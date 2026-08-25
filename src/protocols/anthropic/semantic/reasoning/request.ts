@@ -1,11 +1,39 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type {
+  Context,
+  Model,
+  ModelsSimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../invocation.js";
 import type { AnthropicProjectionOutcome } from "../projection/contract.js";
+import type { AnthropicEffortPlan } from "./contract.js";
+import { resolveAnthropicEffortPlan } from "./levels.js";
 
 export interface PreparedAnthropicReasoning {
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly outcomes: readonly AnthropicProjectionOutcome[];
+}
+
+function cloneOptions(
+  options: ModelsSimpleStreamOptions,
+): ModelsSimpleStreamOptions {
+  return {
+    ...options,
+    ...(options.samplingParams === undefined
+      ? {}
+      : { samplingParams: { ...options.samplingParams } }),
+    ...(options.metadata === undefined
+      ? {}
+      : { metadata: { ...options.metadata } }),
+    ...(options.headers === undefined
+      ? {}
+      : { headers: { ...options.headers } }),
+    ...(options.env === undefined ? {} : { env: { ...options.env } }),
+    ...(options.thinkingBudgets === undefined
+      ? {}
+      : { thinkingBudgets: { ...options.thinkingBudgets } }),
+  };
 }
 
 function sourceMatches(
@@ -36,11 +64,34 @@ function acceptsNativeAnthropicHistory(model: Model<string>): boolean {
   return model.api === "anthropic-messages";
 }
 
-export function prepareAnthropicReasoning(input: {
-  readonly model: Model<string>;
+export function prepareAnthropicReasoning<TApi extends string>(input: {
+  readonly model: Model<TApi>;
   readonly invocation: AnthropicSemanticInvocation;
 }): PreparedAnthropicReasoning {
   const context = structuredClone(input.invocation.pi.context);
+  const options = cloneOptions(input.invocation.pi.options);
+  const effortPlan = resolveAnthropicEffortPlan(
+    input.model,
+    input.invocation.reasoning.effort,
+  );
+  delete options.reasoning;
+  if (effortPlan.kind === "specified") {
+    if (effortPlan.selection.kind === "selected") {
+      options.reasoning = effortPlan.selection.level;
+      if (input.invocation.reasoning.activation.kind === "enabled") {
+        const budgetLevel =
+          effortPlan.selection.level === "xhigh" ||
+          effortPlan.selection.level === "max"
+            ? "high"
+            : effortPlan.selection.level;
+        options.thinkingBudgets = Object.freeze({
+          [budgetLevel]: input.invocation.reasoning.activation.budgetTokens,
+        });
+      }
+    } else {
+      delete options.thinkingBudgets;
+    }
+  }
   const outcomes: AnthropicProjectionOutcome[] = [];
   const continuityByBlock = new Map<string, typeof input.invocation.reasoning.continuity>();
   for (const candidate of input.invocation.reasoning.continuity) {
@@ -183,13 +234,14 @@ export function prepareAnthropicReasoning(input: {
   const invocation: AnthropicSemanticInvocation = Object.freeze({
     pi: Object.freeze({
       context,
-      options: input.invocation.pi.options,
+      options,
     }),
     reasoning: input.invocation.reasoning,
     supplement: input.invocation.supplement,
   });
   return Object.freeze({
     invocation,
+    effortPlan,
     outcomes: Object.freeze(outcomes),
   });
 }

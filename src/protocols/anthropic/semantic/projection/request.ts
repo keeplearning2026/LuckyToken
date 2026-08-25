@@ -2,6 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
 
 import type { AnthropicSemanticInvocation } from "../invocation.js";
+import type { AnthropicEffortPlan } from "../reasoning/contract.js";
 import { enumerateAnthropicSupplementCandidates } from "../supplement/candidates.js";
 import type {
   AnthropicPayloadProjectionOperation,
@@ -45,8 +46,9 @@ function unresolvedReasoningOutcomes(
     outcomes.push(Object.freeze({
       control: "reasoning.effort",
       outcome: Object.freeze({
-        kind: "omitted" as const,
-        warning: "the target has no certified reasoning-effort verifier",
+        kind: "degraded" as const,
+        warning:
+          "the target has no certified reasoning-effort verifier; Provider default was retained",
       }),
     }));
   }
@@ -140,6 +142,7 @@ function finalizeProjection(input: {
 export function prepareAnthropicPayloadProjection(input: {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly factsSink?: ExecutionFactsSink;
 }): AnthropicPayloadProjectionOperation {
   const adapter = selectAnthropicTargetAdapter(input.model);
@@ -164,6 +167,7 @@ export function prepareAnthropicPayloadProjection(input: {
         const result = await phase.project({
           model,
           invocation: input.invocation,
+          effortPlan: input.effortPlan,
           payload: currentPayload,
         });
         for (const outcome of result.outcomes) {

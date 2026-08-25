@@ -11,7 +11,6 @@ import {
   executeOpenAIResponsesSemanticInvocation as executeSemanticConversion,
   InvalidResponsesSemanticExecution as InvalidSemanticExecution,
 } from "../../src/protocols/openai-responses/semantic/execution.js";
-import { ResponsesProjectionRejected } from "../../src/protocols/openai-responses/semantic/pi-execution.js";
 
 const model: Model<"openai-completions"> = {
   id: "model-test",
@@ -323,7 +322,7 @@ describe("LuckyToken Pi execution wrapper", () => {
     ).rejects.toThrow(/without invoking/u);
   });
 
-  it("fails before dispatch when a hard reasoning control has no certified target mapping", async () => {
+  it("keeps dispatch available when explicit disable has no certified target mapping", async () => {
     const target = invocation();
     const withDisabledReasoning: SemanticConversionInvocation = {
       ...target,
@@ -338,24 +337,30 @@ describe("LuckyToken Pi execution wrapper", () => {
     };
     let dispatched = false;
 
-    await expect(
-      executeSemanticConversion({
-        models: {} as Models,
-        model: unknownApiModel,
-        invocation: withDisabledReasoning,
-        infrastructure: {
-          executeOperation: async (_models, _model, _context, options) => {
-            await options.onPayload?.(
-              { model: "model-test", messages: [] },
-              unknownApiModel,
-            );
-            dispatched = true;
-            return terminal;
-          },
+    const result = await executeSemanticConversion({
+      models: {} as Models,
+      model: unknownApiModel,
+      invocation: withDisabledReasoning,
+      infrastructure: {
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.(
+            { model: "model-test", messages: [] },
+            unknownApiModel,
+          );
+          dispatched = true;
+          return terminal;
         },
+      },
+    });
+
+    expect(dispatched).toBe(true);
+    expect(result.reasoningOutcomes).toContainEqual({
+      subject: "effort",
+      outcome: expect.objectContaining({
+        kind: "degraded",
+        fallback: "reasoning-disable-to-provider-default",
       }),
-    ).rejects.toBeInstanceOf(ResponsesProjectionRejected);
-    expect(dispatched).toBe(false);
+    });
   });
 
   it("continues with a developer warning when an uncertified API omits a reasoning preference", async () => {
@@ -393,7 +398,7 @@ describe("LuckyToken Pi execution wrapper", () => {
       expect.arrayContaining([
         {
           subject: "effort",
-          outcome: expect.objectContaining({ kind: "omitted" }),
+          outcome: expect.objectContaining({ kind: "degraded" }),
         },
         {
           subject: "summary",
@@ -403,9 +408,9 @@ describe("LuckyToken Pi execution wrapper", () => {
     );
     expect(notice).toHaveBeenCalledTimes(2);
     expect(notice).toHaveBeenCalledWith({
-      adapter: "openai-responses",
+      adapter: "future-uncertified-api",
       direction: "request",
-      code: "semantic_projection_omitted",
+      code: "semantic_projection_degraded",
       action: "degrade",
     });
   });
@@ -630,7 +635,7 @@ describe("LuckyToken Pi execution wrapper", () => {
     expect(result.message).toBe(terminal);
     expect(result.reasoningOutcomes).toContainEqual({
       subject: "effort",
-      outcome: expect.objectContaining({ kind: "omitted" }),
+      outcome: expect.objectContaining({ kind: "degraded" }),
     });
   });
 });

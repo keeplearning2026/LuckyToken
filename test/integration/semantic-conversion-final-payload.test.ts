@@ -59,6 +59,73 @@ describe("Semantic Conversion final Provider payload tracer", () => {
     });
   });
 
+  it("round-trips an injected Codex low request through Pi minimal to the final legal Provider effort", async () => {
+    const minimalOnlyModel: Model<"openai-completions"> = {
+      ...model,
+      id: "minimal-only",
+      name: "Minimal only",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: "minimal",
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+      compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
+    };
+    const converted = convertResponsesRequest(
+      {
+        model: "client-selector",
+        input: "hello",
+        reasoning: { effort: "low" },
+      },
+      1,
+    );
+    const prepared = prepareReasoning({
+      model: minimalOnlyModel,
+      context: converted.invocation.pi.context,
+      options: converted.invocation.pi.options,
+      semantics: converted.invocation.reasoning,
+    });
+    let outcomes: ReturnType<typeof projectReasoningPayload>["outcomes"] = [];
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamOpenAICompletions(minimalOnlyModel, prepared.context, {
+        ...prepared.options,
+        apiKey: "test-only-key",
+        onPayload(basePayload) {
+          const projected = projectReasoningPayload({
+            model: minimalOnlyModel,
+            prepared,
+            payload: basePayload,
+          });
+          outcomes = projected.outcomes;
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(prepared.effortPlan).toEqual({
+      kind: "enabled",
+      requested: "low",
+      selection: { kind: "selected", level: "minimal" },
+    });
+    expect(prepared.options.reasoning).toBe("minimal");
+    expect(payload).toHaveProperty("reasoning_effort", "minimal");
+    expect(outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "openai-completions",
+        fallback: "reasoning-effort-nearest-level",
+        warning: "requested reasoning level low mapped to supported level minimal",
+      },
+    });
+  });
+
   it("restores Responses history to the final OpenAI Completions reasoning field", async () => {
     const converted = convertResponsesRequest(
       {

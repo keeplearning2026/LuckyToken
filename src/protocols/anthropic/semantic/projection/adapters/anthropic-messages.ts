@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
+import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
@@ -164,6 +165,7 @@ function reconstructTools(
 interface ProjectionInput {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 }
 
@@ -299,7 +301,11 @@ function projectAnthropicToAnthropicMessages(
   const thinkingBudgetDoesNotFit = phase === "reasoning" &&
     input.invocation.reasoning.activation.kind === "enabled" &&
     input.invocation.reasoning.activation.budgetTokens >= payload.max_tokens;
-  const expectedThinking = thinkingBudgetDoesNotFit
+  const requestedThinking = input.invocation.reasoning.activation;
+  const targetCannotReason =
+    !input.model.reasoning &&
+    (requestedThinking.kind === "enabled" || requestedThinking.kind === "adaptive");
+  const expectedThinking = thinkingBudgetDoesNotFit || targetCannotReason
     ? undefined
     : thinkingValue(input.invocation);
   if (phase === "reasoning" && thinkingBudgetDoesNotFit) {
@@ -308,6 +314,13 @@ function projectAnthropicToAnthropicMessages(
       kind: "degraded",
       warning:
         "Anthropic thinking budget no longer fits below the context-safe final max_tokens ceiling; reasoning was disabled for this request",
+    });
+  } else if (phase === "reasoning" && targetCannotReason) {
+    delete payload.thinking;
+    add(outcomes, "reasoning.activation", {
+      kind: "degraded",
+      warning:
+        "target model does not support reasoning; ordinary generation was retained",
     });
   } else if (phase === "reasoning" && expectedThinking === undefined) {
     const changed = Object.hasOwn(payload, "thinking");
@@ -331,21 +344,57 @@ function projectAnthropicToAnthropicMessages(
     );
   }
   const format = nullableValue(supplement.outputFormat);
-  const effortIntent = input.invocation.reasoning.effort;
+  const effortPlan = input.effortPlan;
   const outputConfig: Record<string, unknown> =
     typeof payload.output_config === "object" &&
       payload.output_config !== null &&
       !Array.isArray(payload.output_config)
       ? { ...(payload.output_config as Record<string, unknown>) }
       : {};
-  if (phase === "reasoning" && effortIntent.kind === "specified") {
-    if (typeof outputConfig.effort === "string") {
-      add(outcomes, "reasoning.effort", { kind: "pi-native" });
-    } else {
+  if (phase === "reasoning" && effortPlan.kind === "specified") {
+    if (effortPlan.selection.kind !== "selected") {
+      delete outputConfig.effort;
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: "Pi did not emit a certified Anthropic effort field for this target model",
+        kind: "degraded",
+        warning:
+          effortPlan.selection.kind === "non-reasoning"
+            ? "target model does not support reasoning; ordinary generation was retained"
+            : "target model exposes no selectable reasoning level; Provider default was retained",
       });
+    } else {
+      const mapped = input.model.thinkingLevelMap?.[effortPlan.selection.level];
+      const expected =
+        typeof mapped === "string"
+          ? mapped
+          : effortPlan.selection.level === "minimal"
+            ? undefined
+            : effortPlan.selection.level;
+      if (expected === undefined) {
+        delete outputConfig.effort;
+        add(outcomes, "reasoning.effort", {
+          kind: "degraded",
+          warning:
+            "target has no certified Anthropic effort value for the selected Pi level; Provider default was retained",
+        });
+      } else if (outputConfig.effort === expected) {
+        add(
+          outcomes,
+          "reasoning.effort",
+          effortPlan.requested === effortPlan.selection.level
+            ? { kind: "pi-native" }
+            : {
+                kind: "degraded",
+                warning: `requested reasoning level ${effortPlan.requested} mapped to supported Pi level ${effortPlan.selection.level}`,
+              },
+        );
+      } else {
+        outputConfig.effort = expected;
+        add(outcomes, "reasoning.effort", {
+          kind: "payload-projected",
+          projector: "anthropic-to-anthropic-messages",
+          warning: "pi-native-mapping-repaired",
+        });
+      }
     }
   }
   if (phase === "supplement" && format !== undefined) {

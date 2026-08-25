@@ -74,6 +74,7 @@ export async function captureAnthropicContinuityReplay(input: {
   const projection = prepareAnthropicPayloadProjection({
     model: input.model,
     invocation: prepared.invocation,
+    effortPlan: prepared.effortPlan,
   });
   return captureFinalPiPayload((capture) =>
     input.start(prepared.invocation.pi.context, {

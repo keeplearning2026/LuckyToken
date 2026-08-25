@@ -2,7 +2,9 @@ import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
-import { prepareAnthropicPayloadProjection } from "../../src/protocols/anthropic/semantic/projection/request.js";
+import type { AnthropicSemanticInvocation } from "../../src/protocols/anthropic/semantic/invocation.js";
+import { prepareAnthropicPayloadProjection as prepareAnthropicPayloadProjectionOperation } from "../../src/protocols/anthropic/semantic/projection/request.js";
+import { prepareAnthropicReasoning } from "../../src/protocols/anthropic/semantic/reasoning/request.js";
 
 const baseModel = {
   id: "target-model",
@@ -15,6 +17,18 @@ const baseModel = {
   contextWindow: 32_768,
   maxTokens: 8_192,
 };
+
+function prepareAnthropicPayloadProjection(input: {
+  readonly model: Model<string>;
+  readonly invocation: AnthropicSemanticInvocation;
+}) {
+  const prepared = prepareAnthropicReasoning(input);
+  return prepareAnthropicPayloadProjectionOperation({
+    model: input.model,
+    invocation: prepared.invocation,
+    effortPlan: prepared.effortPlan,
+  });
+}
 
 function projectionFor(
   request: Record<string, unknown>,
@@ -122,7 +136,7 @@ describe("Anthropic supplement target disposition", () => {
     });
     expect(result.outcomes).toContainEqual({
       control: "reasoning.effort",
-      outcome: expect.objectContaining({ kind: "omitted" }),
+      outcome: expect.objectContaining({ kind: "degraded" }),
     });
   });
 
@@ -659,6 +673,7 @@ describe("Anthropic supplement target disposition", () => {
       provider: "commandcode-private",
       id: "deepseek/deepseek-v4-flash",
       reasoning: true,
+      thinkingLevelMap: { high: "high" },
     } as Model<string>;
     const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
     const result = await projection.project({

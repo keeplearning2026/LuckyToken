@@ -48,6 +48,7 @@ export async function executeAnthropicSemanticInvocation(input: {
   const providerProjection = prepareAnthropicPayloadProjection({
     model: input.model,
     invocation: prepared.invocation,
+    effortPlan: prepared.effortPlan,
     ...(input.execution.factsSink === undefined
       ? {}
       : { factsSink: input.execution.factsSink }),

@@ -112,7 +112,6 @@ interface ValidatedResponsesRequest {
   topP?: number;
   cacheRetention?: "short" | "long";
   metadataUserId?: string;
-  reasoning?: string;
   tools?: Tool[];
   toolChoice?: ResponsesToolChoice;
 }
@@ -778,7 +777,6 @@ function convertTools(
  *   future unknown   → futureReasoningEffort policy (max|omit|error), notice on max/omit
  */
 interface ConvertedReasoningRequest {
-  readonly piReasoning?: ResponsesReasoningEffortLevel;
   readonly intent: Readonly<{
     effort: ResponsesReasoningEffortIntent;
     summary: ResponsesReasoningSummaryIntent;
@@ -877,7 +875,6 @@ function convertReasoning(
       requestNotice(ULTRA_ALIAS_NOTICE_CODE, "degrade", "$.reasoning.effort"),
     );
     return Object.freeze({
-      piReasoning: "max",
       intent: Object.freeze({
         effort: Object.freeze({ kind: "enabled", level: "max" }),
         summary,
@@ -887,7 +884,6 @@ function convertReasoning(
   if (effort === "max" || KNOWN_EFFORTS.has(effort)) {
     const level = effort as ResponsesReasoningEffortLevel;
     return Object.freeze({
-      piReasoning: level,
       intent: Object.freeze({
         effort: Object.freeze({ kind: "enabled", level }),
         summary,
@@ -905,7 +901,6 @@ function convertReasoning(
   );
   if (futureReasoningEffort === "max") {
     return Object.freeze({
-      piReasoning: "max",
       intent: Object.freeze({
         effort: Object.freeze({ kind: "enabled", level: "max" }),
         summary,
@@ -2568,10 +2563,6 @@ function buildInvocation(
   if (validated.metadataUserId !== undefined) {
     options.metadata = { user_id: validated.metadataUserId };
   }
-  if (validated.reasoning !== undefined) {
-    const reasoning = validated.reasoning as ModelsSimpleStreamOptions["reasoning"];
-    if (reasoning !== undefined) options.reasoning = reasoning;
-  }
   return Object.freeze({
     selector: validated.selector,
     invocation: Object.freeze({
@@ -2666,9 +2657,6 @@ export function convertResponsesRequest(
     policy.futureReasoningEffort,
     notices,
   );
-  if (convertedReasoning.piReasoning !== undefined) {
-    validated.reasoning = convertedReasoning.piReasoning;
-  }
   const additionalTools: unknown[] = [];
   const historicalReasoningCandidates: ResponsesHistoricalReasoningCandidate[] = [];
   const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];
@@ -2759,9 +2747,6 @@ export async function convertResponsesRequestAsync(
     policy.futureReasoningEffort,
     notices,
   );
-  if (convertedReasoning.piReasoning !== undefined) {
-    validated.reasoning = convertedReasoning.piReasoning;
-  }
   const additionalTools: unknown[] = [];
   const historicalReasoningCandidates: ResponsesHistoricalReasoningCandidate[] = [];
   const reasoningContinuityCandidates: ReasoningContinuityCandidate[] = [];

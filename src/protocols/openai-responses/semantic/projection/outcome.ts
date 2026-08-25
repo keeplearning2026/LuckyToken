@@ -11,7 +11,12 @@ export type ResponsesProjectionOutcome =
       readonly projector: string;
       readonly fallback:
         | "cache-retention-24h-to-1h"
-        | "cache-retention-in-memory-to-provider-ephemeral";
+        | "cache-retention-in-memory-to-provider-ephemeral"
+        | "reasoning-effort-nearest-level"
+        | "reasoning-disable-to-provider-default"
+        | "reasoning-to-provider-default"
+        | "reasoning-to-binary-enable"
+        | "reasoning-to-ordinary-generation";
       readonly warning: string;
     }
   | { readonly kind: "omitted"; readonly warning: string }

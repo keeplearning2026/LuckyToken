@@ -2,6 +2,10 @@ import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
 import type {
+  AnthropicEffortPlan,
+  AnthropicSelectedPiEffort,
+} from "../../reasoning/contract.js";
+import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
 } from "../contract.js";
@@ -75,13 +79,13 @@ function usesThinkingLevel(api: GoogleApi, model: Model<string>): boolean {
 function googleThinkingLevel(
   api: GoogleApi,
   model: Model<string>,
-  effort: "low" | "medium" | "high",
+  effort: "minimal" | "low" | "medium" | "high",
 ): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
   if (isGemini3Pro(model)) {
-    return effort === "low" ? "LOW" : "HIGH";
+    return effort === "minimal" || effort === "low" ? "LOW" : "HIGH";
   }
   if (api === "google-generative-ai" && isGemma4(model)) {
-    return effort === "low" ? "MINIMAL" : "HIGH";
+    return effort === "minimal" || effort === "low" ? "MINIMAL" : "HIGH";
   }
   return effort.toUpperCase() as "LOW" | "MEDIUM" | "HIGH";
 }
@@ -89,17 +93,17 @@ function googleThinkingLevel(
 function googleThinkingBudget(
   api: GoogleApi,
   model: Model<string>,
-  effort: "low" | "medium" | "high",
+  effort: "minimal" | "low" | "medium" | "high",
 ): number | undefined {
   const id = model.id.toLowerCase();
   if (id.includes("2.5-pro")) {
-    return { low: 2_048, medium: 8_192, high: 32_768 }[effort];
+    return { minimal: 128, low: 2_048, medium: 8_192, high: 32_768 }[effort];
   }
   if (api === "google-generative-ai" && id.includes("2.5-flash-lite")) {
-    return { low: 2_048, medium: 8_192, high: 24_576 }[effort];
+    return { minimal: 512, low: 2_048, medium: 8_192, high: 24_576 }[effort];
   }
   if (id.includes("2.5-flash")) {
-    return { low: 2_048, medium: 8_192, high: 24_576 }[effort];
+    return { minimal: 128, low: 2_048, medium: 8_192, high: 24_576 }[effort];
   }
   return undefined;
 }
@@ -108,9 +112,9 @@ function googleThinking(
   api: GoogleApi,
   model: Model<string>,
   invocation: AnthropicSemanticInvocation,
+  selectedEffort?: AnthropicSelectedPiEffort,
 ): Record<string, unknown> | undefined {
   const activation = invocation.reasoning.activation;
-  const effort = invocation.reasoning.effort;
   if (activation.kind === "disabled") {
     return model.reasoning ? { thinkingBudget: 0 } : undefined;
   }
@@ -121,12 +125,20 @@ function googleThinking(
     };
   }
   if (activation.kind === "adaptive") return undefined;
-  if (effort.kind !== "specified" || !model.reasoning) return undefined;
-  if (effort.level === "xhigh" || effort.level === "max") return undefined;
+  if (selectedEffort === undefined || !model.reasoning) return undefined;
+  const mapped = model.thinkingLevelMap?.[selectedEffort];
   if (usesThinkingLevel(api, model)) {
-    return { thinkingLevel: googleThinkingLevel(api, model, effort.level) };
+    if (typeof mapped === "string") {
+      return { thinkingLevel: mapped.toUpperCase() };
+    }
+    if (selectedEffort === "xhigh" || selectedEffort === "max") return undefined;
+    return { thinkingLevel: googleThinkingLevel(api, model, selectedEffort) };
   }
-  const budget = googleThinkingBudget(api, model, effort.level);
+  const budgetLevel =
+    selectedEffort === "xhigh" || selectedEffort === "max"
+      ? "high"
+      : selectedEffort;
+  const budget = googleThinkingBudget(api, model, budgetLevel);
   return budget === undefined ? undefined : { thinkingBudget: budget };
 }
 
@@ -148,6 +160,7 @@ type ProjectionInput = {
   readonly api: GoogleApi;
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 };
 
@@ -325,22 +338,47 @@ function projectAnthropicToGoogle(
         ? `${input.api} used its nearest target reasoning mode for Anthropic adaptive thinking`
         : `${input.api} target does not support reasoning; ordinary generation was used`,
     });
-  } else if (effort.kind === "specified") {
-    const thinking = googleThinking(input.api, input.model, input.invocation);
+  } else if (input.effortPlan.kind === "specified") {
+    if (input.effortPlan.selection.kind !== "selected") {
+      delete config.thinkingConfig;
+      add(outcomes, "reasoning.effort", {
+        kind: "degraded",
+        warning:
+          input.effortPlan.selection.kind === "non-reasoning"
+            ? `${input.api} target does not support reasoning; ordinary generation was retained`
+            : `${input.api} target exposes no selectable reasoning level; Provider default was retained`,
+      });
+    } else {
+    const thinking = googleThinking(
+      input.api,
+      input.model,
+      input.invocation,
+      input.effortPlan.selection.level,
+    );
     if (thinking === undefined) {
       delete config.thinkingConfig;
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: `${input.api} has no certified ${effort.level} effort mapping for model ${input.model.id}`,
+        kind: "degraded",
+        warning: `${input.api} has no certified ${input.effortPlan.selection.level} effort mapping for model ${input.model.id}; Provider default was retained`,
       });
     } else if (containsExpectedFields(config.thinkingConfig, thinking)) {
-      add(outcomes, "reasoning.effort", { kind: "pi-native" });
+      add(
+        outcomes,
+        "reasoning.effort",
+        input.effortPlan.requested === input.effortPlan.selection.level
+          ? { kind: "pi-native" }
+          : {
+              kind: "degraded",
+              warning: `requested reasoning level ${input.effortPlan.requested} mapped to supported Pi level ${input.effortPlan.selection.level}`,
+            },
+      );
     } else {
       delete config.thinkingConfig;
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: `${input.api} Pi payload did not contain the certified reasoning effort`,
+        kind: "degraded",
+        warning: `${input.api} Pi payload did not contain the selected reasoning effort; Provider default was retained`,
       });
+    }
     }
   } else if (config.thinkingConfig !== undefined) {
     delete config.thinkingConfig;

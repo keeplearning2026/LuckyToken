@@ -15,6 +15,7 @@ import type {
   ResponsesReasoningProjectionResult,
   ResponsesReasoningSemantics,
 } from "./contract.js";
+import { resolveResponsesEffortPlan } from "./levels.js";
 import { resolveResponsesReasoningAdapter } from "./registry.js";
 
 export class InvalidResponsesReasoningSemantics extends Error {
@@ -80,8 +81,8 @@ function replaceThinkingWithText(
   content[contentIndex] = { type: "text", text: thinking };
 }
 
-export function prepareResponsesReasoning(input: {
-  readonly model: Model<string>;
+export function prepareResponsesReasoning<TApi extends string>(input: {
+  readonly model: Model<TApi>;
   readonly context: Context;
   readonly options: ModelsSimpleStreamOptions;
   readonly semantics: ResponsesReasoningSemantics;
@@ -220,14 +221,23 @@ export function prepareResponsesReasoning(input: {
     );
   }
 
-  if (input.semantics.request.effort.kind === "enabled") {
-    options.reasoning = input.semantics.request.effort.level;
+  const effortPlan = resolveResponsesEffortPlan(
+    input.model,
+    input.semantics.request.effort,
+  );
+  delete options.reasoning;
+  if (
+    effortPlan.kind === "enabled" &&
+    effortPlan.selection.kind === "selected"
+  ) {
+    options.reasoning = effortPlan.selection.level;
   }
 
   return Object.freeze({
     context,
     options: Object.freeze(options),
     request: input.semantics.request,
+    effortPlan,
     outcomes: Object.freeze(outcomes),
     ...(adapter === undefined ? {} : { adapterId: adapter.id }),
   });
@@ -249,18 +259,30 @@ export function projectResponsesReasoningPayload(input: {
       Object.freeze({
         subject: "effort",
         outcome: Object.freeze({
-          kind: "failed",
-          error: "resolved API has no certified reasoning payload Adapter",
+          kind: "degraded",
+          projector: input.model.api,
+          fallback: "reasoning-disable-to-provider-default",
+          warning:
+            "resolved API has no certified reasoning payload Adapter; Provider default retained",
         }),
       }),
     );
   } else if (effort.kind === "enabled") {
+    const nonReasoning =
+      input.prepared.effortPlan.kind === "enabled" &&
+      input.prepared.effortPlan.selection.kind === "non-reasoning";
     outcomes.push(
       Object.freeze({
         subject: "effort",
         outcome: Object.freeze({
-          kind: "omitted",
-          warning: "resolved API has no certified reasoning effort mapping",
+          kind: "degraded",
+          projector: input.model.api,
+          fallback: nonReasoning
+            ? "reasoning-to-ordinary-generation"
+            : "reasoning-to-provider-default",
+          warning: nonReasoning
+            ? "target model does not support reasoning; ordinary generation retained"
+            : "resolved API has no certified reasoning effort mapping; Provider default retained",
         }),
       }),
     );

@@ -197,6 +197,102 @@ describe("Codex catalog projection", () => {
     expect(parsed.models[1]).not.toHaveProperty("default_reasoning_level");
   });
 
+  it("projects a Pi minimal-only model into the Codex low slot", () => {
+    const routed = model({
+      provider: "provider",
+      id: "minimal-only",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: "minimal",
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    });
+    const result = buildCodexCatalog({
+      nativeCatalogEntries: [
+        {
+          slug: "gpt-native",
+          base_instructions: "Native instructions",
+          supported_reasoning_levels: [
+            { effort: "low", description: "Light" },
+            { effort: "medium", description: "Medium" },
+            { effort: "high", description: "High" },
+            { effort: "xhigh", description: "Extra high" },
+            { effort: "max", description: "Ultra" },
+            { effort: "ultra", description: "Delegating ultra" },
+          ],
+        },
+      ],
+      models: { getModels: () => [routed] } as unknown as Models,
+      aliases: [
+        {
+          alias: "provider/minimal-only",
+          target: { providerId: "provider", modelId: "minimal-only" },
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(result.content) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(parsed.models[1]?.supported_reasoning_levels).toEqual([
+      { effort: "low", description: "Light" },
+    ]);
+  });
+
+  it("maps only non-null Pi levels into the five Codex slots and deduplicates minimal with low", () => {
+    const routed = model({
+      provider: "provider",
+      id: "five-slot",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: "none",
+        minimal: "provider-minimal",
+        low: "provider-low",
+        medium: "provider-medium",
+        high: null,
+        xhigh: "provider-extra-high",
+        max: "provider-ultra",
+      },
+    });
+    const result = buildCodexCatalog({
+      nativeCatalogEntries: [
+        {
+          slug: "gpt-native",
+          supported_reasoning_levels: [
+            { effort: "low", description: "Light" },
+            { effort: "medium", description: "Medium" },
+            { effort: "high", description: "High" },
+            { effort: "xhigh", description: "Extra high" },
+            { effort: "max", description: "Ultra" },
+          ],
+        },
+      ],
+      models: { getModels: () => [routed] } as unknown as Models,
+      aliases: [
+        {
+          alias: "provider/five-slot",
+          target: { providerId: "provider", modelId: "five-slot" },
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(result.content) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(parsed.models[1]?.supported_reasoning_levels).toEqual([
+      { effort: "low", description: "Light" },
+      { effort: "medium", description: "Medium" },
+      { effort: "xhigh", description: "Extra high" },
+      { effort: "max", description: "Ultra" },
+    ]);
+    expect(parsed.models[1]).not.toHaveProperty("default_reasoning_level");
+  });
+
   it("emits the complete parser-required field set for a non-reasoning routed model", () => {
     const routed = model({ provider: "provider", id: "plain" });
     const result = buildCodexCatalog({
@@ -229,6 +325,7 @@ describe("Codex catalog projection", () => {
       expect(entry).toHaveProperty(required);
     }
     expect(entry.supported_reasoning_levels).toEqual([]);
+    expect(entry).not.toHaveProperty("default_reasoning_level");
   });
 
   it("warns instead of inventing a reasoning level when Codex vocabulary is unavailable", () => {

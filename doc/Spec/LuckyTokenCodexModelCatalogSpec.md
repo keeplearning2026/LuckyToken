@@ -47,7 +47,7 @@ Use the narrowest authority that owns each fact:
 | Native Codex rows and current Codex reasoning descriptions | `codex debug models --bundled`; read-only `models_cache.json` remains the existing fallback when bundled discovery is unavailable |
 | Routed identity and callability | The selected LuckyToken Agent injection scope and resolved Pi `Models` collection |
 | Input modalities and context window | The resolved Pi `Model` |
-| Routable reasoning controls | Pi `getSupportedThinkingLevels(model)` and `Model.thinkingLevelMap`, intersected with the installed Codex vocabulary |
+| Routable reasoning controls | Pi `getSupportedThinkingLevels(model)` and `Model.thinkingLevelMap`, projected into LuckyToken's five Codex slots and intersected with the installed Codex vocabulary |
 | Tool/search/verbosity/summary behavior | LuckyToken's OpenAI Responses request/response implementation and end-to-end tests |
 | Official OpenAI model capabilities | Official OpenAI model documentation; this is model evidence, not the external catalog parser schema |
 | Restore result | User-configured `integrations.codex.preimage.*` values |
@@ -159,25 +159,28 @@ This rejects the entire catalog rather than only the bad row. Catalog validation
 
 ### 4.1 Exact derivation
 
-Calculate the advertised ladder as an intersection:
+Calculate the advertised ladder as a projection followed by an intersection:
 
 ```text
 PiSupported = getSupportedThinkingLevels(model) minus "off"
+PiToCodex = minimal→low, low→low, medium→medium, high→high, xhigh→xhigh, max→max
+Projected = stable distinct map(PiSupported, PiToCodex)
 CodexVocabulary = efforts with valid descriptions in the installed bundled catalog
-Advertised = PiSupported intersect CodexVocabulary
+Advertised = Projected intersect CodexVocabulary
 ```
 
 Rules:
 
 1. If `model.reasoning === false`, emit `supported_reasoning_levels: []`.
-2. If `model.reasoning === true`, use Pi's supported-level function; do not construct a fixed global ladder.
+2. If `model.reasoning === true`, use Pi's supported-level function as the capability authority, then project only the supported keys into the five Codex slots `low/medium/high/xhigh/max`.
 3. A `thinkingLevelMap` value of `null` removes that client effort.
-4. `xhigh` and `max` appear only when Pi explicitly exposes them.
-5. A level absent from the installed Codex vocabulary is omitted because LuckyToken cannot provide a current Codex description for it.
-6. `off` is never advertised. LuckyToken currently degrades Responses `reasoning.effort: "none"` to omission, so it cannot promise an explicit-off control.
-7. `ultra` is never synthesized. Pi's current thinking-level contract has no `ultra`; LuckyToken's Responses conversion degrades incoming `ultra` to `max`.
-8. If the intersection is empty, emit `[]` and a generation warning. Do not invent a level.
-9. Emit `default_reasoning_level` only when an authoritative model source supplies a default and that default is in the advertised ladder. Otherwise omit it.
+4. Pi `minimal` and `low` both project to Codex `low`; preserve Pi order and deduplicate, so a model supporting both advertises one `low` entry. A `minimal`-only model also advertises `low`; a later Codex `low` request clamps back to Pi `minimal` for that model.
+5. Pi `medium/high/xhigh/max` project to the same Codex keys. `xhigh` and `max` appear only when Pi explicitly exposes them.
+6. A projected key absent from the installed Codex vocabulary is omitted because LuckyToken cannot provide a current Codex description for it.
+7. `off` is never advertised. LuckyToken currently degrades Responses `reasoning.effort: "none"` to omission, so it cannot promise an explicit-off control.
+8. Routed rows never advertise `minimal`, Provider wire values, or Codex `ultra`. LuckyToken's separate Responses input alias `ultra` still degrades to Pi `max`; it is not a sixth routed Codex slot.
+9. If the intersection is empty, emit `[]` and a generation warning. Do not invent a level.
+10. Emit `default_reasoning_level` only when an authoritative model source supplies a default and that default is in the advertised ladder. Otherwise omit it.
 
 Descriptions come from the installed Codex bundled catalog for the same effort. They are client vocabulary, not provider capability evidence.
 
@@ -327,8 +330,9 @@ Tests must prove:
 - every routed row contains every required 0.149.0 field;
 - non-reasoning rows carry `supported_reasoning_levels: []`;
 - exact CommandCode ladders such as DeepSeek `high/max` are preserved;
+- Pi `minimal` and `low` both project to one Codex `low`, including a `minimal`-only model;
 - unsupported/null Pi levels are absent;
-- no unproven `ultra`, verbosity, parallel, search, original-detail, service-tier, or WebSocket claim appears;
+- no routed `minimal`, `off`, Codex `ultra`, Provider wire effort, verbosity, parallel, search, original-detail, service-tier, or WebSocket claim appears;
 - modalities stay within `text/image/audio`, with no empty result;
 - native rows remain unchanged;
 - neutral base instructions contain no false native GPT identity;

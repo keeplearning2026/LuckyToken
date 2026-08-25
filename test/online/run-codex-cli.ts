@@ -44,7 +44,6 @@
  */
 
 import {
-  InMemoryCredentialStore,
   type AuthInteraction,
   type AuthPrompt,
   type FetchFunction,
@@ -58,6 +57,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import { buildCodexCatalog } from "../../src/integrations/codex/catalog.js";
 import { createCodexCatalogValidator } from "../../src/integrations/codex/catalog-validator.js";
@@ -73,6 +73,7 @@ import {
 } from "../support/configured-data-plane.js";
 import { startLuckyTokenHttpServer } from "../../src/server.js";
 import type { LuckyTokenRuntime } from "../../src/runtime.js";
+import { loginOnlineProvider } from "./provider-login.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
 const DEFAULT_PROVIDER_ID = "commandcode-private";
@@ -1525,7 +1526,9 @@ export async function runCodexCliOnlineSuite(
   // Real login first: the composition's served catalog owns the provider
   // registration, so login runs through the served Models and persists into
   // the same store the composition will use for request-time auth.
-  const credentials = new InMemoryCredentialStore();
+  const credentialRecordStore = createInMemoryProviderCredentialRecordStore({
+    createRevision: randomUUID,
+  });
   const preLogin = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
     ...(config.pi.modelsJson === undefined
@@ -1533,14 +1536,18 @@ export async function runCodexCliOnlineSuite(
       : { modelsJsonPath: config.pi.modelsJson }),
     providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
-    credentialSeedStore: credentials,
+    credentialRecordStore,
   });
   try {
-    await preLogin.models.login(
+    await loginOnlineProvider({
+      models: preLogin.models,
+      providerAuthBindings: preLogin.providerAuthBindings,
+      credentialManagement: preLogin.credentialManagement,
       providerId,
-      "api_key",
-      keyFileLoginInteraction(apiKey),
-    );
+      authType: "api_key",
+      displayName: "Codex online test",
+      interaction: keyFileLoginInteraction(apiKey),
+    });
   } catch (error) {
     throw new Error(
       `Provider login failed for ${providerId}: ${
@@ -1548,10 +1555,13 @@ export async function runCodexCliOnlineSuite(
       }`,
     );
   }
-  const stored = await credentials.read(providerId);
-  if (stored?.type !== "api_key" || stored.key !== apiKey) {
+  const stored = await preLogin.credentialManagement.query([providerId]);
+  if (
+    stored.providers.find((provider) => provider.providerId === providerId)
+      ?.profiles.length !== 1
+  ) {
     throw new Error(
-      `Provider login did not persist a credential for ${providerId}`,
+      `Provider login did not persist one Profile for ${providerId}`,
     );
   }
   console.error("[codex-suite] credentials ready");
@@ -1572,7 +1582,7 @@ export async function runCodexCliOnlineSuite(
   const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
   let composition = await createConfiguredLuckyTokenDataPlane({
     config,
-    credentialSeedStore: credentials,
+    credentialRecordStore,
     fetch: upstreamLogger.fetch,
     ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
   });
@@ -1693,7 +1703,7 @@ export async function runCodexCliOnlineSuite(
               await composition.close();
               composition = await createConfiguredLuckyTokenDataPlane({
                 config,
-                credentialSeedStore: credentials,
+                credentialRecordStore,
                 fetch: upstreamLogger.fetch,
                 ...(publicModelAuthority === undefined
                   ? {}

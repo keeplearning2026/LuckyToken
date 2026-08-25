@@ -116,7 +116,6 @@ describe("CommandCode generation control mapping", () => {
   });
 
   it.each([
-    ["minimal", "low"],
     ["low", "low"],
     ["medium", "medium"],
     ["high", "high"],
@@ -138,6 +137,19 @@ describe("CommandCode generation control mapping", () => {
       expect(value.reasoning_effort).toBe(effort);
     },
   );
+
+  it("does not invent a CommandCode wire value for an unmapped Pi minimal key", () => {
+    const reasoningModel = { ...model, reasoning: true };
+    const value = buildCommandCodeBody(
+      reasoningModel,
+      context,
+      { maxTokens: 20, reasoning: "minimal" },
+      createEmptyServerConfig(),
+      sessionId,
+      {},
+    ).body.params as Record<string, unknown>;
+    expect(value).not.toHaveProperty("reasoning_effort");
+  });
 
   it.each([
     ["xhigh", "xhigh"],
@@ -179,12 +191,9 @@ describe("CommandCode generation control mapping", () => {
     expect(value.reasoning_effort).toBe("xhigh");
   });
 
-  it.each([
-    ["minimal", "high"],
-    ["low", "high"],
-    ["medium", "high"],
-    ["xhigh", "max"],
-  ] as const)("lets Pi clamp unsupported %s to %s", (level, expected) => {
+  it.each(["minimal", "low", "medium", "xhigh"] as const)(
+    "omits unsupported direct Pi key %s instead of reclamping in transport",
+    (level) => {
     const strictModel = {
       ...model,
       reasoning: true,
@@ -206,7 +215,7 @@ describe("CommandCode generation control mapping", () => {
       sessionId,
       {},
     ).body.params as Record<string, unknown>;
-    expect(value.reasoning_effort).toBe(expected);
+    expect(value).not.toHaveProperty("reasoning_effort");
   });
 
   it("uses the Pi default mapping when an ordinary level key is omitted", () => {
@@ -287,7 +296,7 @@ describe("CommandCode generation control mapping", () => {
     expect(value.max_tokens).toBe(64_000);
   });
 
-  it("clamps unsupported catalog efforts through the Pi model capability", () => {
+  it("does not reclamp an unsupported key inside the CommandCode transport", () => {
     const catalogModel = findCommandCodeModel("deepseek/deepseek-v4-flash");
     expect(catalogModel).toBeDefined();
 
@@ -299,7 +308,7 @@ describe("CommandCode generation control mapping", () => {
       sessionId,
       {},
     ).body.params as Record<string, unknown>;
-    expect(low.reasoning_effort).toBe("high");
+    expect(low).not.toHaveProperty("reasoning_effort");
 
     const xhigh = buildCommandCodeBody(
       catalogModel!,
@@ -309,11 +318,11 @@ describe("CommandCode generation control mapping", () => {
       sessionId,
       {},
     ).body.params as Record<string, unknown>;
-    expect(xhigh.reasoning_effort).toBe("max");
+    expect(xhigh).not.toHaveProperty("reasoning_effort");
   });
 
   it.each(["xhigh", "max"] as const)(
-    "clamps %s to high when a reasoning model has no explicit effort map",
+    "omits opt-in Pi key %s when a reasoning model has no explicit map",
     (level) => {
       const reasoningModel = { ...model, reasoning: true };
       const value = buildCommandCodeBody(
@@ -324,7 +333,7 @@ describe("CommandCode generation control mapping", () => {
         sessionId,
         {},
       ).body.params as Record<string, unknown>;
-      expect(value.reasoning_effort).toBe("high");
+      expect(value).not.toHaveProperty("reasoning_effort");
     },
   );
 });

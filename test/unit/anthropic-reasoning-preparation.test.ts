@@ -54,6 +54,70 @@ function invocation() {
 }
 
 describe("Anthropic reasoning history preparation", () => {
+  it("preserves runtime option object identities while copying mutable option maps", () => {
+    const source = invocation();
+    const signal = new AbortController().signal;
+    const withRuntimeOptions = {
+      ...source,
+      pi: {
+        ...source.pi,
+        options: {
+          ...source.pi.options,
+          signal,
+          headers: { "x-test": "value" },
+          thinkingBudgets: { high: 4_096 },
+        },
+      },
+    };
+
+    const prepared = prepareAnthropicReasoning({
+      model: model("gemini-target"),
+      invocation: withRuntimeOptions,
+    });
+
+    expect(prepared.invocation.pi.options.signal).toBe(signal);
+    expect(prepared.invocation.pi.options.headers).toEqual({ "x-test": "value" });
+    expect(prepared.invocation.pi.options.headers).not.toBe(
+      withRuntimeOptions.pi.options.headers,
+    );
+    expect(prepared.invocation.pi.options.thinkingBudgets).not.toBe(
+      withRuntimeOptions.pi.options.thinkingBudgets,
+    );
+  });
+
+  it("selects a real non-null Pi level once after model resolution", () => {
+    const source = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        output_config: { effort: "max" },
+      },
+      1,
+    ).invocation;
+    const target = {
+      ...model("gemini-target"),
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "HIGH",
+        xhigh: null,
+        max: null,
+      },
+    };
+
+    const prepared = prepareAnthropicReasoning({ model: target, invocation: source });
+
+    expect(prepared.effortPlan).toEqual({
+      kind: "specified",
+      requested: "max",
+      selection: { kind: "selected", level: "high" },
+    });
+    expect(prepared.invocation.pi.options.reasoning).toBe("high");
+  });
+
   it("restores compatible opaque state on the exact Pi block", () => {
     const prepared = prepareAnthropicReasoning({
       model: model("gemini-target"),

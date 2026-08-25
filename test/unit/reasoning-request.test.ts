@@ -18,6 +18,41 @@ const openAICompletionsModel: Model<"openai-completions"> = {
 };
 
 describe("target-aware reasoning preparation", () => {
+  it("writes the model-selected effort into Pi options", () => {
+    const converted = convertResponsesRequest(
+      {
+        model: "client-selector",
+        input: "hello",
+        reasoning: { effort: "low" },
+      },
+      1,
+    );
+    const prepared = prepareReasoning({
+      model: {
+        ...openAICompletionsModel,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+      },
+      context: converted.invocation.pi.context,
+      options: converted.invocation.pi.options,
+      semantics: converted.invocation.reasoning,
+    });
+
+    expect(prepared.effortPlan).toEqual({
+      kind: "enabled",
+      requested: "low",
+      selection: { kind: "selected", level: "high" },
+    });
+    expect(prepared.options.reasoning).toBe("high");
+  });
+
   it("restores a same-model OpenAI Completions reasoning field selector", () => {
     const converted = convertResponsesRequest(
       {

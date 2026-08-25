@@ -437,7 +437,11 @@ describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
         }),
         1,
       );
-      expect(invocation.invocation.pi.options.reasoning).toBe(effort);
+      expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
+      expect(invocation.invocation.reasoning.effort).toEqual({
+        kind: "specified",
+        level: effort,
+      });
       expect(invocation.invocation.pi.options.thinkingBudgets).toEqual({
         [effort === "xhigh" || effort === "max" ? "high" : effort]: 32_768,
       });

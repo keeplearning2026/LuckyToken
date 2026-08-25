@@ -83,10 +83,10 @@ describe("CommandCode model catalog", () => {
       description: facts.description,
       input: [...facts.input],
       reasoning: facts.reasoning,
-      reasoningEfforts:
-        facts.reasoningEfforts === undefined
+      thinkingLevelMap:
+        facts.thinkingLevelMap === undefined
           ? null
-          : [...facts.reasoningEfforts],
+          : { ...facts.thinkingLevelMap },
       contextWindow: facts.contextWindow,
       maxOutputTokens: facts.maxOutputTokens ?? null,
       minimumPlan: facts.minimumPlan,
@@ -96,7 +96,7 @@ describe("CommandCode model catalog", () => {
       .digest("hex");
 
     expect(fingerprint).toBe(
-      "bad008a25f1261a97a74baac070774fec82b15c1b9a48dbb3413047b9f1c54cd",
+      "889ab41999b02b2fd7a1a17f147818fa27a192d8e450375dc714cdb94e91b6b3",
     );
   });
 
@@ -110,12 +110,28 @@ describe("CommandCode model catalog", () => {
       contextWindow: 1_000_000,
       minimumPlan: "go",
     });
-    expect(kimi).not.toHaveProperty("reasoningEfforts");
+    expect(kimi?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
+      max: null,
+    });
     expect(
       COMMANDCODE_MODEL_FACTS.find((model) => model.id === "claude-sonnet-4-6"),
     ).toMatchObject({
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: "max",
+      },
       minimumPlan: "pro",
     });
     expect(
@@ -138,16 +154,33 @@ describe("CommandCode model catalog", () => {
       expect(new Set(facts.input).size).toBe(facts.input.length);
       expect(Number.isSafeInteger(facts.contextWindow)).toBe(true);
       expect(facts.contextWindow).toBeGreaterThan(0);
-      if (!facts.reasoning) expect(facts).not.toHaveProperty("reasoningEfforts");
+      if (!facts.reasoning) expect(facts).not.toHaveProperty("thinkingLevelMap");
       expect(Object.isFrozen(facts)).toBe(true);
       expect(Object.isFrozen(facts.input)).toBe(true);
-      if (facts.reasoningEfforts !== undefined) {
-        expect(Object.isFrozen(facts.reasoningEfforts)).toBe(true);
+      if (facts.thinkingLevelMap !== undefined) {
+        expect(Object.isFrozen(facts.thinkingLevelMap)).toBe(true);
       }
     }
     expect(ids.size).toBe(58);
     expect(plans).toEqual({ go: 36, goat: 4, pro: 13, max: 5 });
     expect(Object.isFrozen(COMMANDCODE_MODEL_FACTS)).toBe(true);
+  });
+
+  it("stores every reasoning capability as one explicit complete Pi level map", () => {
+    const keys = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    for (const facts of COMMANDCODE_MODEL_FACTS) {
+      if (!facts.reasoning) {
+        expect(facts).not.toHaveProperty("thinkingLevelMap");
+        continue;
+      }
+      const thinkingLevelMap = facts.thinkingLevelMap;
+      expect(thinkingLevelMap).toBeDefined();
+      if (thinkingLevelMap === undefined) throw new Error("missing level map");
+      expect(Object.keys(thinkingLevelMap)).toEqual(keys);
+      expect(Object.values(thinkingLevelMap).every(
+        (value) => value === null || typeof value === "string",
+      )).toBe(true);
+    }
   });
 
   it("keeps verified context and output limits without projection guesses", () => {
@@ -318,6 +351,15 @@ describe("CommandCode model catalog", () => {
     });
     for (const model of COMMANDCODE_GOAT_MODELS) {
       expect(model.api).toBe("openai-completions");
+    }
+  });
+
+  it("keeps Goat endpoint compatibility with the Goat provider projection", () => {
+    for (const projected of COMMANDCODE_GOAT_MODELS) {
+      expect(projected.compat).toEqual({
+        thinkingFormat: "openai",
+        supportsReasoningEffort: true,
+      });
     }
   });
 

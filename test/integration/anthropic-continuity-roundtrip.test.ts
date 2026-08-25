@@ -130,6 +130,7 @@ describe("Anthropic foreign continuity full-history round trip", () => {
     const projection = prepareAnthropicPayloadProjection({
       model,
       invocation: prepared.invocation,
+      effortPlan: prepared.effortPlan,
     });
     const payload = await captureFinalPiPayload((capture) =>
       streamOpenAICompletions(model, prepared.invocation.pi.context, {

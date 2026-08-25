@@ -102,6 +102,8 @@ export const UNKNOWN_CONTENT_IGNORED_NOTICE_CODE =
   "anthropic_unknown_content_ignored";
 export const UNCLAIMED_REQUEST_FIELD_NOTICE_CODE =
   "anthropic_unclaimed_request_field";
+export const UNKNOWN_EFFORT_FALLBACK_NOTICE_CODE =
+  "anthropic_unknown_effort_fallback";
 
 const ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS = new Set([
   "model",
@@ -310,7 +312,11 @@ function validateOutputConfig(value: unknown): {
   } else if (typeof effort !== "string") {
     throw new InvalidRequest("output_config.effort must be a string when present");
   } else if (!ANTHROPIC_EFFORTS.has(effort)) {
-    throw new InvalidRequest(`output_config.effort is not supported: ${effort}`);
+    effortIntent = {
+      kind: "specified",
+      level: "max",
+      normalizedFromUnknown: effort,
+    };
   } else {
     effortIntent = {
       kind: "specified",
@@ -1397,6 +1403,18 @@ export function convertValidatedAnthropicRequestWithPolicy(
   policy: AnthropicRequestConversionPolicy,
 ): AnthropicRequestConversion {
   const notices: ConversionNotice[] = [];
+  if (
+    request.reasoning.effort.kind === "specified" &&
+    request.reasoning.effort.normalizedFromUnknown !== undefined
+  ) {
+    notices.push(
+      requestNotice(
+        UNKNOWN_EFFORT_FALLBACK_NOTICE_CODE,
+        "degrade",
+        "$.output_config.effort",
+      ),
+    );
+  }
   for (const key of request.unclaimedTopLevelKeys) {
     notices.push(requestNotice(
       UNCLAIMED_REQUEST_FIELD_NOTICE_CODE,
@@ -1625,9 +1643,6 @@ export function convertValidatedAnthropicRequestWithPolicy(
   if (request.topK !== undefined) samplingParams.top_k = request.topK;
   if (Object.keys(samplingParams).length > 0) {
     options.samplingParams = Object.freeze(samplingParams);
-  }
-  if (request.reasoning.effort.kind === "specified") {
-    options.reasoning = request.reasoning.effort.level;
   }
   if (request.reasoning.activation.kind === "enabled") {
     const budget = request.reasoning.activation.budgetTokens;

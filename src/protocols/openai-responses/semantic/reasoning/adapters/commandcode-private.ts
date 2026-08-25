@@ -54,69 +54,74 @@ export const responsesToCommandCodePrivateReasoningAdapter: ResponsesReasoningAd
               }
             : { kind: "pi-native" },
         });
-      } else if (!input.model.reasoning) {
-        outcomes.push({
-          subject: "effort",
-          outcome:
-            effort.kind === "disabled"
-              ? { kind: "pi-native" }
-              : {
-                  kind: "omitted",
-                  warning: "target model does not support reasoning generation",
-                },
-        });
       } else if (effort.kind === "disabled") {
-        throw new InvalidResponsesReasoningProjection(
-          "CommandCode Private has no explicit reasoning-disable wire value",
-        );
-      } else {
-        const levels = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-        const available = levels.filter((level) => {
-          const mapped = input.model.thinkingLevelMap?.[level];
-          if (mapped === null) return false;
-          if (level === "xhigh" || level === "max") return mapped !== undefined;
-          return true;
-        });
-        const requestedIndex = levels.indexOf(effort.level);
-        const effective =
-          levels
-            .slice(requestedIndex)
-            .find((level) => available.includes(level)) ??
-          levels
-            .slice(0, requestedIndex)
-            .reverse()
-            .find((level) => available.includes(level));
-        if (effective === undefined) {
-          throw new InvalidResponsesReasoningProjection(
-            "CommandCode Private model has no supported reasoning effort",
-          );
-        }
-        const explicit = input.model.thinkingLevelMap?.[effective];
-        const expected =
-          typeof explicit === "string"
-            ? explicit
-            : effective === "minimal" || effective === "low"
-              ? "low"
-              : effective === "medium" || effective === "high"
-                ? effective
-                : undefined;
-        if (expected === undefined) {
-          throw new InvalidResponsesReasoningProjection(
-            `CommandCode Private has no certified ${effective} effort mapping`,
-          );
-        }
-        const repaired = params.reasoning_effort !== expected;
-        if (repaired) params.reasoning_effort = expected;
+        delete params.reasoning_effort;
         outcomes.push({
           subject: "effort",
-          outcome: repaired
-            ? {
-                kind: "payload-projected",
-                projector: "commandcode-private",
-                warning: "pi-native-mapping-repaired",
-              }
-            : { kind: "pi-native" },
+          outcome: {
+            kind: "degraded",
+            projector: "commandcode-private",
+            fallback: "reasoning-disable-to-provider-default",
+            warning:
+              "target cannot express explicit reasoning disable; provider default retained",
+          },
         });
+      } else {
+        const plan = input.prepared.effortPlan;
+        if (plan.kind !== "enabled" || plan.selection.kind !== "selected") {
+          delete params.reasoning_effort;
+          const nonReasoning =
+            plan.kind === "enabled" &&
+            plan.selection.kind === "non-reasoning";
+          outcomes.push({
+            subject: "effort",
+            outcome: {
+              kind: "degraded",
+              projector: "commandcode-private",
+              fallback: nonReasoning
+                ? "reasoning-to-ordinary-generation"
+                : "reasoning-to-provider-default",
+              warning: nonReasoning
+                ? "target model does not support reasoning; ordinary generation retained"
+                : "target model exposes no selectable reasoning level; provider default retained",
+            },
+          });
+        } else {
+          const expected = input.model.thinkingLevelMap?.[plan.selection.level];
+          if (typeof expected !== "string") {
+            delete params.reasoning_effort;
+            outcomes.push({
+              subject: "effort",
+              outcome: {
+                kind: "degraded",
+                projector: "commandcode-private",
+                fallback: "reasoning-to-provider-default",
+                warning: `CommandCode Private has no certified ${plan.selection.level} effort mapping; provider default retained`,
+              },
+            });
+          } else {
+            const repaired = params.reasoning_effort !== expected;
+            if (repaired) params.reasoning_effort = expected;
+            outcomes.push({
+              subject: "effort",
+              outcome:
+                plan.requested !== plan.selection.level
+                  ? {
+                      kind: "degraded",
+                      projector: "commandcode-private",
+                      fallback: "reasoning-effort-nearest-level",
+                      warning: `requested reasoning level ${plan.requested} mapped to supported level ${plan.selection.level}`,
+                    }
+                  : repaired
+                    ? {
+                        kind: "payload-projected",
+                        projector: "commandcode-private",
+                        warning: "pi-native-mapping-repaired",
+                      }
+                    : { kind: "pi-native" },
+            });
+          }
+        }
       }
       if (input.prepared.request.summary.kind === "requested") {
         outcomes.push({

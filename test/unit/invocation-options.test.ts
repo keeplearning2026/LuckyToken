@@ -36,7 +36,10 @@ describe("Anthropic Pi invocation controls", () => {
       temperature: 0,
       samplingParams: { top_p: 0.5, top_k: 3 },
       metadata: { user_id: "exact-user" },
-      reasoning: "high",
+    });
+    expect(invocation.invocation.reasoning.effort).toEqual({
+      kind: "specified",
+      level: "high",
     });
     expect(invocation.client.renderState).toEqual({
       stream: true,
@@ -80,12 +83,26 @@ describe("Anthropic Pi invocation controls", () => {
     expect(invocation.invocation.pi.options).toEqual({ maxTokens: 32, ...expected });
   });
 
-  it("rejects an unknown effort instead of changing it to Provider default", () => {
-    expect(() =>
+  it("normalizes an unknown effort to max without rejecting the request", () => {
+    const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request({ output_config: { effort: "super" } }),
       ),
-    ).toThrow(InvalidRequest);
+      1,
+    );
+
+    expect(invocation.invocation.pi.options).not.toHaveProperty("reasoning");
+    expect(invocation.invocation.reasoning.effort).toEqual({
+      kind: "specified",
+      level: "max",
+      normalizedFromUnknown: "super",
+    });
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "anthropic_unknown_effort_fallback",
+        action: "degrade",
+      }),
+    );
   });
 
   it("rejects a malformed known output format instead of ignoring it", () => {

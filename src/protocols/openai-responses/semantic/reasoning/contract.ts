@@ -14,6 +14,21 @@ export type ResponsesReasoningEffortIntent =
       readonly level: ResponsesReasoningEffortLevel;
     };
 
+export type ResponsesEffortPlan =
+  | { readonly kind: "provider-default" }
+  | { readonly kind: "disabled" }
+  | {
+      readonly kind: "enabled";
+      readonly requested: ResponsesReasoningEffortLevel;
+      readonly selection:
+        | {
+            readonly kind: "selected";
+            readonly level: ResponsesReasoningEffortLevel;
+          }
+        | { readonly kind: "no-selectable-level" }
+        | { readonly kind: "non-reasoning" };
+    };
+
 export type ResponsesReasoningSummaryPreference = "auto" | "concise" | "detailed";
 
 export type ResponsesReasoningSummaryIntent =
@@ -88,6 +103,7 @@ export interface PreparedResponsesReasoning {
   readonly context: Context;
   readonly options: ModelsSimpleStreamOptions;
   readonly request: ResponsesReasoningRequestIntent;
+  readonly effortPlan: ResponsesEffortPlan;
   readonly outcomes: readonly ResponsesReasoningOutcome[];
   readonly adapterId?: string;
 }

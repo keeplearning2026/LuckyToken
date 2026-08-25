@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../invocation.js";
+import type { AnthropicEffortPlan } from "../reasoning/contract.js";
 import {
   projectAnthropicToAnthropicMessagesReasoning,
   projectAnthropicToAnthropicMessagesSupplement,
@@ -40,6 +41,7 @@ import type { AnthropicPayloadProjectionResult } from "./contract.js";
 export interface AnthropicTargetProjectionInput {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 }
 

@@ -435,7 +435,11 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       { model: "m", input: "x", reasoning: { effort: "ultra" } },
       1,
     );
-    expect(invocation.invocation.pi.options.reasoning).toBe("max");
+    expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
+    expect(invocation.invocation.reasoning.request.effort).toEqual({
+      kind: "enabled",
+      level: "max",
+    });
   });
 
   it("rejects malformed previous_response_id, store, and tool_choice shapes", () => {
@@ -470,7 +474,11 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.options.reasoning).toBe("max");
+    expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
+    expect(invocation.invocation.reasoning.request.effort).toEqual({
+      kind: "enabled",
+      level: "max",
+    });
     expect(
       invocation.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);
@@ -798,14 +806,18 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     });
   });
 
-  it("maps reasoning effort minimal through xhigh directly", () => {
+  it("normalizes reasoning intent without writing a model-unvalidated Pi option", () => {
     for (const effort of ["minimal", "low", "medium", "high", "xhigh"]) {
       const invocation = convertResponsesRequest(
         { model: "m", input: "x", reasoning: { effort } },
         1,
         policy(),
       );
-      expect(invocation.invocation.pi.options.reasoning).toBe(effort);
+      expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
+      expect(invocation.invocation.reasoning.request.effort).toEqual({
+        kind: "enabled",
+        level: effort,
+      });
     }
   });
 
@@ -833,7 +845,11 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(ultra.invocation.pi.options.reasoning).toBe("max");
+    expect(ultra.invocation.pi.options.reasoning).toBeUndefined();
+    expect(ultra.invocation.reasoning.request.effort).toEqual({
+      kind: "enabled",
+      level: "max",
+    });
     expect(
       ultra.client.notices.some((n) => n.code === "openai-responses_effort_ultra_alias"),
     ).toBe(true);
@@ -842,7 +858,11 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(max.invocation.pi.options.reasoning).toBe("max");
+    expect(max.invocation.pi.options.reasoning).toBeUndefined();
+    expect(max.invocation.reasoning.request.effort).toEqual({
+      kind: "enabled",
+      level: "max",
+    });
     expect(max.client.notices).toEqual([]);
   });
 
@@ -852,7 +872,11 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy({ futureReasoningEffort: "max" }),
     );
-    expect(invocation.invocation.pi.options.reasoning).toBe("max");
+    expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
+    expect(invocation.invocation.reasoning.request.effort).toEqual({
+      kind: "enabled",
+      level: "max",
+    });
     expect(
       invocation.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);
@@ -1729,7 +1753,7 @@ describe("13 recheck: privileged mode extreme combinations", () => {
 });
 
 describe("13 recheck: effort full matrix", () => {
-  it("maps every known effort value exactly", () => {
+  it("normalizes every known effort value without writing a pre-model Pi option", () => {
     const cases: Array<[string, string | undefined]> = [
       ["none", undefined],
       ["minimal", "minimal"],
@@ -1746,7 +1770,12 @@ describe("13 recheck: effort full matrix", () => {
         1,
         policy(),
       );
-      expect(invocation.invocation.pi.options.reasoning).toBe(expected);
+      expect(invocation.invocation.pi.options.reasoning).toBeUndefined();
+      expect(invocation.invocation.reasoning.request.effort).toEqual(
+        expected === undefined
+          ? { kind: "disabled" }
+          : { kind: "enabled", level: expected },
+      );
     }
   });
 
@@ -1756,7 +1785,11 @@ describe("13 recheck: effort full matrix", () => {
       1,
       policy({ futureReasoningEffort: "max" }),
     );
-    expect(max.invocation.pi.options.reasoning).toBe("max");
+    expect(max.invocation.pi.options.reasoning).toBeUndefined();
+    expect(max.invocation.reasoning.request.effort).toEqual({
+      kind: "enabled",
+      level: "max",
+    });
     expect(
       max.client.notices.some((n) => n.code === "openai-responses_future_effort"),
     ).toBe(true);

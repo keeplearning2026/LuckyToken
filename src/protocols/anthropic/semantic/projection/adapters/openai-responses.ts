@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
+import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
@@ -71,17 +72,25 @@ function projectReasoning(
     readonly api: AnthropicResponsesTargetApi;
     readonly model: Model<string>;
     readonly invocation: AnthropicSemanticInvocation;
+    readonly effortPlan: AnthropicEffortPlan;
   },
   payload: Record<string, unknown>,
   outcomes: AnthropicProjectionOutcome[],
 ): void {
   const activation = input.invocation.reasoning.activation;
   const effort = input.invocation.reasoning.effort;
-  if (effort.kind === "specified" && !input.model.reasoning) {
+  const effortPlan = input.effortPlan;
+  if (
+    effortPlan.kind === "specified" &&
+    effortPlan.selection.kind !== "selected"
+  ) {
     clearResponsesReasoning(payload);
     add(outcomes, "reasoning.effort", {
-      kind: "omitted",
-      warning: `${input.api} target model does not support reasoning effort`,
+      kind: "degraded",
+      warning:
+        effortPlan.selection.kind === "non-reasoning"
+          ? `${input.api} target model does not support reasoning; ordinary generation was retained`
+          : `${input.api} target model exposes no selectable reasoning level; Provider default was retained`,
     });
     return;
   }
@@ -117,9 +126,15 @@ function projectReasoning(
   let expected: Record<string, unknown> | undefined;
   if (activation.kind === "disabled") {
     expected = { effort: input.model.thinkingLevelMap?.off ?? "none" };
-  } else if (activation.kind === "omitted" && effort.kind === "specified") {
+  } else if (
+    activation.kind === "omitted" &&
+    effortPlan.kind === "specified" &&
+    effortPlan.selection.kind === "selected"
+  ) {
     expected = {
-      effort: input.model.thinkingLevelMap?.[effort.level] ?? effort.level,
+      effort:
+        input.model.thinkingLevelMap?.[effortPlan.selection.level] ??
+        effortPlan.selection.level,
       summary: "auto",
     };
   } else if (activation.kind === "omitted" && effort.kind === "explicit-null") {
@@ -143,7 +158,19 @@ function projectReasoning(
     ? "reasoning.activation"
     : "reasoning.effort";
   if (same(payload.reasoning, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(
+      outcomes,
+      control,
+      control === "reasoning.effort" &&
+        effortPlan.kind === "specified" &&
+        effortPlan.selection.kind === "selected" &&
+        effortPlan.requested !== effortPlan.selection.level
+        ? {
+            kind: "degraded",
+            warning: `requested reasoning level ${effortPlan.requested} mapped to supported Pi level ${effortPlan.selection.level}`,
+          }
+        : { kind: "pi-native" },
+    );
   } else {
     clearResponsesReasoning(payload);
     add(outcomes, control, {
@@ -165,6 +192,7 @@ type ProjectionInput = {
   readonly api: AnthropicResponsesTargetApi;
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 };
 

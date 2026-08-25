@@ -1,5 +1,4 @@
 import {
-  clampThinkingLevel,
   createAssistantMessageEventStream,
   createProvider,
   getSupportedThinkingLevels,
@@ -285,23 +284,16 @@ export function convertCommandCodeTools(
 
 const REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
-function mapReasoningLevel(
+function mappedReasoningLevel(
   model: Model<typeof API_ID>,
   level: Exclude<ModelThinkingLevel, "off">,
-): string {
+): string | undefined {
+  if (!getSupportedThinkingLevels(model).includes(level)) return undefined;
   const explicit = model.thinkingLevelMap?.[level];
-  if (explicit === null) {
-    throw new Error(`Model exposes an unsupported thinking level: ${level}`);
-  }
-  if (explicit !== undefined) {
-    if (!REASONING_EFFORTS.has(explicit)) {
-      throw new Error(`Model maps ${level} to an invalid CommandCode effort`);
-    }
-    return explicit;
-  }
-  if (level === "minimal" || level === "low") return "low";
-  if (level === "medium" || level === "high") return level;
-  throw new Error(`Model must explicitly map CommandCode effort for ${level}`);
+  const mapped = explicit ?? level;
+  return typeof mapped === "string" && REASONING_EFFORTS.has(mapped)
+    ? mapped
+    : undefined;
 }
 
 function resolveReasoning(
@@ -310,12 +302,15 @@ function resolveReasoning(
 ): { effort?: string; supportedEfforts: ReadonlySet<string> } {
   const supportedEfforts = new Set<string>();
   for (const level of getSupportedThinkingLevels(model)) {
-    if (level !== "off") supportedEfforts.add(mapReasoningLevel(model, level));
+    if (level === "off") continue;
+    const mapped = mappedReasoningLevel(model, level);
+    if (mapped !== undefined) supportedEfforts.add(mapped);
   }
   if (options?.reasoning === undefined) return { supportedEfforts };
-  const effective = clampThinkingLevel(model, options.reasoning);
-  if (effective === "off") return { supportedEfforts };
-  return { effort: mapReasoningLevel(model, effective), supportedEfforts };
+  const effort = mappedReasoningLevel(model, options.reasoning);
+  return effort === undefined
+    ? { supportedEfforts }
+    : { effort, supportedEfforts };
 }
 
 function resolvePermissionMode(value: string | undefined): string {

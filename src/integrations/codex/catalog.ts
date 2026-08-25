@@ -1,6 +1,7 @@
 import {
   getSupportedThinkingLevels,
   type Model,
+  type ModelThinkingLevel,
   type Models,
 } from "@earendil-works/pi-ai";
 
@@ -56,18 +57,37 @@ function reasoningDescriptions(
   return descriptions;
 }
 
+type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+function codexReasoningEffort(
+  level: ModelThinkingLevel,
+): CodexReasoningEffort | undefined {
+  if (level === "minimal" || level === "low") return "low";
+  if (
+    level === "medium" ||
+    level === "high" ||
+    level === "xhigh" ||
+    level === "max"
+  ) {
+    return level;
+  }
+  return undefined;
+}
+
 function supportedReasoningLevels(
   model: Model<string>,
   descriptions: ReadonlyMap<string, string>,
 ): readonly Readonly<{ effort: string; description: string }>[] {
   if (!model.reasoning) return Object.freeze([]);
+  const emitted = new Set<CodexReasoningEffort>();
   return Object.freeze(
-    getSupportedThinkingLevels(model).flatMap((effort) => {
-      if (effort === "off") return [];
+    getSupportedThinkingLevels(model).flatMap((level) => {
+      const effort = codexReasoningEffort(level);
+      if (effort === undefined || emitted.has(effort)) return [];
       const description = descriptions.get(effort);
-      return description === undefined
-        ? []
-        : [Object.freeze({ effort, description })];
+      if (description === undefined) return [];
+      emitted.add(effort);
+      return [Object.freeze({ effort, description })];
     }),
   );
 }

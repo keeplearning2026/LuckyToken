@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
+import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
@@ -89,6 +90,7 @@ function mappedToolChoice(
 interface ProjectionInput {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 }
 
@@ -274,31 +276,41 @@ function projectAnthropicToBedrock(
       delete additional.thinking;
       delete additional.anthropic_beta;
     }
-    if (effort.kind === "specified") {
-      const explicit = input.model.thinkingLevelMap?.[effort.level];
+    if (input.effortPlan.kind === "specified") {
+      const selected = input.effortPlan.selection;
       const expectedEffort =
-        explicit === null
-          ? undefined
-          : typeof explicit === "string"
-            ? explicit
-            : effort.level === "low" || effort.level === "medium" || effort.level === "high"
-              ? effort.level
-              : undefined;
+        selected.kind === "selected"
+          ? input.model.thinkingLevelMap?.[selected.level]
+          : undefined;
       if (
         activation.kind === "adaptive" &&
-        expectedEffort !== undefined &&
+        typeof expectedEffort === "string" &&
         same(outputConfig.effort, expectedEffort)
       ) {
-        add(outcomes, "reasoning.effort", { kind: "pi-native" });
+        add(
+          outcomes,
+          "reasoning.effort",
+          selected.kind === "selected" &&
+            input.effortPlan.requested !== selected.level
+            ? {
+                kind: "degraded",
+                warning: `requested reasoning level ${input.effortPlan.requested} mapped to supported Pi level ${selected.level}`,
+              }
+            : { kind: "pi-native" },
+        );
       } else {
         delete outputConfig.effort;
         add(outcomes, "reasoning.effort", {
-          kind: "omitted",
+          kind: "degraded",
           warning:
-            activation.kind === "adaptive" && expectedEffort !== undefined
-              ? "Pi did not emit the certified Bedrock Claude reasoning effort"
-              : activation.kind === "adaptive"
-              ? `Bedrock Claude model ${input.model.id} has no certified ${effort.level} effort mapping`
+            selected.kind === "non-reasoning"
+              ? "Bedrock Claude target does not support reasoning; ordinary generation was retained"
+              : selected.kind === "no-selectable-level"
+                ? "Bedrock Claude target exposes no selectable reasoning level; Provider default was retained"
+                : activation.kind === "adaptive" && typeof expectedEffort === "string"
+                  ? "Pi did not emit the selected Bedrock Claude reasoning effort; Provider default was retained"
+                  : activation.kind === "adaptive"
+              ? `Bedrock Claude model ${input.model.id} has no certified ${selected.level} effort mapping; Provider default was retained`
               : "Bedrock Claude effort requires an explicit adaptive-thinking source activation",
         });
       }
@@ -315,10 +327,10 @@ function projectAnthropicToBedrock(
           }
         : { kind: "pi-native" });
     }
-    if (effort.kind === "specified") {
+    if (input.effortPlan.kind === "specified") {
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: "Bedrock non-Claude target has no certified Anthropic effort control",
+        kind: "degraded",
+        warning: "Bedrock non-Claude target has no certified Anthropic effort control; Provider default was retained",
       });
     }
   }

@@ -7,25 +7,88 @@ export type CommandCodeReasoningEffort =
   | "xhigh"
   | "max";
 
+export type CommandCodeThinkingLevel =
+  | "off"
+  | "minimal"
+  | CommandCodeReasoningEffort;
+
+export type CommandCodeThinkingLevelMap = Readonly<
+  Record<CommandCodeThinkingLevel, string | null>
+>;
+
 export interface CommandCodeModelFacts {
   readonly id: string;
   readonly name: string;
   readonly description: string;
   readonly input: readonly ("text" | "image")[];
   readonly reasoning: boolean;
-  readonly reasoningEfforts?: readonly CommandCodeReasoningEffort[];
+  readonly thinkingLevelMap?: CommandCodeThinkingLevelMap;
   readonly contextWindow: number;
   readonly maxOutputTokens?: number;
   readonly minimumPlan: CommandCodePlan;
 }
 
-const EFFORT_ORDER: readonly CommandCodeReasoningEffort[] = Object.freeze([
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+const explicitThinkingLevelMap = (
+  values: Omit<CommandCodeThinkingLevelMap, "off" | "minimal">,
+): CommandCodeThinkingLevelMap =>
+  Object.freeze({ off: null, minimal: null, ...values });
+
+const NO_SELECTABLE_THINKING_LEVELS = explicitThinkingLevelMap({
+  low: null,
+  medium: null,
+  high: null,
+  xhigh: null,
+  max: null,
+});
+const LOW_MEDIUM_HIGH = explicitThinkingLevelMap({
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: null,
+  max: null,
+});
+const LOW_MEDIUM_HIGH_XHIGH = explicitThinkingLevelMap({
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: null,
+});
+const LOW_MEDIUM_HIGH_XHIGH_MAX = explicitThinkingLevelMap({
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "max",
+});
+const HIGH_MAX = explicitThinkingLevelMap({
+  low: null,
+  medium: null,
+  high: "high",
+  xhigh: null,
+  max: "max",
+});
+const LOW_HIGH_MAX = explicitThinkingLevelMap({
+  low: "low",
+  medium: null,
+  high: "high",
+  xhigh: null,
+  max: "max",
+});
+const LOW_MEDIUM_XHIGH = explicitThinkingLevelMap({
+  low: "low",
+  medium: "medium",
+  high: null,
+  xhigh: "xhigh",
+  max: null,
+});
+const HIGH_XHIGH = explicitThinkingLevelMap({
+  low: null,
+  medium: null,
+  high: "high",
+  xhigh: "xhigh",
+  max: null,
+});
 
 function freezeAndValidateFacts(
   values: readonly CommandCodeModelFacts[],
@@ -52,26 +115,26 @@ function freezeAndValidateFacts(
       ) {
         throw new Error(`CommandCode model ${value.id} must have a positive max output`);
       }
-      if (!value.reasoning && value.reasoningEfforts !== undefined) {
-        throw new Error(`CommandCode model ${value.id} cannot declare efforts without reasoning`);
+      if (!value.reasoning && value.thinkingLevelMap !== undefined) {
+        throw new Error(`CommandCode model ${value.id} cannot declare levels without reasoning`);
       }
-      if (value.reasoningEfforts?.length === 0) {
-        throw new Error(`CommandCode model ${value.id} must omit empty reasoning efforts`);
+      if (value.reasoning && value.thinkingLevelMap === undefined) {
+        throw new Error(`CommandCode reasoning model ${value.id} requires an explicit level map`);
       }
-      let previousIndex = -1;
-      for (const effort of value.reasoningEfforts ?? []) {
-        const index = EFFORT_ORDER.indexOf(effort);
-        if (index <= previousIndex) {
-          throw new Error(`CommandCode model ${value.id} has invalid reasoning efforts`);
+      if (value.thinkingLevelMap !== undefined) {
+        const keys = Object.keys(value.thinkingLevelMap);
+        if (
+          keys.join(",") !== "off,minimal,low,medium,high,xhigh,max" ||
+          Object.values(value.thinkingLevelMap).some(
+            (mapped) => mapped !== null && typeof mapped !== "string",
+          )
+        ) {
+          throw new Error(`CommandCode model ${value.id} has an incomplete level map`);
         }
-        previousIndex = index;
       }
       return Object.freeze({
         ...value,
         input: Object.freeze([...value.input]),
-        ...(value.reasoningEfforts === undefined
-          ? {}
-          : { reasoningEfforts: Object.freeze([...value.reasoningEfforts]) }),
       });
     }),
   );
@@ -86,7 +149,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "best combo of speed & intelligence (recommended)",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "pro",
     },
@@ -96,7 +159,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "prev Sonnet, still fast & capable",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "pro",
     },
@@ -106,7 +169,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "most capable for demanding reasoning & long-horizon agents",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "max",
     },
@@ -116,7 +179,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "most intelligent Opus for agents and coding",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "max",
     },
@@ -126,7 +189,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "prev flagship, still strong for agents and coding",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "max",
     },
@@ -136,7 +199,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "older Opus, still strong for agents and coding",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "max",
     },
@@ -155,7 +218,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "frontier model for complex professional work",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_050_000,
       minimumPlan: "goat",
     },
@@ -165,7 +228,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "balances intelligence and cost",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_050_000,
       minimumPlan: "pro",
     },
@@ -175,7 +238,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "optimized for cost-sensitive workloads",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH_MAX,
       contextWindow: 1_050_000,
       minimumPlan: "go",
     },
@@ -185,7 +248,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "latest frontier model for general complex work",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH,
       contextWindow: 400_000,
       minimumPlan: "pro",
     },
@@ -195,7 +258,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "frontier model for general complex work",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH,
       contextWindow: 400_000,
       minimumPlan: "pro",
     },
@@ -205,7 +268,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "frontier coding model",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH,
       contextWindow: 400_000,
       minimumPlan: "pro",
     },
@@ -215,7 +278,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "fast, cost-effective model for everyday tasks",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH,
       contextWindow: 400_000,
       minimumPlan: "pro",
     },
@@ -225,7 +288,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "hybrid-attention long-context reasoning",
       input: ["text"],
       reasoning: true,
-      reasoningEfforts: ["high", "max"],
+      thinkingLevelMap: HIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -235,7 +298,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "fast hybrid-attention reasoning",
       input: ["text"],
       reasoning: true,
-      reasoningEfforts: ["high", "max"],
+      thinkingLevelMap: HIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -245,7 +308,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "fast hybrid-attention reasoning with vision",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["high", "max"],
+      thinkingLevelMap: HIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -255,6 +318,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "long-horizon coding & knowledge work with 1M context",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -264,6 +328,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "improved long-horizon coding with vision",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 256_000,
       minimumPlan: "go",
     },
@@ -273,6 +338,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "high-speed long-horizon coding with vision",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 262_000,
       minimumPlan: "go",
     },
@@ -300,7 +366,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "frontier coding with emergent cyber capabilities",
       input: ["text"],
       reasoning: true,
-      reasoningEfforts: ["low", "high", "max"],
+      thinkingLevelMap: LOW_HIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -310,7 +376,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "powerful coding with 1M context and long-horizon tasks",
       input: ["text"],
       reasoning: true,
-      reasoningEfforts: ["high", "max"],
+      thinkingLevelMap: HIGH_MAX,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -347,6 +413,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "frontier coding, agents & native multimodality",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -392,7 +459,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "autonomous long-horizon coding & professional work",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "xhigh"],
+      thinkingLevelMap: LOW_MEDIUM_XHIGH,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -402,7 +469,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "compact vision-language coding & agentic work",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "xhigh"],
+      thinkingLevelMap: LOW_MEDIUM_XHIGH,
       contextWindow: 262_144,
       maxOutputTokens: 32_768,
       minimumPlan: "go",
@@ -413,6 +480,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "frontier coding & long-horizon agent execution",
       input: ["text"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -422,6 +490,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "agentic coding & reasoning at lower cost",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -431,6 +500,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "fast low-cost agentic coding & reasoning",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -440,6 +510,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "vibe coding & efficient agent execution",
       input: ["text"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 200_000,
       minimumPlan: "go",
     },
@@ -449,6 +520,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "agentic coding & reasoning",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 200_000,
       minimumPlan: "go",
     },
@@ -458,6 +530,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "multimodal sparse-MoE reasoning",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 256_000,
       minimumPlan: "go",
     },
@@ -467,6 +540,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "fast sparse-MoE agentic reasoning",
       input: ["text"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -476,6 +550,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "sparse-MoE reasoning & agentic tool use",
       input: ["text"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 262_144,
       minimumPlan: "go",
     },
@@ -485,7 +560,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "higher-quality coding & agentic workflows, fewer tokens",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH,
       contextWindow: 1_000_000,
       minimumPlan: "goat",
     },
@@ -495,7 +570,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "previous Gemini Flash, still fast & capable",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH,
       contextWindow: 1_000_000,
       minimumPlan: "pro",
     },
@@ -505,7 +580,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "Pro-level coding proficiency, parallel agentic execution",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH,
       contextWindow: 1_000_000,
       minimumPlan: "pro",
     },
@@ -515,7 +590,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "upgraded agentic capabilities, ideal for subagents",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH,
       contextWindow: 1_000_000,
       minimumPlan: "pro",
     },
@@ -525,7 +600,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "high-volume workhorse model with implicit caching",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH,
       contextWindow: 1_000_000,
       minimumPlan: "pro",
     },
@@ -535,7 +610,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "multi-agent orchestration across frontier models",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["high", "xhigh"],
+      thinkingLevelMap: HIGH_XHIGH,
       contextWindow: 1_000_000,
       minimumPlan: "max",
     },
@@ -545,6 +620,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "open reasoning model for long-horizon autonomous agents",
       input: ["text"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -554,6 +630,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "multimodal MoE reasoning",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 256_000,
       minimumPlan: "go",
     },
@@ -563,6 +640,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "lightweight MoE reasoning at lower cost and latency",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -572,7 +650,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "long-horizon coding, agentic work & visual context",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "high", "max"],
+      thinkingLevelMap: LOW_HIGH_MAX,
       contextWindow: 1_000_000,
       maxOutputTokens: 131_072,
       minimumPlan: "go",
@@ -583,6 +661,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "open-weight agentic coding and long-horizon work",
       input: ["text"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 256_000,
       maxOutputTokens: 32_768,
       minimumPlan: "go",
@@ -593,6 +672,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "agentic performance, tool use, and computer use",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "pro",
     },
@@ -602,6 +682,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "coding-optimized for agentic workflows and large codebases",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "goat",
     },
@@ -611,6 +692,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "Muse Spark 1.2 at ~95% off",
       input: ["text", "image"],
       reasoning: true,
+      thinkingLevelMap: NO_SELECTABLE_THINKING_LEVELS,
       contextWindow: 1_000_000,
       minimumPlan: "go",
     },
@@ -620,7 +702,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "smartest model for coding, agentic tasks, knowledge work",
       input: ["text", "image"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH,
       contextWindow: 500_000,
       minimumPlan: "go",
     },
@@ -630,7 +712,7 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       description: "frontier performance on coding, knowledge work, and STEM",
       input: ["text"],
       reasoning: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      thinkingLevelMap: LOW_MEDIUM_HIGH_XHIGH,
       contextWindow: 500_000,
       minimumPlan: "goat",
     },

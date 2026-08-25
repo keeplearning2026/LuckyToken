@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
+import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
@@ -429,6 +430,7 @@ function projectReasoning(
   payload: Record<string, unknown>,
   model: Model<string>,
   invocation: AnthropicSemanticInvocation,
+  effortPlan: AnthropicEffortPlan,
   outcomes: AnthropicProjectionOutcome[],
 ): void {
   const activation = invocation.reasoning.activation;
@@ -465,20 +467,45 @@ function projectReasoning(
     }
   }
 
-  if (effort.kind === "specified") {
-    if (model.reasoning !== true) {
+  if (effortPlan.kind === "specified") {
+    if (effortPlan.selection.kind === "non-reasoning") {
       clearOmittedReasoning(payload, format, compat);
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: "target model does not support reasoning effort",
+        kind: "degraded",
+        warning:
+          "target model does not support reasoning; ordinary generation was retained",
       });
-    } else if (hasEffortReasoningShape(payload, model, format, compat, effort.level)) {
-      add(outcomes, "reasoning.effort", { kind: "pi-native" });
+    } else if (effortPlan.selection.kind === "no-selectable-level") {
+      clearOmittedReasoning(payload, format, compat);
+      add(outcomes, "reasoning.effort", {
+        kind: "degraded",
+        warning:
+          "target model exposes no selectable reasoning level; Provider default was retained",
+      });
+    } else if (
+      hasEffortReasoningShape(
+        payload,
+        model,
+        format,
+        compat,
+        effortPlan.selection.level,
+      )
+    ) {
+      add(
+        outcomes,
+        "reasoning.effort",
+        effortPlan.requested === effortPlan.selection.level
+          ? { kind: "pi-native" }
+          : {
+              kind: "degraded",
+              warning: `requested reasoning level ${effortPlan.requested} mapped to supported Pi level ${effortPlan.selection.level}`,
+            },
+      );
     } else {
       clearOmittedReasoning(payload, format, compat);
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: `openai-completions ${format} has no certified ${effort.level} effort mapping`,
+        kind: "degraded",
+        warning: `openai-completions ${format} has no certified ${effortPlan.selection.level} effort mapping; Provider default was retained`,
       });
     }
   }
@@ -487,6 +514,7 @@ function projectReasoning(
 type ProjectionInput = {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 };
 
@@ -664,6 +692,7 @@ function projectAnthropicToOpenAICompletions(
       payload,
       input.model,
       input.invocation,
+      input.effortPlan,
       outcomes,
     );
   }

@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
+import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
@@ -54,6 +55,7 @@ function mappedToolChoice(
 type ProjectionInput = {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 };
 
@@ -126,20 +128,34 @@ function projectAnthropicToPiMessages(
   }
   } else {
   const effort = input.invocation.reasoning.effort;
-  if (effort.kind === "specified") {
-    if (!input.model.reasoning) {
+  const effortPlan = input.effortPlan;
+  if (effortPlan.kind === "specified") {
+    if (effortPlan.selection.kind !== "selected") {
       delete options.reasoning;
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: `pi-messages model ${input.model.id} does not support reasoning effort`,
+        kind: "degraded",
+        warning:
+          effortPlan.selection.kind === "non-reasoning"
+            ? `pi-messages model ${input.model.id} does not support reasoning; ordinary generation was retained`
+            : `pi-messages model ${input.model.id} exposes no selectable reasoning level; Provider default was retained`,
       });
-    } else if (same(options.reasoning, effort.level)) {
-      add(outcomes, "reasoning.effort", { kind: "pi-native" });
+    } else if (same(options.reasoning, effortPlan.selection.level)) {
+      add(
+        outcomes,
+        "reasoning.effort",
+        effortPlan.requested === effortPlan.selection.level
+          ? { kind: "pi-native" }
+          : {
+              kind: "degraded",
+              warning: `requested reasoning level ${effortPlan.requested} mapped to supported Pi level ${effortPlan.selection.level}`,
+            },
+      );
     } else {
       delete options.reasoning;
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: "Pi did not retain the certified Pi Messages reasoning effort",
+        kind: "degraded",
+        warning:
+          "Pi did not retain the selected Pi Messages reasoning effort; Provider default was retained",
       });
     }
   } else if (effort.kind === "explicit-null") {

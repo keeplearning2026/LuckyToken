@@ -129,6 +129,7 @@ describe("CommandCode Goat Provider Package", () => {
     expect(requests[0]?.headers.get("authorization")).toBe(
       "Bearer goat-secret",
     );
+    expect(requests[0]?.headers.get("x-cmd-zdr")).toBe("1");
     await expect(requests[0]?.json()).resolves.toMatchObject({
       model: "deepseek/deepseek-v4-flash",
       stream: true,

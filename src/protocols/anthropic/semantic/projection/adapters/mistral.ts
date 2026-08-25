@@ -2,6 +2,10 @@ import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
 import type {
+  AnthropicEffortPlan,
+  AnthropicSelectedPiEffort,
+} from "../../reasoning/contract.js";
+import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
 } from "../contract.js";
@@ -37,23 +41,13 @@ function exact(
   });
 }
 
-const MISTRAL_REASONING_EFFORT_MODELS = new Set([
-  "mistral-small-2603",
-  "mistral-small-latest",
-  "mistral-medium-3.5",
-]);
-
 function expectedMistralReasoningEffort(
   model: Model<string>,
-  level: "low" | "medium" | "high" | "xhigh" | "max",
+  level: AnthropicSelectedPiEffort,
 ): string | undefined {
-  if (!model.reasoning || !MISTRAL_REASONING_EFFORT_MODELS.has(model.id)) {
-    return undefined;
-  }
+  if (!model.reasoning) return undefined;
   const mapped = model.thinkingLevelMap?.[level];
-  if (mapped === null) return undefined;
-  if (typeof mapped === "string") return mapped;
-  return level === "high" ? "high" : undefined;
+  return typeof mapped === "string" ? mapped : undefined;
 }
 
 function clearMistralReasoning(payload: Record<string, unknown>): boolean {
@@ -84,6 +78,7 @@ function mappedToolChoice(
 type ProjectionInput = {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 };
 
@@ -207,26 +202,46 @@ function projectAnthropicToMistral(
         warning: "reasoning effort cannot be applied while reasoning is explicitly disabled",
       });
     }
-  } else if (effort.kind === "specified") {
+  } else if (input.effortPlan.kind === "specified") {
+    if (input.effortPlan.selection.kind !== "selected") {
+      clearMistralReasoning(payload);
+      add(outcomes, "reasoning.effort", {
+        kind: "degraded",
+        warning:
+          input.effortPlan.selection.kind === "non-reasoning"
+            ? "Mistral target does not support reasoning; ordinary generation was retained"
+            : "Mistral target exposes no selectable reasoning level; Provider default was retained",
+      });
+    } else {
     const expectedEffort = expectedMistralReasoningEffort(
       input.model,
-      effort.level,
+      input.effortPlan.selection.level,
     );
     if (expectedEffort === undefined) {
       clearMistralReasoning(payload);
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: "mistral-conversations has no certified equivalent for the requested reasoning effort",
+        kind: "degraded",
+        warning: "mistral-conversations has no certified equivalent for the selected reasoning effort; Provider default was retained",
       });
     } else if (same(payload.reasoningEffort, expectedEffort)) {
       delete payload.promptMode;
-      add(outcomes, "reasoning.effort", { kind: "pi-native" });
+      add(
+        outcomes,
+        "reasoning.effort",
+        input.effortPlan.requested === input.effortPlan.selection.level
+          ? { kind: "pi-native" }
+          : {
+              kind: "degraded",
+              warning: `requested reasoning level ${input.effortPlan.requested} mapped to supported Pi level ${input.effortPlan.selection.level}`,
+            },
+      );
     } else {
       clearMistralReasoning(payload);
       add(outcomes, "reasoning.effort", {
-        kind: "omitted",
-        warning: "Pi did not emit the certified Mistral reasoning effort",
+        kind: "degraded",
+        warning: "Pi did not emit the selected Mistral reasoning effort; Provider default was retained",
       });
+    }
     }
   }
   }

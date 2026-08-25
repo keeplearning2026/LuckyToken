@@ -90,57 +90,91 @@ function unsupportedSummary(input: ProjectInput): ResponsesReasoningOutcome | un
     : undefined;
 }
 
-const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+function selectedEnabledLevel(input: ProjectInput) {
+  const plan = input.prepared.effortPlan;
+  if (plan.kind !== "enabled" || plan.selection.kind !== "selected") {
+    throw new InvalidResponsesReasoningProjection(
+      "selected reasoning level required by target projection",
+    );
+  }
+  return plan.selection.level;
+}
 
-function clampedEnabledLevel(input: ProjectInput): Exclude<
-  (typeof THINKING_LEVELS)[number],
-  "off"
-> {
-  const effort = input.prepared.request.effort;
-  if (effort.kind !== "enabled") {
-    throw new InvalidResponsesReasoningProjection(
-      "enabled reasoning level requested for a non-enabled intent",
-    );
+function finalizedEffort(
+  input: ProjectInput,
+  repaired: boolean,
+): ResponsesReasoningOutcome {
+  const plan = input.prepared.effortPlan;
+  if (
+    plan.kind === "enabled" &&
+    plan.selection.kind === "selected" &&
+    plan.requested !== plan.selection.level
+  ) {
+    return outcome("effort", {
+      kind: "degraded",
+      projector: input.model.api,
+      fallback: "reasoning-effort-nearest-level",
+      warning: `requested reasoning level ${plan.requested} mapped to supported level ${plan.selection.level}`,
+    });
   }
-  if (!input.model.reasoning) {
-    throw new InvalidResponsesReasoningProjection(
-      `${input.model.api} model ${input.model.id} does not support reasoning`,
-    );
-  }
-  const available = THINKING_LEVELS.filter((level) => {
-    const mapped = input.model.thinkingLevelMap?.[level];
-    if (mapped === null) return false;
-    if (level === "xhigh" || level === "max") return mapped !== undefined;
-    return level !== "off";
+  return repaired
+    ? repairedEffort(input)
+    : outcome("effort", { kind: "pi-native" });
+}
+
+function unavailableEnabledSelection(
+  input: ProjectInput,
+): "no-selectable-level" | "non-reasoning" | undefined {
+  const plan = input.prepared.effortPlan;
+  return plan.kind === "enabled" && plan.selection.kind !== "selected"
+    ? plan.selection.kind
+    : undefined;
+}
+
+function unavailableEffortOutcome(
+  input: ProjectInput,
+  selection: "no-selectable-level" | "non-reasoning",
+): ResponsesReasoningOutcome {
+  return selection === "non-reasoning"
+    ? outcome("effort", {
+        kind: "degraded",
+        projector: input.model.api,
+        fallback: "reasoning-to-ordinary-generation",
+        warning:
+          "target model does not support reasoning; ordinary generation retained",
+      })
+    : outcome("effort", {
+        kind: "degraded",
+        projector: input.model.api,
+        fallback: "reasoning-to-provider-default",
+        warning:
+          "target model exposes no selectable reasoning level; provider default retained",
+      });
+}
+
+function unavailableDisabledOutcome(input: ProjectInput): ResponsesReasoningOutcome {
+  return outcome("effort", {
+    kind: "degraded",
+    projector: input.model.api,
+    fallback: "reasoning-disable-to-provider-default",
+    warning:
+      "target cannot express explicit reasoning disable; provider default retained",
   });
-  const requestedIndex = THINKING_LEVELS.indexOf(effort.level);
-  for (let index = requestedIndex; index < THINKING_LEVELS.length; index += 1) {
-    const candidate = THINKING_LEVELS[index];
-    if (
-      candidate !== undefined &&
-      candidate !== "off" &&
-      available.includes(candidate)
-    ) return candidate;
-  }
-  for (let index = requestedIndex - 1; index >= 0; index -= 1) {
-    const candidate = THINKING_LEVELS[index];
-    if (
-      candidate !== undefined &&
-      candidate !== "off" &&
-      available.includes(candidate)
-    ) return candidate;
-  }
-  throw new InvalidResponsesReasoningProjection(
-    `${input.model.api} model ${input.model.id} has no supported reasoning level`,
-  );
+}
+
+function uncertifiedEnabledOutcome(
+  input: ProjectInput,
+  fallback: "reasoning-to-binary-enable" | "reasoning-to-provider-default",
+): ResponsesReasoningOutcome {
+  return outcome("effort", {
+    kind: "degraded",
+    projector: input.model.api,
+    fallback,
+    warning:
+      fallback === "reasoning-to-binary-enable"
+        ? "target accepts reasoning enablement but has no certified graded effort representation"
+        : "target has no certified graded effort representation; Provider default retained",
+  });
 }
 
 function mappedEffort(input: ProjectInput): string | null | undefined {
@@ -149,7 +183,7 @@ function mappedEffort(input: ProjectInput): string | null | undefined {
   if (effort.kind === "disabled") {
     return input.model.thinkingLevelMap?.off ?? "none";
   }
-  const level = clampedEnabledLevel(input);
+  const level = selectedEnabledLevel(input);
   return input.model.thinkingLevelMap?.[level] ?? level;
 }
 
@@ -171,7 +205,11 @@ export function projectOpenAIResponsesPayload(
     !Array.isArray(payload.reasoning)
       ? { ...(payload.reasoning as Record<string, unknown>) }
       : undefined;
-  if (effort.kind === "provider-default") {
+  const unavailable = unavailableEnabledSelection(input);
+  if (unavailable !== undefined) {
+    if (reasoning !== undefined) delete reasoning.effort;
+    controls.push(unavailableEffortOutcome(input, unavailable));
+  } else if (effort.kind === "provider-default") {
     const repaired =
       reasoning !== undefined && Object.hasOwn(reasoning, "effort");
     if (reasoning !== undefined) delete reasoning.effort;
@@ -181,17 +219,26 @@ export function projectOpenAIResponsesPayload(
         : outcome("effort", { kind: "pi-native" }),
     );
   } else if (effort.kind === "disabled") {
-    const mapped = mappedEffort(input);
-    if (mapped === null) {
-      throw new InvalidResponsesReasoningProjection(
-        `${input.model.api} target cannot express requested reasoning effort`,
+    if (!input.model.reasoning) {
+      const repaired =
+        reasoning !== undefined && Object.hasOwn(reasoning, "effort");
+      if (reasoning !== undefined) delete reasoning.effort;
+      controls.push(
+        repaired
+          ? repairedEffort(input)
+          : outcome("effort", { kind: "pi-native" }),
       );
-    }
-    if (reasoning?.effort === mapped) {
-      controls.push(outcome("effort", { kind: "pi-native" }));
+    } else if (input.model.thinkingLevelMap?.off === null) {
+      if (reasoning !== undefined) delete reasoning.effort;
+      controls.push(unavailableDisabledOutcome(input));
     } else {
-      reasoning = { ...(reasoning ?? {}), effort: mapped };
-      controls.push(repairedEffort(input));
+      const mapped = mappedEffort(input);
+      if (reasoning?.effort === mapped) {
+        controls.push(outcome("effort", { kind: "pi-native" }));
+      } else {
+        reasoning = { ...(reasoning ?? {}), effort: mapped };
+        controls.push(repairedEffort(input));
+      }
     }
   } else {
     const mapped = mappedEffort(input);
@@ -200,14 +247,13 @@ export function projectOpenAIResponsesPayload(
         `${input.model.api} target cannot express the requested reasoning effort`,
       );
     }
-    if (reasoning?.effort === mapped) {
-      controls.push(outcome("effort", { kind: "pi-native" }));
-    } else {
+    const repaired = reasoning?.effort !== mapped;
+    if (repaired) {
       reasoning = { ...(reasoning ?? {}), effort: mapped };
-      controls.push(repairedEffort(input));
     }
+    controls.push(finalizedEffort(input, repaired));
   }
-  if (summary.kind === "requested") {
+  if (summary.kind === "requested" && unavailable !== "non-reasoning") {
     reasoning = { ...(reasoning ?? {}), summary: summary.value };
     controls.push(
       outcome("summary", {
@@ -217,6 +263,14 @@ export function projectOpenAIResponsesPayload(
     );
   } else if (reasoning !== undefined) {
     delete reasoning.summary;
+    if (summary.kind === "requested") {
+      controls.push(
+        outcome("summary", {
+          kind: "omitted",
+          warning: "target model does not support reasoning summaries",
+        }),
+      );
+    }
   }
   if (reasoning === undefined || Object.keys(reasoning).length === 0) {
     delete payload.reasoning;
@@ -237,29 +291,56 @@ export function projectAnthropicPayload(
   ]);
   const controls: ResponsesReasoningOutcome[] = [];
   const effort = input.prepared.request.effort;
-  if (effort.kind === "provider-default") {
+  const unavailable = unavailableEnabledSelection(input);
+  if (unavailable !== undefined) {
+    delete payload.thinking;
+    const outputConfig = payload.output_config;
+    if (
+      typeof outputConfig === "object" &&
+      outputConfig !== null &&
+      !Array.isArray(outputConfig)
+    ) {
+      const copy = { ...(outputConfig as Record<string, unknown>) };
+      delete copy.effort;
+      if (Object.keys(copy).length === 0) delete payload.output_config;
+      else payload.output_config = copy;
+    }
+    controls.push(unavailableEffortOutcome(input, unavailable));
+  } else if (effort.kind === "provider-default") {
     const repaired = Object.hasOwn(payload, "thinking");
     delete payload.thinking;
-    controls.push(
-      repaired
-        ? repairedEffort(input)
-        : outcome("effort", { kind: "pi-native" }),
-    );
+    controls.push(finalizedEffort(input, repaired));
   } else if (effort.kind === "disabled") {
-    if (input.model.thinkingLevelMap?.off === null) {
-      throw new InvalidResponsesReasoningProjection(
-        "Anthropic target does not support explicit reasoning disable",
-      );
-    }
-    const expected = { type: "disabled" };
-    if (sameJson(payload.thinking, expected)) {
-      controls.push(outcome("effort", { kind: "pi-native" }));
+    if (!input.model.reasoning) {
+      let repaired = Object.hasOwn(payload, "thinking");
+      delete payload.thinking;
+      const outputConfig = payload.output_config;
+      if (
+        typeof outputConfig === "object" &&
+        outputConfig !== null &&
+        !Array.isArray(outputConfig)
+      ) {
+        const copy = { ...(outputConfig as Record<string, unknown>) };
+        repaired ||= Object.hasOwn(copy, "effort");
+        delete copy.effort;
+        if (Object.keys(copy).length === 0) delete payload.output_config;
+        else payload.output_config = copy;
+      }
+      controls.push(finalizedEffort(input, repaired));
+    } else if (input.model.thinkingLevelMap?.off === null) {
+      delete payload.thinking;
+      controls.push(unavailableDisabledOutcome(input));
     } else {
-      payload.thinking = expected;
-      controls.push(repairedEffort(input));
+      const expected = { type: "disabled" };
+      if (sameJson(payload.thinking, expected)) {
+        controls.push(outcome("effort", { kind: "pi-native" }));
+      } else {
+        payload.thinking = expected;
+        controls.push(repairedEffort(input));
+      }
     }
   } else {
-    const level = clampedEnabledLevel(input);
+    const level = selectedEnabledLevel(input);
     let repaired = false;
     if (
       (input.model as Model<"anthropic-messages">).compat
@@ -345,7 +426,11 @@ export function projectGooglePayload(
   const config = { ...(payload.config as Record<string, unknown>) };
   const effort = input.prepared.request.effort;
   const controls: ResponsesReasoningOutcome[] = [];
-  if (effort.kind === "provider-default") {
+  const unavailable = unavailableEnabledSelection(input);
+  if (unavailable !== undefined) {
+    delete config.thinkingConfig;
+    controls.push(unavailableEffortOutcome(input, unavailable));
+  } else if (effort.kind === "provider-default") {
     const repaired = Object.hasOwn(config, "thinkingConfig");
     delete config.thinkingConfig;
     controls.push(
@@ -360,26 +445,30 @@ export function projectGooglePayload(
       id === "gemini-flash-latest" ||
       id === "gemini-flash-lite-latest" ||
       (input.model.api === "google-generative-ai" && id.includes("gemma-4"));
-    if (cannotDisable) {
-      throw new InvalidResponsesReasoningProjection(
-        `${input.model.api} model ${input.model.id} cannot disable reasoning`,
-      );
-    }
-    const current = config.thinkingConfig;
-    if (
-      typeof current === "object" &&
-      current !== null &&
-      !Array.isArray(current) &&
-      (current as Record<string, unknown>).thinkingBudget === 0 &&
-      Object.keys(current).length === 1
-    ) {
-      controls.push(outcome("effort", { kind: "pi-native" }));
+    if (!input.model.reasoning) {
+      const repaired = Object.hasOwn(config, "thinkingConfig");
+      delete config.thinkingConfig;
+      controls.push(finalizedEffort(input, repaired));
+    } else if (cannotDisable) {
+      delete config.thinkingConfig;
+      controls.push(unavailableDisabledOutcome(input));
     } else {
-      config.thinkingConfig = { thinkingBudget: 0 };
-      controls.push(repairedEffort(input));
+      const current = config.thinkingConfig;
+      if (
+        typeof current === "object" &&
+        current !== null &&
+        !Array.isArray(current) &&
+        (current as Record<string, unknown>).thinkingBudget === 0 &&
+        Object.keys(current).length === 1
+      ) {
+        controls.push(outcome("effort", { kind: "pi-native" }));
+      } else {
+        config.thinkingConfig = { thinkingBudget: 0 };
+        controls.push(repairedEffort(input));
+      }
     }
   } else {
-    const level = clampedEnabledLevel(input);
+    const level = selectedEnabledLevel(input);
     const id = input.model.id.toLowerCase();
     let expected: Record<string, unknown>;
     const isGemini3Pro = /gemini-3(?:\.\d+)?-pro/u.test(id);
@@ -414,12 +503,11 @@ export function projectGooglePayload(
       }
       expected = { includeThoughts: true, thinkingBudget };
     }
-    if (sameJson(config.thinkingConfig, expected)) {
-      controls.push(outcome("effort", { kind: "pi-native" }));
-    } else {
+    const repaired = !sameJson(config.thinkingConfig, expected);
+    if (repaired) {
       config.thinkingConfig = expected;
-      controls.push(repairedEffort(input));
     }
+    controls.push(finalizedEffort(input, repaired));
   }
   payload.config = config;
   const summaryOutcome = unsupportedSummary(input);
@@ -438,7 +526,12 @@ export function projectMistralPayload(
   ]);
   const effort = input.prepared.request.effort;
   const controls: ResponsesReasoningOutcome[] = [];
-  if (effort.kind !== "enabled") {
+  const unavailable = unavailableEnabledSelection(input);
+  if (unavailable !== undefined) {
+    delete payload.promptMode;
+    delete payload.reasoningEffort;
+    controls.push(unavailableEffortOutcome(input, unavailable));
+  } else if (effort.kind !== "enabled") {
     const hadNativeReasoning =
       payload.promptMode !== undefined || payload.reasoningEffort !== undefined;
     delete payload.promptMode;
@@ -449,7 +542,7 @@ export function projectMistralPayload(
         : outcome("effort", { kind: "pi-native" }),
     );
   } else {
-    const level = clampedEnabledLevel(input);
+    const level = selectedEnabledLevel(input);
     const usesEffort =
       input.model.id === "mistral-small-2603" ||
       input.model.id === "mistral-small-latest" ||
@@ -461,9 +554,7 @@ export function projectMistralPayload(
         payload.promptMode === undefined
       : payload.promptMode === "reasoning" &&
         payload.reasoningEffort === undefined;
-    if (correct) {
-      controls.push(outcome("effort", { kind: "pi-native" }));
-    } else {
+    if (!correct) {
       if (usesEffort) {
         payload.reasoningEffort = expectedEffort;
         delete payload.promptMode;
@@ -471,8 +562,8 @@ export function projectMistralPayload(
         payload.promptMode = "reasoning";
         delete payload.reasoningEffort;
       }
-      controls.push(repairedEffort(input));
     }
+    controls.push(finalizedEffort(input, !correct));
   }
   const summaryOutcome = unsupportedSummary(input);
   if (summaryOutcome !== undefined) controls.push(summaryOutcome);
@@ -496,7 +587,11 @@ export function projectBedrockPayload(
   ]);
   const effort = input.prepared.request.effort;
   const controls: ResponsesReasoningOutcome[] = [];
-  if (effort.kind === "provider-default") {
+  const unavailable = unavailableEnabledSelection(input);
+  if (unavailable !== undefined) {
+    delete payload.additionalModelRequestFields;
+    controls.push(unavailableEffortOutcome(input, unavailable));
+  } else if (effort.kind === "provider-default") {
     const hadNativeReasoning =
       payload.additionalModelRequestFields !== undefined;
     delete payload.additionalModelRequestFields;
@@ -516,9 +611,13 @@ export function projectBedrockPayload(
     );
   } else {
     if (!isBedrockClaude(input.model)) {
-      throw new InvalidResponsesReasoningProjection(
-        "Pi does not emit Bedrock reasoning generation fields for this model family",
+      delete payload.additionalModelRequestFields;
+      controls.push(
+        uncertifiedEnabledOutcome(input, "reasoning-to-provider-default"),
       );
+      const summaryOutcome = unsupportedSummary(input);
+      if (summaryOutcome !== undefined) controls.push(summaryOutcome);
+      return finish(payload, input, controls);
     }
     const additional = payload.additionalModelRequestFields;
     if (
@@ -542,7 +641,7 @@ export function projectBedrockPayload(
         "Pi emitted an uncertified Bedrock reasoning shape",
       );
     }
-    controls.push(outcome("effort", { kind: "pi-native" }));
+    controls.push(finalizedEffort(input, false));
   }
   const summaryOutcome = unsupportedSummary(input);
   if (summaryOutcome !== undefined) controls.push(summaryOutcome);
@@ -649,20 +748,29 @@ function detectedOpenAICompletionsReasoningEffortSupport(
   );
 }
 
-function setOpenAICompletionsEffort(
+interface OpenAICompletionsEffortVerification {
+  readonly changed: boolean;
+  readonly representation: "exact" | "binary" | "provider-default";
+}
+
+function verifyOpenAICompletionsEffort(
   payload: Record<string, unknown>,
   input: ProjectInput,
-): boolean {
+): OpenAICompletionsEffortVerification {
   const effort = input.prepared.request.effort;
-  if (effort.kind === "provider-default") return false;
+  if (effort.kind === "provider-default") {
+    return { changed: false, representation: "exact" };
+  }
+  const providerDefault = (): OpenAICompletionsEffortVerification => ({
+    changed: deleteKnownOpenAICompletionsOffFields(payload, input),
+    representation: "provider-default",
+  });
   if (!input.model.reasoning) {
-    throw new InvalidResponsesReasoningProjection(
-      `OpenAI Completions model ${input.model.id} does not support reasoning`,
-    );
+    return providerDefault();
   }
   const format = detectedOpenAICompletionsThinkingFormat(input);
   const enabled = effort.kind === "enabled";
-  const enabledLevel = enabled ? clampedEnabledLevel(input) : undefined;
+  const enabledLevel = enabled ? selectedEnabledLevel(input) : undefined;
   const mapped =
     effort.kind === "disabled"
       ? input.model.thinkingLevelMap?.off
@@ -683,22 +791,24 @@ function setOpenAICompletionsEffort(
 
   if (format === "deepseek") {
     if (!enabled && mapped === null) {
-      throw new InvalidResponsesReasoningProjection(
-        "OpenAI Completions target cannot express explicit reasoning disable",
-      );
+      return providerDefault();
     }
     assign("thinking", { type: enabled ? "enabled" : "disabled" });
     if (enabled && detectedOpenAICompletionsReasoningEffortSupport(input)) {
       if (typeof mapped !== "string") {
-        throw new InvalidResponsesReasoningProjection(
-          "OpenAI Completions target has no certified reasoning effort value",
-        );
+        return providerDefault();
       }
       assign("reasoning_effort", mapped);
     } else {
       remove("reasoning_effort");
     }
-    return changed;
+    return {
+      changed,
+      representation:
+        enabled && !detectedOpenAICompletionsReasoningEffortSupport(input)
+          ? "binary"
+          : "exact",
+    };
   }
 
   if (format === "zai") {
@@ -710,30 +820,38 @@ function setOpenAICompletionsEffort(
     );
     if (enabled && detectedOpenAICompletionsReasoningEffortSupport(input)) {
       if (typeof mapped !== "string") {
-        throw new InvalidResponsesReasoningProjection(
-          "Z.AI target has no certified reasoning effort value",
-        );
+        return providerDefault();
       }
       assign("reasoning_effort", mapped);
     } else {
       remove("reasoning_effort");
     }
-    return changed;
+    return {
+      changed,
+      representation:
+        enabled && !detectedOpenAICompletionsReasoningEffortSupport(input)
+          ? "binary"
+          : "exact",
+    };
   }
 
   if (format === "qwen") {
     assign("enable_thinking", enabled);
     if (enabled && detectedOpenAICompletionsReasoningEffortSupport(input)) {
       if (typeof mapped !== "string") {
-        throw new InvalidResponsesReasoningProjection(
-          "Qwen target has no certified reasoning effort value",
-        );
+        return providerDefault();
       }
       assign("reasoning_effort", mapped);
     } else {
       remove("reasoning_effort");
     }
-    return changed;
+    return {
+      changed,
+      representation:
+        enabled && !detectedOpenAICompletionsReasoningEffortSupport(input)
+          ? "binary"
+          : "exact",
+    };
   }
 
   if (format === "qwen-chat-template") {
@@ -741,54 +859,52 @@ function setOpenAICompletionsEffort(
       enable_thinking: enabled,
       preserve_thinking: true,
     });
-    return changed;
+    return { changed, representation: enabled ? "binary" : "exact" };
   }
 
   if (format === "openrouter") {
     const value = enabled ? mapped : input.model.thinkingLevelMap?.off ?? "none";
     if (value === null || typeof value !== "string") {
-      throw new InvalidResponsesReasoningProjection(
-        "OpenRouter target has no certified reasoning value",
-      );
+      return providerDefault();
     }
     assign("reasoning", { effort: value });
-    return changed;
+    return { changed, representation: "exact" };
   }
 
   if (format === "together") {
     assign("reasoning", { enabled });
     if (enabled && detectedOpenAICompletionsReasoningEffortSupport(input)) {
       if (typeof mapped !== "string") {
-        throw new InvalidResponsesReasoningProjection(
-          "Together target has no certified reasoning effort value",
-        );
+        return providerDefault();
       }
       assign("reasoning_effort", mapped);
     } else {
       remove("reasoning_effort");
     }
-    return changed;
+    return {
+      changed,
+      representation:
+        enabled && !detectedOpenAICompletionsReasoningEffortSupport(input)
+          ? "binary"
+          : "exact",
+    };
   }
 
   if (format === "string-thinking") {
     const value = enabled ? mapped : input.model.thinkingLevelMap?.off ?? "none";
     if (value === null || typeof value !== "string") {
-      throw new InvalidResponsesReasoningProjection(
-        "string-thinking target has no certified reasoning value",
-      );
+      return providerDefault();
     }
     assign("thinking", value);
-    return changed;
+    return { changed, representation: "exact" };
   }
 
   if (format === "ant-ling") {
     if (!enabled || typeof mapped !== "string") {
-      throw new InvalidResponsesReasoningProjection(
-        "Ant Ling target has no certified explicit reasoning-disable value",
-      );
+      return providerDefault();
     }
     assign("reasoning", { effort: mapped });
-    return changed;
+    return { changed, representation: "exact" };
   }
 
   if (format === "chat-template" || format === "baseten") {
@@ -798,11 +914,11 @@ function setOpenAICompletionsEffort(
         ? compat?.chatTemplateKwargs
         : compat?.chatTemplateArgs;
     if (configured === undefined || Object.keys(configured).length === 0) {
-      throw new InvalidResponsesReasoningProjection(
-        `OpenAI Completions ${format} has no configured reasoning projection`,
-      );
+      return providerDefault();
     }
     const values: Record<string, unknown> = {};
+    let hasEnablement = false;
+    let hasGradedEffort = false;
     for (const [key, raw] of Object.entries(configured)) {
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
         values[key] = raw;
@@ -812,8 +928,10 @@ function setOpenAICompletionsEffort(
       if (!enabled && variable.omitWhenOff === true) continue;
       if (variable.$var === "thinking.enabled") {
         values[key] = enabled;
+        hasEnablement = true;
       } else if (typeof mapped === "string") {
         values[key] = mapped;
+        hasGradedEffort = true;
       }
     }
     assign(
@@ -828,30 +946,28 @@ function setOpenAICompletionsEffort(
       typeof mapped === "string"
     ) {
       assign("reasoning_effort", mapped);
+      hasGradedEffort = true;
     }
-    return changed;
+    if (enabled && !hasGradedEffort && !hasEnablement) return providerDefault();
+    if (!enabled && !hasEnablement && !hasGradedEffort) return providerDefault();
+    return {
+      changed,
+      representation: enabled && !hasGradedEffort ? "binary" : "exact",
+    };
   }
 
   if (format === "openai") {
     if (!detectedOpenAICompletionsReasoningEffortSupport(input)) {
-      throw new InvalidResponsesReasoningProjection(
-        "OpenAI Completions target has no certified reasoning effort field",
-      );
+      return providerDefault();
     }
     if (typeof mapped !== "string") {
-      throw new InvalidResponsesReasoningProjection(
-        enabled
-          ? "OpenAI Completions target has no certified reasoning effort value"
-          : "OpenAI Completions target has no certified explicit reasoning-disable value",
-      );
+      return providerDefault();
     }
     assign("reasoning_effort", mapped);
-    return changed;
+    return { changed, representation: "exact" };
   }
 
-  throw new InvalidResponsesReasoningProjection(
-    `OpenAI Completions ${format} reasoning correction is not certified`,
-  );
+  return providerDefault();
 }
 
 export function projectOpenAICompletionsPayload(
@@ -865,7 +981,20 @@ export function projectOpenAICompletionsPayload(
   ]);
   const effort = input.prepared.request.effort;
   const controls: ResponsesReasoningOutcome[] = [];
-  if (effort.kind === "provider-default") {
+  const unavailable = unavailableEnabledSelection(input);
+  if (unavailable !== undefined) {
+    deleteKnownOpenAICompletionsOffFields(payload, input);
+    controls.push(unavailableEffortOutcome(input, unavailable));
+  } else if (effort.kind === "disabled" && !input.model.reasoning) {
+    const repaired = deleteKnownOpenAICompletionsOffFields(payload, input);
+    controls.push(finalizedEffort(input, repaired));
+  } else if (
+    effort.kind === "disabled" &&
+    input.model.thinkingLevelMap?.off === null
+  ) {
+    deleteKnownOpenAICompletionsOffFields(payload, input);
+    controls.push(unavailableDisabledOutcome(input));
+  } else if (effort.kind === "provider-default") {
     const repaired = deleteKnownOpenAICompletionsOffFields(payload, input);
     controls.push(
       repaired
@@ -873,11 +1002,15 @@ export function projectOpenAICompletionsPayload(
         : outcome("effort", { kind: "pi-native" }),
     );
   } else {
-    const repaired = setOpenAICompletionsEffort(payload, input);
+    const verification = verifyOpenAICompletionsEffort(payload, input);
     controls.push(
-      repaired
-        ? repairedEffort(input)
-        : outcome("effort", { kind: "pi-native" }),
+      verification.representation === "provider-default"
+        ? effort.kind === "disabled"
+          ? unavailableDisabledOutcome(input)
+          : uncertifiedEnabledOutcome(input, "reasoning-to-provider-default")
+        : verification.representation === "binary"
+          ? uncertifiedEnabledOutcome(input, "reasoning-to-binary-enable")
+          : finalizedEffort(input, verification.changed),
     );
   }
   const summaryOutcome = unsupportedSummary(input);
@@ -896,24 +1029,32 @@ export function projectPiMessagesPayload(
   ]);
   const options = { ...(payload.options as Record<string, unknown>) };
   const effort = input.prepared.request.effort;
-  if (effort.kind === "disabled") {
-    throw new InvalidResponsesReasoningProjection(
-      "Pi Messages has no explicit reasoning-disable wire value",
-    );
-  }
+  const unavailable = unavailableEnabledSelection(input);
+  let disabledUnavailable = false;
   let repaired = false;
-  if (effort.kind === "provider-default") {
+  if (unavailable !== undefined) {
+    delete options.reasoning;
+  } else if (effort.kind === "disabled") {
     repaired = Object.hasOwn(options, "reasoning");
     delete options.reasoning;
-  } else if (effort.kind === "enabled" && options.reasoning !== effort.level) {
-    options.reasoning = effort.level;
+    disabledUnavailable = input.model.reasoning;
+  } else if (effort.kind === "provider-default") {
+    repaired = Object.hasOwn(options, "reasoning");
+    delete options.reasoning;
+  } else if (
+    effort.kind === "enabled" &&
+    options.reasoning !== selectedEnabledLevel(input)
+  ) {
+    options.reasoning = selectedEnabledLevel(input);
     repaired = true;
   }
   payload.options = options;
   const controls = [
-    repaired
-      ? repairedEffort(input)
-      : outcome("effort", { kind: "pi-native" }),
+    unavailable !== undefined
+      ? unavailableEffortOutcome(input, unavailable)
+      : disabledUnavailable
+        ? unavailableDisabledOutcome(input)
+      : finalizedEffort(input, repaired),
   ];
   const summaryOutcome = unsupportedSummary(input);
   if (summaryOutcome !== undefined) controls.push(summaryOutcome);

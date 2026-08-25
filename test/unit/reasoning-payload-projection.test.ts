@@ -3,12 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import type {
   PreparedResponsesReasoning as PreparedReasoning,
+  ResponsesEffortPlan,
   ResponsesReasoningEffortIntent as ReasoningEffortIntent,
   ResponsesReasoningSummaryIntent as ReasoningSummaryIntent,
 } from "../../src/protocols/openai-responses/semantic/reasoning/contract.js";
-import {
-  InvalidResponsesReasoningProjection as InvalidReasoningProjection,
-} from "../../src/protocols/openai-responses/semantic/reasoning/adapters/payload.js";
 import { projectResponsesReasoningPayload as projectReasoningPayload } from "../../src/protocols/openai-responses/semantic/reasoning/request.js";
 
 function model(
@@ -33,11 +31,19 @@ function model(
 function prepared(
   effort: ReasoningEffortIntent,
   summary: ReasoningSummaryIntent = { kind: "provider-default" },
+  effortPlan: ResponsesEffortPlan = effort.kind === "enabled"
+    ? {
+        kind: "enabled",
+        requested: effort.level,
+        selection: { kind: "selected", level: effort.level },
+      }
+    : { kind: effort.kind },
 ): PreparedReasoning {
   return {
     context: { messages: [] },
     options: {},
     request: { effort, summary },
+    effortPlan,
     outcomes: [],
   };
 }
@@ -70,16 +76,31 @@ describe("reasoning Provider payload projection", () => {
     });
   });
 
-  it("requires a concrete OpenAI Completions off field for explicit disable", () => {
-    expect(() =>
-      projectReasoningPayload({
-        model: model("openai-completions", {
-          compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
-        }),
-        prepared: prepared({ kind: "disabled" }),
-        payload: { model: "model-test", messages: [], stream: true },
+  it("falls back to provider default when explicit OpenAI Completions off is unavailable", () => {
+    const result = projectReasoningPayload({
+      model: model("openai-completions", {
+        compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
+        thinkingLevelMap: { off: null },
       }),
-    ).toThrow(InvalidReasoningProjection);
+      prepared: prepared({ kind: "disabled" }),
+      payload: {
+        model: "model-test",
+        messages: [],
+        stream: true,
+        reasoning_effort: "high",
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("reasoning_effort");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "openai-completions",
+        fallback: "reasoning-disable-to-provider-default",
+        warning: "target cannot express explicit reasoning disable; provider default retained",
+      },
+    });
   });
 
   it("repairs an incorrect Pi-native OpenAI Completions off value with a warning", () => {
@@ -133,34 +154,298 @@ describe("reasoning Provider payload projection", () => {
     });
   });
 
+  it("emits the Pi-selected legal level and records nearest-level degradation", () => {
+    const result = projectReasoningPayload({
+      model: model("openai-completions", {
+        compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+      }),
+      prepared: prepared(
+        { kind: "enabled", level: "low" },
+        { kind: "provider-default" },
+        {
+          kind: "enabled",
+          requested: "low",
+          selection: { kind: "selected", level: "high" },
+        },
+      ),
+      payload: {
+        model: "model-test",
+        messages: [],
+        stream: true,
+        reasoning_effort: "low",
+      },
+    });
+
+    expect(result.payload).toHaveProperty("reasoning_effort", "high");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "openai-completions",
+        fallback: "reasoning-effort-nearest-level",
+        warning: "requested reasoning level low mapped to supported level high",
+      },
+    });
+  });
+
+  it("dispatches ordinary generation without reasoning controls for a non-reasoning model", () => {
+    const result = projectReasoningPayload({
+      model: model("openai-completions", {
+        reasoning: false,
+        compat: { supportsReasoningEffort: true, thinkingFormat: "qwen" },
+      }),
+      prepared: prepared(
+        { kind: "enabled", level: "high" },
+        { kind: "provider-default" },
+        {
+          kind: "enabled",
+          requested: "high",
+          selection: { kind: "non-reasoning" },
+        },
+      ),
+      payload: {
+        model: "model-test",
+        messages: [],
+        stream: true,
+        enable_thinking: true,
+        reasoning_effort: "high",
+        thinking_token_budget: 8_192,
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("enable_thinking");
+    expect(result.payload).not.toHaveProperty("reasoning_effort");
+    expect(result.payload).not.toHaveProperty("thinking_token_budget");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "openai-completions",
+        fallback: "reasoning-to-ordinary-generation",
+        warning: "target model does not support reasoning; ordinary generation retained",
+      },
+    });
+  });
+
+  it("treats explicit none as already satisfied by a non-reasoning model", () => {
+    const result = projectReasoningPayload({
+      model: model("openai-responses", {
+        reasoning: false,
+        thinkingLevelMap: undefined,
+      }),
+      prepared: prepared({ kind: "disabled" }),
+      payload: {
+        model: "model-test",
+        input: [],
+        stream: true,
+        reasoning: { effort: "none" },
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("reasoning");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "payload-projected",
+        projector: "openai-responses",
+        warning: "pi-native-mapping-repaired",
+      },
+    });
+  });
+
+  it("dispatches a no-selectable-level model without a graded effort field", () => {
+    const result = projectReasoningPayload({
+      model: model("openai-completions", {
+        reasoning: true,
+        compat: { supportsReasoningEffort: true, thinkingFormat: "qwen" },
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      }),
+      prepared: prepared(
+        { kind: "enabled", level: "high" },
+        { kind: "provider-default" },
+        {
+          kind: "enabled",
+          requested: "high",
+          selection: { kind: "no-selectable-level" },
+        },
+      ),
+      payload: {
+        model: "model-test",
+        messages: [],
+        stream: true,
+        enable_thinking: true,
+        reasoning_effort: "high",
+        thinking_token_budget: 8_192,
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("reasoning_effort");
+    expect(result.payload).not.toHaveProperty("thinking_token_budget");
+    expect(result.payload).not.toHaveProperty("enable_thinking");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "openai-completions",
+        fallback: "reasoning-to-provider-default",
+        warning: "target model exposes no selectable reasoning level; provider default retained",
+      },
+    });
+  });
+
+  it("keeps Pi Messages dispatchable when an enabled request has no selectable model level", () => {
+    const result = projectReasoningPayload({
+      model: model("pi-messages", {
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      }),
+      prepared: prepared(
+        { kind: "enabled", level: "high" },
+        { kind: "provider-default" },
+        {
+          kind: "enabled",
+          requested: "high",
+          selection: { kind: "no-selectable-level" },
+        },
+      ),
+      payload: {
+        model: "model-test",
+        context: { messages: [] },
+        options: { reasoning: "high" },
+      },
+    });
+
+    expect(result.payload).toMatchObject({ options: {} });
+    expect((result.payload as { options: Record<string, unknown> }).options)
+      .not.toHaveProperty("reasoning");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "pi-messages",
+        fallback: "reasoning-to-provider-default",
+        warning:
+          "target model exposes no selectable reasoning level; provider default retained",
+      },
+    });
+  });
+
+  it("uses Provider default when an OpenAI Completions target has no certified effort field", () => {
+    const result = projectReasoningPayload({
+      model: model("openai-completions", {
+        compat: { supportsReasoningEffort: false, thinkingFormat: "openai" },
+        thinkingLevelMap: { high: "high" },
+      }),
+      prepared: prepared({ kind: "enabled", level: "high" }),
+      payload: {
+        model: "model-test",
+        messages: [],
+        stream: true,
+        reasoning_effort: "high",
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("reasoning_effort");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: expect.objectContaining({
+        kind: "degraded",
+        fallback: "reasoning-to-provider-default",
+      }),
+    });
+  });
+
+  it("keeps Bedrock dispatchable when the model family has no certified graded mapping", () => {
+    const result = projectReasoningPayload({
+      model: model("bedrock-converse-stream", {
+        id: "amazon.nova-reasoning-test",
+        name: "Nova reasoning test",
+        thinkingLevelMap: { high: "high" },
+      }),
+      prepared: prepared({ kind: "enabled", level: "high" }),
+      payload: {
+        modelId: "amazon.nova-reasoning-test",
+        messages: [],
+        inferenceConfig: {},
+        additionalModelRequestFields: {
+          thinking: { type: "enabled" },
+          output_config: { effort: "high" },
+        },
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("additionalModelRequestFields");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: expect.objectContaining({
+        kind: "degraded",
+        fallback: "reasoning-to-provider-default",
+      }),
+    });
+  });
+
   it.each([
     [
       "deepseek",
       { supportsReasoningEffort: true },
       { thinking: { type: "enabled" }, reasoning_effort: "high" },
+      "payload-projected",
     ],
     [
       "zai",
       { supportsReasoningEffort: false },
       { thinking: { type: "enabled", clear_thinking: false } },
+      "degraded",
     ],
     [
       "qwen",
       { supportsReasoningEffort: true },
       { enable_thinking: true, reasoning_effort: "high" },
+      "payload-projected",
     ],
     [
       "qwen-chat-template",
       {},
       { chat_template_kwargs: { enable_thinking: true, preserve_thinking: true } },
+      "degraded",
     ],
-    ["openrouter", {}, { reasoning: { effort: "high" } }],
-    ["together", { supportsReasoningEffort: false }, { reasoning: { enabled: true } }],
-    ["string-thinking", {}, { thinking: "high" }],
-    ["ant-ling", {}, { reasoning: { effort: "high" } }],
+    ["openrouter", {}, { reasoning: { effort: "high" } }, "payload-projected"],
+    [
+      "together",
+      { supportsReasoningEffort: false },
+      { reasoning: { enabled: true } },
+      "degraded",
+    ],
+    ["string-thinking", {}, { thinking: "high" }, "payload-projected"],
+    ["ant-ling", {}, { reasoning: { effort: "high" } }, "payload-projected"],
   ] as const)(
     "repairs the %s OpenAI Completions thinking format",
-    (thinkingFormat, compat, expected) => {
+    (thinkingFormat, compat, expected, expectedOutcome) => {
       const result = projectReasoningPayload({
         model: model("openai-completions", {
           compat: { thinkingFormat, ...compat },
@@ -174,11 +459,7 @@ describe("reasoning Provider payload projection", () => {
       expect(result.payload).toMatchObject(expected);
       expect(result.outcomes).toContainEqual({
         subject: "effort",
-        outcome: {
-          kind: "payload-projected",
-          projector: "openai-completions",
-          warning: "pi-native-mapping-repaired",
-        },
+        outcome: expect.objectContaining({ kind: expectedOutcome }),
       });
     },
   );
@@ -258,6 +539,32 @@ describe("reasoning Provider payload projection", () => {
     });
 
     expect(result.payload).toMatchObject({ reasoning: { effort: "none" } });
+  });
+
+  it("falls back to Responses provider default when explicit off is unsupported", () => {
+    const result = projectReasoningPayload({
+      model: model("openai-responses", {
+        thinkingLevelMap: { off: null },
+      }),
+      prepared: prepared({ kind: "disabled" }),
+      payload: {
+        model: "model-test",
+        input: [],
+        stream: true,
+        reasoning: { effort: "high" },
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("reasoning");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "openai-responses",
+        fallback: "reasoning-disable-to-provider-default",
+        warning: "target cannot express explicit reasoning disable; provider default retained",
+      },
+    });
   });
 
   it("repairs an incorrect Pi-native Responses enabled effort with a warning", () => {
@@ -342,18 +649,29 @@ describe("reasoning Provider payload projection", () => {
     });
   });
 
-  it("rejects explicit reasoning off when the Google model cannot disable thinking", () => {
-    expect(() =>
-      projectReasoningPayload({
-        model: model("google-generative-ai", { id: "gemini-3-flash" }),
-        prepared: prepared({ kind: "disabled" }),
-        payload: {
-          model: "gemini-3-flash",
-          contents: [],
-          config: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
-        },
-      }),
-    ).toThrow(/cannot disable reasoning/u);
+  it("falls back to Google provider default when the model cannot disable thinking", () => {
+    const result = projectReasoningPayload({
+      model: model("google-generative-ai", { id: "gemini-3-flash" }),
+      prepared: prepared({ kind: "disabled" }),
+      payload: {
+        model: "gemini-3-flash",
+        contents: [],
+        config: { thinkingConfig: { thinkingLevel: "MINIMAL" } },
+      },
+    });
+
+    expect((result.payload as { config: object }).config).not.toHaveProperty(
+      "thinkingConfig",
+    );
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "google-generative-ai",
+        fallback: "reasoning-disable-to-provider-default",
+        warning: "target cannot express explicit reasoning disable; provider default retained",
+      },
+    });
   });
 
   it("repairs incorrect adaptive Anthropic reasoning fields", () => {
@@ -381,6 +699,32 @@ describe("reasoning Provider payload projection", () => {
         kind: "payload-projected",
         projector: "anthropic-messages",
         warning: "pi-native-mapping-repaired",
+      },
+    });
+  });
+
+  it("falls back to Anthropic provider default when explicit disable is unsupported", () => {
+    const result = projectReasoningPayload({
+      model: model("anthropic-messages", {
+        thinkingLevelMap: { off: null },
+      }),
+      prepared: prepared({ kind: "disabled" }),
+      payload: {
+        model: "model-test",
+        messages: [],
+        stream: true,
+        thinking: { type: "enabled", budget_tokens: 2_048 },
+      },
+    });
+
+    expect(result.payload).not.toHaveProperty("thinking");
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "anthropic-messages",
+        fallback: "reasoning-disable-to-provider-default",
+        warning: "target cannot express explicit reasoning disable; provider default retained",
       },
     });
   });
@@ -441,7 +785,9 @@ describe("reasoning Provider payload projection", () => {
 
   it("repairs CommandCode Private reasoning effort to its certified mapping", () => {
     const result = projectReasoningPayload({
-      model: model("commandcode-private"),
+      model: model("commandcode-private", {
+        thinkingLevelMap: { medium: "medium" },
+      }),
       prepared: prepared({ kind: "enabled", level: "medium" }),
       payload: {
         params: { reasoning_effort: "low" },
@@ -457,6 +803,45 @@ describe("reasoning Provider payload projection", () => {
         kind: "payload-projected",
         projector: "commandcode-private",
         warning: "pi-native-mapping-repaired",
+      },
+    });
+  });
+
+  it("uses the prepared Pi selection for CommandCode Private without reclamping", () => {
+    const result = projectReasoningPayload({
+      model: model("commandcode-private", {
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "command-high",
+          xhigh: null,
+          max: "command-max",
+        },
+      }),
+      prepared: prepared(
+        { kind: "enabled", level: "low" },
+        { kind: "provider-default" },
+        {
+          kind: "enabled",
+          requested: "low",
+          selection: { kind: "selected", level: "high" },
+        },
+      ),
+      payload: { params: { reasoning_effort: "low" } },
+    });
+
+    expect(result.payload).toMatchObject({
+      params: { reasoning_effort: "command-high" },
+    });
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "commandcode-private",
+        fallback: "reasoning-effort-nearest-level",
+        warning: "requested reasoning level low mapped to supported level high",
       },
     });
   });
@@ -479,6 +864,29 @@ describe("reasoning Provider payload projection", () => {
         kind: "payload-projected",
         projector: "pi-messages",
         warning: "pi-native-mapping-repaired",
+      },
+    });
+  });
+
+  it("keeps Pi Messages dispatchable when explicit reasoning disable has no wire value", () => {
+    const result = projectReasoningPayload({
+      model: model("pi-messages"),
+      prepared: prepared({ kind: "disabled" }),
+      payload: {
+        model: "model-test",
+        context: { messages: [] },
+        options: { reasoning: "high" },
+      },
+    });
+
+    expect(result.payload).toMatchObject({ options: {} });
+    expect(result.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "degraded",
+        projector: "pi-messages",
+        fallback: "reasoning-disable-to-provider-default",
+        warning: "target cannot express explicit reasoning disable; provider default retained",
       },
     });
   });
@@ -508,11 +916,34 @@ describe("reasoning Provider payload projection", () => {
     expect(result.outcomes).toEqual([
       expect.objectContaining({
         subject: "effort",
-        outcome: { kind: "omitted", warning: expect.any(String) },
+        outcome: expect.objectContaining({
+          kind: "degraded",
+          fallback: "reasoning-to-provider-default",
+        }),
       }),
       expect.objectContaining({
         subject: "summary",
         outcome: { kind: "omitted", warning: expect.any(String) },
+      }),
+    ]);
+  });
+
+  it("does not reject explicit disable solely because an API has no effort adapter", () => {
+    const base = { model: "model-test", request: "opaque" };
+    const result = projectReasoningPayload({
+      model: model("future-text-api"),
+      prepared: prepared({ kind: "disabled" }),
+      payload: base,
+    });
+
+    expect(result.payload).toEqual(base);
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        subject: "effort",
+        outcome: expect.objectContaining({
+          kind: "degraded",
+          fallback: "reasoning-disable-to-provider-default",
+        }),
       }),
     ]);
   });

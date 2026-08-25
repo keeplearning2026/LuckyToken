@@ -2,6 +2,10 @@ import type { Model } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../../invocation.js";
 import type {
+  AnthropicEffortPlan,
+  AnthropicSelectedPiEffort,
+} from "../../reasoning/contract.js";
+import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
 } from "../contract.js";
@@ -37,14 +41,6 @@ function exact(
   });
 }
 
-function omitted(
-  outcomes: AnthropicProjectionOutcome[],
-  control: string,
-  warning: string,
-): void {
-  add(outcomes, control, { kind: "omitted", warning });
-}
-
 function degraded(
   outcomes: AnthropicProjectionOutcome[],
   control: string,
@@ -55,19 +51,16 @@ function degraded(
 
 function expectedReasoningEffort(
   model: Model<string>,
-  level: "low" | "medium" | "high" | "xhigh" | "max",
+  level: AnthropicSelectedPiEffort,
 ): string | undefined {
   const explicit = model.thinkingLevelMap?.[level];
-  if (explicit === null) return undefined;
-  if (typeof explicit === "string") return explicit;
-  return level === "low" || level === "medium" || level === "high"
-    ? level
-    : undefined;
+  return typeof explicit === "string" ? explicit : undefined;
 }
 
 interface ProjectionInput {
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
+  readonly effortPlan: AnthropicEffortPlan;
   readonly payload: unknown;
 }
 
@@ -166,30 +159,45 @@ function projectAnthropicToCommandCodePrivate(
         "CommandCode Private received schema guidance only; conformance is not guaranteed",
       );
     }
-  } else if (reasoning.effort.kind === "specified") {
-    if (!input.model.reasoning) {
-      omitted(
+  } else if (input.effortPlan.kind === "specified") {
+    if (input.effortPlan.selection.kind !== "selected") {
+      delete params.reasoning_effort;
+      degraded(
         outcomes,
         "reasoning.effort",
-        "CommandCode Private target model does not support reasoning effort",
+        input.effortPlan.selection.kind === "non-reasoning"
+          ? "CommandCode Private target does not support reasoning; ordinary generation was retained"
+          : "CommandCode Private target exposes no selectable reasoning level; Provider default was retained",
       );
     } else {
-      const expected = expectedReasoningEffort(input.model, reasoning.effort.level);
+      const expected = expectedReasoningEffort(
+        input.model,
+        input.effortPlan.selection.level,
+      );
       if (expected === undefined) {
         delete params.reasoning_effort;
-        omitted(
+        degraded(
           outcomes,
           "reasoning.effort",
-          `CommandCode Private has no certified ${reasoning.effort.level} effort mapping`,
+          `CommandCode Private has no certified ${input.effortPlan.selection.level} effort mapping; Provider default was retained`,
         );
       } else if (same(params.reasoning_effort, expected)) {
-        add(outcomes, "reasoning.effort", { kind: "pi-native" });
-      } else {
-        delete params.reasoning_effort;
-        omitted(
+        add(
           outcomes,
           "reasoning.effort",
-          "Pi did not emit the certified CommandCode Private reasoning effort",
+          input.effortPlan.requested === input.effortPlan.selection.level
+            ? { kind: "pi-native" }
+            : {
+                kind: "degraded",
+                warning: `requested reasoning level ${input.effortPlan.requested} mapped to supported Pi level ${input.effortPlan.selection.level}`,
+              },
+        );
+      } else {
+        delete params.reasoning_effort;
+        degraded(
+          outcomes,
+          "reasoning.effort",
+          "Pi did not emit the selected CommandCode Private reasoning effort; Provider default was retained",
         );
       }
     }

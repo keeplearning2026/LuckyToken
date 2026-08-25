@@ -13,7 +13,9 @@ import { describe, expect, it } from "vitest";
 import { createCommandCodePrivateProvider } from "../../packages/provider-commandcode-private/src/provider.js";
 
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
+import type { AnthropicSemanticInvocation } from "../../src/protocols/anthropic/semantic/invocation.js";
 import { prepareAnthropicPayloadProjection } from "../../src/protocols/anthropic/semantic/projection/request.js";
+import { prepareAnthropicReasoning } from "../../src/protocols/anthropic/semantic/reasoning/request.js";
 import { captureFinalPiPayload } from "../support/pi-final-payload.js";
 import { captureJsonProviderRequest } from "../support/provider-request-capture.js";
 
@@ -22,6 +24,21 @@ function requireRecord(value: unknown, path: string): Record<string, unknown> {
     throw new Error(`${path} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function prepareAnthropicFinalPipeline(
+  model: Model<string>,
+  invocation: AnthropicSemanticInvocation,
+) {
+  const prepared = prepareAnthropicReasoning({ model, invocation });
+  return Object.freeze({
+    pi: prepared.invocation.pi,
+    projection: prepareAnthropicPayloadProjection({
+      model,
+      invocation: prepared.invocation,
+      effortPlan: prepared.effortPlan,
+    }),
+  });
 }
 
 const baseModelFields = {
@@ -48,6 +65,15 @@ const commandCodePrivateModel: Model<"commandcode-private"> = {
   api: "commandcode-private",
   provider: "commandcode-private",
   reasoning: true,
+  thinkingLevelMap: {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: null,
+    high: "high",
+    xhigh: null,
+    max: "max",
+  },
 };
 
 describe("Anthropic Client Wire to final CommandCode Private payload", () => {
@@ -61,10 +87,8 @@ describe("Anthropic Client Wire to final CommandCode Private payload", () => {
       top_k: 12,
       output_config: { effort: "high" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: commandCodePrivateModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(commandCodePrivateModel, converted.invocation);
+    const projection = pipeline.projection;
     const provider = createCommandCodePrivateProvider({
       apiKey: "test-only-key",
       model: commandCodePrivateModel,
@@ -76,9 +100,9 @@ describe("Anthropic Client Wire to final CommandCode Private payload", () => {
     const payload = await captureFinalPiPayload((capture) =>
       provider.streamSimple(
         commandCodePrivateModel,
-        converted.invocation.pi.context,
+        pipeline.pi.context,
         {
-          ...converted.invocation.pi.options,
+          ...pipeline.pi.options,
           sessionId: "00000000-0000-4000-8000-000000000123",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, commandCodePrivateModel);
@@ -101,8 +125,118 @@ describe("Anthropic Client Wire to final CommandCode Private payload", () => {
     expect(payload).not.toHaveProperty("params.top_p");
     expect(payload).not.toHaveProperty("params.top_k");
   });
-});
 
+  it("normalizes an unknown Anthropic effort to Pi max and emits only the model's legal max wire value", async () => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      output_config: { effort: "super" },
+    }, 1);
+    const pipeline = prepareAnthropicFinalPipeline(
+      commandCodePrivateModel,
+      converted.invocation,
+    );
+    const provider = createCommandCodePrivateProvider({
+      apiKey: "test-only-key",
+      model: commandCodePrivateModel,
+      now: () => 1,
+      fetch: async () => {
+        throw new Error("capture must stop before transport");
+      },
+    });
+
+    const payload = await captureFinalPiPayload((capture) =>
+      provider.streamSimple(
+        commandCodePrivateModel,
+        pipeline.pi.context,
+        {
+          ...pipeline.pi.options,
+          sessionId: "00000000-0000-4000-8000-000000000123",
+          async onPayload(basePayload) {
+            const projected = await pipeline.projection.project(
+              basePayload,
+              commandCodePrivateModel,
+            );
+            return capture(projected.payload);
+          },
+        },
+      ),
+    );
+
+    expect(converted.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "anthropic_unknown_effort_fallback",
+        action: "degrade",
+      }),
+    );
+    expect(pipeline.pi.options.reasoning).toBe("max");
+    expect(payload).toHaveProperty("params.reasoning_effort", "max");
+  });
+
+  it("dispatches an all-null reasoning model without any effort field", async () => {
+    const noSelectableModel: Model<"commandcode-private"> = {
+      ...commandCodePrivateModel,
+      id: "no-selectable-level",
+      name: "No selectable level",
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    };
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [{ role: "user", content: "hello" }],
+      output_config: { effort: "high" },
+    }, 1);
+    const pipeline = prepareAnthropicFinalPipeline(
+      noSelectableModel,
+      converted.invocation,
+    );
+    const provider = createCommandCodePrivateProvider({
+      apiKey: "test-only-key",
+      model: noSelectableModel,
+      now: () => 1,
+      fetch: async () => {
+        throw new Error("capture must stop before transport");
+      },
+    });
+    let outcomes: Awaited<ReturnType<typeof pipeline.projection.project>>["outcomes"] = [];
+
+    const payload = await captureFinalPiPayload((capture) =>
+      provider.streamSimple(noSelectableModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
+        sessionId: "00000000-0000-4000-8000-000000000123",
+        async onPayload(basePayload) {
+          const projected = await pipeline.projection.project(
+            basePayload,
+            noSelectableModel,
+          );
+          outcomes = projected.outcomes;
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(pipeline.pi.options).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("params.reasoning_effort");
+    expect(outcomes).toContainEqual({
+      control: "reasoning.effort",
+      outcome: {
+        kind: "degraded",
+        warning: expect.stringMatching(
+          /no selectable reasoning level.*Provider default was retained/iu,
+        ),
+      },
+    });
+  });
+});
 const anthropicModel: Model<"anthropic-messages"> = {
   ...baseModelFields,
   id: "claude-semantic-target",
@@ -134,6 +268,15 @@ const mistralModel: Model<"mistral-conversations"> = {
   api: "mistral-conversations",
   provider: "mistral-test",
   reasoning: true,
+  thinkingLevelMap: {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: null,
+    high: null,
+    xhigh: null,
+    max: null,
+  },
 };
 
 const responsesModel: Model<"openai-responses"> = {
@@ -163,6 +306,15 @@ const bedrockClaudeModel: Model<"bedrock-converse-stream"> = {
   provider: "amazon-bedrock",
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
   reasoning: true,
+  thinkingLevelMap: {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: null,
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
 };
 
 const bedrockNovaModel: Model<"bedrock-converse-stream"> = {
@@ -198,17 +350,15 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: constrainedModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(constrainedModel, converted.invocation);
+    const projection = pipeline.projection;
 
     const payload = await captureFinalPiPayload((capture) =>
       streamOpenAICompletions(
         constrainedModel,
-        converted.invocation.pi.context,
+        pipeline.pi.context,
         {
-          ...converted.invocation.pi.options,
+          ...pipeline.pi.options,
           apiKey: "test-only-key",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, constrainedModel);
@@ -240,14 +390,12 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     let effortOutcome: string | undefined;
     const payload = await captureFinalPiPayload((capture) =>
-      streamOpenAICompletions(target, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamOpenAICompletions(target, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
@@ -284,35 +432,35 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       format: "together-without-effort" as const,
       compat: { thinkingFormat: "together" as const, supportsReasoningEffort: false },
       expected: {},
-      effortOutcome: "omitted" as const,
+      effortOutcome: "degraded" as const,
       forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
     },
     {
       format: "qwen-chat-template-without-effort" as const,
       compat: { thinkingFormat: "qwen-chat-template" as const },
       expected: {},
-      effortOutcome: "omitted" as const,
+      effortOutcome: "degraded" as const,
       forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
     },
     {
       format: "deepseek-without-effort" as const,
       compat: { thinkingFormat: "deepseek" as const, supportsReasoningEffort: false },
       expected: {},
-      effortOutcome: "omitted" as const,
+      effortOutcome: "degraded" as const,
       forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
     },
     {
       format: "zai-without-effort" as const,
       compat: { thinkingFormat: "zai" as const, supportsReasoningEffort: false },
       expected: {},
-      effortOutcome: "omitted" as const,
+      effortOutcome: "degraded" as const,
       forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
     },
     {
       format: "qwen-without-effort" as const,
       compat: { thinkingFormat: "qwen" as const, supportsReasoningEffort: false },
       expected: {},
-      effortOutcome: "omitted" as const,
+      effortOutcome: "degraded" as const,
       forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "chat_template_kwargs"],
     },
     {
@@ -325,7 +473,7 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
         },
       },
       expected: { chat_template_kwargs: { literal: "fixed" } },
-      effortOutcome: "omitted" as const,
+      effortOutcome: "degraded" as const,
       forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
     },
     {
@@ -339,7 +487,7 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
         },
       },
       expected: { chat_template_args: { literal: "fixed" } },
-      effortOutcome: "omitted" as const,
+      effortOutcome: "degraded" as const,
       forbidden: ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
     },
     {
@@ -381,14 +529,12 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     let projectedOutcomes: readonly { readonly control: string; readonly outcome: { readonly kind: string } }[] = [];
     const payload = await captureFinalPiPayload((capture) =>
-      streamOpenAICompletions(target, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamOpenAICompletions(target, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
@@ -427,13 +573,11 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamOpenAICompletions(target, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamOpenAICompletions(target, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
@@ -514,13 +658,11 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamOpenAICompletions(target, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamOpenAICompletions(target, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
@@ -551,10 +693,8 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       messages: [{ role: "user", content: "hello" }],
       thinking: { type: "disabled" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     const result = await projection.project({
       model: target.id,
       messages: [{ role: "user", content: "hello" }],
@@ -589,10 +729,8 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       messages: [{ role: "user", content: "hello" }],
       thinking: { type: "disabled" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     const result = await projection.project({
       model: target.id,
       messages: [{ role: "user", content: "hello" }],
@@ -649,17 +787,15 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(model, converted.invocation);
+    const projection = pipeline.projection;
 
     const payload = await captureFinalPiPayload((capture) =>
       streamOpenAICompletions(
         model,
-        converted.invocation.pi.context,
+        pipeline.pi.context,
         {
-          ...converted.invocation.pi.options,
+          ...pipeline.pi.options,
           apiKey: "test-only-key",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, model);
@@ -742,18 +878,16 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: anthropicModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(anthropicModel, converted.invocation);
+    const projection = pipeline.projection;
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
 
     const payload = await captureFinalPiPayload((capture) =>
       streamAnthropicMessages(
         anthropicModel,
-        converted.invocation.pi.context,
+        pipeline.pi.context,
         {
-          ...converted.invocation.pi.options,
+          ...pipeline.pi.options,
           apiKey: "test-only-key",
           async onPayload(basePayload) {
             const projected = await projection.project(basePayload, anthropicModel);
@@ -790,7 +924,7 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
     });
     expect(outcomes).toContainEqual({
       control: "reasoning.effort",
-      outcome: expect.objectContaining({ kind: "omitted" }),
+      outcome: expect.objectContaining({ kind: "payload-projected" }),
     });
   });
 
@@ -845,13 +979,11 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: anthropicModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(anthropicModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamAnthropicMessages(anthropicModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamAnthropicMessages(anthropicModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, anthropicModel);
@@ -913,13 +1045,11 @@ describe("Anthropic Client Wire to final Google payloads", () => {
 
   it("projects the independently registered Google Generative AI shape", async () => {
     const converted = parseAnthropicTextInvocation(request, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: googleModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(googleModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamGoogleGenerativeAI(googleModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamGoogleGenerativeAI(googleModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, googleModel);
@@ -965,14 +1095,12 @@ describe("Anthropic Client Wire to final Google payloads", () => {
       messages: [{ role: "user", content: "hello" }],
       output_config: { effort: "high" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
-      start(target as never, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      start(target as never, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, target);
@@ -1007,14 +1135,12 @@ describe("Anthropic Client Wire to final Google payloads", () => {
       messages: [{ role: "user", content: "hello" }],
       output_config: { effort: "high" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
-      start(target as never, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      start(target as never, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, target);
@@ -1028,7 +1154,7 @@ describe("Anthropic Client Wire to final Google payloads", () => {
     const googleConfig = requireRecord(googlePayload.config, "Google payload.config");
     expect(googleConfig.thinkingConfig).toBeUndefined();
     expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
-      .toBe("omitted");
+      .toBe("degraded");
   });
 
   it.each([
@@ -1052,10 +1178,9 @@ describe("Anthropic Client Wire to final Google payloads", () => {
       messages: [{ role: "user", content: "hello" }],
       thinking: { type: "disabled" },
     }, 1);
-    expect(() => prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    })).not.toThrow();
+    expect(() =>
+      prepareAnthropicFinalPipeline(target, converted.invocation)
+    ).not.toThrow();
   });
 
   it("keeps requests available when Gemini 3 can only use a nearest reasoning mode", () => {
@@ -1070,21 +1195,18 @@ describe("Anthropic Client Wire to final Google payloads", () => {
       messages: [{ role: "user", content: "hello" }],
       thinking: { type: "enabled", budget_tokens: 1_024 },
     }, 1);
-    expect(() => prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    })).not.toThrow();
+    expect(() =>
+      prepareAnthropicFinalPipeline(target, converted.invocation)
+    ).not.toThrow();
   });
 
   it("projects the independently registered Google Vertex shape", async () => {
     const converted = parseAnthropicTextInvocation(request, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: vertexModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(vertexModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamGoogleVertex(vertexModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamGoogleVertex(vertexModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, vertexModel);
@@ -1145,13 +1267,11 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: mistralModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(mistralModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamMistral(mistralModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamMistral(mistralModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, mistralModel);
@@ -1189,6 +1309,15 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
         ...mistralModel,
         id: "mistral-small-2603",
         name: "Mistral Small 2603",
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: null,
+        },
       } as Model<"mistral-conversations">,
       effort: "high" as const,
       expected: { reasoningEffort: "high" },
@@ -1203,14 +1332,14 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
       } as Model<"mistral-conversations">,
       effort: "low" as const,
       expected: {},
-      outcome: "omitted" as const,
+      outcome: "degraded" as const,
     },
     {
       label: "prompt-mode-only reasoning",
       target: mistralModel,
       effort: "high" as const,
       expected: {},
-      outcome: "omitted" as const,
+      outcome: "degraded" as const,
     },
   ])("handles $label without converting effort into a different reasoning activation", async ({
     target,
@@ -1224,14 +1353,12 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
       messages: [{ role: "user", content: "hello" }],
       output_config: { effort },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
-      streamMistral(target, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamMistral(target, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
@@ -1275,13 +1402,11 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: mistralModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(mistralModel, converted.invocation);
+    const projection = pipeline.projection;
     const request = await captureJsonProviderRequest((fetch) =>
-      streamMistral(mistralModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamMistral(mistralModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         fetch,
         async onPayload(basePayload) {
@@ -1348,13 +1473,11 @@ describe.each([
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: targetModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(targetModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      start(targetModel as never, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      start(targetModel as never, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, targetModel);
@@ -1392,14 +1515,12 @@ describe.each([
       messages: [{ role: "user", content: "hello" }],
       output_config: { effort: "high" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: targetModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(targetModel, converted.invocation);
+    const projection = pipeline.projection;
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
-      start(targetModel as never, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      start(targetModel as never, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload: unknown) {
           const projected = await projection.project(basePayload, targetModel);
@@ -1412,10 +1533,9 @@ describe.each([
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("include");
     expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
-      .toBe("omitted");
+      .toBe("degraded");
   });
 });
-
 describe("Anthropic Client Wire to final Bedrock payloads", () => {
   const bedrockOptions = {
     env: {
@@ -1444,13 +1564,11 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: bedrockClaudeModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(bedrockClaudeModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamBedrock(bedrockClaudeModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamBedrock(bedrockClaudeModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         ...bedrockOptions,
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, bedrockClaudeModel);
@@ -1520,14 +1638,12 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
       ...(thinking === undefined ? {} : { thinking }),
       output_config: { effort: "high" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
-      streamBedrock(target, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamBedrock(target, pipeline.pi.context, {
+        ...pipeline.pi.options,
         ...bedrockOptions,
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
@@ -1557,7 +1673,7 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
       expect(additional?.thinking).toBeUndefined();
       expect(outputConfig?.effort).toBeUndefined();
       expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
-        .toBe("omitted");
+        .toBe("degraded");
     }
   });
 
@@ -1577,13 +1693,11 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: bedrockNovaModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(bedrockNovaModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamBedrock(bedrockNovaModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamBedrock(bedrockNovaModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         ...bedrockOptions,
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, bedrockNovaModel);
@@ -1622,13 +1736,11 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
       },
       1,
     );
-    const projection = prepareAnthropicPayloadProjection({
-      model: piMessagesModel,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(piMessagesModel, converted.invocation);
+    const projection = pipeline.projection;
     const payload = await captureFinalPiPayload((capture) =>
-      streamPiMessages(piMessagesModel, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamPiMessages(piMessagesModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, piMessagesModel);
@@ -1661,14 +1773,12 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
       messages: [{ role: "user", content: "hello" }],
       output_config: { effort: "high" },
     }, 1);
-    const projection = prepareAnthropicPayloadProjection({
-      model: target,
-      invocation: converted.invocation,
-    });
+    const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
+    const projection = pipeline.projection;
     let outcomes: Awaited<ReturnType<typeof projection.project>>["outcomes"] = [];
     const payload = await captureFinalPiPayload((capture) =>
-      streamPiMessages(target, converted.invocation.pi.context, {
-        ...converted.invocation.pi.options,
+      streamPiMessages(target, pipeline.pi.context, {
+        ...pipeline.pi.options,
         apiKey: "test-only-key",
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
@@ -1680,6 +1790,6 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
 
     expect(payload).not.toHaveProperty("options.reasoning");
     expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
-      .toBe("omitted");
+      .toBe("degraded");
   });
 });

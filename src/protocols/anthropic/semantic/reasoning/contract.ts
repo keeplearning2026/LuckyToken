@@ -25,6 +25,27 @@ export type AnthropicEffortIntent =
   | {
       readonly kind: "specified";
       readonly level: "low" | "medium" | "high" | "xhigh" | "max";
+      readonly normalizedFromUnknown?: string;
+    };
+
+export type AnthropicSelectedPiEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+export type AnthropicEffortPlan =
+  | { readonly kind: "omitted" }
+  | { readonly kind: "explicit-null" }
+  | {
+      readonly kind: "specified";
+      readonly requested: "low" | "medium" | "high" | "xhigh" | "max";
+      readonly selection:
+        | { readonly kind: "selected"; readonly level: AnthropicSelectedPiEffort }
+        | { readonly kind: "no-selectable-level" }
+        | { readonly kind: "non-reasoning" };
     };
 
 export interface AnthropicHistoricalReasoning {
