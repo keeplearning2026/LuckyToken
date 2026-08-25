@@ -40,14 +40,6 @@ const HOP_BY_HOP = new Set([
   "expect",
 ]);
 
-const STALE_RESPONSE_REPRESENTATION_HEADERS = new Set([
-  "content-encoding",
-  "content-md5",
-  "digest",
-  "content-digest",
-  "repr-digest",
-]);
-
 function buildRequestHeaders(source: Headers): Headers {
   const connectionHeaders = new Set(
     (source.get("connection") ?? "")
@@ -61,17 +53,10 @@ function buildRequestHeaders(source: Headers): Headers {
     if (HOP_BY_HOP.has(lower) || connectionHeaders.has(lower)) continue;
     headers.set(lower, value);
   }
-  headers.set("accept-encoding", "identity");
   return headers;
 }
 
 function responseHeaders(source: Headers): Headers {
-  const contentEncoding = source.get("content-encoding")?.trim().toLowerCase();
-  const representationWasDecoded =
-    contentEncoding === "gzip" ||
-    contentEncoding === "x-gzip" ||
-    contentEncoding === "deflate" ||
-    contentEncoding === "br";
   const connectionHeaders = new Set(
     (source.get("connection") ?? "")
       .split(",")
@@ -83,7 +68,6 @@ function responseHeaders(source: Headers): Headers {
     const lower = name.toLowerCase();
     if (
       HOP_BY_HOP.has(lower) ||
-      (representationWasDecoded && STALE_RESPONSE_REPRESENTATION_HEADERS.has(lower)) ||
       connectionHeaders.has(lower)
     ) continue;
     result.append(lower, value);

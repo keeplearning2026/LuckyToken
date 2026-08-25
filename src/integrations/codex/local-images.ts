@@ -4,7 +4,10 @@ import {
   type ClientProtocolHandler,
   type ClientProtocolRequestContext,
 } from "../../http.js";
-import { preserveDirectStatusText } from "../../local-native-http-response.js";
+import {
+  preserveDirectResponse,
+  preserveDirectStatusText,
+} from "../../local-native-http-response.js";
 
 export const CODEX_IMAGES_GENERATIONS_URL =
   "https://chatgpt.com/backend-api/codex/images/generations";
@@ -32,14 +35,6 @@ const HOP_BY_HOP_HEADERS = new Set([
   "expect",
 ]);
 
-const STALE_RESPONSE_REPRESENTATION_HEADERS = new Set([
-  "content-encoding",
-  "content-md5",
-  "digest",
-  "content-digest",
-  "repr-digest",
-]);
-
 function connectionHeaders(source: Headers): Set<string> {
   return new Set(
     (source.get("connection") ?? "")
@@ -64,26 +59,16 @@ function requestHeaders(
     }
     result.append(lower, value);
   }
-  // Node/Bun Fetch decodes compressed responses before exposing their body.
-  // Ask for identity so the buffered representation remains self-consistent.
-  result.set("accept-encoding", "identity");
   return result;
 }
 
 function responseHeaders(source: Headers): Headers {
-  const contentEncoding = source.get("content-encoding")?.trim().toLowerCase();
-  const representationWasDecoded =
-    contentEncoding === "gzip" ||
-    contentEncoding === "x-gzip" ||
-    contentEncoding === "deflate" ||
-    contentEncoding === "br";
   const connectionScoped = connectionHeaders(source);
   const result = new Headers();
   for (const [name, value] of source) {
     const lower = name.toLowerCase();
     if (
       HOP_BY_HOP_HEADERS.has(lower) ||
-      (representationWasDecoded && STALE_RESPONSE_REPRESENTATION_HEADERS.has(lower)) ||
       connectionScoped.has(lower)
     ) {
       continue;
@@ -103,6 +88,10 @@ function payloadTooLargeError(): Response {
     }),
     { status: 413, headers: { "content-type": "application/json" } },
   );
+}
+
+function requestReadFailureError(): Response {
+  return new Response(null, { status: 500 });
 }
 
 function upstreamFailureError(): Response {
@@ -251,7 +240,7 @@ function completeImages(
     protocol: "codex-images",
     location: outcomeLocation,
   });
-  return response;
+  return preserveDirectResponse(response);
 }
 
 function createCodexDirectImagesHandler(
@@ -337,11 +326,27 @@ function createCodexDirectImagesHandler(
           location: envelopeLocation,
         });
       }
-      const body = await readBoundedBody(
-        request.body,
-        options.maxRequestBytes,
-        request.signal,
-      );
+      let body: Uint8Array<ArrayBuffer> | undefined;
+      try {
+        body = await readBoundedBody(
+          request.body,
+          options.maxRequestBytes,
+          request.signal,
+        );
+      } catch (error) {
+        if (request.signal.aborted) throw error;
+        observeImages(context, {
+          kind: "step_completed",
+          stepInstanceId: "p3.construct_direct_envelope",
+          completion: "failed",
+          location: envelopeLocation,
+        });
+        return completeImages(context, requestReadFailureError(), {
+          classification: "images_request_body_read_failed",
+          origin: "network_os",
+          location: envelopeLocation,
+        });
+      }
       if (body === undefined) {
         observeImages(context, {
           kind: "step_completed",

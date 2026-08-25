@@ -18,7 +18,10 @@ import type {
   RequestJourneyObservationInput,
   RequestJourneyObserver,
 } from "../../diagnostics/contract.js";
-import { preserveDirectStatusText } from "../../local-native-http-response.js";
+import {
+  preserveDirectResponse,
+  preserveDirectStatusText,
+} from "../../local-native-http-response.js";
 
 export interface CreateCodexDirectResponsesLaneOptions {
   readonly models: CodexNativeModelSource;
@@ -179,7 +182,7 @@ async function executeDirect(
         "failed",
         "render_direct_error_response",
       );
-      return response;
+      return preserveDirectResponse(response);
     }
     throw error;
   }

@@ -17,7 +17,10 @@ import {
   renderResponsesError,
   type PreparedHttpResponse,
 } from "../../protocols/openai-responses/response.js";
-import { preserveDirectStatusText } from "../../local-native-http-response.js";
+import {
+  preserveDirectResponse,
+  preserveDirectStatusText,
+} from "../../local-native-http-response.js";
 
 export interface CreateCodexDirectCompactLaneOptions {
   readonly models: CodexNativeModelSource;
@@ -190,7 +193,7 @@ export function createCodexDirectCompactLane(
             "Upstream compact request failed",
           );
           observeLocalCompactTerminal(input.journey, response, "failed");
-          return response;
+          return preserveDirectResponse(response);
         }
         throw error;
       }

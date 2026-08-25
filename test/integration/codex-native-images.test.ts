@@ -128,6 +128,7 @@ describe("Codex Direct Mode images", () => {
           "content-type": `multipart/form-data; boundary=${boundary}`,
           "content-encoding": "gzip",
           "x-codex-image-extension": "preserve-me",
+          "accept-encoding": "gzip, br",
         },
         body,
       }),
@@ -170,24 +171,24 @@ describe("Codex Direct Mode images", () => {
       accessToken: "caller-access-token",
       auth: "caller-auth",
       securityToken: "caller-security-token",
-      acceptEncoding: "identity",
+      acceptEncoding: "gzip, br",
       redirect: "manual",
     });
   });
 
-  it("keeps an auto-decoded upstream response representation consistent", async () => {
+  it("preserves a compressed upstream response representation", async () => {
     const decoded = new TextEncoder().encode('{"data":[{"b64_json":"image"}]}');
-    const compressedLength = gzipSync(decoded).byteLength;
+    const compressed = gzipSync(decoded);
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
       commandCodeApiKey: "provider-secret",
       commandCodeBaseUrl: "https://commandcode.test",
       fetch: async () =>
-        new Response(decoded, {
+        new Response(compressed, {
           headers: {
             "content-type": "application/json",
             "content-encoding": "x-gzip",
-            "content-length": String(compressedLength),
+            "content-length": String(compressed.byteLength),
           },
         }),
       modelId: "deepseek/deepseek-v4-flash",
@@ -208,8 +209,8 @@ describe("Codex Direct Mode images", () => {
       contentEncoding: response.headers.get("content-encoding"),
       contentLength: response.headers.get("content-length"),
     }).toEqual({
-      body: Array.from(decoded),
-      contentEncoding: null,
+      body: Array.from(compressed),
+      contentEncoding: "x-gzip",
       contentLength: null,
     });
   });
@@ -284,7 +285,44 @@ describe("Codex Direct Mode images", () => {
       } as RequestInit & { duplex: "half" }),
     );
 
-    expect([response.status, upstreamCalls]).toEqual([413, 0]);
+    expect({
+      status: response.status,
+      upstreamCalls,
+      tokenRequestId: response.headers.get("x-token-request-id"),
+    }).toEqual({
+      status: 413,
+      upstreamCalls: 0,
+      tokenRequestId: null,
+    });
+  });
+
+  it("keeps a Direct request-body read failure free of Token-owned headers", async () => {
+    const composition = await createOpenAIResponsesServingTestComposition({
+      clientApiKey: "client-token",
+      commandCodeApiKey: "provider-secret",
+      commandCodeBaseUrl: "https://commandcode.test",
+      fetch: async () => new Response("must not execute", { status: 200 }),
+      modelId: "deepseek/deepseek-v4-flash",
+      codexNativeModels: noNativeModels,
+    });
+    compositions.push(composition);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error("caller body failed"));
+      },
+    });
+
+    const response = await composition.runtime.handle(
+      new Request("http://Token.test/v1/images/generations", {
+        method: "POST",
+        headers: { authorization: "Bearer codex-token" },
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.has("x-token-request-id")).toBe(false);
   });
 
   it("preserves upstream errors but maps transport and oversized responses to 502", async () => {
@@ -342,9 +380,17 @@ describe("Codex Direct Mode images", () => {
       digest: "sha-256=:identity-representation:",
     });
     mode = "transport";
-    expect((await request()).status).toBe(502);
+    const transportFailure = await request();
+    expect({
+      status: transportFailure.status,
+      tokenRequestId: transportFailure.headers.get("x-token-request-id"),
+    }).toEqual({ status: 502, tokenRequestId: null });
     mode = "oversized";
-    expect((await request()).status).toBe(502);
+    const oversizedFailure = await request();
+    expect({
+      status: oversizedFailure.status,
+      tokenRequestId: oversizedFailure.headers.get("x-token-request-id"),
+    }).toEqual({ status: 502, tokenRequestId: null });
   });
 
   it("maps an upstream response read failure to 502", async () => {

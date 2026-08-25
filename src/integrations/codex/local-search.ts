@@ -4,7 +4,10 @@ import {
   type ClientProtocolHandler,
   type ClientProtocolRequestContext,
 } from "../../http.js";
-import { preserveDirectStatusText } from "../../local-native-http-response.js";
+import {
+  preserveDirectResponse,
+  preserveDirectStatusText,
+} from "../../local-native-http-response.js";
 
 export const CODEX_SEARCH_URL =
   "https://chatgpt.com/backend-api/codex/alpha/search";
@@ -29,14 +32,6 @@ const HOP_BY_HOP_HEADERS = new Set([
   "expect",
 ]);
 
-const STALE_RESPONSE_REPRESENTATION_HEADERS = new Set([
-  "content-encoding",
-  "content-md5",
-  "digest",
-  "content-digest",
-  "repr-digest",
-]);
-
 function requestHeaders(
   source: Headers,
 ): Headers {
@@ -57,17 +52,10 @@ function requestHeaders(
     }
     result.append(lower, value);
   }
-  result.set("accept-encoding", "identity");
   return result;
 }
 
 function responseHeaders(source: Headers): Headers {
-  const contentEncoding = source.get("content-encoding")?.trim().toLowerCase();
-  const representationWasDecoded =
-    contentEncoding === "gzip" ||
-    contentEncoding === "x-gzip" ||
-    contentEncoding === "deflate" ||
-    contentEncoding === "br";
   const connectionHeaders = new Set(
     (source.get("connection") ?? "")
       .split(",")
@@ -79,7 +67,6 @@ function responseHeaders(source: Headers): Headers {
     const lower = name.toLowerCase();
     if (
       HOP_BY_HOP_HEADERS.has(lower) ||
-      (representationWasDecoded && STALE_RESPONSE_REPRESENTATION_HEADERS.has(lower)) ||
       connectionHeaders.has(lower)
     ) {
       continue;
@@ -99,6 +86,10 @@ function payloadTooLargeError(): Response {
     }),
     { status: 413, headers: { "content-type": "application/json" } },
   );
+}
+
+function requestReadFailureError(): Response {
+  return new Response(null, { status: 500 });
 }
 
 function upstreamFailureError(): Response {
@@ -225,7 +216,7 @@ function completeSearch(
     protocol: "codex-alpha-search",
     location: outcomeLocation,
   });
-  return response;
+  return preserveDirectResponse(response);
 }
 
 export function createCodexDirectSearchHandler(
@@ -261,7 +252,13 @@ export function createCodexDirectSearchHandler(
         protocol: "codex-alpha-search",
         location: laneLocation,
       });
-      const body = await readBoundedBody(request, options.maxRequestBytes);
+      let body: Uint8Array<ArrayBuffer> | undefined;
+      try {
+        body = await readBoundedBody(request, options.maxRequestBytes);
+      } catch (error) {
+        if (request.signal.aborted) throw error;
+        return completeSearch(context, requestReadFailureError());
+      }
       if (body === undefined) {
         return completeSearch(context, payloadTooLargeError());
       }

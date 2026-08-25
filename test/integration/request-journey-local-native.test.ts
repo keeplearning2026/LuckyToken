@@ -169,7 +169,7 @@ describe("Direct Mode Request Journey", () => {
 
     expect(response.status).toBe(502);
     expect(response.headers.get("content-type")).toBe("application/json");
-    expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
+    expect(response.headers.has("x-token-request-id")).toBe(false);
     expect(responseBody).toBe(expectedResponseBody);
     expect(outboundRequests).toEqual([
       {

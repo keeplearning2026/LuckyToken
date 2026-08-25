@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   copyDirectResponseMetadata,
+  preservesDirectResponse,
   preservesDirectStatusText,
 } from "./local-native-http-response.js";
 
@@ -442,7 +443,7 @@ export async function handleHttpRequest(
     // passthrough. The transport edge must not add Token-owned response
     // headers to that wire; only non-passthrough responses carry the
     // request correlation id.
-    const delivered = preservesDirectStatusText(response)
+    const delivered = preservesDirectResponse(response)
       ? response
       : attachRequestId(response, responseRequestId);
     if (ownsJourney) {

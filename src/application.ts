@@ -31,6 +31,7 @@ import {
 } from "./backup/index.js";
 import { loadTokenCliConfig } from "./cli-config.js";
 import { createConfiguredTokenDataPlane } from "./composition.js";
+import { createCodexDirectHttpFetch } from "./integrations/codex/direct-http-fetch.js";
 import {
   createControlPlaneDiscovery,
   resolveControlPlaneDescriptorPath,
@@ -911,6 +912,7 @@ async function startNormalApplication(options: {
             diagnostics: ownedDiagnosticsAuthority,
             isProtocolEnabled,
             fetch: globalThis.fetch,
+            codexDirectFetch: createCodexDirectHttpFetch(),
             shutdownSignal: shutdownController.signal,
             codexNativeModels: codexIntegrationAuthority.nativeModels,
           });

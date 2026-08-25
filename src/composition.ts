@@ -7,7 +7,10 @@ import {
   certifyCoreServingComposition,
   type CoreServingCertificationManifest,
 } from "./core-serving-certification.js";
-import type { CodexNativeModelSource } from "./codex-native-seam.js";
+import type {
+  CodexFetchFunction,
+  CodexNativeModelSource,
+} from "./codex-native-seam.js";
 import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 import { createExecutionOperation } from "./execution.js";
 import type { ProviderAuthBindingAuthority } from "./credentials/profile-contract.js";
@@ -64,6 +67,7 @@ export interface ConfiguredTokenDataPlaneOptions {
   readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly isProtocolEnabled: (protocolId: string) => boolean;
   readonly fetch: FetchFunction;
+  readonly codexDirectFetch?: CodexFetchFunction;
   readonly codexNativeModels?: CodexNativeModelSource;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
@@ -148,19 +152,20 @@ export async function createConfiguredTokenDataPlane(
       ...(options.now === undefined ? {} : { now: options.now }),
     }),
   ];
+  const codexDirectFetch = options.codexDirectFetch ?? options.fetch;
   const realtime = createCodexDirectRealtimeModule({ fetch: options.fetch });
   const webSocketUpgrade = realtime.webSocketUpgrade;
   handlers.push(
     createCodexDirectSearchHandler({
-      fetch: options.fetch,
+      fetch: codexDirectFetch,
       maxRequestBytes: config.limits.maxRequestBytes,
     }),
     createCodexDirectImagesGenerationsHandler({
-      fetch: options.fetch,
+      fetch: codexDirectFetch,
       maxRequestBytes: config.limits.maxRequestBytes,
     }),
     createCodexDirectImagesEditsHandler({
-      fetch: options.fetch,
+      fetch: codexDirectFetch,
       maxRequestBytes: config.limits.maxRequestBytes,
     }),
     ...realtime.httpHandlers,
@@ -184,14 +189,14 @@ export async function createConfiguredTokenDataPlane(
         ? undefined
         : createCodexDirectResponsesLane({
             models: options.codexNativeModels,
-            fetch: options.fetch,
+            fetch: codexDirectFetch,
           });
     const directCompactLane =
       options.codexNativeModels === undefined
         ? undefined
         : createCodexDirectCompactLane({
             models: options.codexNativeModels,
-            fetch: options.fetch,
+            fetch: codexDirectFetch,
           });
     const configuration = bindOpenAIResponsesConfiguration(
       responsesConfig.adapterConfiguration,

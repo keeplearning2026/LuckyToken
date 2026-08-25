@@ -176,6 +176,7 @@ describe("Codex Direct Mode web search", () => {
           "content-type": "application/vnd.codex.search+json",
           "x-codex-future-feature": "preserve-me",
           "accept-language": "zh-CN",
+          "accept-encoding": "gzip, br",
         },
         body: Uint8Array.from([0x7b, 0x7d]),
       }),
@@ -205,7 +206,7 @@ describe("Codex Direct Mode web search", () => {
       connection: null,
       namedByConnection: null,
       host: null,
-      acceptEncoding: "identity",
+      acceptEncoding: "gzip, br",
       redirect: "manual",
     });
   });
@@ -326,10 +327,44 @@ describe("Codex Direct Mode web search", () => {
       }),
     );
 
-    expect({ status: response.status, contacted }).toEqual({
+    expect({
+      status: response.status,
+      contacted,
+      tokenRequestId: response.headers.get("x-token-request-id"),
+    }).toEqual({
       status: 413,
       contacted: false,
+      tokenRequestId: null,
     });
+  });
+
+  it("keeps a Direct request-body read failure free of Token-owned headers", async () => {
+    const composition = await createOpenAIResponsesServingTestComposition({
+      clientApiKey: "client-token",
+      commandCodeApiKey: "provider-secret",
+      commandCodeBaseUrl: "https://commandcode.test",
+      fetch: async () => new Response("must not execute", { status: 200 }),
+      modelId: "deepseek/deepseek-v4-flash",
+      codexNativeModels: noNativeModels,
+    });
+    compositions.push(composition);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error("caller body failed"));
+      },
+    });
+
+    const response = await composition.runtime.handle(
+      new Request("http://Token.test/v1/alpha/search", {
+        method: "POST",
+        headers: { authorization: "Bearer codex-token" },
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.has("x-token-request-id")).toBe(false);
   });
 
   it("renders an upstream transport failure as a safe 502 response", async () => {
@@ -355,9 +390,11 @@ describe("Codex Direct Mode web search", () => {
 
     expect({
       status: response.status,
+      tokenRequestId: response.headers.get("x-token-request-id"),
       body: await response.json(),
     }).toEqual({
       status: 502,
+      tokenRequestId: null,
       body: {
         error: {
           type: "api_error",

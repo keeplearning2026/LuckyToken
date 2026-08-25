@@ -75,6 +75,7 @@ function request(model: string, token: string, stream = false): Request {
       cookie: "caller=session",
       "x-api-key": "caller-api-key",
       "x-codex-future": "preserve-me",
+      "accept-encoding": "gzip, br",
       "content-type": "application/json",
     },
     body: JSON.stringify({ model, input: "hello", ...(stream ? { stream: true } : {}) }),
@@ -125,6 +126,7 @@ describe("Codex-native Responses routing", () => {
     expect(calls[0]?.headers.get("cookie")).toBe("caller=session");
     expect(calls[0]?.headers.get("x-api-key")).toBe("caller-api-key");
     expect(calls[0]?.headers.get("x-codex-future")).toBe("preserve-me");
+    expect(calls[0]?.headers.get("accept-encoding")).toBe("gzip, br");
     await expect(calls[0]?.json()).resolves.toMatchObject({ model: "gpt-native" });
     await expect(response.json()).resolves.toMatchObject({
       object: "response",

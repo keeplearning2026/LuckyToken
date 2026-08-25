@@ -52,7 +52,10 @@ function recordingAuthority(): {
 function compactRequest(model: string): Request {
   return new Request("http://Token.test/v1/responses/compact?bare&token=caller-query", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "accept-encoding": "gzip, br",
+    },
     body: JSON.stringify({
       model,
       input: [
@@ -102,6 +105,35 @@ function semanticMessage(model: Model<string>): AssistantMessage {
 }
 
 describe("Request Journey successful conversation compaction", () => {
+  it("keeps Direct Mode compact synthetic failures free of Token-owned headers", async () => {
+    const nativeModels: CodexNativeModelSource = {
+      has: (selector) => selector === "gpt-native",
+    };
+    const models = new Proxy({} as Models, {
+      get() {
+        throw new Error("Direct Mode compact must not touch Pi Models");
+      },
+    });
+    const handler = createOpenAIResponsesCompactHandler({
+      models,
+      directLane: createCodexDirectCompactLane({
+        models: nativeModels,
+        fetch: async () => {
+          throw new Error("upstream unavailable");
+        },
+      }),
+      stateFile: "unused-local-compact-error.json",
+      maxRequestBytes: 8_192,
+    });
+
+    const response = await createTokenRuntime({
+      clientProtocols: [handler],
+    }).handle(compactRequest("gpt-native"));
+
+    expect(response.status).toBe(502);
+    expect(response.headers.has("x-token-request-id")).toBe(false);
+  });
+
   it("keeps the Direct Mode compact lane observable through final in-process handoff", async () => {
     const recording = recordingAuthority();
     const nativeModels: CodexNativeModelSource = {
@@ -109,9 +141,11 @@ describe("Request Journey successful conversation compaction", () => {
     };
     const outbound: string[] = [];
     const outboundUrls: string[] = [];
+    const outboundAcceptEncodings: Array<string | null> = [];
     const fetch: CodexFetchFunction = async (input, init) => {
       const request = new Request(input, init);
       outboundUrls.push(request.url);
+      outboundAcceptEncodings.push(request.headers.get("accept-encoding"));
       outbound.push(await request.text());
       return new Response(
         JSON.stringify({ object: "response.compaction", output: [] }),
@@ -143,6 +177,7 @@ describe("Request Journey successful conversation compaction", () => {
     expect(outboundUrls).toEqual([
       "https://chatgpt.com/backend-api/codex/responses/compact?bare&token=caller-query",
     ]);
+    expect(outboundAcceptEncodings).toEqual(["gzip, br"]);
     expect(recording.journeys).toHaveLength(1);
     const journey = recording.journeys[0]!;
     expect(journey.observations).toEqual(
