@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createRequire } from "node:module";
@@ -125,6 +125,10 @@ describe("Public Model serve wiring", () => {
 
     await expect
       .poll(async () => {
+        if (serve.exitCode !== null || serve.signalCode !== null) {
+          const result = await serving;
+          throw new Error(`serve exited (${String(result.code)}): ${result.stderr}`);
+        }
         try {
           const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
             address?: unknown;
@@ -136,6 +140,14 @@ describe("Public Model serve wiring", () => {
         }
       }, { timeout: 10_000, interval: 50 })
       .toBe(true);
+    await expect.poll(async () => {
+      try {
+        await access(join(root, "state", "request-diagnostics", "diagnostics-v3.sqlite3"));
+        return true;
+      } catch {
+        return false;
+      }
+    }, { timeout: 10_000, interval: 50 }).toBe(true);
 
     await expect
       .poll(async () => {

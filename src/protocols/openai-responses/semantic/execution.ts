@@ -5,11 +5,11 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
-import type { ExecutionOperation } from "../../../execution.js";
 import type { ResponsesSemanticInvocation } from "./invocation.js";
 import {
   executeWithResponsesPi,
   InvalidResponsesPiExecution,
+  type ResponsesPiExecutionCapabilities,
 } from "./pi-execution.js";
 import type { ResponsesPayloadProjectionOperation } from "./projection/operation.js";
 import type { ResponsesProjectionOutcome } from "./projection/outcome.js";
@@ -21,10 +21,8 @@ import type { ResponsesReasoningOutcome } from "./reasoning/contract.js";
 import { projectResponsesPayload } from "./projection/request.js";
 import type { ResponsesProjectionRecord } from "./supplement/contract.js";
 
-export interface ResponsesSemanticExecutionCapabilities {
-  readonly executeOperation?: ExecutionOperation;
-  readonly factsSink?: ExecutionFactsSink;
-}
+export type ResponsesSemanticExecutionCapabilities =
+  ResponsesPiExecutionCapabilities;
 
 export interface ResponsesSemanticExecutionResult {
   readonly message: AssistantMessage;

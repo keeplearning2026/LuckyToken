@@ -99,7 +99,7 @@ function observeCompactRequestArtifact(
   bytes: Uint8Array<ArrayBuffer>,
   location: RequestJourneyLocation,
 ): void {
-  const capturedBytes = Math.min(bytes.byteLength, 256 * 1_024);
+  const capturedBytes = bytes.byteLength;
   observeCompactJourney(journey, {
     kind: "artifact_observed",
     artifactId: "client_request_wire",
@@ -221,7 +221,7 @@ function preserveProviderCompactResponse(
   } as const;
   const step = `p5.preserve_provider_native_response.${input.attempt}`;
   enterCompactStep(journey, step, location);
-  const capturedBytes = Math.min(input.body.byteLength, 256 * 1_024);
+  const capturedBytes = input.body.byteLength;
   observeCompactJourney(journey, {
     kind: "artifact_observed",
     artifactId: "provider_native_preserved_response_wire",
@@ -495,8 +495,27 @@ export function createOpenAIResponsesCompactHandler(
           step: "read_and_decode_body",
         } as const;
         enterCompactStep(journey, "p1.read_and_decode_body", bodyLocation);
-        const decoded = await readResponsesRequestBody(request, options.maxRequestBytes);
-        observeCompactRequestArtifact(journey, request, decoded.wireBytes, bodyLocation);
+        const requestArtifact = journey?.openArtifact?.({
+          artifactId: "client_request_wire",
+          artifactKind: "client_request_wire",
+          ...(request.headers.get("content-type") === null
+            ? {}
+            : { mediaType: request.headers.get("content-type")! }),
+          location: bodyLocation,
+        });
+        const decoded = await readResponsesRequestBody(
+          request,
+          options.maxRequestBytes,
+          requestArtifact,
+        );
+        if (requestArtifact === undefined) {
+          observeCompactRequestArtifact(
+            journey,
+            request,
+            decoded.wireBytes,
+            bodyLocation,
+          );
+        }
         completeCompactStep(
           journey,
           "p1.read_and_decode_body",

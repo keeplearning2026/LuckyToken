@@ -4,6 +4,7 @@ import type {
   RequestJourneyObservationInput,
   RequestJourneyObserver,
 } from "../diagnostics/contract.js";
+import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
 
 import {
   AnthropicNativeBodyProjectionError,
@@ -454,7 +455,15 @@ export async function passthroughAnthropicRequest(
       options.composedHeaders,
     );
     const outboundBytes = new TextEncoder().encode(forwardedBody);
-    const capturedBytes = Math.min(outboundBytes.byteLength, 256 * 1_024);
+    publishSafeHttpEnvelopeArtifact(options.journey, {
+      artifactId: `provider_native_outbound_request_envelope.${options.attempt}`,
+      artifactKind: "provider_native_outbound_request_envelope",
+      method: "POST",
+      url: endpoint,
+      headers: new Headers(headers),
+      location: envelopeLocation,
+    });
+    const capturedBytes = outboundBytes.byteLength;
     observeAnthropicNativeTransport(options.journey, {
       kind: "artifact_observed",
       artifactId: `provider_native_outbound_request_wire.${options.attempt}`,
@@ -535,6 +544,14 @@ export async function passthroughAnthropicRequest(
     dispatchLocation,
     "success",
   );
+  publishSafeHttpEnvelopeArtifact(options.journey, {
+    artifactId: `provider_native_upstream_response_envelope.${options.attempt}`,
+    artifactKind: "provider_native_upstream_response_envelope",
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: upstream.headers,
+    location: dispatchLocation,
+  });
 
   const readLocation = {
     phase: "upstream_execution",
@@ -583,7 +600,7 @@ export async function passthroughAnthropicRequest(
     if (signal.aborted) throw error;
     throw new AnthropicPassthroughBodyReadError(error);
   }
-  const capturedBytes = Math.min(body.byteLength, 256 * 1_024);
+  const capturedBytes = body.byteLength;
   observeAnthropicNativeTransport(options.journey, {
     kind: "artifact_observed",
     artifactId: `provider_native_upstream_response_wire.${options.attempt}`,

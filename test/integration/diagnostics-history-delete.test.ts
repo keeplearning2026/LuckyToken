@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -74,6 +74,20 @@ function recordFailedJourney(
     primaryFailureId: failureId,
     lastKnownLocation: FAILURE_LOCATION,
   });
+}
+
+async function journeyFolderNames(root: string): Promise<string[]> {
+  const fullJourneyRoot = join(root, "full-journeys");
+  const result: string[] = [];
+  for (const date of await readdir(fullJourneyRoot, { withFileTypes: true })) {
+    if (!date.isDirectory() || date.name === ".inflight") continue;
+    for (const journey of await readdir(join(fullJourneyRoot, date.name), {
+      withFileTypes: true,
+    })) {
+      if (journey.isDirectory()) result.push(journey.name);
+    }
+  }
+  return result.sort();
 }
 
 describe("unified Diagnostics history deletion", () => {
@@ -152,6 +166,7 @@ describe("unified Diagnostics history deletion", () => {
         limit: 256,
       }),
     ).resolves.toMatchObject({ complete: true });
+    expect(await journeyFolderNames(root)).toHaveLength(2);
 
     const result = await historyManagement(authority).deleteHistory({
       fromMs: 100,
@@ -160,6 +175,7 @@ describe("unified Diagnostics history deletion", () => {
     expect(result).toEqual({
       deleted: { requestJourneys: 1, runtimeEvents: 1 },
     });
+    expect(await journeyFolderNames(root)).toHaveLength(1);
 
     const journeys = await authority.queryRequestJourneys({ limit: 10 });
     expect(journeys.records.map((record) => record.requestId)).toEqual([

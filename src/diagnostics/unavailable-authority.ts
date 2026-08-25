@@ -26,6 +26,11 @@ export function createUnavailableDiagnosticsAuthority(): DiagnosticsManagementAu
     begin(input: RequestJourneyBeginInput): RequestJourneyObserver {
       return Object.freeze({
         requestId: input.requestId,
+        openArtifact: () => Object.freeze({
+          append: () => undefined,
+          finish: () => undefined,
+          abandon: () => undefined,
+        }),
         observe: () => undefined,
         close: () => undefined,
       });

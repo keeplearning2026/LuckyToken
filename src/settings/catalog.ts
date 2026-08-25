@@ -178,6 +178,22 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     sensitivity: "public",
     applyMode: "hot-apply",
   }),
+  Object.freeze({
+    key: "diagnostics.fullJourneyCapture.enabled",
+    type: "boolean",
+    default: false,
+    validation: Object.freeze({ type: "boolean" }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
+  Object.freeze({
+    key: "diagnostics.failedJourneyCapture.enabled",
+    type: "boolean",
+    default: true,
+    validation: Object.freeze({ type: "boolean" }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
   ...[
     "modelProvider",
     "openaiBaseUrl",

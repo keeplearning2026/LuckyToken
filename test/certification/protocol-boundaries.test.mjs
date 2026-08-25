@@ -37,6 +37,10 @@ const CLIENT_SHARED_SEAMS = new Set([
   // vocabulary only. Persistence, Worker, query, and configuration modules
   // remain outside both Client Protocol boundaries.
   "diagnostics/contract.ts",
+  // Mechanism-only, protocol-unaware safe HTTP envelope encoder/publisher.
+  // It applies the shared credential/query redaction policy and exposes no
+  // routing, transport, execution, persistence, or lane-selection authority.
+  "diagnostics/http-envelope.ts",
   // Secret-free request-local Profile attribution facts. This narrow seam
   // exposes no credential values, resolution, storage, or transport authority.
   "credentials/activity.ts",

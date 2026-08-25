@@ -21,8 +21,94 @@ describe("Settings product slice", () => {
     await click("Data & privacyHistory and backups");
     expect(container.textContent).toContain("3 stored history records");
     expect(container.textContent).not.toContain("captures");
-    expect(container.querySelector('.settings-status')?.textContent).toBe("3 records");
+    expect(container.querySelector('.settings-danger-section .settings-status')?.textContent).toBe("3 records");
     expect(container.querySelector('button.danger-button')?.textContent).toContain("Delete history");
+  });
+
+  it("controls all-request and failed-request capture through registered settings and shows the folder", async () => {
+    let enabled = false;
+    let failedEnabled = true;
+    const executeSettings = vi.fn(async (
+      command: Parameters<
+        ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]
+      >[0],
+    ) => {
+      if (command.command === "set") {
+        if (command.key === "diagnostics.fullJourneyCapture.enabled") {
+          enabled = command.value === true;
+        } else if (command.key === "diagnostics.failedJourneyCapture.enabled") {
+          failedEnabled = command.value === true;
+        }
+      }
+      const fullKey = "diagnostics.fullJourneyCapture.enabled";
+      const failedKey = "diagnostics.failedJourneyCapture.enabled";
+      return {
+        outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
+        settings: {
+          [fullKey]: {
+            key: fullKey,
+            type: "boolean" as const,
+            default: false,
+            validation: { type: "boolean" },
+            sensitivity: "public" as const,
+            applyMode: "hot-apply" as const,
+            value: enabled,
+          },
+          [failedKey]: {
+            key: failedKey,
+            type: "boolean" as const,
+            default: true,
+            validation: { type: "boolean" },
+            sensitivity: "public" as const,
+            applyMode: "hot-apply" as const,
+            value: failedEnabled,
+          },
+        },
+      };
+    });
+    await render(createFakeDesktopApi({
+      control: {
+        executeSettings,
+        queryHistory: async () => ({ range: "all", counts: { requestJourneys: 0, runtimeEvents: 0 } }),
+        getBackendState: async () => ({
+          revision: 1,
+          kind: "ready" as const,
+          status: {
+            sequence: 1,
+            modelDataPlane: "running" as const,
+            provider: "configured" as const,
+            diagnostics: {
+              available: true,
+              fullJourneyDirectory: "D:\\TokenData\\state\\request-diagnostics\\full-journeys",
+              maxJsonArtifactBytes: 67_108_864,
+              maxJourneyArtifactBytes: 536_870_912,
+              isolation: "process" as const,
+            },
+          },
+        }),
+      },
+    }));
+    await click("Data & privacyHistory and backups");
+
+    expect(container.textContent).toContain("Full journey capture");
+    expect(container.textContent).toContain(
+      "D:\\TokenData\\state\\request-diagnostics\\full-journeys",
+    );
+    expect(container.textContent).toContain("64 MiB per JSON file");
+    expect(container.textContent).toContain("Force capture when a request fails");
+    expect(container.textContent).toContain("Failures only");
+    await click("Enable full journey capture");
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: "diagnostics.fullJourneyCapture.enabled",
+      value: true,
+    });
+    await click("Disable failed-request capture");
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: "diagnostics.failedJourneyCapture.enabled",
+      value: false,
+    });
   });
 
   it("removes deep-capture controls and reads typed Runtime Events", async () => {

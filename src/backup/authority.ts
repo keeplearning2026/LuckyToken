@@ -27,7 +27,7 @@ import { validateCanonicalExportDestination } from "../history/path-safety.js";
 
 const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 const FULL_CONFIRMATION =
-  "This full-sensitive backup includes raw Token configuration, Provider credentials, Client token secrets, and unified request diagnostic history with captured artifacts. Store it as a secret and confirm to continue.";
+  "This full-sensitive backup includes raw Token configuration, Provider credentials, Client token secrets, and the request diagnostic history index. The captured artifacts in full-journey JSON files remain in the capture folder and are not included. Store both as secrets and confirm to continue.";
 
 export interface BackupFileSource {
   readonly id: string;

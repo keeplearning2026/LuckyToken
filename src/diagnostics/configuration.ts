@@ -2,14 +2,18 @@ import { isAbsolute, resolve } from "node:path";
 
 export interface DiagnosticsConfiguration {
   readonly directory: string;
-  readonly successArtifacts: Readonly<{ readonly enabled: boolean }>;
+  /** Hard cap for one redacted JSON artifact: 64 MiB. */
+  readonly maxJsonArtifactBytes: number;
+  /** Aggregate hard cap for one Request Journey: 512 MiB. */
   readonly maxJourneyArtifactBytes: number;
+  /** Process-owned artifact-file retention cap. */
+  readonly maxArtifactDiskBytes: number;
   readonly artifactRetentionAgeMs: number;
   readonly maxArtifactJourneys: number;
 }
 
-const CONFIGURATION_SCHEMA = "Token.diagnostics.configuration.v1";
-const CONFIGURATION_MARKER = "__TokenDiagnosticsConfigurationV1";
+const CONFIGURATION_SCHEMA = "Token.diagnostics.configuration.v2";
+const CONFIGURATION_MARKER = "__TokenDiagnosticsConfigurationV2";
 
 function object(value: unknown, path: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -43,8 +47,9 @@ export function parseDiagnosticsConfiguration(
   for (const key of Object.keys(root)) {
     if (
       key !== "directory" &&
-      key !== "successArtifacts" &&
+      key !== "maxJsonArtifactBytes" &&
       key !== "maxJourneyArtifactBytes" &&
+      key !== "maxArtifactDiskBytes" &&
       key !== "artifactRetentionAgeMs" &&
       key !== "maxArtifactJourneys"
     ) {
@@ -58,24 +63,26 @@ export function parseDiagnosticsConfiguration(
   const directory = isAbsolute(rawDirectory)
     ? resolve(rawDirectory)
     : resolve(configDirectory, rawDirectory);
-  const successArtifacts = object(
-    root.successArtifacts ?? {},
-    `${path}.successArtifacts`,
+  const maxJsonArtifactBytes = positiveIntegerAtMost(
+    root.maxJsonArtifactBytes ?? 67_108_864,
+    67_108_864,
+    `${path}.maxJsonArtifactBytes`,
   );
-  for (const key of Object.keys(successArtifacts)) {
-    if (key !== "enabled") {
-      throw new Error(`${path}.successArtifacts.${key} is unknown`);
-    }
-  }
-  const enabled = successArtifacts.enabled ?? false;
-  if (typeof enabled !== "boolean") {
-    throw new Error(`${path}.successArtifacts.enabled must be a boolean`);
-  }
   const maxJourneyArtifactBytes = positiveIntegerAtMost(
-    root.maxJourneyArtifactBytes ?? 4_194_304,
-    4_194_304,
+    root.maxJourneyArtifactBytes ?? 536_870_912,
+    536_870_912,
     `${path}.maxJourneyArtifactBytes`,
   );
+  const maxArtifactDiskBytes = positiveIntegerAtMost(
+    root.maxArtifactDiskBytes ?? 5_368_709_120,
+    1_099_511_627_776,
+    `${path}.maxArtifactDiskBytes`,
+  );
+  if (maxJsonArtifactBytes > maxJourneyArtifactBytes) {
+    throw new Error(
+      `${path}.maxJsonArtifactBytes must not exceed ${path}.maxJourneyArtifactBytes`,
+    );
+  }
   const artifactRetentionAgeMs = positiveIntegerAtMost(
     root.artifactRetentionAgeMs ?? 604_800_000,
     604_800_000,
@@ -88,8 +95,9 @@ export function parseDiagnosticsConfiguration(
   );
   return Object.freeze({
     directory,
-    successArtifacts: Object.freeze({ enabled }),
+    maxJsonArtifactBytes,
     maxJourneyArtifactBytes,
+    maxArtifactDiskBytes,
     artifactRetentionAgeMs,
     maxArtifactJourneys,
     [CONFIGURATION_MARKER]: CONFIGURATION_SCHEMA,

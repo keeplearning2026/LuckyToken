@@ -94,8 +94,8 @@ describe("Diagnostics startup fail-open", () => {
     );
   });
 
-  it("leaves diagnostics v1 unread and untouched while creating diagnostics v2", async () => {
-    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-v2-"));
+  it("leaves diagnostics v1 unread and untouched while creating diagnostics v3", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-v3-"));
     roots.push(root);
     const v1Path = join(root, "diagnostics.sqlite3");
     const v1Bytes = Buffer.from("legacy diagnostics v1 must remain untouched");
@@ -115,14 +115,14 @@ describe("Diagnostics startup fail-open", () => {
 
     expect(await readFile(v1Path)).toEqual(v1Bytes);
     expect((await stat(v1Path)).mtimeMs).toBe(v1Mtime);
-    const v2 = new DatabaseSync(join(root, "diagnostics-v2.sqlite3"), {
+    const v3 = new DatabaseSync(join(root, "diagnostics-v3.sqlite3"), {
       readOnly: true,
     });
     try {
       expect(
-        v2.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get(),
-      ).toEqual({ value: 2 });
-      const usageColumns = v2
+        v3.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get(),
+      ).toEqual({ value: 3 });
+      const usageColumns = v3
         .prepare("PRAGMA table_info(request_journeys)")
         .all()
         .map((column) => (column as { name: string }).name)
@@ -134,14 +134,14 @@ describe("Diagnostics startup fail-open", () => {
         "usage_output",
       ]);
     } finally {
-      v2.close();
+      v3.close();
     }
   });
 
   it("preserves the Data Plane and reports typed unavailability without mutating incompatible storage", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-fail-open-"));
     roots.push(root);
-    const databasePath = join(root, "diagnostics-v2.sqlite3");
+    const databasePath = join(root, "diagnostics-v3.sqlite3");
     const database = new DatabaseSync(databasePath);
     database.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);

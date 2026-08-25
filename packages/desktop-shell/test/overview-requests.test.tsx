@@ -171,7 +171,18 @@ describe("Overview Request Journeys", () => {
     const failed = summary(10, "failed");
     const listeners = new Set<(record: RequestJourneySummary) => void>();
     const getRequestJourney = vi.fn(async () => ({ outcome: "ok" as const, result: detail(failed) }));
-    const api = createFakeDesktopApi({ control: { getBackendState: async () => ({ revision: 1, kind: "ready", status }), onBackendState: () => () => undefined, queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [failed], hasMore: false } }), getRequestJourney, onRequestJourneys: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } } });
+    const getRequestArtifact = vi.fn(async () => ({
+      outcome: "ok" as const,
+      result: {
+        requestId: failed.requestId,
+        artifactId: "response-body",
+        offset: 0,
+        nextOffset: 17,
+        complete: true,
+        dataBase64: btoa('{"status":"safe"}'),
+      },
+    }));
+    const api = createFakeDesktopApi({ control: { getBackendState: async () => ({ revision: 1, kind: "ready", status }), onBackendState: () => () => undefined, queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [failed], hasMore: false } }), getRequestJourney, getRequestArtifact, onRequestJourneys: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } } });
     await act(async () => root.render(<App api={api} />));
     await flush();
     expect(container.textContent).toContain("request-10");
@@ -188,6 +199,20 @@ describe("Overview Request Journeys", () => {
     expect(container.textContent).toContain("Production");
     expect(container.textContent).toContain("What happened");
     expect(container.textContent).toContain("These are stored observations in sequence, not inferred causes.");
+    const captures = [...container.querySelectorAll("details")].find((entry) =>
+      entry.textContent?.includes("Diagnostic captures"),
+    );
+    await act(async () => {
+      (captures?.querySelector("button") as HTMLButtonElement).click();
+    });
+    await flush();
+    expect(getRequestArtifact).toHaveBeenCalledWith({
+      requestId: "request-10",
+      artifactId: "response-body",
+      offset: 0,
+      limit: 64 * 1_024,
+    });
+    expect(captures?.querySelector("pre")?.textContent).toBe('{"status":"safe"}');
     await act(async () => { for (const listener of listeners) listener(summary(11, "running")); });
     expect(container.textContent).toContain("request-11");
     await act(async () => {

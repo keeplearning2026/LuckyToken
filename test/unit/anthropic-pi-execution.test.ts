@@ -79,6 +79,46 @@ describe("Anthropic-owned Pi execution", () => {
     expect(result).toEqual({ message: terminal, outcomes: [projectedOutcome] });
   });
 
+  it("publishes final Provider payload evidence without trusting observer behavior", async () => {
+    const providerPayloads: unknown[] = [];
+    const providerResponses: unknown[] = [];
+    const result = await executeWithAnthropicPi({
+      models: {} as Models,
+      model,
+      pi: { context, options: {} },
+      projection: {
+        initialOutcomes: [],
+        project: () => ({ payload: { final: "provider-wire" }, outcomes: [] }),
+      },
+      infrastructure: {
+        providerEvidence: {
+          request(payload) {
+            providerPayloads.push(payload);
+            throw new Error("diagnostics observer crashed");
+          },
+          response(response) {
+            providerResponses.push(response);
+            throw new Error("diagnostics response observer crashed");
+          },
+        },
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.({ draft: true }, model);
+          await options.onResponse?.(
+            { status: 200, headers: { "request-id": "response-1" } },
+            model,
+          );
+          return terminal;
+        },
+      },
+    });
+
+    expect(providerPayloads).toEqual([{ final: "provider-wire" }]);
+    expect(providerResponses).toEqual([
+      { status: 200, headers: { "request-id": "response-1" } },
+    ]);
+    expect(result.message).toBe(terminal);
+  });
+
   it("rejects a caller-owned payload callback", async () => {
     await expect(executeWithAnthropicPi({
       models: {} as Models,

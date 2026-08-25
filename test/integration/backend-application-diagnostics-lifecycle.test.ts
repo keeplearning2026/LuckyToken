@@ -30,6 +30,7 @@ import { createControlPlaneDiscovery } from "../../src/control-plane-discovery.j
 import type {
   DiagnosticsConfiguration,
   DiagnosticsManagementAuthority,
+  JourneyCapturePolicySource,
   RequestJourneyBeginInput,
   RequestJourneyCloseInput,
 } from "../../src/diagnostics/index.js";
@@ -54,6 +55,7 @@ function deferred<T>(): Deferred<T> {
 interface DiagnosticsAuthorityFactoryInput {
   readonly configuration: DiagnosticsConfiguration;
   readonly runtimeId: string;
+  readonly journeyCapturePolicy: JourneyCapturePolicySource;
 }
 
 type DiagnosticsAuthorityFactory = (
@@ -133,8 +135,9 @@ async function fixture(): Promise<{
         providerPackages: {},
         diagnostics: {
           directory: "state/request-diagnostics",
-          successArtifacts: { enabled: false },
-          maxJourneyArtifactBytes: 4_194_304,
+          maxJsonArtifactBytes: 67_108_864,
+          maxJourneyArtifactBytes: 536_870_912,
+          maxArtifactDiskBytes: 5_368_709_120,
           artifactRetentionAgeMs: 604_800_000,
           maxArtifactJourneys: 1_000,
         },
@@ -339,6 +342,10 @@ describe("Backend Application DiagnosticsAuthority lifecycle", () => {
       ),
     });
     const backendRuntimeId = factoryInputs[0]!.runtimeId;
+    expect(factoryInputs[0]!.journeyCapturePolicy.snapshot()).toEqual({
+      allRequestsEnabled: false,
+      failedRequestsEnabled: true,
+    });
 
     await sendUnknownModelRequest(port);
     await firstJourneyClosed.promise;
@@ -352,6 +359,28 @@ describe("Backend Application DiagnosticsAuthority lifecycle", () => {
     });
     try {
       await client.hello(controlPlaneVersion);
+      await expect(
+        client.executeSettingsCommand({
+          command: "set",
+          key: "diagnostics.fullJourneyCapture.enabled",
+          value: true,
+        }),
+      ).resolves.toMatchObject({ outcome: "applied" });
+      expect(factoryInputs[0]!.journeyCapturePolicy.snapshot()).toEqual({
+        allRequestsEnabled: true,
+        failedRequestsEnabled: true,
+      });
+      await expect(
+        client.executeSettingsCommand({
+          command: "set",
+          key: "diagnostics.failedJourneyCapture.enabled",
+          value: false,
+        }),
+      ).resolves.toMatchObject({ outcome: "applied" });
+      expect(factoryInputs[0]!.journeyCapturePolicy.snapshot()).toEqual({
+        allRequestsEnabled: true,
+        failedRequestsEnabled: false,
+      });
       expect((await client.executeRuntimeCommand("restart")).outcome).toBe(
         "completed",
       );
@@ -415,16 +444,17 @@ describe("Backend Application DiagnosticsAuthority lifecycle", () => {
       "the unified DiagnosticsAuthority must create state/request-diagnostics",
     ).toBeDefined();
     if (unifiedFiles === undefined) return;
-    expect(unifiedFiles).toContain("diagnostics-v2.sqlite3");
+    expect(unifiedFiles).toContain("diagnostics-v3.sqlite3");
     expect(unifiedFiles).toEqual(
-      expect.arrayContaining(["diagnostics-v2.sqlite3"]),
+      expect.arrayContaining(["diagnostics-v3.sqlite3", "full-journeys"]),
     );
     expect(
       unifiedFiles.filter(
         (name) =>
-          name !== "diagnostics-v2.sqlite3" &&
-          name !== "diagnostics-v2.sqlite3-wal" &&
-          name !== "diagnostics-v2.sqlite3-shm",
+          name !== "diagnostics-v3.sqlite3" &&
+          name !== "diagnostics-v3.sqlite3-wal" &&
+          name !== "diagnostics-v3.sqlite3-shm" &&
+          name !== "full-journeys",
       ),
     ).toEqual([]);
   });

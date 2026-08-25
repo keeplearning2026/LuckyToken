@@ -128,6 +128,10 @@ describe("catalog serve wiring", () => {
 
     await expect
       .poll(async () => {
+        if (serve.exitCode !== null || serve.signalCode !== null) {
+          const result = await serveCapture.result;
+          throw new Error(`serve exited (${String(result.code)}): ${result.stderr}`);
+        }
         try {
           const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
             address?: unknown;

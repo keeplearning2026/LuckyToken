@@ -21,7 +21,9 @@ interface WorkerEnvelope {
   readonly sequence?: number;
   readonly messageKind?: string;
   readonly payload?: Readonly<Record<string, unknown>>;
-  readonly artifactBody?: Uint8Array;
+  readonly artifactId?: string;
+  readonly chunkIndex?: number;
+  readonly bytes?: Uint8Array;
 }
 
 interface AppendIdentity {
@@ -50,6 +52,7 @@ function createSaturatedReserveHarness(): {
   readonly closeSealPosts: () => number;
   readonly closeSealPayload: () => Readonly<Record<string, unknown>> | undefined;
   readonly artifactPosts: () => readonly WorkerEnvelope[];
+  readonly artifactChunks: () => readonly WorkerEnvelope[];
   readonly releaseHeld: () => void;
 } {
   let messageListener: ((message: unknown) => void) | undefined;
@@ -57,6 +60,7 @@ function createSaturatedReserveHarness(): {
   let closeSealPostCount = 0;
   let sealPayload: Readonly<Record<string, unknown>> | undefined;
   const artifacts: WorkerEnvelope[] = [];
+  const artifactChunks: WorkerEnvelope[] = [];
 
   const acknowledge = (message: WorkerEnvelope): void => {
     const identity = appendIdentity(message);
@@ -90,6 +94,10 @@ function createSaturatedReserveHarness(): {
           if (identity !== undefined) held.push(identity);
           return;
         }
+        if (envelope.type === "artifact_chunk") {
+          artifactChunks.push(envelope);
+          return;
+        }
         if (envelope.type === "close") {
           messageListener?.({ type: "result", commandId: envelope.commandId });
         }
@@ -110,6 +118,7 @@ function createSaturatedReserveHarness(): {
     closeSealPosts: () => closeSealPostCount,
     closeSealPayload: () => sealPayload,
     artifactPosts: () => artifacts,
+    artifactChunks: () => artifactChunks,
     releaseHeld: () => {
       for (const identity of held.splice(0)) {
         messageListener?.({ type: "ack", ...identity });
@@ -190,12 +199,15 @@ describe("Request Journey close-seal reserve", () => {
     const harness = createSaturatedReserveHarness();
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
-        {
-          directory: root,
-          successArtifacts: { enabled: true },
-        },
+        { directory: root },
         root,
       ),
+      journeyCapturePolicy: {
+        snapshot: () => Object.freeze({
+          allRequestsEnabled: true,
+          failedRequestsEnabled: true,
+        }),
+      },
       runtimeId: `${RUNTIME_ID}-shedding`,
       workerFactory: harness.factory,
     });
@@ -298,7 +310,6 @@ describe("Request Journey close-seal reserve", () => {
         state: "unavailable",
         reason: "queue_capacity_exhausted",
       });
-      expect(successPost).not.toHaveProperty("artifactBody");
       const failurePost = posts.find(
         (post) => post.requestId === failed.requestId,
       );
@@ -306,7 +317,12 @@ describe("Request Journey close-seal reserve", () => {
         artifactId: "failure-body",
         state: "captured",
       });
-      expect(failurePost?.artifactBody).toBeInstanceOf(Uint8Array);
+      expect(
+        harness
+          .artifactChunks()
+          .filter((post) => post.artifactId === "failure-body")
+          .map((post) => post.bytes?.byteLength),
+      ).toEqual([65_536, 65_536, 65_536, expect.any(Number)]);
     } finally {
       harness.releaseHeld();
       await authority.close();

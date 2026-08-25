@@ -57,8 +57,9 @@ describe("Token CLI configuration", () => {
       limits: { maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES, requestTimeoutMs: 120_000 },
       diagnostics: {
         directory: resolve(directory, "state", "request-diagnostics"),
-        successArtifacts: { enabled: false },
-        maxJourneyArtifactBytes: 4_194_304,
+        maxJsonArtifactBytes: 67_108_864,
+        maxJourneyArtifactBytes: 536_870_912,
+        maxArtifactDiskBytes: 5_368_709_120,
         artifactRetentionAgeMs: 604_800_000,
         maxArtifactJourneys: 1_000,
       },

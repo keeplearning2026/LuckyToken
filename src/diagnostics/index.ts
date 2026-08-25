@@ -71,5 +71,6 @@ export {
   createDiagnosticsAuthority,
   DiagnosticsUnavailableError,
   type CreateDiagnosticsAuthorityOptions,
+  type JourneyCapturePolicySource,
 } from "./authority.js";
 export { createUnavailableDiagnosticsAuthority } from "./unavailable-authority.js";

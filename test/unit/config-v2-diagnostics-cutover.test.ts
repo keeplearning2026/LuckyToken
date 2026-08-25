@@ -55,8 +55,9 @@ describe("Token config v2 diagnostics cutover", () => {
       schemaVersion: "token-config-v2",
       diagnostics: {
         directory: expectedDiagnosticsDirectory,
-        successArtifacts: { enabled: false },
-        maxJourneyArtifactBytes: 4_194_304,
+        maxJsonArtifactBytes: 67_108_864,
+        maxJourneyArtifactBytes: 536_870_912,
+        maxArtifactDiskBytes: 5_368_709_120,
         artifactRetentionAgeMs: 604_800_000,
         maxArtifactJourneys: 1_000,
       },
@@ -109,8 +110,9 @@ describe("Token config v2 diagnostics cutover", () => {
       schemaVersion: "token-config-v2",
       diagnostics: {
         directory: "state/request-diagnostics",
-        successArtifacts: { enabled: false },
-        maxJourneyArtifactBytes: 4_194_304,
+        maxJsonArtifactBytes: 67_108_864,
+        maxJourneyArtifactBytes: 536_870_912,
+        maxArtifactDiskBytes: 5_368_709_120,
         artifactRetentionAgeMs: 604_800_000,
         maxArtifactJourneys: 1_000,
       },

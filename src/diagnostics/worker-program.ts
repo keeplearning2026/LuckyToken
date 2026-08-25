@@ -1,25 +1,55 @@
 /**
- * The Worker is created with `eval: true` so the same source works both from
- * TypeScript tests and from compiled JavaScript without a second build asset.
+ * The diagnostics actor is created with an eval source so the same program
+ * works both from TypeScript tests and from compiled JavaScript without a
+ * second build asset. Production runs it in an independent child process;
+ * the worker_threads transport remains only as a test adapter while the
+ * process-isolation cutover is completed.
  * This function must remain self-contained: only its serialized body runs in
  * the Worker isolate.
  */
 function diagnosticsWorkerMain(): void {
   /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports -- the serialized eval Worker has no module-scope imports */
   const { parentPort, workerData } = require("node:worker_threads") as typeof import("node:worker_threads");
-  const { chmodSync, mkdirSync, readFileSync, rmSync } = require("node:fs") as typeof import("node:fs");
-  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
-  const { join } = require("node:path") as typeof import("node:path");
+  const {
+    chmodSync,
+    closeSync,
+    mkdirSync,
+    openSync,
+    readFileSync,
+    readSync,
+    renameSync,
+    rmSync,
+    rmdirSync,
+    statSync,
+    writeFileSync,
+  } = require("node:fs") as typeof import("node:fs");
+  const { createHash, randomBytes } = require("node:crypto") as typeof import("node:crypto");
+  const { basename, dirname, join, resolve, sep } = require("node:path") as typeof import("node:path");
   const { backup, DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
   /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
 
-  if (parentPort === null) throw new Error("Diagnostics Worker has no parent port");
-  const port = parentPort;
-  const data = workerData as {
+  const processData = process.env.TOKEN_DIAGNOSTICS_PROCESS_DATA;
+  const port = parentPort ?? {
+    postMessage(message: unknown): void {
+      if (typeof process.send === "function") process.send(message);
+    },
+    on(event: "message", listener: (message: unknown) => void): void {
+      process.on(event, listener);
+    },
+  };
+  if (parentPort === null && processData === undefined) {
+    throw new Error("Diagnostics process has no parent IPC data");
+  }
+  const data = (parentPort === null
+    ? JSON.parse(processData!)
+    : workerData) as {
     readonly directory: string;
     readonly runtimeId: string;
     readonly artifactRetentionAgeMs: number;
     readonly maxArtifactJourneys: number;
+    readonly maxArtifactDiskBytes: number;
+    readonly maxJsonArtifactBytes: number;
+    readonly maxJourneyArtifactBytes: number;
     /** @internal Bounded-page test seam; production uses the fixed default. */
     readonly analyticsPageSize?: number;
   };
@@ -40,8 +70,39 @@ function diagnosticsWorkerMain(): void {
     data.maxArtifactJourneys > 0
       ? data.maxArtifactJourneys
       : 1_000;
+  const maxArtifactDiskBytes =
+    Number.isSafeInteger(data.maxArtifactDiskBytes) &&
+    data.maxArtifactDiskBytes > 0
+      ? data.maxArtifactDiskBytes
+      : 5_368_709_120;
+  const maxJsonArtifactBytes =
+    Number.isSafeInteger(data.maxJsonArtifactBytes) &&
+    data.maxJsonArtifactBytes > 0 &&
+    data.maxJsonArtifactBytes <= 64 * 1_024 * 1_024
+      ? data.maxJsonArtifactBytes
+      : 64 * 1_024 * 1_024;
+  const maxActiveArtifactBytes =
+    Number.isSafeInteger(data.maxJourneyArtifactBytes) &&
+    data.maxJourneyArtifactBytes > 0 &&
+    data.maxJourneyArtifactBytes <= 512 * 1_024 * 1_024
+      ? data.maxJourneyArtifactBytes
+      : 512 * 1_024 * 1_024;
+  const activeArtifacts = new Map<string, {
+    readonly descriptor: Readonly<Record<string, unknown>>;
+    readonly chunks: Uint8Array[];
+    receivedBytes: number;
+    nextChunkIndex: number;
+  }>();
+  const completedArtifacts = new Map<
+    string,
+    Readonly<Record<string, unknown>>
+  >();
+  let activeArtifactBytes = 0;
   mkdirSync(data.directory, { recursive: true });
-  const database = new DatabaseSync(join(data.directory, "diagnostics-v2.sqlite3"));
+  const fullJourneyDirectory = join(data.directory, "full-journeys");
+  const inflightDirectory = join(fullJourneyDirectory, ".inflight");
+  mkdirSync(inflightDirectory, { recursive: true });
+  const database = new DatabaseSync(join(data.directory, "diagnostics-v3.sqlite3"));
   const permanentStartupFailure = (): void => {
     database.close();
     port.postMessage({
@@ -74,7 +135,7 @@ function diagnosticsWorkerMain(): void {
     const existingVersion = database
       .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
       .get() as { readonly value: number } | undefined;
-    if (existingVersion === undefined || Number(existingVersion.value) !== 2) {
+    if (existingVersion === undefined || Number(existingVersion.value) !== 3) {
       permanentStartupFailure();
       return;
     }
@@ -127,7 +188,7 @@ function diagnosticsWorkerMain(): void {
   }
   database.exec(`
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_name', 'TOKEN_diagnostics');
-    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 2);
+    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 3);
     CREATE TABLE IF NOT EXISTS records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       record_kind TEXT NOT NULL,
@@ -188,7 +249,7 @@ function diagnosticsWorkerMain(): void {
       request_id TEXT NOT NULL,
       artifact_id TEXT NOT NULL,
       descriptor_json TEXT NOT NULL,
-      body BLOB,
+      body_path TEXT,
       PRIMARY KEY (request_id, artifact_id)
     );
     CREATE TABLE IF NOT EXISTS artifact_evictions (
@@ -212,28 +273,274 @@ function diagnosticsWorkerMain(): void {
   database.exec("PRAGMA synchronous = NORMAL");
   database.exec("PRAGMA foreign_keys = ON");
 
+  const storageRoot = resolve(data.directory);
+  const storagePath = (relativePath: string): string => {
+    const absolutePath = resolve(storageRoot, relativePath);
+    if (
+      absolutePath === storageRoot ||
+      !absolutePath.startsWith(`${storageRoot}${sep}`)
+    ) {
+      throw new Error("Diagnostics artifact path escaped its storage root");
+    }
+    return absolutePath;
+  };
+  const opaqueSegment = (prefix: string, value: string): string =>
+    `${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+  const inflightJourneyRelative = (
+    runtimeId: string,
+    requestId: string,
+  ): string =>
+    join(
+      "full-journeys",
+      ".inflight",
+      opaqueSegment("runtime", runtimeId),
+      opaqueSegment("request", requestId),
+    );
+  const artifactBodyRelative = (
+    runtimeId: string,
+    requestId: string,
+    artifactId: string,
+    suffix: ".part" | ".json" | ".jsonl" | ".sse",
+  ): string =>
+    join(
+      inflightJourneyRelative(runtimeId, requestId),
+      "artifacts",
+      `${opaqueSegment("artifact", artifactId)}${suffix}`,
+    );
+  const artifactKey = (
+    runtimeId: string,
+    requestId: string,
+    artifactId: string,
+  ): string => `${runtimeId}\u0000${requestId}\u0000${artifactId}`;
+  const discardActiveArtifact = (key: string): void => {
+    const active = activeArtifacts.get(key);
+    if (active === undefined) return;
+    activeArtifactBytes = Math.max(
+      0,
+      activeArtifactBytes - active.receivedBytes,
+    );
+    activeArtifacts.delete(key);
+  };
+  const writeSanitizedArtifact = (
+    runtimeId: string,
+    requestId: string,
+    artifactId: string,
+    bytes: Uint8Array,
+  ): void => {
+    const relativePath = artifactBodyRelative(
+      runtimeId,
+      requestId,
+      artifactId,
+      ".part",
+    );
+    const absolutePath = storagePath(relativePath);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, bytes, { flag: "w", mode: 0o600 });
+  };
+  const completeArtifactBody = (
+    runtimeId: string,
+    requestId: string,
+    artifactId: string,
+    descriptor: Readonly<Record<string, unknown>>,
+  ): string | null => {
+    const partRelative = artifactBodyRelative(
+      runtimeId,
+      requestId,
+      artifactId,
+      ".part",
+    );
+    const mediaType = typeof descriptor.mediaType === "string"
+      ? descriptor.mediaType.split(";", 1)[0]!.trim().toLowerCase()
+      : "";
+    const extension = mediaType === "text/event-stream"
+      ? ".sse"
+      : mediaType === "application/jsonl" ||
+          mediaType === "application/x-jsonlines" ||
+          mediaType === "application/ndjson" ||
+          mediaType === "application/x-ndjson"
+        ? ".jsonl"
+        : ".json";
+    const finalRelative = artifactBodyRelative(
+      runtimeId,
+      requestId,
+      artifactId,
+      extension,
+    );
+    const partPath = storagePath(partRelative);
+    const finalPath = storagePath(finalRelative);
+    const bodyAvailable =
+      (descriptor.state === "captured" || descriptor.state === "partial") &&
+      typeof descriptor.capturedBytes === "number" &&
+      descriptor.capturedBytes > 0;
+    if (!bodyAvailable) {
+      rmSync(partPath, { force: true });
+      rmSync(finalPath, { force: true });
+      return null;
+    }
+    try {
+      renameSync(partPath, finalPath);
+    } catch {
+      const existing = statSync(finalPath);
+      if (existing.size !== descriptor.capturedBytes) throw new Error(
+        "Diagnostics artifact file length is inconsistent",
+      );
+    }
+    if (statSync(finalPath).size !== descriptor.capturedBytes) {
+      rmSync(finalPath, { force: true });
+      throw new Error("Diagnostics artifact file is incomplete");
+    }
+    return finalRelative;
+  };
+  const finalizeJourneyFiles = (requestId: string): void => {
+    const journey = database
+      .prepare(
+        `SELECT r.runtime_id AS runtimeId, j.accepted_at AS acceptedAt,
+                j.operation AS operation, j.protocol AS protocol,
+                j.lane AS lane, j.outcome AS outcome
+           FROM request_journeys j
+           JOIN records r ON r.id = j.record_id
+          WHERE j.request_id = ?`,
+      )
+      .get(requestId) as
+      | {
+          readonly runtimeId: string;
+          readonly acceptedAt: number;
+          readonly operation: string;
+          readonly protocol: string | null;
+          readonly lane: string | null;
+          readonly outcome: string;
+        }
+      | undefined;
+    if (journey === undefined) return;
+    const artifacts = database
+      .prepare(
+        `SELECT artifact_id AS artifactId, descriptor_json AS descriptorJson,
+                body_path AS bodyPath
+           FROM request_journey_artifacts
+          WHERE request_id = ? ORDER BY artifact_id`,
+      )
+      .all(requestId) as Array<{
+      readonly artifactId: string;
+      readonly descriptorJson: string;
+      readonly bodyPath: string | null;
+    }>;
+    const inflightRelative = inflightJourneyRelative(
+      journey.runtimeId,
+      requestId,
+    );
+    const inflightPath = storagePath(inflightRelative);
+    const removeEmptyRuntimeDirectory = (): void => {
+      try {
+        rmdirSync(dirname(inflightPath));
+      } catch {
+        // Concurrent Journeys keep the runtime directory non-empty. It is
+        // removed by the last closer or by startup orphan recovery.
+      }
+    };
+    if (!artifacts.some((artifact) => artifact.bodyPath !== null)) {
+      try {
+        rmSync(inflightPath, { recursive: true, force: true });
+        removeEmptyRuntimeDirectory();
+      } catch {
+        // A policy-rejected body has no index reference. Empty-directory
+        // cleanup remains best effort inside the diagnostics process.
+      }
+      return;
+    }
+
+    const date = new Date(Number(journey.acceptedAt))
+      .toISOString()
+      .slice(0, 10);
+    const finalRelative = join(
+      "full-journeys",
+      date,
+      opaqueSegment("request", requestId),
+    );
+    const finalPath = storagePath(finalRelative);
+    const manifest = {
+      schema: "Token.full-journey.v1",
+      requestId,
+      runtimeId: journey.runtimeId,
+      acceptedAt: Number(journey.acceptedAt),
+      operation: journey.operation,
+      ...(journey.protocol === null ? {} : { protocol: journey.protocol }),
+      ...(journey.lane === null ? {} : { lane: journey.lane }),
+      outcome: journey.outcome,
+      artifacts: artifacts.map((artifact) => ({
+        ...(JSON.parse(artifact.descriptorJson) as Record<string, unknown>),
+        ...(artifact.bodyPath === null
+          ? {}
+          : {
+              file: join("artifacts", basename(artifact.bodyPath)).replaceAll(
+                "\\",
+                "/",
+              ),
+            }),
+      })),
+    };
+    mkdirSync(inflightPath, { recursive: true });
+    const manifestTemporary = join(inflightPath, "manifest.json.tmp");
+    writeFileSync(manifestTemporary, JSON.stringify(manifest, null, 2), {
+      flag: "w",
+      mode: 0o600,
+    });
+    renameSync(manifestTemporary, join(inflightPath, "manifest.json"));
+    mkdirSync(dirname(finalPath), { recursive: true });
+    try {
+      renameSync(inflightPath, finalPath);
+    } catch {
+      // A replay after a successful rename reaches the already finalized
+      // directory. Any other filesystem failure is surfaced to the actor and
+      // remains contained by the diagnostics process boundary.
+      statSync(finalPath);
+    }
+    removeEmptyRuntimeDirectory();
+    for (const artifact of artifacts) {
+      if (artifact.bodyPath === null) continue;
+      const finalBodyPath = join(
+        finalRelative,
+        "artifacts",
+        basename(artifact.bodyPath),
+      );
+      database
+        .prepare(
+          `UPDATE request_journey_artifacts SET body_path = ?
+            WHERE request_id = ? AND artifact_id = ?`,
+        )
+        .run(finalBodyPath, requestId, artifact.artifactId);
+    }
+  };
+
   const evictArtifactBodies = (
     requestId: string,
     time: number,
   ): void => {
     const rows = database
       .prepare(
-        `SELECT artifact_id AS artifactId, descriptor_json AS descriptorJson
+        `SELECT artifact_id AS artifactId, descriptor_json AS descriptorJson,
+                body_path AS bodyPath
            FROM request_journey_artifacts
-          WHERE request_id = ? AND body IS NOT NULL
+          WHERE request_id = ? AND body_path IS NOT NULL
           ORDER BY artifact_id`,
       )
       .all(requestId) as Array<{
       readonly artifactId: string;
       readonly descriptorJson: string;
+      readonly bodyPath: string;
     }>;
+    const journeyDirectories = new Set<string>();
     for (const row of rows) {
       const descriptor = JSON.parse(row.descriptorJson) as Record<string, unknown>;
+      try {
+        journeyDirectories.add(dirname(dirname(storagePath(row.bodyPath))));
+      } catch {
+        // Invalid stored paths are treated as unavailable, never followed.
+      }
       database
         .prepare(
           `UPDATE request_journey_artifacts
-              SET descriptor_json = ?, body = NULL
-            WHERE request_id = ? AND artifact_id = ? AND body IS NOT NULL`,
+              SET descriptor_json = ?, body_path = NULL
+            WHERE request_id = ? AND artifact_id = ? AND body_path IS NOT NULL`,
         )
         .run(
           JSON.stringify({
@@ -252,6 +559,14 @@ function diagnosticsWorkerMain(): void {
         )
         .run(requestId, row.artifactId, time);
     }
+    for (const journeyDirectory of journeyDirectories) {
+      try {
+        rmSync(journeyDirectory, { recursive: true, force: true });
+      } catch {
+        // Retention cleanup failure cannot invalidate the index update or
+        // escape the diagnostics process.
+      }
+    }
   };
 
   const enforceArtifactRetention = (time: number): void => {
@@ -260,7 +575,7 @@ function diagnosticsWorkerMain(): void {
         `SELECT DISTINCT a.request_id AS requestId
            FROM request_journey_artifacts a
            JOIN request_journeys j ON j.request_id = a.request_id
-          WHERE a.body IS NOT NULL AND j.accepted_at < ?
+          WHERE a.body_path IS NOT NULL AND j.accepted_at < ?
           ORDER BY j.accepted_at, j.record_id`,
       )
       .all(Math.max(0, time - artifactRetentionAgeMs)) as Array<{
@@ -276,13 +591,57 @@ function diagnosticsWorkerMain(): void {
                            j.record_id AS recordId
              FROM request_journey_artifacts a
              JOIN request_journeys j ON j.request_id = a.request_id
-            WHERE a.body IS NOT NULL
+            WHERE a.body_path IS NOT NULL
             ORDER BY acceptedAt DESC, recordId DESC
             LIMIT -1 OFFSET ?
          ) ORDER BY acceptedAt, recordId`,
       )
       .all(maxArtifactJourneys) as Array<{ readonly requestId: string }>;
     for (const row of countExpired) evictArtifactBodies(row.requestId, time);
+
+    let retainedBytes = Number(
+      (
+        database
+          .prepare(
+            `SELECT COALESCE(SUM(
+                      CAST(json_extract(descriptor_json, '$.capturedBytes') AS INTEGER)
+                    ), 0) AS bytes
+               FROM request_journey_artifacts
+              WHERE body_path IS NOT NULL`,
+          )
+          .get() as { readonly bytes: number }
+      ).bytes,
+    );
+    if (retainedBytes <= maxArtifactDiskBytes) return;
+    const diskCandidates = database
+      .prepare(
+        `SELECT DISTINCT a.request_id AS requestId,
+                         j.accepted_at AS acceptedAt,
+                         j.record_id AS recordId
+           FROM request_journey_artifacts a
+           JOIN request_journeys j ON j.request_id = a.request_id
+          WHERE a.body_path IS NOT NULL
+          ORDER BY acceptedAt, recordId`,
+      )
+      .all() as Array<{ readonly requestId: string }>;
+    for (const candidate of diskCandidates) {
+      const bytes = Number(
+        (
+          database
+            .prepare(
+              `SELECT COALESCE(SUM(
+                        CAST(json_extract(descriptor_json, '$.capturedBytes') AS INTEGER)
+                      ), 0) AS bytes
+                 FROM request_journey_artifacts
+                WHERE request_id = ? AND body_path IS NOT NULL`,
+            )
+            .get(candidate.requestId) as { readonly bytes: number }
+        ).bytes,
+      );
+      evictArtifactBodies(candidate.requestId, time);
+      retainedBytes = Math.max(0, retainedBytes - bytes);
+      if (retainedBytes <= maxArtifactDiskBytes) break;
+    }
   };
 
   database.exec("BEGIN IMMEDIATE");
@@ -314,6 +673,32 @@ function diagnosticsWorkerMain(): void {
     database.close();
     throw error;
   }
+
+  const recoverableArtifacts = database
+    .prepare(
+      `SELECT DISTINCT a.request_id AS requestId, a.body_path AS bodyPath
+         FROM request_journey_artifacts a
+         JOIN request_journeys j ON j.request_id = a.request_id
+         JOIN records r ON r.id = j.record_id
+        WHERE a.body_path IS NOT NULL AND r.closed_at IS NOT NULL`,
+    )
+    .all() as Array<{
+    readonly requestId: string;
+    readonly bodyPath: string;
+  }>;
+  const inflightPrefix = `${join("full-journeys", ".inflight")}${sep}`;
+  for (const requestId of new Set(
+    recoverableArtifacts
+      .filter((row) => row.bodyPath.startsWith(inflightPrefix))
+      .map((row) => row.requestId),
+  )) {
+    finalizeJourneyFiles(requestId);
+  }
+  // Anything still under .inflight has no committed closed descriptor and
+  // is therefore an orphan from an interrupted diagnostics generation.
+  rmSync(inflightDirectory, { recursive: true, force: true });
+  mkdirSync(inflightDirectory, { recursive: true });
+  enforceArtifactRetention(Date.now());
 
   const projectSummary = (row: {
     readonly id: number;
@@ -570,7 +955,6 @@ function diagnosticsWorkerMain(): void {
   const invalidAppendClassification = (message: {
     readonly messageKind?: string;
     readonly payload?: Record<string, unknown>;
-    readonly artifactBody?: Uint8Array;
   }): string | undefined => {
     if (
       message.messageKind !== "begin" &&
@@ -583,8 +967,7 @@ function diagnosticsWorkerMain(): void {
     if (!isRecord(message.payload)) return "invalid_append_payload";
     const payload = message.payload;
     if (message.messageKind === "runtime_event") {
-      return message.artifactBody === undefined &&
-        (payload.level === "info" ||
+      return (payload.level === "info" ||
           payload.level === "warning" ||
           payload.level === "error" ||
           payload.level === "critical") &&
@@ -594,12 +977,6 @@ function diagnosticsWorkerMain(): void {
         payload.safeMessage.length > 0
         ? undefined
         : "invalid_append_runtime_event";
-    }
-    if (
-      message.artifactBody !== undefined &&
-      !(message.artifactBody instanceof Uint8Array)
-    ) {
-      return "invalid_append_artifact_body";
     }
     try {
       if (JSON.stringify(payload) === undefined) {
@@ -1116,17 +1493,261 @@ function diagnosticsWorkerMain(): void {
       readonly requestId?: string;
       readonly recordId?: string;
       readonly artifactId?: string;
+      readonly chunkIndex?: number;
       readonly offset?: number;
+      readonly bytes?: Uint8Array;
+      readonly descriptor?: Record<string, unknown>;
+      readonly originalBytes?: number;
+      readonly complete?: boolean;
+      readonly reason?: string;
       readonly limit?: number;
       readonly sequence?: number;
       readonly time?: number;
       readonly messageKind?: string;
       readonly payload?: Record<string, unknown>;
-      readonly artifactBody?: Uint8Array;
       readonly query?: Record<string, unknown>;
       readonly range?: unknown;
     };
     try {
+      if (message.type === "artifact_begin") {
+        const descriptorBytes = (() => {
+          try {
+            return Buffer.byteLength(JSON.stringify(message.descriptor), "utf8");
+          } catch {
+            return Number.POSITIVE_INFINITY;
+          }
+        })();
+        const valid =
+          typeof message.runtimeId === "string" &&
+          message.runtimeId.length > 0 &&
+          typeof message.requestId === "string" &&
+          message.requestId.length > 0 &&
+          typeof message.artifactId === "string" &&
+          message.artifactId.length > 0 &&
+          message.chunkIndex === -1 &&
+          typeof message.descriptor === "object" &&
+          message.descriptor !== null &&
+          descriptorBytes <= 64 * 1_024;
+        const key = valid
+          ? artifactKey(
+              message.runtimeId!,
+              message.requestId!,
+              message.artifactId!,
+            )
+          : undefined;
+        if (!valid || key === undefined || activeArtifacts.has(key)) {
+          port.postMessage({
+            type: "nack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: -1,
+            classification: "invalid_artifact_begin",
+          });
+          return;
+        }
+        activeArtifacts.set(key, {
+          descriptor: Object.freeze({ ...message.descriptor! }),
+          chunks: [],
+          receivedBytes: 0,
+          nextChunkIndex: 0,
+        });
+        port.postMessage({
+          type: "ack",
+          runtimeId: message.runtimeId,
+          requestId: message.requestId,
+          artifactId: message.artifactId,
+          chunkIndex: -1,
+        });
+        return;
+      }
+      if (message.type === "artifact_chunk") {
+        const valid =
+          typeof message.runtimeId === "string" &&
+          message.runtimeId.length > 0 &&
+          typeof message.requestId === "string" &&
+          message.requestId.length > 0 &&
+          typeof message.artifactId === "string" &&
+          message.artifactId.length > 0 &&
+          Number.isSafeInteger(message.chunkIndex) &&
+          message.chunkIndex! >= 0 &&
+          Number.isSafeInteger(message.offset) &&
+          message.offset! >= 0 &&
+          message.bytes instanceof Uint8Array &&
+          message.bytes.byteLength > 0 &&
+          message.bytes.byteLength <= 64 * 1_024;
+        if (!valid) {
+          port.postMessage({
+            type: "nack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: message.chunkIndex,
+            classification: "invalid_artifact_chunk",
+          });
+          return;
+        }
+        const key = artifactKey(
+          message.runtimeId!,
+          message.requestId!,
+          message.artifactId!,
+        );
+        const active = activeArtifacts.get(key);
+        if (
+          active === undefined ||
+          message.chunkIndex !== active.nextChunkIndex ||
+          message.offset !== active.receivedBytes ||
+          active.receivedBytes + message.bytes!.byteLength >
+            maxJsonArtifactBytes ||
+          activeArtifactBytes + message.bytes!.byteLength >
+            maxActiveArtifactBytes
+        ) {
+          discardActiveArtifact(key);
+          port.postMessage({
+            type: "nack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: message.chunkIndex,
+            classification: "artifact_chunk_capacity_or_order_rejected",
+          });
+          return;
+        }
+        try {
+          const owned = new Uint8Array(message.bytes!.byteLength);
+          owned.set(message.bytes!);
+          active.chunks.push(owned);
+          active.receivedBytes += owned.byteLength;
+          active.nextChunkIndex += 1;
+          activeArtifactBytes += owned.byteLength;
+          port.postMessage({
+            type: "ack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: message.chunkIndex,
+          });
+        } catch {
+          port.postMessage({
+            type: "nack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: message.chunkIndex,
+            classification: "artifact_chunk_capture_failed",
+          });
+        }
+        return;
+      }
+      if (message.type === "artifact_finish") {
+        const valid =
+          typeof message.runtimeId === "string" &&
+          message.runtimeId.length > 0 &&
+          typeof message.requestId === "string" &&
+          message.requestId.length > 0 &&
+          typeof message.artifactId === "string" &&
+          message.artifactId.length > 0 &&
+          message.chunkIndex === -2 &&
+          Number.isSafeInteger(message.originalBytes) &&
+          message.originalBytes! >= 0 &&
+          typeof message.complete === "boolean";
+        const key = valid
+          ? artifactKey(
+              message.runtimeId!,
+              message.requestId!,
+              message.artifactId!,
+            )
+          : undefined;
+        const active = key === undefined ? undefined : activeArtifacts.get(key);
+        if (!valid || key === undefined || active === undefined) {
+          port.postMessage({
+            type: "nack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: -2,
+            classification: "artifact_finish_without_active_capture",
+          });
+          return;
+        }
+        try {
+          let completed: Readonly<Record<string, unknown>>;
+          if (
+            !message.complete ||
+            active.receivedBytes !== message.originalBytes
+          ) {
+            completed = Object.freeze({
+              ...active.descriptor,
+              state: "unavailable",
+              originalBytes: message.originalBytes,
+              capturedBytes: 0,
+              redaction: "failed",
+              truncated: true,
+              reason: message.reason ?? "artifact_capture_incomplete",
+            });
+          } else {
+            const raw = Buffer.concat(
+              active.chunks.map((chunk) => Buffer.from(chunk)),
+              active.receivedBytes,
+            );
+            const result = redactRequestArtifact({
+              artifactKind: String(active.descriptor.artifactKind),
+              ...(typeof active.descriptor.mediaType === "string"
+                ? { mediaType: active.descriptor.mediaType }
+                : {}),
+              bytes: raw,
+              originalBytes: message.originalBytes,
+              sourceTruncated: false,
+            });
+            if (result.kind === "unavailable") {
+              completed = Object.freeze({
+                ...active.descriptor,
+                state: "unavailable",
+                originalBytes: message.originalBytes,
+                capturedBytes: 0,
+                redaction: result.redaction,
+                truncated: false,
+                reason: result.reason,
+              });
+            } else {
+              writeSanitizedArtifact(
+                message.runtimeId!,
+                message.requestId!,
+                message.artifactId!,
+                result.bytes,
+              );
+              completed = Object.freeze({
+                ...active.descriptor,
+                state: "captured",
+                originalBytes: message.originalBytes,
+                capturedBytes: result.bytes.byteLength,
+                redaction: result.redaction,
+                truncated: false,
+              });
+            }
+          }
+          completedArtifacts.set(key, completed);
+          discardActiveArtifact(key);
+          port.postMessage({
+            type: "ack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: -2,
+          });
+        } catch {
+          discardActiveArtifact(key);
+          port.postMessage({
+            type: "nack",
+            runtimeId: message.runtimeId,
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            chunkIndex: -2,
+            classification: "artifact_redaction_failed",
+          });
+        }
+        return;
+      }
       if (message.type === "append") {
         if (!validAppendIdentity(message)) {
           exitAfterActorFailure(new Error("Diagnostics Worker append identity is invalid"));
@@ -1150,7 +1771,39 @@ function diagnosticsWorkerMain(): void {
         const recordId = message.recordId;
         const sequence = message.sequence!;
         const time = message.time!;
-        const payload = message.payload!;
+        let payload = message.payload!;
+        if (
+          message.messageKind === "observation" &&
+          requestId !== undefined &&
+          payload.kind === "artifact_observed" &&
+          typeof payload.artifactId === "string"
+        ) {
+          const key = artifactKey(runtimeId, requestId, payload.artifactId);
+          if (
+            payload.state === "unavailable" ||
+            payload.state === "not_applicable"
+          ) {
+            discardActiveArtifact(key);
+            completedArtifacts.delete(key);
+          } else {
+            const completed = completedArtifacts.get(key);
+            if (completed === undefined) discardActiveArtifact(key);
+            payload = completed === undefined
+              ? {
+                  ...payload,
+                  state: "unavailable",
+                  capturedBytes: 0,
+                  redaction: "failed",
+                  reason: "artifact_capture_incomplete",
+                }
+              : {
+                  ...payload,
+                  ...completed,
+                  location: payload.location,
+                };
+            completedArtifacts.delete(key);
+          }
+        }
         let publication: Record<string, unknown> | undefined;
         try {
           database.exec("BEGIN IMMEDIATE");
@@ -1281,21 +1934,27 @@ function diagnosticsWorkerMain(): void {
                 ...(typeof payload.reason === "string"
                   ? { reason: payload.reason }
                   : {}),
-              };
+            };
+              const bodyPath = completeArtifactBody(
+                runtimeId,
+                requestId,
+                descriptor.artifactId,
+                descriptor,
+              );
               database
                 .prepare(
                   `INSERT INTO request_journey_artifacts
-                     (request_id, artifact_id, descriptor_json, body)
+                     (request_id, artifact_id, descriptor_json, body_path)
                    VALUES (?, ?, ?, ?)
                    ON CONFLICT(request_id, artifact_id) DO UPDATE SET
                      descriptor_json = excluded.descriptor_json,
-                     body = excluded.body`,
+                     body_path = excluded.body_path`,
                 )
                 .run(
                   requestId,
                   descriptor.artifactId,
                   JSON.stringify(descriptor),
-                  message.artifactBody ?? null,
+                  bodyPath,
                 );
             }
             if (eventWasInserted && kind === "lane_committed") {
@@ -1463,9 +2122,15 @@ function diagnosticsWorkerMain(): void {
                 String(payload.outcome),
                 requestId,
               );
-            enforceArtifactRetention(time);
           }
           database.exec("COMMIT");
+          if (message.messageKind === "close" && requestId !== undefined) {
+            // Filesystem publication is deliberately outside the SQLite
+            // transaction. A crash at either side is recovered from the
+            // closed index row and .inflight path on the next process start.
+            finalizeJourneyFiles(requestId);
+            enforceArtifactRetention(time);
+          }
           if (message.messageKind === "runtime_event") {
             if (recordId === undefined) {
               throw new Error("runtime event record identity is missing");
@@ -1746,6 +2411,28 @@ function diagnosticsWorkerMain(): void {
         const range = parseHistoryRange(message.range);
         const journeyRange = historyRangeSql(range, "j.accepted_at");
         const runtimeRange = historyRangeSql(range, "time");
+        const artifactRows = database
+          .prepare(
+            `SELECT DISTINCT a.body_path AS bodyPath
+               FROM request_journey_artifacts a
+               JOIN request_journeys j ON j.request_id = a.request_id
+               JOIN records r ON r.id = j.record_id
+              WHERE a.body_path IS NOT NULL
+                AND r.record_kind = 'request_journey'
+                AND r.closed_at IS NOT NULL
+                AND ${journeyRange.sql}`,
+          )
+          .all(...journeyRange.parameters) as Array<{
+          readonly bodyPath: string;
+        }>;
+        const journeyDirectories = new Set<string>();
+        for (const row of artifactRows) {
+          try {
+            journeyDirectories.add(dirname(dirname(storagePath(row.bodyPath))));
+          } catch {
+            // Never follow an invalid stored path outside diagnostics root.
+          }
+        }
 
         try {
           database.exec("BEGIN IMMEDIATE");
@@ -1792,6 +2479,15 @@ function diagnosticsWorkerMain(): void {
             )
             .run(...runtimeRange.parameters).changes;
           database.exec("COMMIT");
+          for (const journeyDirectory of journeyDirectories) {
+            try {
+              rmSync(journeyDirectory, { recursive: true, force: true });
+            } catch {
+              // The index deletion is authoritative. A filesystem cleanup
+              // failure remains inside diagnostics and is retried by orphan
+              // cleanup on a later process start.
+            }
+          }
           port.postMessage({
             type: "result",
             commandId: message.commandId,
@@ -1949,14 +2645,14 @@ function diagnosticsWorkerMain(): void {
         }
         const artifact = database
           .prepare(
-            `SELECT body
+            `SELECT body_path AS bodyPath
              FROM request_journey_artifacts
              WHERE request_id = ? AND artifact_id = ?`,
           )
           .get(message.requestId, message.artifactId) as
-          | { readonly body: Uint8Array | null }
+          | { readonly bodyPath: string | null }
           | undefined;
-        if (artifact === undefined || artifact.body === null) {
+        if (artifact === undefined || artifact.bodyPath === null) {
           port.postMessage({
             type: "command_error",
             commandId: message.commandId,
@@ -1966,12 +2662,18 @@ function diagnosticsWorkerMain(): void {
         }
         const offset = message.offset!;
         const limit = message.limit!;
-        const body = new Uint8Array(artifact.body);
-        const nextOffset = Math.min(body.byteLength, offset + limit);
-        const chunk =
-          offset >= body.byteLength
-            ? new Uint8Array()
-            : body.subarray(offset, nextOffset);
+        const absolutePath = storagePath(artifact.bodyPath);
+        const bodyBytes = statSync(absolutePath).size;
+        const nextOffset = Math.min(bodyBytes, offset + limit);
+        const chunk = new Uint8Array(Math.max(0, nextOffset - offset));
+        if (chunk.byteLength > 0) {
+          const descriptor = openSync(absolutePath, "r");
+          try {
+            readSync(descriptor, chunk, 0, chunk.byteLength, offset);
+          } finally {
+            closeSync(descriptor);
+          }
+        }
         port.postMessage({
           type: "result",
           commandId: message.commandId,
@@ -1980,7 +2682,7 @@ function diagnosticsWorkerMain(): void {
             artifactId: message.artifactId,
             offset,
             nextOffset,
-            complete: nextOffset >= body.byteLength,
+            complete: nextOffset >= bodyBytes,
             dataBase64: Buffer.from(chunk).toString("base64"),
           },
         });
@@ -2004,7 +2706,7 @@ function diagnosticsWorkerMain(): void {
               sequence: message.sequence,
             }
           : { commandId: message.commandId }),
-        message: error instanceof Error ? error.message : "Diagnostics Worker failed",
+        message: error instanceof Error ? error.message : "Diagnostics process failed",
       });
     }
   };
@@ -2017,4 +2719,26 @@ function diagnosticsWorkerMain(): void {
   port.postMessage({ type: "ready" });
 }
 
-export const DIAGNOSTICS_WORKER_SOURCE = `(${diagnosticsWorkerMain.toString()})()`;
+export const DIAGNOSTICS_WORKER_SOURCE = `${ARTIFACT_REDACTION_ISOLATE_SOURCE}\n(${diagnosticsWorkerMain.toString()})()`;
+import { ARTIFACT_REDACTION_ISOLATE_SOURCE } from "./artifact-redaction.js";
+
+declare const redactRequestArtifact: (
+  input: Readonly<{
+    artifactKind: string;
+    mediaType?: string;
+    bytes: Uint8Array;
+    originalBytes: number;
+    sourceTruncated: boolean;
+  }>,
+) =>
+  | Readonly<{
+      kind: "sanitized";
+      bytes: Uint8Array;
+      redaction: "not_required" | "applied";
+      truncated: false;
+    }>
+  | Readonly<{
+      kind: "unavailable";
+      redaction: "not_required" | "failed";
+      reason: string;
+    }>;

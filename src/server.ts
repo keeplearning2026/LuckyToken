@@ -10,6 +10,7 @@ import type {
   RequestJourneyCloseInput,
   RequestJourneyObservationAuthority,
 } from "./diagnostics/contract.js";
+import { publishSafeHttpEnvelopeArtifact } from "./diagnostics/http-envelope.js";
 import {
   beginRequestJourney,
   closeRequestJourney,
@@ -310,7 +311,15 @@ async function writeWebResponse(
     // This is the existing single materialization seam. Diagnostics observes
     // a bounded copy of these bytes and never clones or re-reads the Response.
     const body = Buffer.from(await response.arrayBuffer());
-    const capturedBytes = Math.min(body.byteLength, 256 * 1_024);
+    publishSafeHttpEnvelopeArtifact(context.journey, {
+      artifactId: "client_response_envelope",
+      artifactKind: "client_response_envelope",
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      location,
+    });
+    const capturedBytes = body.byteLength;
     observeRequestJourney(context, {
       kind: "artifact_observed",
       artifactId: "client_response_wire",
@@ -473,6 +482,14 @@ export async function startTokenHttpServer(
       kind: "step_completed",
       stepInstanceId: "p0.admit_http_request",
       completion: "success",
+      location: { phase: "http_admission", step: "admit_http_request" },
+    });
+    publishSafeHttpEnvelopeArtifact(context.journey, {
+      artifactId: "client_request_envelope",
+      artifactKind: "client_request_envelope",
+      method,
+      url: new URL(request.url ?? "/", origin).toString(),
+      headers: requestHeaders(request),
       location: { phase: "http_admission", step: "admit_http_request" },
     });
     if (!accepting) {

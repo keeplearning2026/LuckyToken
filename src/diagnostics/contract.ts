@@ -230,6 +230,23 @@ export interface RequestJourneyCloseInput {
   readonly completeness?: "complete" | "degraded";
 }
 
+export interface ImmutableArtifactMeta extends LocatedObservation {
+  readonly artifactId: string;
+  readonly artifactKind: string;
+  readonly mediaType?: string;
+  readonly originalBytes?: number;
+}
+
+export interface ArtifactRecorder {
+  append(bytes: Uint8Array): void;
+  finish(input: Readonly<{
+    readonly originalBytes: number;
+    readonly complete: boolean;
+    readonly reason?: string;
+  }>): void;
+  abandon(reason: string): void;
+}
+
 export interface RuntimeEventObservationInput {
   readonly level: "info" | "warning" | "error" | "critical";
   readonly classification: string;
@@ -238,6 +255,9 @@ export interface RuntimeEventObservationInput {
 
 export interface RequestJourneyObserver {
   readonly requestId: string;
+  /** Diagnostics authorities expose this streaming seam; minimal test and
+   * unavailable observers may omit it and remain fail-open. */
+  openArtifact?(meta: ImmutableArtifactMeta): ArtifactRecorder;
   observe(input: RequestJourneyObservationInput): void;
   close(input: RequestJourneyCloseInput): void;
 }

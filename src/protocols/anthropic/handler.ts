@@ -23,11 +23,13 @@ import {
   HttpRequestAbortedError,
 } from "../../http.js";
 import type {
+  ArtifactRecorder,
   RequestJourneyLocation,
   RequestJourneyObservationInput,
   RequestJourneyObserver,
   RequestJourneyOperation,
 } from "../../diagnostics/contract.js";
+import { publishSafeHttpEnvelopeArtifact } from "../../diagnostics/http-envelope.js";
 import {
   ModelResolutionFailure,
 } from "../../model-resolution.js";
@@ -82,6 +84,43 @@ function observeJourney(
     journey?.observe(observation);
   } catch {
     // A caller-provided observer must never affect protocol handling.
+  }
+}
+
+function observeAnthropicJsonArtifact(
+  journey: RequestJourneyObserver | undefined,
+  input: Readonly<{
+    artifactId: string;
+    artifactKind: string;
+    value: unknown;
+    location: RequestJourneyLocation;
+  }>,
+): void {
+  try {
+    const serialized = JSON.stringify(input.value);
+    if (serialized === undefined) throw new Error("JSON value is unavailable");
+    const bytes = new TextEncoder().encode(serialized);
+    observeJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: input.artifactId,
+      artifactKind: input.artifactKind,
+      state: "captured",
+      mediaType: "application/json",
+      bytes,
+      originalBytes: bytes.byteLength,
+      capturedBytes: bytes.byteLength,
+      truncated: false,
+      location: input.location,
+    });
+  } catch {
+    observeJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: input.artifactId,
+      artifactKind: input.artifactKind,
+      state: "unavailable",
+      reason: "snapshot_projection_failed",
+      location: input.location,
+    });
   }
 }
 
@@ -363,23 +402,6 @@ function attachRequestId(response: Response, requestId: string): Response {
   });
 }
 
-async function raceWithRequestSignal<T>(
-  value: Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  if (signal.aborted) throw new HttpRequestAbortedError(signal.reason);
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new HttpRequestAbortedError(signal.reason));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([value, aborted]);
-  } finally {
-    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
-  }
-}
-
 function hasJsonContentType(headers: Headers): boolean {
   const contentType = headers.get("content-type");
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
@@ -388,15 +410,60 @@ function hasJsonContentType(headers: Headers): boolean {
 async function readRawBody(
   request: Request,
   maximumBytes: number,
+  recorder?: ArtifactRecorder,
 ): Promise<string | undefined> {
   const declaredLength = request.headers.get("content-length");
   if (/^[0-9]+$/u.test(declaredLength ?? "") && Number(declaredLength) > maximumBytes) {
+    recorder?.abandon("request_body_exceeds_limit");
     return undefined;
   }
-  const rawBody = await raceWithRequestSignal(request.text(), request.signal);
-  return new TextEncoder().encode(rawBody).byteLength <= maximumBytes
-    ? rawBody
-    : undefined;
+  request.signal.throwIfAborted();
+  if (request.body === null) {
+    recorder?.finish({ originalBytes: 0, complete: true });
+    return "";
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const onAbort = () => {
+    void reader.cancel(request.signal.reason).catch(() => undefined);
+  };
+  request.signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    while (true) {
+      request.signal.throwIfAborted();
+      const { value, done } = await reader.read();
+      request.signal.throwIfAborted();
+      if (done) break;
+      if (value === undefined || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        recorder?.abandon("request_body_exceeds_limit");
+        void reader.cancel().catch(() => undefined);
+        return undefined;
+      }
+      recorder?.append(value);
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    recorder?.finish({ originalBytes: total, complete: true });
+    return new TextDecoder().decode(bytes);
+  } catch (error) {
+    recorder?.abandon("request_body_read_failed");
+    throw error;
+  } finally {
+    request.signal.removeEventListener("abort", onAbort);
+    try {
+      reader.releaseLock();
+    } catch {
+      // Request teardown owns a lock retained by cancellation.
+    }
+  }
 }
 
 async function handleAnthropicMessages(
@@ -507,7 +574,19 @@ async function handleAnthropicMessages(
       location: bodyLocation,
     };
     enterJourneyStep(journey, "p1.read_and_decode_body", bodyLocation);
-    const rawBody = await readRawBody(request, dependencies.maxRequestBytes);
+    const requestArtifact = journey?.openArtifact?.({
+      artifactId: "client_request_wire",
+      artifactKind: "client_request_wire",
+      ...(request.headers.get("content-type") === null
+        ? {}
+        : { mediaType: request.headers.get("content-type")! }),
+      location: bodyLocation,
+    });
+    const rawBody = await readRawBody(
+      request,
+      dependencies.maxRequestBytes,
+      requestArtifact,
+    );
     if (rawBody === undefined) {
       observeJourney(journey, {
         kind: "artifact_observed",
@@ -535,28 +614,23 @@ async function handleAnthropicMessages(
         },
       );
     }
-    const rawRequestBytes = new TextEncoder().encode(rawBody);
-    const capturedRequestBytes = Math.min(
-      rawRequestBytes.byteLength,
-      256 * 1_024,
-    );
-    observeJourney(journey, {
-      kind: "artifact_observed",
-      artifactId: "client_request_wire",
-      artifactKind: "client_request_wire",
-      state:
-        capturedRequestBytes < rawRequestBytes.byteLength
-          ? "partial"
-          : "captured",
-      ...(request.headers.get("content-type") === null
-        ? {}
-        : { mediaType: request.headers.get("content-type")! }),
-      bytes: rawRequestBytes.subarray(0, capturedRequestBytes),
-      originalBytes: rawRequestBytes.byteLength,
-      capturedBytes: capturedRequestBytes,
-      truncated: capturedRequestBytes < rawRequestBytes.byteLength,
-      location: bodyLocation,
-    });
+    if (requestArtifact === undefined) {
+      const rawRequestBytes = new TextEncoder().encode(rawBody);
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "client_request_wire",
+        artifactKind: "client_request_wire",
+        state: "captured",
+        ...(request.headers.get("content-type") === null
+          ? {}
+          : { mediaType: request.headers.get("content-type")! }),
+        bytes: rawRequestBytes,
+        originalBytes: rawRequestBytes.byteLength,
+        capturedBytes: rawRequestBytes.byteLength,
+        truncated: false,
+        location: bodyLocation,
+      });
+    }
     const body: unknown = JSON.parse(rawBody);
     assertImplementedAnthropicProfile(sourceProfile);
     completeJourneyStep(journey, "p1.read_and_decode_body", bodyLocation);
@@ -788,40 +862,30 @@ async function handleAnthropicMessages(
         options: piOptions,
       },
     };
-    try {
-      const invocationSnapshot = encodedBoundedSummary({
-        schema: "Token.pi_invocation_summary.v1",
+    observeAnthropicJsonArtifact(journey, {
+      artifactId: "pi_invocation_snapshot",
+      artifactKind: "pi_invocation_snapshot",
+      value: {
+        schema: "Token.anthropic_messages.pi_invocation.v2",
         selector: invocation.client.renderState.selector,
         model: { provider: model.provider, id: model.id, api: model.api },
-        systemPrompt: invocation.invocation.pi.context.systemPrompt,
-        messages: invocation.invocation.pi.context.messages,
+        reasoning: semanticInvocation.reasoning,
+        supplement: semanticInvocation.supplement,
+        context: semanticInvocation.pi.context,
         options: {
           maxTokens: piOptions.maxTokens,
           temperature: piOptions.temperature,
+          reasoning: piOptions.reasoning,
+          samplingParams: piOptions.samplingParams,
+          cacheRetention: piOptions.cacheRetention,
+          thinkingBudgets: piOptions.thinkingBudgets,
+          metadata: piOptions.metadata,
+          sessionId: piOptions.sessionId,
         },
-      });
-      observeJourney(journey, {
-        kind: "artifact_observed",
-        artifactId: "pi_invocation_snapshot",
-        artifactKind: "pi_invocation_snapshot",
-        state: invocationSnapshot.truncated ? "partial" : "captured",
-        mediaType: "application/json",
-        bytes: invocationSnapshot.bytes,
-        originalBytes: invocationSnapshot.originalBytes,
-        capturedBytes: invocationSnapshot.bytes.byteLength,
-        truncated: invocationSnapshot.truncated,
-        location: invocationLocation,
-      });
-    } catch {
-      observeJourney(journey, {
-        kind: "artifact_observed",
-        artifactId: "pi_invocation_snapshot",
-        artifactKind: "pi_invocation_snapshot",
-        state: "unavailable",
-        reason: "snapshot_projection_failed",
-        location: invocationLocation,
-      });
-    }
+        client: invocation.client,
+      },
+      location: invocationLocation,
+    });
     completeJourneyStep(journey, "p3.finalize_pi_invocation", invocationLocation);
     const executionLocation = {
       phase: "upstream_execution",
@@ -889,34 +953,22 @@ async function handleAnthropicMessages(
         });
       },
     });
-    observeJourney(journey, {
-      kind: "artifact_observed",
-      artifactId: "pi_provider_outbound_request_evidence",
-      artifactKind: "pi_provider_outbound_request_evidence",
-      state: "unavailable",
-      reason: "provider_did_not_expose",
-      location: {
-        phase: "upstream_execution",
-        lane: "semantic_conversion",
-        direction: "pi_to_provider",
-        step: "convert_pi_request",
-        subject: "envelope",
-      },
-    });
-    observeJourney(journey, {
-      kind: "artifact_observed",
-      artifactId: "pi_provider_response_decode_evidence",
-      artifactKind: "pi_provider_response_decode_evidence",
-      state: "unavailable",
-      reason: "provider_did_not_expose",
-      location: {
-        phase: "upstream_execution",
-        lane: "semantic_conversion",
-        direction: "provider_to_pi",
-        step: "decode_provider_events",
-        subject: "envelope",
-      },
-    });
+    const providerRequestLocation = {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "pi_to_provider",
+      step: "convert_pi_request",
+      subject: "envelope",
+    } as const;
+    const providerResponseLocation = {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "provider_to_pi",
+      step: "decode_provider_events",
+      subject: "envelope",
+    } as const;
+    let providerRequestObserved = false;
+    let providerResponseMetadataObserved = false;
     enterJourneyStep(journey, "p4.create_pi_stream", executionLocation);
     let message;
     try {
@@ -927,10 +979,83 @@ async function handleAnthropicMessages(
         execution: {
           executeOperation: dependencies.executeOperation,
           factsSink: executionFacts,
+          providerEvidence: {
+            request(payload) {
+              if (providerRequestObserved) return;
+              providerRequestObserved = true;
+              observeAnthropicJsonArtifact(journey, {
+                artifactId: "pi_provider_request_payload",
+                artifactKind: "pi_provider_request_payload",
+                value: payload,
+                location: providerRequestLocation,
+              });
+            },
+            response(response) {
+              if (providerResponseMetadataObserved) return;
+              providerResponseMetadataObserved = true;
+              try {
+                if (
+                  typeof response !== "object" ||
+                  response === null ||
+                  typeof (response as { status?: unknown }).status !== "number" ||
+                  typeof (response as { headers?: unknown }).headers !== "object" ||
+                  (response as { headers?: unknown }).headers === null
+                ) {
+                  throw new Error("Pi Provider response metadata is malformed");
+                }
+                publishSafeHttpEnvelopeArtifact(journey, {
+                  artifactId: "pi_provider_response_metadata",
+                  artifactKind: "pi_provider_response_metadata",
+                  status: (response as { status: number }).status,
+                  headers: new Headers(
+                    (response as { headers: Record<string, string> }).headers,
+                  ),
+                  location: providerResponseLocation,
+                });
+              } catch {
+                observeJourney(journey, {
+                  kind: "artifact_observed",
+                  artifactId: "pi_provider_response_metadata",
+                  artifactKind: "pi_provider_response_metadata",
+                  state: "unavailable",
+                  reason: "provider_response_metadata_invalid",
+                  location: providerResponseLocation,
+                });
+              }
+            },
+          },
         },
       });
       message = semanticResult.message;
     } catch (error) {
+      if (!providerRequestObserved) {
+        observeJourney(journey, {
+          kind: "artifact_observed",
+          artifactId: "pi_provider_request_payload",
+          artifactKind: "pi_provider_request_payload",
+          state: "unavailable",
+          reason: "provider_request_not_reached",
+          location: providerRequestLocation,
+        });
+      }
+      if (!providerResponseMetadataObserved) {
+        observeJourney(journey, {
+          kind: "artifact_observed",
+          artifactId: "pi_provider_response_metadata",
+          artifactKind: "pi_provider_response_metadata",
+          state: "unavailable",
+          reason: "provider_response_headers_not_reached",
+          location: providerResponseLocation,
+        });
+      }
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_provider_response_ir",
+        artifactKind: "pi_provider_response_ir",
+        state: "unavailable",
+        reason: "provider_response_not_decoded",
+        location: providerResponseLocation,
+      });
       failJourneyStep(
         journey,
         "p4.create_pi_stream",
@@ -940,6 +1065,22 @@ async function handleAnthropicMessages(
       );
       throw error;
     }
+    if (!providerResponseMetadataObserved) {
+      observeJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_provider_response_metadata",
+        artifactKind: "pi_provider_response_metadata",
+        state: "unavailable",
+        reason: "pinned_pi_adapter_did_not_publish_response_metadata",
+        location: providerResponseLocation,
+      });
+    }
+    observeAnthropicJsonArtifact(journey, {
+      artifactId: "pi_provider_response_ir",
+      artifactKind: "pi_provider_response_ir",
+      value: message,
+      location: providerResponseLocation,
+    });
     completeJourneyStep(journey, "p4.create_pi_stream", executionLocation);
     try {
       const terminalSummary = encodedBoundedSummary({

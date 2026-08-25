@@ -231,7 +231,112 @@ function observationText(
   }
 }
 
-function RequestDetailPanel({ record }: { readonly record: RequestJourneyRecord }) {
+interface ArtifactPreview {
+  readonly text: string;
+  readonly pageOffset: number;
+  readonly nextOffset: number;
+  readonly complete: boolean;
+  readonly loading: boolean;
+  readonly error?: string;
+}
+
+function decodeArtifactChunk(dataBase64: string): string {
+  const binary = atob(dataBase64);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function ArtifactCaptureList({
+  api,
+  record,
+}: {
+  readonly api: TokenDesktopApi;
+  readonly record: RequestJourneyRecord;
+}) {
+  const [previews, setPreviews] = useState<Readonly<Record<string, ArtifactPreview>>>({});
+  const load = async (artifactId: string): Promise<void> => {
+    const current = previews[artifactId];
+    if (current?.loading === true || current?.complete === true) return;
+    const offset = current?.nextOffset ?? 0;
+    setPreviews((existing) => ({
+      ...existing,
+      [artifactId]: {
+        text: existing[artifactId]?.text ?? "",
+        pageOffset: existing[artifactId]?.pageOffset ?? 0,
+        nextOffset: offset,
+        complete: false,
+        loading: true,
+      },
+    }));
+    try {
+      const response = await api.control.getRequestArtifact({
+        requestId: record.requestId,
+        artifactId,
+        offset,
+        limit: 64 * 1_024,
+      });
+      if (response.outcome !== "ok") throw new Error("Diagnostics storage is unavailable.");
+      const page = response.result;
+      const text = decodeArtifactChunk(page.dataBase64);
+      setPreviews((existing) => ({
+        ...existing,
+        [artifactId]: {
+          // Keep exactly one bounded page in renderer memory. A 64 MiB capture
+          // must never grow into one renderer state value or DOM node.
+          text,
+          pageOffset: offset,
+          nextOffset: page.nextOffset,
+          complete: page.complete,
+          loading: false,
+        },
+      }));
+    } catch {
+      setPreviews((existing) => ({
+        ...existing,
+        [artifactId]: {
+          text: existing[artifactId]?.text ?? "",
+          pageOffset: existing[artifactId]?.pageOffset ?? 0,
+          nextOffset: offset,
+          complete: false,
+          loading: false,
+          error: "Artifact content is temporarily unavailable.",
+        },
+      }));
+    }
+  };
+
+  if (record.artifacts.length === 0) return <p>No diagnostic captures were recorded.</p>;
+  return <ul>{record.artifacts.map((artifact) => {
+    const preview = previews[artifact.artifactId];
+    const readable = artifact.state === "captured" || artifact.state === "partial";
+    return <li key={artifact.artifactId}>
+      <strong>{humanizeDiagnosticName(artifact.artifactKind)}</strong>
+      <span>{humanizeDiagnosticName(artifact.state)} · {artifact.redaction === "applied" ? "Redacted" : humanizeDiagnosticName(artifact.redaction)}{artifact.truncated ? " · Truncated" : ""}</span>
+      <small>{[
+        artifact.mediaType,
+        displayArtifactBytes(artifact.capturedBytes),
+        artifact.reason,
+      ].filter((part): part is string => part !== undefined).join(" · ")}</small>
+      {readable ? <button
+        type="button"
+        className="secondary"
+        disabled={preview?.loading === true || preview?.complete === true}
+        onClick={() => void load(artifact.artifactId)}
+      >
+        {preview === undefined ? "View JSON" : preview.loading ? "Loading…" : preview.complete ? "Complete" : "Next page"}
+      </button> : null}
+      {preview?.error === undefined ? null : <p className="error-text">{preview.error}</p>}
+      {preview === undefined || preview.text.length === 0
+        ? null
+        : <>
+          <small>Bytes {preview.pageOffset}–{preview.nextOffset}</small>
+          <pre className="diagnostic-artifact-preview">{preview.text}</pre>
+        </>}
+    </li>;
+  })}</ul>;
+}
+
+function RequestDetailPanel({ api, record }: { readonly api: TokenDesktopApi; readonly record: RequestJourneyRecord }) {
   const primaryFailure = record.incident?.failures.find(
     (entry) => entry.failureId === record.incident?.primaryFailureId,
   );
@@ -359,17 +464,7 @@ function RequestDetailPanel({ record }: { readonly record: RequestJourneyRecord 
       <details>
         <summary>Diagnostic captures <span>{record.artifacts.length}</span></summary>
         <p>Capture status describes stored diagnostic data; it does not prove upstream behavior.</p>
-        {record.artifacts.length === 0 ? <p>No diagnostic captures were recorded.</p> : (
-          <ul>{record.artifacts.map((artifact) => <li key={artifact.artifactId}>
-            <strong>{humanizeDiagnosticName(artifact.artifactKind)}</strong>
-            <span>{humanizeDiagnosticName(artifact.state)} · {artifact.redaction === "applied" ? "Redacted" : humanizeDiagnosticName(artifact.redaction)}{artifact.truncated ? " · Truncated" : ""}</span>
-            <small>{[
-              artifact.mediaType,
-              displayArtifactBytes(artifact.capturedBytes),
-              artifact.reason,
-            ].filter((part): part is string => part !== undefined).join(" · ")}</small>
-          </li>)}</ul>
-        )}
+        <ArtifactCaptureList api={api} record={record} />
       </details>
     </div>
   </div>;
@@ -490,7 +585,7 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDes
               <RequestUsageCells record={record} /><td className="request-column request-column-time" title={duration}>{duration}</td><td className="request-column request-column-model" title={model}>{model}</td><td className="request-column request-column-status" title={status}><span className={`overview-status ${statusTone(record)}`} aria-label={`${status}; request outcome ${displayOutcome(record.outcome)}`}><span aria-hidden="true" />{status}</span></td>
             </tr>
             {expanded ? <tr className="overview-detail-row"><td colSpan={12}>
-              {detail === undefined ? <div className="request-detail-loading"><p>Loading request details…</p></div> : detail === "unavailable" ? <div className="request-detail-loading"><p className="error-text">Request details are temporarily unavailable.</p></div> : <RequestDetailPanel record={detail} />}
+              {detail === undefined ? <div className="request-detail-loading"><p>Loading request details…</p></div> : detail === "unavailable" ? <div className="request-detail-loading"><p className="error-text">Request details are temporarily unavailable.</p></div> : <RequestDetailPanel api={api} record={detail} />}
             </td></tr> : null}
           </Fragment>;
         })}</tbody>

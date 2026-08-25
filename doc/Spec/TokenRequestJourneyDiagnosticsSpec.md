@@ -1,7 +1,7 @@
 # Token Request Journey Diagnostics Specification
 
-- **Status:** IMPLEMENTED CONTRACT — Usage v2/Analytics v3 revision implemented on 2026-08-24
-- **Date:** 2026-08-24
+- **Status:** TARGET REVISION — full-journey file capture implementation in progress
+- **Date:** 2026-08-25
 - **Scope:** Data Plane request journey, failure location, investigation artifacts, fail-open observation runtime, and one diagnostics persistence authority
 - **Out of scope:** physical SQL/index tuning, final Desktop layout, and legacy data migration/import (not provided)
 
@@ -200,7 +200,7 @@ Pi is the only shared semantic boundary. The execution phase contains two Provid
 | SEXEC-12 | none | P4 | `normalize_terminal_usage` | execution usage observer | API declaration, terminal class, completeness reason |
 | SEXEC-13 | none | P4 | `advance_semantic_profile` | Semantic Conversion binding | validated final 429, attempt, transition result |
 
-The Client Protocol adapter must not inject a custom transport to observe SEXEC-04 through SEXEC-09. Those steps are recorded only when the selected Pi Provider exposes bounded, trusted protocol-neutral evidence. When it does not, the Request Artifact is marked `unavailable` with reason `provider_did_not_expose` rather than inferred from client-side behavior.
+The Client Protocol adapter must not inject a custom transport to observe SEXEC-04 through SEXEC-09. Under pinned Pi 0.84.2, each owning OpenAI Responses or Anthropic semantic executor records the complete provider-native payload returned by its exclusive `onPayload`, safe response status/headers from `onResponse`, and the complete decoded Pi `AssistantMessage`. The protocols do not share a semantic invocation or serializer. Adapter/SDK-internal HTTP wire and raw Provider response events are not required artifacts. A required public callback or Pi terminal that was not reached is recorded explicitly as unavailable; it is never replaced by a summary labelled complete.
 
 ### 7.1 Provider semantic subjects
 
@@ -256,10 +256,10 @@ Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_a
 | Lane decision | request resolution | yes | yes | yes | yes |
 | Local outbound request wire | Direct Mode | yes | n/a | n/a | yes when constructed |
 | Provider Native outbound request wire | Provider Native | n/a | yes | n/a | yes when constructed |
-| Pi invocation snapshot | Client Protocol adapter | n/a | n/a | yes | yes when finalized |
-| Pi Provider outbound request evidence | selected Pi Provider | n/a | n/a | provider-exposed | when safely exposed |
-| Upstream response wire/evidence | lane transport or Pi Provider | yes | yes | provider-exposed | yes when observed and safely exposed |
-| Pi event/terminal summary | Core execution / Pi Provider | n/a | n/a | yes | yes when any event was observed |
+| Complete protocol-owned invocation/Pi IR | Client Protocol adapter | n/a | n/a | yes | yes when finalized |
+| Final Pi Provider outbound request | selected Pi Provider | n/a | n/a | yes | yes when assembled |
+| Upstream response wire/provider events | lane transport or Pi Provider | yes | yes | yes | yes when observed |
+| Complete Pi terminal IR | owning Client Protocol semantic module | n/a | n/a | yes | yes when any event was observed |
 | Client Response Wire | Client Protocol edge / HTTP transport | yes | yes | yes | yes when constructed |
 | Timeline and attempts | Journey observation | yes | yes | yes | yes |
 | Failure and exception chain | failing owner + redaction choke point | yes | yes | yes | yes |
@@ -348,18 +348,18 @@ write_http_response / response_body
 4. A non-successful journey has one primary Failure Location. Retry/attempt failures remain ordered supporting events.
 5. Artifact absence is explicit and reasoned; missing data is never silently presented as complete capture.
 6. Redaction and truncation are permanent artifact facts and cannot be hidden by the UI.
-7. Semantic Conversion Provider-wire evidence comes only from the selected Pi Provider's trusted diagnostic contract.
+7. Semantic Conversion Provider request payload, response metadata, and decoded response IR come only from the selected Pi Provider's public `onPayload`/`onResponse` lifecycle and the owning protocol executor; raw Provider response events are not a required artifact.
 8. Native artifacts do not enter Pi AI IR, and Semantic Conversion artifacts do not reuse either native lane's transport or credential implementation.
 9. Observation and persistence failure cannot become the primary Request Incident or replace or modify the model-serving response. Record the completeness degradation when possible; if the single authority is unavailable, expose operational health/attention without creating a secondary request store.
 10. Semantic outcome commit, Client response preparation, HTTP handoff, and client consumption are distinct lifecycle facts.
 
 ## 14. Observation Runtime Contract
 
-The diagnostics Module is a deep observation Module behind one small Interface. Data Plane callers publish bounded facts and do not know about its queue, Worker, redaction, SQLite schema, retention, retries, projections, or operational-health implementation. Deleting this Module would redistribute those responsibilities to every request path; therefore they belong behind this seam rather than in handlers or lane implementations.
+The diagnostics Module is a deep observation Module behind one small Interface. Data Plane callers publish bounded facts and do not know about its queue, child process, redaction, SQLite schema, file tree, retention, retries, projections, or operational-health implementation. Deleting this Module would redistribute those responsibilities to every request path; therefore they belong behind this seam rather than in handlers or lane implementations.
 
 ### 14.1 Data Plane observation Interface
 
-The production Interface has exactly one request lifecycle and one requestless-event entry point:
+The production Interface has one request lifecycle, one requestless-event entry point, and one artifact lifecycle attached to the request observer:
 
 ```ts
 interface RequestJourneyObservationAuthority {
@@ -370,15 +370,22 @@ interface RequestJourneyObservationAuthority {
 interface RequestJourneyObserver {
   readonly requestId: string;
   observe(input: RequestJourneyObservationInput): void;
+  openArtifact(input: ArtifactOpenInput): ArtifactRecorder;
   close(input: RequestJourneyCloseInput): void;
+}
+
+interface ArtifactRecorder {
+  append(bytes: Uint8Array): void;
+  finish(input: ArtifactFinishInput): void;
+  abandon(reason: string): void;
 }
 ```
 
-`begin`, `observe`, `close`, and `observeRuntime` are synchronous, no-throw operations and never return a `Promise`. They do not return routing, lane, retry, Profile, cancellation, response, or any other execution decision. They perform only bounded validation, copying, sequencing, and in-memory admission; no caller waits for Worker IPC, redaction I/O, SQLite, subscription delivery, or persistence acknowledgement. If allocation, validation, queue admission, or internal observation fails, the Adapter contains that failure, updates operational health when possible, and otherwise behaves as a no-op.
+`begin`, `observe`, `openArtifact`, `append`, `finish`, `abandon`, `close`, and `observeRuntime` are synchronous, no-throw operations and never return a `Promise`. `openArtifact` returns only a recorder/no-op recorder, never a serving decision. None of these methods return routing, lane, retry, Profile, cancellation, response, or any other execution decision. They perform only bounded validation/copying, sequencing, and in-memory admission; redaction and persistence run in the independent child process. No caller waits for child-process IPC, directory or file I/O, SQLite, subscription delivery, or persistence acknowledgement. If policy lookup, allocation, validation, redaction, queue admission, child-process, filesystem, or internal observation fails, the Adapter contains that failure, updates operational health when possible, and otherwise behaves as a no-op.
 
 `RequestJourneyBeginInput` contains the request-edge `requestId`, operation candidate, transport kind, method/path facts, accepted time, and initial cancellation context. It contains no runtime-generated diagnostics ID. The Node HTTP edge creates the request ID at P0 before routing and passes the same Observer through the Runtime. A direct in-process `TokenRuntime.handle()` call creates its request ID at its own P0 seam and records `transport=in_process`. No handler, lane, capture Adapter, or persistence implementation may mint a second request correlation ID.
 
-The diagnostics Module injects `runtimeId`, monotonic per-Journey `sequence`, and observation time. Callers cannot supply or override them. Each Backend start has one new `runtimeId`.
+The diagnostics Module injects `runtimeId`, monotonic per-Journey `sequence`, and observation time. Callers cannot supply or override them. Each Backend start has one new `runtimeId`. At `begin`, the Module obtains and freezes both Settings-owned policies through one narrow synchronous capability: `diagnostics.fullJourneyCapture.enabled` (default `false`) and `diagnostics.failedJourneyCapture.enabled` (default `true`). Policy failure is caught and uses those catalog defaults. The Data Plane never receives the policy and cannot branch on it.
 
 ### 14.2 Closed observation vocabulary
 
@@ -424,37 +431,40 @@ Artifacts are copied only where their owning module already has the bytes:
 - the Client Protocol edge copies from the body bytes it already reads;
 - a Native lane copies from the outbound envelope or response bytes it already constructs or consumes;
 - the Semantic Conversion path copies its finalized Pi invocation and terminal summaries at their ownership seams;
-- Pi Provider wire evidence is accepted only from the selected Provider's trusted diagnostics contract;
+- the Semantic Provider request payload is copied only from the value returned by the owning protocol's `onPayload`; response metadata comes only from Pi `onResponse`, and response IR only from the completed Pi `AssistantMessage`;
 - P6/P8 copies from the already prepared or materialized Client response bytes.
 
 Diagnostics must not clone or re-read a consumed body, add a second stream consumer, retain a live stream, wrap or replace `fetch`, inject a transport, or reconstruct evidence from a different representation. Capture failure changes only the artifact descriptor.
 
-The request-local Flight Recorder retains bounded evidence until `close`, because a request that is successful at P7 may still fail HTTP handoff at P8. On close:
+The request-local Flight Recorder retains only bounded, unacknowledged copied chunks in the Backend process. A dedicated Diagnostics child process owns at most 64 MiB for one complete artifact and 512 MiB across active artifacts, performs complete-document fail-closed redaction after `finish`, and writes only sanitized bytes into an unsealed Journey directory. The outcome is not known until close because work that succeeds at P7 may still fail HTTP handoff at P8. On close:
 
-- a non-successful Journey attempts to enqueue all retained, redacted, in-budget failure artifacts;
-- a successful Journey persists artifact bodies only when the P0 policy snapshot enabled successful artifacts;
-- otherwise it discards successful bodies and persists descriptors with `unavailable:success_artifacts_disabled`, captured/original byte counts when safe, truncation, redaction, and integrity facts;
+- a Journey whose P0 all-request snapshot was enabled seals every complete, redacted, in-budget stage artifact for every outcome;
+- otherwise a Journey whose P0 failed-request snapshot was enabled seals bodies only when the outcome is failed, aborted, or interrupted;
+- policy-rejected successful bodies record `unavailable:full_journey_capture_disabled`; policy-rejected abnormal bodies record `unavailable:failed_journey_capture_disabled`;
+- a mid-Journey Settings change does not alter this decision;
 - summaries, timeline, outcome, Incident, and completeness never depend on retaining artifact bodies.
 
 ### 14.4 Fixed capacity and degradation rules
 
-Version 1 uses the following hard defaults. Configuration may lower them but cannot disable the failure-path bounds or exceed implementation safety maxima without a later contract revision.
+The full-capture revision uses the following independent defaults. Configuration may lower storage/retention budgets but cannot raise the single JSON-family artifact maximum beyond 64 MiB without a later contract revision.
 
 | Bound | Default |
 |---|---:|
 | lifecycle observations per Journey | 512 |
 | serialized non-artifact observation | 64 KiB |
-| one artifact chunk accepted by `observe` | 256 KiB |
-| artifact bytes retained per Journey | 4 MiB |
-| aggregate process Flight Recorder artifact bytes | 64 MiB |
-| ordinary pending/unacknowledged Worker queue | 16 MiB |
+| one artifact chunk accepted by `ArtifactRecorder.append` | 64 KiB |
+| one JSON/JSONL/SSE artifact | 64 MiB (67,108,864 bytes) |
+| artifact bytes accepted per Journey | 512 MiB |
+| aggregate main-process unacknowledged artifact bytes | 16 MiB |
+| ordinary pending/unacknowledged child-process queue | 16 MiB |
 | failure/terminal/seal metadata reserve | 4 MiB |
+| retained artifact files | explicit configured byte, age, and Journey-count ceilings |
 
 The 4 MiB reserve accepts only compact `failure_detected`, work outcome, response/handoff terminal facts, completeness changes, and the final close seal. Artifact bodies never consume the reserve. The seal repeats the primary/last-active location and final completeness, so queue loss cannot be mistaken for a complete timeline.
 
 When capacity is exhausted, shedding order is deterministic:
 
-1. successful-Journey artifact bodies;
+1. full-scene artifact bodies from newly admitted chunks;
 2. successful-Journey non-terminal step detail;
 3. nonessential notices and repeated attempt detail;
 4. failure artifact bodies, recorded as `unavailable:queue_capacity_exhausted`;
@@ -462,36 +472,35 @@ When capacity is exhausted, shedding order is deterministic:
 
 No capacity condition blocks, throws into, cancels, delays for persistence, or modifies the observed work. If even the reserved seal cannot be admitted, the request still proceeds unchanged and diagnostics exposes only process-level degraded health when possible. The system does not open a secondary request log or persistence fallback.
 
-### 14.5 Worker Thread, acknowledgement, replay, and shutdown
+### 14.5 Diagnostics child process, acknowledgement, replay, and shutdown
 
-A dedicated Node Worker Thread is the only process actor allowed to open or query the diagnostics SQLite database. A `setImmediate`, Promise microtask, handler-owned writer, or direct Control Plane database connection is not an equivalent Adapter.
+A dedicated Node child process is the only actor allowed to open or query the diagnostics SQLite database or create/read/move/delete files in the managed full-journey tree. A Worker Thread, `setImmediate`, Promise microtask, handler-owned writer, lane-owned file writer, or direct Control Plane database/filesystem connection is not an equivalent Adapter. The child receives no serving socket, credential authority, Provider object, cancellation handle, or Backend lifecycle authority.
 
-The main thread assigns sequence before queue admission and retains each admitted message until the Worker acknowledges the SQLite transaction that durably contains it. Worker batches are idempotent under `(runtimeId, requestId, sequence)`; replay after a lost acknowledgement cannot duplicate an event or artifact. Runtime Events use an equivalent `(runtimeId, recordId, sequence)` key.
+The Backend assigns sequence before queue admission and retains each ordinary message until the child acknowledges acceptance/commit. An artifact-chunk acknowledgement means the isolated process owns that bounded in-memory copy; it is not a durability promise. A child crash may therefore make the active artifact unavailable, but cannot affect the request. SQLite observations are idempotent under `(runtimeId, requestId, sequence)` and Runtime Events under `(runtimeId, recordId, sequence)`. IPC is never awaited. Node's `child.send(false)` means IPC backpressure while the message remains accepted; throw, callback error, or disconnect degrades diagnostics and never reaches serving code. The Diagnostics Authority's own 16 MiB admission queue remains the authoritative Backend bound.
 
-Unexpected Worker exit triggers automatic restart with fixed bounded backoff:
+Unexpected child-process `error`, malformed message, disconnect, or exit is contained by the diagnostics supervisor and triggers automatic restart with fixed bounded backoff:
 
 ```text
 100 ms -> 500 ms -> 2 s -> 10 s -> 30 s -> 30 s ...
 ```
 
-The backoff resets only after the Worker reports ready and successfully commits at least one batch. Pending unacknowledged messages are replayed in sequence after restart, subject to the same memory bounds and truthful completeness degradation.
+The backoff resets only after the child reports ready and successfully commits at least one batch. Pending unacknowledged messages are replayed in sequence after restart, subject to the same memory bounds and truthful completeness degradation.
 
-Worker restart within the same `runtimeId` must not mark active requests interrupted. At Backend startup, the new runtime marks only unclosed Journeys belonging to an older `runtimeId` as `interrupted`; it does not fabricate completion events. A previous runtime's last entered step remains the failure/interruption location.
+Child-process restart within the same `runtimeId` must not mark active requests interrupted. At Backend startup, the new runtime marks only unclosed Journeys belonging to an older `runtimeId` as `interrupted`; it does not fabricate completion events. A previous runtime's last entered step remains the failure/interruption location.
 
-Normal Backend shutdown drains Data Plane work first, then gives diagnostics at most 2 seconds to acknowledge queued records. The timeout ends the flush and allows shutdown; it cannot revise already completed requests. No individual request awaits this flush. Forced termination, process crash, OS failure, or power loss may leave an explicitly incomplete Journey; guaranteeing persistence under those failures would require request-path durability and is intentionally not promised.
+Normal Backend shutdown drains Data Plane work first, then gives diagnostics at most 2 seconds to acknowledge queued records. The timeout terminates a hung child and allows shutdown; it cannot revise already completed requests. No individual request awaits this flush. A diagnostics-process exception, fatal exit, or diagnostics-process memory exhaustion cannot terminate the Backend. Backend forced termination, OS failure, or power loss may leave an explicitly incomplete Journey; guaranteeing persistence under those failures would require request-path durability and is intentionally not promised.
 
 ### 14.6 One diagnostics persistence authority
 
-Version 2 uses one authority and one database:
+The full-capture revision uses one Diagnostics Authority and one child process owning an index plus a managed artifact tree:
 
 ```text
-state/request-diagnostics/diagnostics-v2.sqlite3
-logical schema: TOKEN_diagnostics v2
+state/request-diagnostics/diagnostics-v3.sqlite3
+state/request-diagnostics/full-journeys/
+logical schema: TOKEN_diagnostics v3
 ```
 
-The former `diagnostics.sqlite3` v1 file is not read, migrated, rewritten, or
-deleted. Version selection is expressed by the file name and schema together;
-there is no dual reader or compatibility projection.
+Former diagnostics database and capture files are not read, migrated, rewritten, or deleted. Version selection is expressed by the file name and schema together; there is no dual reader or compatibility projection.
 
 The current configuration contract is intentionally new and has no legacy aliases:
 
@@ -500,8 +509,9 @@ The current configuration contract is intentionally new and has no legacy aliase
   "schemaVersion": "token-config-v2",
   "diagnostics": {
     "directory": "state/request-diagnostics",
-    "successArtifacts": { "enabled": false },
-    "maxJourneyArtifactBytes": 4194304,
+    "maxJsonArtifactBytes": 67108864,
+    "maxJourneyArtifactBytes": 536870912,
+    "maxArtifactDiskBytes": 5368709120,
     "artifactRetentionAgeMs": 604800000,
     "maxArtifactJourneys": 1000
   }
@@ -510,6 +520,15 @@ The current configuration contract is intentionally new and has no legacy aliase
 
 The directory is resolved under Token's application-state authority, never the current working directory or a user-owned Codex state directory.
 
+The user-facing body-retention policies are registered Settings values, not root-configuration switches:
+
+```text
+diagnostics.fullJourneyCapture.enabled = false
+diagnostics.failedJourneyCapture.enabled = true
+```
+
+They are hot-applied and persisted by the Settings Authority. The resolved artifact folder is `<diagnostics.directory>/full-journeys`, is exposed read-only by the Control Plane, and is displayed beside the switches in Settings.
+
 Its logical tables are:
 
 | Table | Responsibility |
@@ -517,22 +536,22 @@ Its logical tables are:
 | `records` | common ID, record kind, runtime ID, created/closed time, completeness |
 | `request_journeys` | operation, protocol, lane, outcomes, primary Incident and summary |
 | `request_journey_events` | ordered typed observations keyed by Journey and sequence |
-| `request_journey_artifacts` | descriptor, retention state and optional bounded body |
+| `request_journey_artifacts` | descriptor, retention state, safe relative file reference, counts and hash |
 | `artifact_evictions` | immutable reason/time audit for removed artifact bodies |
 | `runtime_events` | requestless startup, store-health, catalog and application diagnostics |
 | `meta` | logical schema version and persistence metadata |
 
-Events and artifacts are child sections of a Journey, not independent persistence authorities. SQLite WAL/SHM files are implementation files of this database, not additional authorities. The Worker owns all transactions and queries. Deleting a sealed Journey deletes its event and artifact children in the same transaction. History count, deletion, and retention exclude active Journeys whose close seal has not committed, so a concurrent management operation cannot turn later observations into orphan facts.
+Events and artifacts are child sections of a Journey, not independent persistence authorities. SQLite WAL/SHM and the managed file tree are implementation storage owned by the same child process, not additional authorities. Sanitized bodies are written below `full-journeys/.inflight/<runtimeId>/<requestId>` using hashed opaque path segments. The child commits the closed index row/provisional references, then atomically writes the manifest and renames the directory into `full-journeys/YYYY-MM-DD/<requestId>` outside the SQLite transaction. On restart, a closed row still pointing into `.inflight` is finalized idempotently before unreferenced `.inflight` orphans are removed. Request/artifact IDs are never unchecked path fragments and every path is verified below the managed root. Queries use the SQLite relationship and never scan caller-selected paths. Deletion removes index references transactionally and then garbage-collects unreferenced directories. History count, deletion, and retention exclude active Journeys whose close seal has not committed, so a concurrent management operation cannot turn later observations into orphan facts.
 
-Request Journey structure and Runtime Events remain until explicit user deletion. Artifact bodies expire when either they are older than 7 days or bodies for more than the newest 1,000 Journeys are retained. Eviction preserves the descriptor, safe counts/hash, redaction/truncation facts, and changes its state to `unavailable:expired`; it never makes a previously partial artifact appear complete.
+Request Journey structure and Runtime Events remain until explicit user deletion. Artifact bodies expire when any configured byte, age, or Journey-count ceiling requires eviction. Eviction preserves the descriptor, safe counts/hash, redaction/truncation facts, and changes its state to `unavailable:expired`; it never makes a previously partial artifact appear complete.
 
 ### 14.7 Artifact policy and redaction
 
-Successful artifact bodies are disabled by default. The request edge snapshots `diagnostics.successArtifacts.enabled` once at P0, and that value cannot change during the Journey. Failed-Journey artifacts cannot be disabled, but remain subject to all byte bounds, ownership, redaction, binary, and completeness rules.
+All-request full-scene bodies are disabled by default; failed/aborted/interrupted full-scene bodies are enabled by default. The Diagnostics Module snapshots both Settings values once at P0, and neither can change during the Journey. The Data Plane does not read either setting. Journey timeline, Incident, safe failure facts, outcome, and artifact descriptors remain always-on even when body retention is disabled.
 
-Credential values, authorization/cookie/proxy-auth headers, Control Plane capabilities, Profile/AuthResult objects, local credential state, and unrelated environment values must be excluded before observation; they never enter the Observer, queue, Worker message, database, export, or subscriber event. Safe Profile ID/display name/auth type and selection reason may enter as attribution facts.
+Credential-bearing HTTP header values, URL userinfo, Control Plane capabilities, Profile/AuthResult objects, local credential state, and unrelated environment values are excluded by their owning module before observation. Safe Profile ID/display name/auth type and selection reason may enter as attribution facts. A body can contain arbitrary secret-named fields, so its bounded raw chunks cross only the private Backend-to-diagnostics-process IPC seam transiently; they never enter SQLite, files, exports, subscriptions, or renderer results.
 
-The diagnostics Module applies centralized bounded redaction before persistence. If known-sensitive scrubbing or artifact serialization fails, it drops the affected body and persists `unavailable:redaction_failed` plus a safe failure fingerprint. Binary bodies persist only media type, original/captured length when known, a policy-approved integrity hash, and an explicit body-unavailable reason. Redaction and truncation facts are permanent and must survive projection, export, and retention eviction.
+The independent diagnostics process applies centralized bounded complete-document redaction after `finish` proves byte completeness and before any body reaches the filesystem. JSON/`+json` parses and redacts secret-named fields and credential patterns. JSONL/NDJSON frames and redacts every record. SSE frames complete events, redacts JSON `data:` payloads, preserves `[DONE]`, and fails closed for unclassified data. If syntax, known-sensitive scrubbing, or artifact serialization fails, it drops the body and persists `unavailable:redaction_failed` or the more precise typed reason. Binary bodies persist only media type, original/captured length when known, a policy-approved integrity hash, and an explicit body-unavailable reason. Redaction and truncation facts are permanent and survive projection and retention eviction.
 
 ### 14.8 Control Plane and compatibility contract
 
@@ -541,6 +560,7 @@ The Application Control Plane is the only management seam into the running diagn
 - `queryRequestJourneys(query)`;
 - `getRequestJourney({ requestId })`;
 - `getRequestArtifact({ requestId, artifactId, offset, limit })`;
+- `getDiagnosticsStorageStatus()`, returning only the resolved full-journey directory and fixed artifact limit;
 - `subscribeRequestJourneys(listener)`;
 - `queryRuntimeEvents(query)` and `subscribeRuntimeEvents(listener)`;
 - `getAnalytics(query)`, preserving current product analytics semantics while sourcing them from Journeys.
@@ -575,15 +595,15 @@ token speed = sum(output) / sum(execution duration seconds), for speedRequests
 An undefined derived value is omitted from the wire contract and rendered as
 `—`. Coverage is shown only when the relevant request count is below the total.
 
-Artifact reads return at most 256 KiB of base64 per call. Subscriber failure is contained in the Control Plane and cannot affect the Worker or Data Plane. When the Worker/database is unavailable, reads return a typed `unavailable` result with diagnostics-health facts; they do not return a fabricated empty-complete result and do not open SQLite directly.
+Artifact reads return at most 256 KiB of base64 per call. Subscriber, query, file-read, and renderer failure is contained in its owning observation/management module and cannot affect the diagnostics child process or Data Plane. When the child/database/file is unavailable, reads return a typed `unavailable` result with diagnostics-health facts; they do not return a fabricated empty-complete result and do not open SQLite or scan the capture directory directly.
 
-The production cutover replaces the legacy Request Ledger, Invocation Diagnostics, Deep Capture, and request-owned Runtime Diagnostics paths atomically. It does not dual-write. The new config contract, Control Plane contract, and `TOKEN_diagnostics v2` schema do not read deprecated fields, command aliases, journals, databases, or capture directories. Legacy data is not migrated, imported, modified, or deleted. A new run creates only the new diagnostics database; incompatible or corrupt new-schema storage raises operational attention while Data Plane serving remains fail-open.
+The production cutover replaces the v2 artifact BLOB/configuration shape atomically. It does not dual-write. The new config contract, Control Plane contract, and `TOKEN_diagnostics v3` schema do not read deprecated fields, command aliases, journals, databases, or capture directories. Legacy data is not migrated, imported, modified, or deleted. A new run creates only the new diagnostics database and managed folder; incompatible or corrupt new-schema storage raises operational attention while Data Plane serving remains fail-open.
 
 ### 14.9 Runtime certification requirements
 
 Non-interference is proved by comparing each fault-injected run with the same request under diagnostics disabled. Tests use latches/barriers rather than elapsed-time thresholds to prove that the request completes without a diagnostics acknowledgement.
 
-For a throwing Observer, saturated ordinary and reserved queues, stalled/crashed Worker, slow/locked/unavailable SQLite, redaction failure, oversized/cyclic/proxy artifact input, subscriber exception, and cancellation/Provider-terminal race, the following must be byte- or fact-identical to the disabled baseline:
+For a throwing Observer/recorder/policy source, saturated ordinary and reserved queues, failed child spawn/IPC, stalled/crashed/malformed/disconnected/out-of-memory diagnostics child process, slow/locked/unavailable SQLite, directory creation/file append/manifest rename/retention failure, redaction failure, oversized/cyclic/proxy artifact input, subscriber/query/renderer exception, and cancellation/Provider-terminal race, the following must be byte- or fact-identical to the disabled baseline:
 
 - committed lane;
 - outbound method, URL, headers, body, and encoding;
@@ -600,8 +620,8 @@ Diagnostic quality certification must also prove:
 4. Pi success followed by Client render failure or P8 handoff failure remains three distinct outcomes;
 5. every artifact slot is `captured`, `partial`, `unavailable`, or `not_applicable` with a truthful reason;
 6. no record claims Client consumption;
-7. credential canaries are absent from Observer messages, SQLite/WAL/SHM, Control Plane results, exports, and subscriber projections;
-8. architecture checks forbid Data Plane imports of the Worker, store, or SQLite, `await` on observations, handler-generated request IDs, and observation transports injected into Pi execution;
+7. credential header/URL canaries are absent before Observer publication, and body credential canaries are absent from SQLite/WAL/SHM, artifact files, Control Plane results, exports, and subscriber projections after isolated redaction;
+8. architecture checks forbid Data Plane imports of the child-process supervisor, store, filesystem, or SQLite, `await` on observations, handler-generated request IDs, and observation transports injected into Pi execution;
 9. architecture checks preserve the three lane dependency prohibitions while allowing only the shared observation vocabulary.
 
 ## 15. Pre-refactor implementation baseline

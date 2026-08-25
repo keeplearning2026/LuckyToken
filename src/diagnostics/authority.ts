@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Worker } from "node:worker_threads";
+import { spawn } from "node:child_process";
 
 import type {
   AnalyticsQuery,
@@ -22,6 +22,8 @@ import { decodeTerminalUsageFact } from "@token/provider-contract/usage";
 
 import {
   type ArtifactObservedObservation,
+  type ArtifactRecorder,
+  type ImmutableArtifactMeta,
   type RequestJourneyBeginInput,
   type RequestJourneyLocation,
   type RequestJourneyObservationInput,
@@ -39,15 +41,12 @@ import {
   bindDiagnosticsConfiguration,
   type DiagnosticsConfiguration,
 } from "./configuration.js";
-import {
-  redactRequestArtifact,
-  type ArtifactRedactionResult,
-} from "./artifact-redaction.js";
 import { DIAGNOSTICS_WORKER_SOURCE } from "./worker-program.js";
 
 const MAX_OBSERVATIONS_PER_JOURNEY = 512;
 const MAX_OBSERVATION_BYTES = 64 * 1_024;
-const MAX_ARTIFACT_CHUNK_BYTES = 256 * 1_024;
+const MAX_ARTIFACT_WRITE_CHUNK_BYTES = 64 * 1_024;
+const MAX_ARTIFACT_READ_CHUNK_BYTES = 256 * 1_024;
 const MAX_ORDINARY_PENDING_BYTES = 16 * 1_024 * 1_024;
 const SUCCESS_ARTIFACT_PENDING_BYTES = 4 * 1_024 * 1_024;
 const STEP_DETAIL_PENDING_BYTES = 8 * 1_024 * 1_024;
@@ -62,13 +61,21 @@ interface CreateDiagnosticsAuthorityOptions {
   readonly configuration: DiagnosticsConfiguration;
   readonly runtimeId?: string;
   readonly now?: () => number;
+  readonly journeyCapturePolicy?: JourneyCapturePolicySource;
   /** @internal System-boundary seam for real Worker fault injection. */
   readonly workerFactory?: DiagnosticsWorkerFactory;
 }
 
+export interface JourneyCapturePolicySource {
+  snapshot(): Readonly<{
+    readonly allRequestsEnabled: boolean;
+    readonly failedRequestsEnabled: boolean;
+  }>;
+}
+
 /** @internal Owned by the diagnostics system boundary, never the Data Plane. */
 export interface DiagnosticsWorkerSession {
-  postMessage(message: object): void;
+  postMessage(message: object): boolean | void;
   onMessage(listener: (message: unknown) => void): void;
   onError(listener: (error: Error) => void): void;
   onExit(listener: (code: number) => void): void;
@@ -83,28 +90,94 @@ export type DiagnosticsWorkerFactory = (input: Readonly<{
     runtimeId: string;
     artifactRetentionAgeMs: number;
     maxArtifactJourneys: number;
+    maxArtifactDiskBytes: number;
+    maxJsonArtifactBytes: number;
+    maxJourneyArtifactBytes: number;
   }>;
 }>) => DiagnosticsWorkerSession;
 
-const createNodeDiagnosticsWorker: DiagnosticsWorkerFactory = (input) => {
-  const worker = new Worker(input.source, {
-    eval: true,
-    workerData: input.workerData,
+export const createNodeDiagnosticsProcess: DiagnosticsWorkerFactory = (input) => {
+  const errorListeners = new Set<(error: Error) => void>();
+  const bootstrap =
+    'process.once("message",(message)=>{process.env.TOKEN_DIAGNOSTICS_PROCESS_DATA=JSON.stringify(message.workerData);(0,eval)(message.source);});';
+  const child = spawn(process.execPath, ["--eval", bootstrap], {
+    env: {},
+    serialization: "advanced",
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    windowsHide: true,
   });
+  const reportError = (error: Error): void => {
+    for (const listener of errorListeners) {
+      try {
+        listener(error);
+      } catch {
+        // Diagnostics listener failure is contained on the Backend loop.
+      }
+    }
+  };
+  child.on("error", reportError);
+  try {
+    child.send({ source: input.source, workerData: input.workerData }, (error) => {
+      if (error !== null) reportError(error);
+    });
+  } catch (error) {
+    child.kill();
+    throw error;
+  }
   return Object.freeze({
-    postMessage(message: object): void {
-      worker.postMessage(message);
+    postMessage(message: object): boolean {
+      if (!child.connected) return false;
+      try {
+        child.send(message, (error) => {
+          if (error === null) return;
+          reportError(error);
+        });
+        // child.send(false) means the Node IPC buffer is applying
+        // backpressure, not that the message was rejected. Diagnostics owns
+        // its separate bounded admission queue and serving never awaits this.
+        return true;
+      } catch (error) {
+        const failure =
+          error instanceof Error
+            ? error
+            : new Error("Diagnostics process IPC failed");
+        reportError(failure);
+        return false;
+      }
     },
     onMessage(listener: (message: unknown) => void): void {
-      worker.on("message", listener);
+      child.on("message", listener);
     },
     onError(listener: (error: Error) => void): void {
-      worker.on("error", listener);
+      errorListeners.add(listener);
     },
     onExit(listener: (code: number) => void): void {
-      worker.on("exit", listener);
+      child.on("exit", (code) => listener(code ?? -1));
     },
-    terminate: () => worker.terminate(),
+    terminate: async () => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return child.exitCode ?? 0;
+      }
+      return await new Promise<number>((resolve) => {
+        let settled = false;
+        const finish = (code: number): void => {
+          if (settled) return;
+          settled = true;
+          resolve(code);
+        };
+        const timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          const finalTimer = setTimeout(() => finish(-1), 250);
+          finalTimer.unref();
+        }, 250);
+        timer.unref();
+        child.once("exit", (code) => {
+          clearTimeout(timer);
+          finish(code ?? 0);
+        });
+        child.kill();
+      });
+    },
   });
 };
 
@@ -116,7 +189,6 @@ interface RequestJourneyAppendMessage {
   readonly time: number;
   readonly messageKind: "begin" | "observation" | "close";
   readonly payload: object;
-  readonly artifactBody?: Uint8Array;
 }
 
 interface RuntimeEventAppendMessage {
@@ -131,12 +203,49 @@ interface RuntimeEventAppendMessage {
 
 type AppendMessage = RequestJourneyAppendMessage | RuntimeEventAppendMessage;
 
+interface ArtifactChunkMessage {
+  readonly type: "artifact_chunk";
+  readonly runtimeId: string;
+  readonly requestId: string;
+  readonly artifactId: string;
+  readonly chunkIndex: number;
+  readonly offset: number;
+  readonly bytes: Uint8Array;
+}
+
+interface ArtifactBeginMessage {
+  readonly type: "artifact_begin";
+  readonly runtimeId: string;
+  readonly requestId: string;
+  readonly artifactId: string;
+  readonly chunkIndex: -1;
+  readonly descriptor: Omit<ArtifactObservedObservation, "bytes">;
+}
+
+interface ArtifactFinishMessage {
+  readonly type: "artifact_finish";
+  readonly runtimeId: string;
+  readonly requestId: string;
+  readonly artifactId: string;
+  readonly chunkIndex: -2;
+  readonly originalBytes: number;
+  readonly complete: boolean;
+  readonly reason?: string;
+}
+
+type PendingMessage =
+  | AppendMessage
+  | ArtifactBeginMessage
+  | ArtifactChunkMessage
+  | ArtifactFinishMessage;
+
 interface ArtifactFlight {
   readonly sequence: number;
   readonly time: number;
   descriptor: Omit<ArtifactObservedObservation, "bytes">;
-  readonly chunks: Uint8Array[];
   capturedBytes: number;
+  nextChunkIndex: number;
+  finished: boolean;
 }
 
 interface JourneyState {
@@ -148,13 +257,15 @@ interface JourneyState {
   closeSealReservationBytes: number;
   primaryFailureId?: string;
   finalOutcome?: RequestJourneyOutcome;
+  readonly allRequestsCaptureEnabled: boolean;
+  readonly failedRequestsCaptureEnabled: boolean;
   readonly artifacts: Map<string, ArtifactFlight>;
 }
 
 type PendingCapacity = "ordinary" | "reserved" | "close_seal";
 
 interface PendingAppend {
-  readonly message: AppendMessage;
+  readonly message: PendingMessage;
   readonly bytes: number;
   readonly capacity: PendingCapacity;
 }
@@ -174,7 +285,10 @@ export class DiagnosticsUnavailableError extends Error {
   }
 }
 
-function appendKey(message: AppendMessage): string {
+function appendKey(message: PendingMessage): string {
+  if (message.type !== "append") {
+    return `artifact_chunk\u0000${message.runtimeId}\u0000${message.requestId}\u0000${message.artifactId}\u0000${message.chunkIndex}`;
+  }
   return message.messageKind === "runtime_event"
     ? `runtime_event\u0000${message.runtimeId}\u0000${message.recordId}\u0000${message.sequence}`
     : `request_journey\u0000${message.runtimeId}\u0000${message.requestId}\u0000${message.sequence}`;
@@ -185,13 +299,20 @@ function acknowledgementKey(message: Readonly<{
   requestId?: string;
   recordId?: string;
   sequence?: number;
+  artifactId?: string;
+  chunkIndex?: number;
 }>): string | undefined {
-  if (
-    typeof message.runtimeId !== "string" ||
-    !Number.isSafeInteger(message.sequence)
-  ) {
+  if (typeof message.runtimeId !== "string") {
     return undefined;
   }
+  if (
+    typeof message.requestId === "string" &&
+    typeof message.artifactId === "string" &&
+    Number.isSafeInteger(message.chunkIndex)
+  ) {
+    return `artifact_chunk\u0000${message.runtimeId}\u0000${message.requestId}\u0000${message.artifactId}\u0000${message.chunkIndex}`;
+  }
+  if (!Number.isSafeInteger(message.sequence)) return undefined;
   if (typeof message.recordId === "string") {
     return `runtime_event\u0000${message.runtimeId}\u0000${message.recordId}\u0000${message.sequence}`;
   }
@@ -209,16 +330,15 @@ function safeByteLength(value: unknown): number | undefined {
   }
 }
 
-function messageByteLength(message: AppendMessage): number | undefined {
-  const metadataBytes = safeByteLength({
-    ...message,
-    artifactBody: undefined,
-  });
-  if (metadataBytes === undefined) return undefined;
-  return (
-    metadataBytes +
-    ("artifactBody" in message ? (message.artifactBody?.byteLength ?? 0) : 0)
+function messageByteLength(message: PendingMessage): number | undefined {
+  const metadataBytes = safeByteLength(
+    message.type === "artifact_chunk"
+      ? { ...message, bytes: undefined }
+      : message,
   );
+  if (metadataBytes === undefined) return undefined;
+  return metadataBytes +
+    (message.type === "artifact_chunk" ? message.bytes.byteLength : 0);
 }
 
 function boundedUtf8(
@@ -511,11 +631,21 @@ function copyRuntimeEvent(
   }
 }
 
-function isReservedMessage(message: AppendMessage): boolean {
+function isReservedMessage(message: PendingMessage): boolean {
+  if (message.type === "artifact_chunk" || message.type === "artifact_begin") {
+    return false;
+  }
+  if (message.type === "artifact_finish") return true;
   if (message.messageKind === "runtime_event") return false;
   if (message.messageKind === "close") return true;
   if (message.messageKind !== "observation") return false;
   const kind = (message.payload as RequestJourneyObservationInput).kind;
+  if (
+    kind === "artifact_observed" &&
+    (message.payload as ArtifactObservedObservation).state === "unavailable"
+  ) {
+    return true;
+  }
   return (
     kind === "failure_detected" ||
     kind === "terminal_usage_observed" ||
@@ -526,17 +656,15 @@ function isReservedMessage(message: AppendMessage): boolean {
 }
 
 function ordinaryAdmissionLimit(
-  message: AppendMessage,
+  message: PendingMessage,
   state: JourneyState | undefined,
 ): number {
+  if (message.type !== "append") return MAX_ORDINARY_PENDING_BYTES;
   if (
     message.messageKind === "observation" &&
     (message.payload as RequestJourneyObservationInput).kind ===
       "artifact_observed"
   ) {
-    if (message.artifactBody === undefined) {
-      return MAX_ORDINARY_PENDING_BYTES;
-    }
     return state?.finalOutcome === "success"
       ? SUCCESS_ARTIFACT_PENDING_BYTES
       : FAILURE_ARTIFACT_PENDING_BYTES;
@@ -554,27 +682,21 @@ function ordinaryAdmissionLimit(
   return MAX_ORDINARY_PENDING_BYTES;
 }
 
-function combineArtifactChunks(
-  chunks: readonly Uint8Array[],
-  byteLength: number,
-): Uint8Array | undefined {
-  if (byteLength === 0) return undefined;
-  const combined = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return combined;
-}
-
 export async function createDiagnosticsAuthority(
   options: CreateDiagnosticsAuthorityOptions,
 ): Promise<DiagnosticsManagementAuthority> {
   const configuration = bindDiagnosticsConfiguration(options.configuration);
   const runtimeId = options.runtimeId ?? randomUUID();
   const now = options.now ?? Date.now;
-  const workerFactory = options.workerFactory ?? createNodeDiagnosticsWorker;
+  const workerFactory = options.workerFactory ?? createNodeDiagnosticsProcess;
+  const journeyCapturePolicy =
+    options.journeyCapturePolicy ??
+    Object.freeze({
+      snapshot: () => Object.freeze({
+        allRequestsEnabled: false,
+        failedRequestsEnabled: true,
+      }),
+    });
   const pending = new Map<string, PendingAppend>();
   const journeys = new Map<string, JourneyState>();
   const commands = new Map<number, CommandWaiter>();
@@ -676,9 +798,22 @@ export async function createDiagnosticsAuthority(
     readyResolve?.();
   };
 
+  const postToDiagnostics = (
+    session: DiagnosticsWorkerSession,
+    message: object,
+  ): boolean => {
+    try {
+      return session.postMessage(message) !== false;
+    } catch {
+      return false;
+    }
+  };
+
   const postPending = (): void => {
     if (!ready || worker === undefined) return;
-    for (const entry of pending.values()) worker.postMessage(entry.message);
+    for (const entry of pending.values()) {
+      postToDiagnostics(worker, entry.message);
+    }
   };
 
   const rejectCommands = (reason: unknown): void => {
@@ -698,6 +833,9 @@ export async function createDiagnosticsAuthority(
           runtimeId,
           artifactRetentionAgeMs: configuration.artifactRetentionAgeMs,
           maxArtifactJourneys: configuration.maxArtifactJourneys,
+          maxArtifactDiskBytes: configuration.maxArtifactDiskBytes,
+          maxJsonArtifactBytes: configuration.maxJsonArtifactBytes,
+          maxJourneyArtifactBytes: configuration.maxJourneyArtifactBytes,
         },
       });
     } catch {
@@ -706,13 +844,16 @@ export async function createDiagnosticsAuthority(
     }
     worker = next;
     next.onMessage((raw: unknown) => {
-      const message = raw as {
+      try {
+        const message = raw as {
         readonly type: string;
         readonly commandId?: number;
         readonly runtimeId?: string;
         readonly requestId?: string;
         readonly recordId?: string;
         readonly sequence?: number;
+        readonly artifactId?: string;
+        readonly chunkIndex?: number;
         readonly value?: unknown;
         readonly message?: string;
         readonly classification?: string;
@@ -726,7 +867,7 @@ export async function createDiagnosticsAuthority(
               record: RuntimeEventRecord;
             }>;
       };
-      if (message.type === "startup_failure") {
+        if (message.type === "startup_failure") {
         becomePermanentlyUnavailable();
         return;
       }
@@ -761,24 +902,45 @@ export async function createDiagnosticsAuthority(
           if (message.type === "ack") {
             restartIndex = 0;
             if (
+              entry.message.type === "append" &&
               entry.message.messageKind === "close" &&
               message.publication?.kind === "request_journey"
             ) {
               publish(requestJourneySubscribers, message.publication.record);
             } else if (
+              entry.message.type === "append" &&
               entry.message.messageKind === "runtime_event" &&
               message.publication?.kind === "runtime_event"
             ) {
               publish(runtimeEventSubscribers, message.publication.record);
             }
-          } else if (entry.message.messageKind !== "runtime_event") {
+          } else if (
+            entry.message.type !== "append" ||
+            entry.message.messageKind !== "runtime_event"
+          ) {
             const state = journeys.get(entry.message.requestId);
-            if (state !== undefined) state.degraded = true;
+            if (state !== undefined) {
+              state.degraded = true;
+              if (entry.message.type !== "append") {
+                const flight = state.artifacts.get(entry.message.artifactId);
+                if (flight !== undefined) {
+                  flight.descriptor = Object.freeze({
+                    ...flight.descriptor,
+                    state: "unavailable",
+                    redaction: "failed",
+                    capturedBytes: 0,
+                    reason:
+                      message.classification ??
+                      "diagnostics_process_rejected_artifact",
+                  });
+                }
+              }
+            }
           }
         }
         return;
       }
-      if (message.commandId !== undefined) {
+        if (message.commandId !== undefined) {
         const waiter = commands.get(message.commandId);
         if (waiter === undefined) return;
         commands.delete(message.commandId);
@@ -787,6 +949,9 @@ export async function createDiagnosticsAuthority(
         } else {
           waiter.resolve(message.value);
         }
+        }
+      } catch {
+        // Malformed or hostile diagnostics-process output is contained.
       }
     });
     next.onError(() => {
@@ -808,13 +973,13 @@ export async function createDiagnosticsAuthority(
     });
   };
 
-  const admit = (message: AppendMessage, state?: JourneyState): boolean => {
+  const admit = (message: PendingMessage, state?: JourneyState): boolean => {
     const bytes = messageByteLength(message);
     if (bytes === undefined) {
       if (state !== undefined) state.degraded = true;
       return false;
     }
-    if (message.messageKind === "close") {
+    if (message.type === "append" && message.messageKind === "close") {
       if (state !== undefined) state.degraded = true;
       return false;
     }
@@ -841,7 +1006,7 @@ export async function createDiagnosticsAuthority(
     });
     if (reserved) reservedPendingBytes += bytes;
     else ordinaryPendingBytes += bytes;
-    if (ready && worker !== undefined) worker.postMessage(message);
+    if (ready && worker !== undefined) postToDiagnostics(worker, message);
     return true;
   };
 
@@ -882,13 +1047,20 @@ export async function createDiagnosticsAuthority(
     }
     pending.set(key, { message, bytes, capacity: "close_seal" });
     state.closeSealReservationBytes = 0;
-    if (ready && worker !== undefined) worker.postMessage(message);
+    if (ready && worker !== undefined) postToDiagnostics(worker, message);
     return true;
   };
+
+  const noOpArtifactRecorder: ArtifactRecorder = Object.freeze({
+    append: () => undefined,
+    finish: () => undefined,
+    abandon: () => undefined,
+  });
 
   const noOpObserver = (requestId: string): RequestJourneyObserver =>
     Object.freeze({
       requestId,
+      openArtifact: () => noOpArtifactRecorder,
       observe: () => undefined,
       close: () => undefined,
     });
@@ -910,6 +1082,17 @@ export async function createDiagnosticsAuthority(
         return noOpObserver(suppliedRequestId);
       }
       const copied = structuredClone(input) as RequestJourneyBeginInput;
+      let allRequestsCaptureEnabled = false;
+      let failedRequestsCaptureEnabled = true;
+      try {
+        const capturePolicy = journeyCapturePolicy.snapshot();
+        allRequestsCaptureEnabled = capturePolicy.allRequestsEnabled === true;
+        failedRequestsCaptureEnabled = capturePolicy.failedRequestsEnabled === true;
+      } catch {
+        // Settings and diagnostics policy failures are observation-only.
+        // Full capture stays private-by-default; failed-request capture keeps
+        // its catalog default. Neither fallback alters the observed request.
+      }
       const state: JourneyState = {
         sequence: 0,
         observations: 0,
@@ -917,6 +1100,8 @@ export async function createDiagnosticsAuthority(
         degraded: false,
         artifactBytes: 0,
         closeSealReservationBytes: 0,
+        allRequestsCaptureEnabled,
+        failedRequestsCaptureEnabled,
         artifacts: new Map(),
       };
       openingState = state;
@@ -939,143 +1124,283 @@ export async function createDiagnosticsAuthority(
         return noOpObserver(copied.requestId);
       }
 
+      const openArtifact = (meta: ImmutableArtifactMeta): ArtifactRecorder => {
+        try {
+          if (closed || permanentlyUnavailable || state.closed) {
+            return noOpArtifactRecorder;
+          }
+          if (state.observations >= MAX_OBSERVATIONS_PER_JOURNEY) {
+            state.degraded = true;
+            return noOpArtifactRecorder;
+          }
+          const copiedMeta = structuredClone(meta) as ImmutableArtifactMeta;
+          if (
+            typeof copiedMeta.artifactId !== "string" ||
+            copiedMeta.artifactId.length === 0 ||
+            Buffer.byteLength(copiedMeta.artifactId, "utf8") > 256 ||
+            typeof copiedMeta.artifactKind !== "string" ||
+            copiedMeta.artifactKind.length === 0 ||
+            Buffer.byteLength(copiedMeta.artifactKind, "utf8") > 256
+          ) {
+            state.degraded = true;
+            return noOpArtifactRecorder;
+          }
+          state.sequence += 1;
+          state.observations += 1;
+          if (state.artifacts.has(copiedMeta.artifactId)) {
+            state.degraded = true;
+            return noOpArtifactRecorder;
+          }
+          const descriptor = Object.freeze({
+            kind: "artifact_observed",
+            ...copiedMeta,
+            state: "captured",
+            capturedBytes: 0,
+            redaction: "not_required",
+            truncated: false,
+          }) satisfies Omit<ArtifactObservedObservation, "bytes">;
+          const descriptorBytes = safeByteLength(descriptor);
+          if (
+            descriptorBytes === undefined ||
+            descriptorBytes > MAX_OBSERVATION_BYTES
+          ) {
+            state.degraded = true;
+            return noOpArtifactRecorder;
+          }
+          const flight: ArtifactFlight = {
+            sequence: state.sequence,
+            time: now(),
+            descriptor,
+            capturedBytes: 0,
+            nextChunkIndex: 0,
+            finished: false,
+          };
+          state.artifacts.set(descriptor.artifactId, flight);
+          if (
+            !admit(
+              {
+                type: "artifact_begin",
+                runtimeId,
+                requestId: copied.requestId,
+                artifactId: descriptor.artifactId,
+                chunkIndex: -1,
+                descriptor,
+              },
+              state,
+            )
+          ) {
+            flight.descriptor = Object.freeze({
+              ...descriptor,
+              state: "unavailable",
+              redaction: "failed",
+              reason: "queue_capacity_exhausted",
+            });
+          }
+
+          let accepting = flight.descriptor.state !== "unavailable";
+          const finish = (input: Readonly<{
+            readonly originalBytes: number;
+            readonly complete: boolean;
+            readonly reason?: string;
+          }>): void => {
+            try {
+              if (flight.finished || state.closed) return;
+              flight.finished = true;
+              const originalBytes =
+                Number.isSafeInteger(input.originalBytes) &&
+                input.originalBytes >= 0
+                  ? input.originalBytes
+                  : flight.capturedBytes;
+              const reason = boundedUtf8(input.reason, 256).value;
+              const complete =
+                accepting &&
+                input.complete === true &&
+                flight.capturedBytes === originalBytes;
+              flight.descriptor = Object.freeze({
+                ...flight.descriptor,
+                state: complete ? "captured" : "unavailable",
+                originalBytes,
+                capturedBytes: flight.capturedBytes,
+                truncated: !complete,
+                ...(!complete
+                  ? {
+                      redaction: "failed" as const,
+                      reason: reason ??
+                        flight.descriptor.reason ??
+                        "artifact_capture_incomplete",
+                    }
+                  : {}),
+              });
+              if (
+                !admit(
+                  {
+                    type: "artifact_finish",
+                    runtimeId,
+                    requestId: copied.requestId,
+                    artifactId: descriptor.artifactId,
+                    chunkIndex: -2,
+                    originalBytes,
+                    complete,
+                    ...(reason === undefined ? {} : { reason }),
+                  },
+                  state,
+                )
+              ) {
+                flight.descriptor = Object.freeze({
+                  ...flight.descriptor,
+                  state: "unavailable",
+                  redaction: "failed",
+                  capturedBytes: 0,
+                  reason: "queue_capacity_exhausted",
+                });
+                state.degraded = true;
+              }
+            } catch {
+              accepting = false;
+              state.degraded = true;
+            }
+          };
+
+          return Object.freeze({
+            append(bytes: Uint8Array): void {
+              try {
+                if (
+                  !accepting ||
+                  flight.finished ||
+                  state.closed ||
+                  !(bytes instanceof Uint8Array)
+                ) {
+                  return;
+                }
+                const accepted = Math.min(
+                  bytes.byteLength,
+                  Math.max(
+                    0,
+                    configuration.maxJsonArtifactBytes - flight.capturedBytes,
+                  ),
+                  Math.max(
+                    0,
+                    configuration.maxJourneyArtifactBytes - state.artifactBytes,
+                  ),
+                  Math.max(
+                    0,
+                    configuration.maxJourneyArtifactBytes - flightArtifactBytes,
+                  ),
+                );
+                let sourceOffset = 0;
+                while (sourceOffset < accepted) {
+                  const end = Math.min(
+                    accepted,
+                    sourceOffset + MAX_ARTIFACT_WRITE_CHUNK_BYTES,
+                  );
+                  const chunk = new Uint8Array(end - sourceOffset);
+                  chunk.set(bytes.subarray(sourceOffset, end));
+                  if (
+                    !admit(
+                      {
+                        type: "artifact_chunk",
+                        runtimeId,
+                        requestId: copied.requestId,
+                        artifactId: descriptor.artifactId,
+                        chunkIndex: flight.nextChunkIndex,
+                        offset: flight.capturedBytes,
+                        bytes: chunk,
+                      },
+                      state,
+                    )
+                  ) {
+                    accepting = false;
+                    state.degraded = true;
+                    break;
+                  }
+                  flight.nextChunkIndex += 1;
+                  flight.capturedBytes += chunk.byteLength;
+                  state.artifactBytes += chunk.byteLength;
+                  flightArtifactBytes += chunk.byteLength;
+                  sourceOffset = end;
+                }
+                if (sourceOffset < bytes.byteLength) {
+                  accepting = false;
+                  flight.descriptor = Object.freeze({
+                    ...flight.descriptor,
+                    state: "unavailable",
+                    redaction: "failed",
+                    reason:
+                      accepted < bytes.byteLength
+                        ? "artifact_size_limit_exceeded"
+                        : "queue_capacity_exhausted",
+                  });
+                }
+              } catch {
+                accepting = false;
+                state.degraded = true;
+              }
+            },
+            finish,
+            abandon(reason: string): void {
+              finish({
+                originalBytes:
+                  copiedMeta.originalBytes ?? flight.capturedBytes,
+                complete: false,
+                reason,
+              });
+            },
+          });
+        } catch {
+          state.degraded = true;
+          return noOpArtifactRecorder;
+        }
+      };
+
       const observer: RequestJourneyObserver = {
         requestId: copied.requestId,
+        openArtifact,
         observe(observation): void {
           try {
             if (closed || permanentlyUnavailable || state.closed) return;
-            state.sequence += 1;
             if (state.observations >= MAX_OBSERVATIONS_PER_JOURNEY) {
               state.degraded = true;
               return;
             }
             if (observation.kind === "artifact_observed") {
-              const suppliedDescriptor = structuredClone({
-                ...observation,
-                bytes: undefined,
-              }) as Omit<ArtifactObservedObservation, "bytes">;
-              const descriptor = Object.freeze({
-                ...suppliedDescriptor,
-                // Producer redaction claims are not authoritative. Only the
-                // diagnostics-owned redactor may set this persisted fact.
-                redaction: "not_required",
-              }) satisfies Omit<ArtifactObservedObservation, "bytes">;
-              const descriptorBytes = safeByteLength(descriptor);
-              if (
-                descriptorBytes === undefined ||
-                descriptorBytes > MAX_OBSERVATION_BYTES
-              ) {
-                state.degraded = true;
-                return;
-              }
-              const existing = state.artifacts.get(descriptor.artifactId);
-              if (existing !== undefined) {
-                flightArtifactBytes -= existing.capturedBytes;
-                state.artifactBytes -= existing.capturedBytes;
-                existing.chunks.length = 0;
-                existing.capturedBytes = 0;
-                existing.descriptor = Object.freeze({
-                  ...descriptor,
-                  state: "unavailable",
-                  redaction: "failed",
-                  capturedBytes: 0,
-                  reason:
-                    existing.descriptor.artifactKind === descriptor.artifactKind
-                      ? "redaction_multiple_chunks_unsupported"
-                      : "artifact_kind_changed",
-                });
-                state.degraded = true;
-                state.observations += 1;
-                return;
-              }
-              const flight: ArtifactFlight = {
-                sequence: state.sequence,
-                time: now(),
-                descriptor,
-                chunks: [],
-                capturedBytes: 0,
-              };
-              state.artifacts.set(descriptor.artifactId, flight);
               const source = observation.bytes;
-              if (source === undefined) {
-                if (
-                  descriptor.state === "captured" ||
-                  descriptor.state === "partial"
-                ) {
-                  flight.descriptor = Object.freeze({
-                    ...descriptor,
-                    state: "unavailable",
-                    redaction: "failed",
-                    capturedBytes: 0,
-                    reason: "artifact_body_missing",
-                  });
-                  state.degraded = true;
-                }
-                state.observations += 1;
-                return;
-              }
-              const accepted = Math.min(
-                source.byteLength,
-                MAX_ARTIFACT_CHUNK_BYTES,
-                Math.max(
-                  0,
-                  configuration.maxJourneyArtifactBytes - state.artifactBytes,
-                ),
-                Math.max(0, 64 * 1_024 * 1_024 - flightArtifactBytes),
-              );
-              const ownedSource = new Uint8Array(accepted);
-              if (accepted > 0) ownedSource.set(source.subarray(0, accepted));
               const originalBytes =
-                descriptor.originalBytes ?? source.byteLength;
-              let redaction: ArtifactRedactionResult;
-              try {
-                redaction = redactRequestArtifact({
-                  artifactKind: descriptor.artifactKind,
-                  ...(descriptor.mediaType === undefined
-                    ? {}
-                    : { mediaType: descriptor.mediaType }),
-                  bytes: ownedSource,
-                  originalBytes,
-                  sourceTruncated:
-                    descriptor.truncated === true ||
-                    accepted < source.byteLength ||
-                    accepted < originalBytes,
-                });
-              } catch {
-                redaction = Object.freeze({
-                  kind: "unavailable",
-                  redaction: "failed",
-                  reason: "redaction_failed",
-                });
-              }
-              if (redaction.kind === "unavailable") {
-                flight.descriptor = Object.freeze({
-                  ...descriptor,
-                  state: "unavailable",
-                  redaction: redaction.redaction,
-                  originalBytes,
-                  capturedBytes: 0,
-                  truncated: descriptor.truncated === true,
-                  reason: redaction.reason,
-                });
-                if (redaction.redaction === "failed") state.degraded = true;
-                state.observations += 1;
-                return;
-              }
-              flight.descriptor = Object.freeze({
-                ...descriptor,
-                redaction: redaction.redaction,
+                observation.originalBytes ?? source?.byteLength ?? 0;
+              const recorder = openArtifact({
+                artifactId: observation.artifactId,
+                artifactKind: observation.artifactKind,
+                ...(observation.mediaType === undefined
+                  ? {}
+                  : { mediaType: observation.mediaType }),
                 originalBytes,
-                capturedBytes: redaction.bytes.byteLength,
-                truncated: redaction.truncated,
+                location: observation.location,
               });
-              flight.chunks.push(redaction.bytes);
-              flight.capturedBytes = redaction.bytes.byteLength;
-              state.artifactBytes += redaction.bytes.byteLength;
-              flightArtifactBytes += redaction.bytes.byteLength;
-              state.observations += 1;
+              if (source !== undefined) recorder.append(source);
+              if (
+                source === undefined ||
+                observation.state === "unavailable" ||
+                observation.state === "not_applicable"
+              ) {
+                recorder.abandon(
+                  observation.reason ??
+                    (observation.state === "not_applicable"
+                      ? "not_applicable"
+                      : "artifact_body_missing"),
+                );
+              } else {
+                recorder.finish({
+                  originalBytes,
+                  complete:
+                    observation.truncated !== true &&
+                    source.byteLength === originalBytes,
+                  ...(observation.reason === undefined
+                    ? {}
+                    : { reason: observation.reason }),
+                });
+              }
               return;
             }
+            state.sequence += 1;
             const snapshot = copyObservation(observation);
             if (snapshot === undefined) {
               state.degraded = true;
@@ -1117,10 +1442,23 @@ export async function createDiagnosticsAuthority(
             state.closed = true;
             let closePayload = projectCloseSeal(closeInput, state);
             state.finalOutcome = closePayload.outcome;
-            const successfulArtifactsDisabled =
-              closePayload.outcome === "success" &&
-              !configuration.successArtifacts.enabled;
+            const abnormalOutcome = closePayload.outcome !== "success";
+            const captureEnabled =
+              state.allRequestsCaptureEnabled ||
+              (abnormalOutcome && state.failedRequestsCaptureEnabled);
+            const captureDisabledReason = abnormalOutcome
+              ? "failed_journey_capture_disabled"
+              : "full_journey_capture_disabled";
             for (const flight of state.artifacts.values()) {
+              if (!flight.finished) {
+                flight.descriptor = Object.freeze({
+                  ...flight.descriptor,
+                  state: "unavailable",
+                  redaction: "failed",
+                  reason: "artifact_recorder_not_finished",
+                });
+                state.degraded = true;
+              }
               const originalBytes =
                 flight.descriptor.originalBytes ?? flight.capturedBytes;
               const unavailable =
@@ -1129,27 +1467,24 @@ export async function createDiagnosticsAuthority(
               const truncated = flight.descriptor.truncated === true;
               const descriptor = Object.freeze({
                 ...flight.descriptor,
-                state: successfulArtifactsDisabled
+                state: !captureEnabled
                   ? "unavailable"
                   : unavailable
                     ? flight.descriptor.state
                     : truncated
                     ? "partial"
                     : flight.descriptor.state,
-                capturedBytes: flight.capturedBytes,
+                capturedBytes:
+                  !captureEnabled || unavailable || !flight.finished
+                    ? 0
+                    : flight.capturedBytes,
                 originalBytes,
                 redaction: flight.descriptor.redaction ?? "not_required",
                 truncated,
-                ...(successfulArtifactsDisabled
-                  ? { reason: "success_artifacts_disabled" }
+                ...(!captureEnabled
+                  ? { reason: captureDisabledReason }
                   : {}),
               }) satisfies Omit<ArtifactObservedObservation, "bytes">;
-              const artifactBody = successfulArtifactsDisabled
-                ? undefined
-                : combineArtifactChunks(
-                    flight.chunks,
-                    flight.capturedBytes,
-                  );
               const message: AppendMessage = {
                 type: "append",
                 runtimeId,
@@ -1158,7 +1493,6 @@ export async function createDiagnosticsAuthority(
                 time: flight.time,
                 messageKind: "observation",
                 payload: descriptor,
-                ...(artifactBody === undefined ? {} : { artifactBody }),
               };
               if (!admit(message, state)) {
                 admit(
@@ -1276,7 +1610,10 @@ export async function createDiagnosticsAuthority(
     const result = new Promise<unknown>((resolve, reject) => {
       commands.set(commandId, { resolve, reject });
     });
-    worker.postMessage({ ...message, commandId });
+    if (!postToDiagnostics(worker, { ...message, commandId })) {
+      commands.delete(commandId);
+      throw new DiagnosticsUnavailableError();
+    }
     return result;
   };
 
@@ -1330,10 +1667,10 @@ export async function createDiagnosticsAuthority(
       if (
         !Number.isSafeInteger(input.limit) ||
         input.limit <= 0 ||
-        input.limit > MAX_ARTIFACT_CHUNK_BYTES
+        input.limit > MAX_ARTIFACT_READ_CHUNK_BYTES
       ) {
         throw new RangeError(
-          `Artifact limit must be between 1 and ${MAX_ARTIFACT_CHUNK_BYTES}`,
+          `Artifact limit must be between 1 and ${MAX_ARTIFACT_READ_CHUNK_BYTES}`,
         );
       }
       return (await command({
@@ -1449,7 +1786,9 @@ export async function createDiagnosticsAuthority(
           },
         });
       });
-      activeWorker.postMessage({ type: "close", commandId });
+      if (!postToDiagnostics(activeWorker, { type: "close", commandId })) {
+        commands.delete(commandId);
+      }
       await result;
       await activeWorker.terminate().catch(() => undefined);
       worker = undefined;

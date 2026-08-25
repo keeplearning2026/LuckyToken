@@ -1983,8 +1983,10 @@ flowchart LR
 ├── state/
 │   ├── openai-responses.json
 │   │   owner: Responses session-state capability
-│   └── request-diagnostics/diagnostics-v2.sqlite3
-│       owner: RequestJourneyDiagnosticsAuthority
+│   └── request-diagnostics/
+│       ├── diagnostics-v3.sqlite3
+│       └── full-journeys/<date>/<opaque-request-id>/
+│           owner: RequestJourneyDiagnosticsAuthority child process
 │
 └── pi/
     ├── credential-profiles/
@@ -2005,7 +2007,7 @@ frequency、secret level 和 lifetime 不同：
 | `models.json` | 管理态 | 可能引用 credential source，但不应含明文状态投影 | Provider/model composition authority |
 | `public-models.json` | 管理态 | 否 | Public Model on/off、rename、endpoint；debounced persistence + shutdown flush |
 | Responses state snapshot | 动态协议状态 | 含会话内容 | bounded `previous_response_id` state |
-| Request Ledger / Diagnostics / Capture SQLite | 动态 observation state | 经过各自 redaction/sensitivity policy | Backend-owned persistence |
+| Request Ledger / Diagnostics index + full-journey files | 动态 observation state | 仅落盘隔离进程完成脱敏的文件 | Diagnostics child-process-owned persistence |
 | `pi/credential-profiles/<providerId>.json` | 动态 Provider Profiles | 是 | Profile lifecycle、exact binding、refresh publication、selection CAS |
 
 `instance.sqlite` 必须保持 InstanceAuthority 私有：backup、support bundle、generic scanner 或其他

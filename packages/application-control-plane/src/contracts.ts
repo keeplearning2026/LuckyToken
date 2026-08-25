@@ -50,6 +50,16 @@ export interface ApplicationStatus {
   /** Live in-flight requests owned by the running Data Plane. */
   readonly activeRequests?: number;
   readonly dataPlane?: DataPlaneStatus;
+  /** Sanitized diagnostics storage facts; never contains captured content. */
+  readonly diagnostics?: DiagnosticsStorageProjection;
+}
+
+export interface DiagnosticsStorageProjection {
+  readonly available: boolean;
+  readonly fullJourneyDirectory: string;
+  readonly maxJsonArtifactBytes: number;
+  readonly maxJourneyArtifactBytes: number;
+  readonly isolation: "process";
 }
 
 export type DataPlaneFailureCode =

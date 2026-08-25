@@ -24,6 +24,8 @@ describe("authoritative registered settings catalog", () => {
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
       "application.quitDrainTimeoutMs",
+      "diagnostics.fullJourneyCapture.enabled",
+      "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",
@@ -57,6 +59,35 @@ describe("authoritative registered settings catalog", () => {
     });
     expect(registry.validate("application.quitDrainTimeoutMs", 750)).toMatchObject({
       valid: true,
+    });
+
+    const fullJourneyCapture = byKey.get(
+      "diagnostics.fullJourneyCapture.enabled",
+    );
+    expect(fullJourneyCapture).toMatchObject({
+      key: "diagnostics.fullJourneyCapture.enabled",
+      type: "boolean",
+      default: false,
+      validation: { type: "boolean" },
+      sensitivity: "public",
+      applyMode: "hot-apply",
+      value: false,
+    });
+    expect(
+      registry.validate("diagnostics.fullJourneyCapture.enabled", true),
+    ).toEqual({ valid: true });
+    expect(
+      registry.validate("diagnostics.fullJourneyCapture.enabled", "true"),
+    ).toMatchObject({ valid: false });
+
+    expect(byKey.get("diagnostics.failedJourneyCapture.enabled")).toMatchObject({
+      key: "diagnostics.failedJourneyCapture.enabled",
+      type: "boolean",
+      default: true,
+      validation: { type: "boolean" },
+      sensitivity: "public",
+      applyMode: "hot-apply",
+      value: true,
     });
 
     for (const key of [

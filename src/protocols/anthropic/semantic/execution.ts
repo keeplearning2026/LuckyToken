@@ -35,6 +35,10 @@ export async function executeAnthropicSemanticInvocation(input: {
   readonly execution: {
     readonly executeOperation: ExecutionOperation;
     readonly factsSink?: ExecutionFactsSink;
+    readonly providerEvidence?: Readonly<{
+      request(payload: unknown): void;
+      response?(response: unknown): void;
+    }>;
   };
 }): Promise<AnthropicSemanticExecutionResult> {
   const prepared = prepareAnthropicReasoning({
@@ -74,6 +78,9 @@ export async function executeAnthropicSemanticInvocation(input: {
         ...(input.execution.factsSink === undefined
           ? {}
           : { factsSink: input.execution.factsSink }),
+        ...(input.execution.providerEvidence === undefined
+          ? {}
+          : { providerEvidence: input.execution.providerEvidence }),
       },
     });
   } catch (error) {

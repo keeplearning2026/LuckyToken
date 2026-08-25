@@ -170,9 +170,24 @@ describe("Request Journey diagnostics non-interference", () => {
 
     let observerObserveReached = false;
     let observerCloseReached = false;
+    let recorderAppendReached = false;
+    let recorderFinishReached = false;
     const throwingObserverAuthority: RequestJourneyObservationAuthority = {
       begin: (input) => ({
         requestId: input.requestId,
+        openArtifact: () => ({
+          append: () => {
+            recorderAppendReached = true;
+            throw new Error(`${DIAGNOSTICS_CANARY}-append`);
+          },
+          finish: () => {
+            recorderFinishReached = true;
+            throw new Error(`${DIAGNOSTICS_CANARY}-finish`);
+          },
+          abandon: () => {
+            throw new Error(`${DIAGNOSTICS_CANARY}-abandon`);
+          },
+        }),
         observe: () => {
           observerObserveReached = true;
           throw new Error(`${DIAGNOSTICS_CANARY}-observe`);
@@ -187,6 +202,8 @@ describe("Request Journey diagnostics non-interference", () => {
     const observerFaulted = await runExchange(throwingObserverAuthority);
     expect(observerObserveReached).toBe(true);
     expect(observerCloseReached).toBe(true);
+    expect(recorderAppendReached).toBe(true);
+    expect(recorderFinishReached).toBe(true);
     expect(observerFaulted).toEqual(baseline);
 
     const comparedBytes = JSON.stringify({

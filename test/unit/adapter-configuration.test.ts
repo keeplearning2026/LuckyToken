@@ -754,8 +754,9 @@ describe("adapter-owned configuration", () => {
           },
           diagnostics: {
             directory: "diagnostics",
-            successArtifacts: { enabled: true },
+            maxJsonArtifactBytes: 4_096,
             maxJourneyArtifactBytes: 8_192,
+            maxArtifactDiskBytes: 16_384,
             artifactRetentionAgeMs: 7_000,
             maxArtifactJourneys: 25,
           },
@@ -776,8 +777,9 @@ describe("adapter-owned configuration", () => {
       });
       expect(loaded.diagnostics).toMatchObject({
         directory: join(configDirectory, "diagnostics"),
-        successArtifacts: { enabled: true },
+        maxJsonArtifactBytes: 4_096,
         maxJourneyArtifactBytes: 8_192,
+        maxArtifactDiskBytes: 16_384,
         artifactRetentionAgeMs: 7_000,
         maxArtifactJourneys: 25,
       });
@@ -845,7 +847,6 @@ describe("adapter-owned configuration", () => {
         loaded.clientProtocols["openai-responses"],
         loaded.providerPackages,
         loaded.diagnostics,
-        loaded.diagnostics.successArtifacts,
       ]);
     } finally {
       await rm(root, { force: true, recursive: true });

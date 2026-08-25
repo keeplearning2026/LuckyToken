@@ -20,6 +20,7 @@ import {
   observeProviderResponses,
   observeProviderResponsesArtifact,
 } from "./observation.js";
+import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
 
 function assertTransportAuth(
   provider: string,
@@ -175,6 +176,14 @@ export function createOpenAIResponsesSender(
           operation === "compact" ? "/responses/compact" : "/responses";
         url = appendEndpoint(model.baseUrl, endpoint);
         if (observation !== undefined) {
+          publishSafeHttpEnvelopeArtifact(observation.journey, {
+            artifactId: `provider_native_outbound_request_envelope.${attempt}`,
+            artifactKind: "provider_native_outbound_request_envelope",
+            method: "POST",
+            url,
+            headers,
+            location: envelopeLocation,
+          });
           observeProviderResponsesArtifact(observation.journey, {
             artifactId: `provider_native_outbound_request_wire.${attempt}`,
             artifactKind: "provider_native_outbound_request_wire",
@@ -227,6 +236,14 @@ export function createOpenAIResponsesSender(
           headers,
           body: rewritten.text,
           signal,
+        });
+        publishSafeHttpEnvelopeArtifact(observation?.journey, {
+          artifactId: `provider_native_upstream_response_envelope.${attempt}`,
+          artifactKind: "provider_native_upstream_response_envelope",
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+          location: dispatchLocation,
         });
         completeProviderResponsesStep(
           observation?.journey,

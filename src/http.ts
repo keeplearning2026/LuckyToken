@@ -6,12 +6,46 @@ import {
 } from "./local-native-http-response.js";
 
 import type {
+  ArtifactRecorder,
+  ImmutableArtifactMeta,
   RequestJourneyBeginInput,
   RequestJourneyCloseInput,
   RequestJourneyObservationAuthority,
   RequestJourneyObservationInput,
   RequestJourneyObserver,
 } from "./diagnostics/contract.js";
+
+const NOOP_ARTIFACT_RECORDER: ArtifactRecorder = Object.freeze({
+  append: () => undefined,
+  finish: () => undefined,
+  abandon: () => undefined,
+});
+
+function containArtifactRecorder(recorder: ArtifactRecorder): ArtifactRecorder {
+  return Object.freeze({
+    append(bytes: Uint8Array): void {
+      try {
+        recorder.append(bytes);
+      } catch {
+        // Diagnostics recorder failure is observation-only.
+      }
+    },
+    finish(input: Parameters<ArtifactRecorder["finish"]>[0]): void {
+      try {
+        recorder.finish(input);
+      } catch {
+        // Diagnostics recorder failure is observation-only.
+      }
+    },
+    abandon(reason: string): void {
+      try {
+        recorder.abandon(reason);
+      } catch {
+        // Diagnostics recorder failure is observation-only.
+      }
+    },
+  });
+}
 
 export interface ClientProtocolRequestContext {
   readonly requestId: string;
@@ -62,6 +96,7 @@ export function createRequestJourneyId(
 function createNoopJourneyObserver(requestId: string): RequestJourneyObserver {
   return Object.freeze({
     requestId,
+    openArtifact: () => NOOP_ARTIFACT_RECORDER,
     observe: () => undefined,
     close: () => undefined,
   });
@@ -90,6 +125,17 @@ export function beginRequestJourney(
     } else {
       safeObserver = Object.freeze({
         requestId: input.requestId,
+        ...(observer.openArtifact === undefined
+          ? {}
+          : {
+              openArtifact(meta: ImmutableArtifactMeta): ArtifactRecorder {
+                try {
+                  return containArtifactRecorder(observer.openArtifact!(meta));
+                } catch {
+                  return NOOP_ARTIFACT_RECORDER;
+                }
+              },
+            }),
         observe(observation: RequestJourneyObservationInput): void {
           try {
             observer.observe(observation);

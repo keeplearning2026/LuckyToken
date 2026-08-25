@@ -48,8 +48,9 @@ function firstRunConfig(): unknown {
     },
     diagnostics: {
       directory: "state/request-diagnostics",
-      successArtifacts: { enabled: false },
-      maxJourneyArtifactBytes: 4194304,
+      maxJsonArtifactBytes: 67108864,
+      maxJourneyArtifactBytes: 536870912,
+      maxArtifactDiskBytes: 5368709120,
       artifactRetentionAgeMs: 604800000,
       maxArtifactJourneys: 1000,
     },

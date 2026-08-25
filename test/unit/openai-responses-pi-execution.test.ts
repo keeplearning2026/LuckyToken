@@ -71,4 +71,44 @@ describe("OpenAI Responses-owned Pi execution", () => {
       outcomes: [{ control: "responses-owned", state: "projected" }],
     });
   });
+
+  it("publishes the final projected Provider payload through a fail-open protocol-local seam", async () => {
+    const providerPayloads: unknown[] = [];
+    const providerResponses: unknown[] = [];
+    const result = await executeWithResponsesPi({
+      models: {} as Models,
+      model,
+      pi: { context, options: {} },
+      projection: {
+        initialOutcomes: [],
+        project: () => ({ payload: { final: "provider-wire" }, outcomes: [] }),
+      },
+      infrastructure: {
+        providerEvidence: {
+          request(payload) {
+            providerPayloads.push(payload);
+            throw new Error("diagnostics observer crashed");
+          },
+          response(response) {
+            providerResponses.push(response);
+            throw new Error("diagnostics response observer crashed");
+          },
+        },
+        executeOperation: async (_models, _model, _context, options) => {
+          await options.onPayload?.({ draft: true }, model);
+          await options.onResponse?.(
+            { status: 200, headers: { "request-id": "response-1" } },
+            model,
+          );
+          return terminal;
+        },
+      },
+    });
+
+    expect(providerPayloads).toEqual([{ final: "provider-wire" }]);
+    expect(providerResponses).toEqual([
+      { status: 200, headers: { "request-id": "response-1" } },
+    ]);
+    expect(result.message).toBe(terminal);
+  });
 });

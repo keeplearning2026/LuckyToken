@@ -45,6 +45,7 @@ import {
   createUnavailableDiagnosticsAuthority,
   type DiagnosticsConfiguration,
   type DiagnosticsManagementAuthority,
+  type JourneyCapturePolicySource,
 } from "./diagnostics/index.js";
 import {
   createDesktopOwnerLeaseAuthority,
@@ -137,6 +138,7 @@ export interface TokenApplicationEvents {
 export interface DiagnosticsAuthorityFactoryInput {
   readonly configuration: DiagnosticsConfiguration;
   readonly runtimeId: string;
+  readonly journeyCapturePolicy: JourneyCapturePolicySource;
 }
 
 export type DiagnosticsAuthorityFactory = (
@@ -521,6 +523,25 @@ async function startNormalApplication(options: {
   });
 
   try {
+    const settingsRegistry = createSettingsRegistry(
+      createFileSettingsStore(join(dirname(options.configPath), "settings.json")),
+    );
+    await settingsRegistry.load();
+    const journeyCapturePolicy: JourneyCapturePolicySource =
+      Object.freeze({
+        snapshot: () => {
+          const settings = settingsRegistry.query([
+            "diagnostics.fullJourneyCapture.enabled",
+            "diagnostics.failedJourneyCapture.enabled",
+          ]);
+          return Object.freeze({
+            allRequestsEnabled:
+              settings["diagnostics.fullJourneyCapture.enabled"]?.value === true,
+            failedRequestsEnabled:
+              settings["diagnostics.failedJourneyCapture.enabled"]?.value === true,
+          });
+        },
+      });
     const diagnosticsFactory =
       options.diagnosticsAuthorityFactory ??
       ((input: DiagnosticsAuthorityFactoryInput) =>
@@ -529,6 +550,7 @@ async function startNormalApplication(options: {
       diagnosticsAuthority = await diagnosticsFactory({
         configuration: config.diagnostics,
         runtimeId: randomUUID(),
+        journeyCapturePolicy,
       });
     } catch {
       diagnosticsAuthority = createUnavailableDiagnosticsAuthority();
@@ -559,23 +581,28 @@ async function startNormalApplication(options: {
         ...(lastSucceededAt === 0 ? {} : { lastSucceededAt }),
       });
     };
-    try {
-      let afterId: number | undefined;
-      for (;;) {
-        const page = await ownedDiagnosticsAuthority.queryRequestJourneys({
-          limit: 1_000,
-          ...(afterId === undefined ? {} : { afterId }),
-        });
-        for (const record of page.records) observeCredentialUsage(record);
-        const newestId = page.records.at(-1)?.id;
-        if (!page.hasMore || newestId === undefined) break;
-        afterId = newestId;
-      }
-    } catch {
-      // Profile usage is a fail-open diagnostic projection only.
-    }
     profileUsageDiagnosticsSubscription =
       ownedDiagnosticsAuthority.subscribeRequestJourneys(observeCredentialUsage);
+    // Historical usage is a diagnostics-only projection. Backend startup,
+    // Control Plane publication, and Data Plane availability must not await a
+    // diagnostics process, database, or file tree that may be stalled/crashed.
+    void (async () => {
+      try {
+        let afterId: number | undefined;
+        for (;;) {
+          const page = await ownedDiagnosticsAuthority.queryRequestJourneys({
+            limit: 1_000,
+            ...(afterId === undefined ? {} : { afterId }),
+          });
+          for (const record of page.records) observeCredentialUsage(record);
+          const newestId = page.records.at(-1)?.id;
+          if (!page.hasMore || newestId === undefined) break;
+          afterId = newestId;
+        }
+      } catch {
+        // Profile usage is a fail-open diagnostic projection only.
+      }
+    })();
     const controlPipe = await createProductionControlPipe();
     const modelsAuthority = createModelsJsonAuthority({
       path: config.pi.modelsJson,
@@ -584,10 +611,6 @@ async function startNormalApplication(options: {
     const catalogCacheStore = createCatalogCacheStore({
       path: join(config.pi.directory, "models-catalog-cache.json"),
     });
-    const settingsRegistry = createSettingsRegistry(
-      createFileSettingsStore(join(dirname(options.configPath), "settings.json")),
-    );
-    await settingsRegistry.load();
     const publicModelAuthority = createPublicModelAuthority({
       path: join(dirname(config.pi.modelsJson), "public-models.json"),
       initialEndpoint: {
@@ -876,7 +899,7 @@ async function startNormalApplication(options: {
           contract: "token-diagnostics-sqlite",
           version: 1,
           category: "history" as const,
-          sourcePath: join(config.diagnostics.directory, "diagnostics-v2.sqlite3"),
+          sourcePath: join(config.diagnostics.directory, "diagnostics-v3.sqlite3"),
           snapshot: (signal: AbortSignal) =>
             diagnosticsManagement.createBackupSnapshot(signal),
         },
@@ -1068,6 +1091,18 @@ async function startNormalApplication(options: {
       settingsCommandHandler,
       settingsProjection: () => settingsRegistry.snapshot(),
       diagnostics: ownedDiagnosticsAuthority,
+      diagnosticsProjection: () =>
+        Object.freeze({
+          available: ownedDiagnosticsAuthority.diagnosticsAvailable(),
+          fullJourneyDirectory: join(
+            config.diagnostics.directory,
+            "full-journeys",
+          ),
+          maxJsonArtifactBytes: config.diagnostics.maxJsonArtifactBytes,
+          maxJourneyArtifactBytes:
+            config.diagnostics.maxJourneyArtifactBytes,
+          isolation: "process" as const,
+        }),
       ...(diagnosticsManagement.getAnalytics === undefined
         ? {}
         : {

@@ -4,6 +4,7 @@ import type {
   RequestJourneyObservationInput,
   RequestJourneyObserver,
 } from "./diagnostics/contract.js";
+import { publishSafeHttpEnvelopeArtifact } from "./diagnostics/http-envelope.js";
 
 export const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 export const CODEX_RESPONSES_COMPACT_URL =
@@ -163,6 +164,15 @@ async function passthroughCodexRequest(
     envelopeLocation,
   );
   const headers = buildRequestHeaders(options.requestHeaders);
+  const outboundUrl = `${url}${new URL(options.requestUrl).search}`;
+  publishSafeHttpEnvelopeArtifact(options.journey, {
+    artifactId: "local_outbound_request_envelope",
+    artifactKind: "local_outbound_request_envelope",
+    method: "POST",
+    url: outboundUrl,
+    headers,
+    location: envelopeLocation,
+  });
   observeLocalTransportJourney(options.journey, {
     kind: "artifact_observed",
     artifactId: "local_outbound_request_wire",
@@ -201,7 +211,7 @@ async function passthroughCodexRequest(
   });
   let response: Response;
   try {
-    response = await options.fetch(`${url}${new URL(options.requestUrl).search}`, {
+    response = await options.fetch(outboundUrl, {
       method: "POST",
       headers,
       body: options.rawBody,
@@ -241,6 +251,14 @@ async function passthroughCodexRequest(
     dispatchLocation,
     "success",
   );
+  publishSafeHttpEnvelopeArtifact(options.journey, {
+    artifactId: "local_upstream_response_envelope",
+    artifactKind: "local_upstream_response_envelope",
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+    location: dispatchLocation,
+  });
 
   const readLocation = {
     phase: "upstream_execution",

@@ -469,6 +469,31 @@ export function decodeApplicationStatus(
   ) {
     return undefined;
   }
+  const diagnostics = (() => {
+    if (value.diagnostics === undefined) return undefined;
+    if (!isRecord(value.diagnostics)) return null;
+    const candidate = value.diagnostics;
+    if (
+      typeof candidate.available !== "boolean" ||
+      typeof candidate.fullJourneyDirectory !== "string" ||
+      candidate.fullJourneyDirectory.length === 0 ||
+      !Number.isSafeInteger(candidate.maxJsonArtifactBytes) ||
+      (candidate.maxJsonArtifactBytes as number) <= 0 ||
+      !Number.isSafeInteger(candidate.maxJourneyArtifactBytes) ||
+      (candidate.maxJourneyArtifactBytes as number) <= 0 ||
+      candidate.isolation !== "process"
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      available: candidate.available,
+      fullJourneyDirectory: candidate.fullJourneyDirectory,
+      maxJsonArtifactBytes: candidate.maxJsonArtifactBytes as number,
+      maxJourneyArtifactBytes: candidate.maxJourneyArtifactBytes as number,
+      isolation: "process" as const,
+    });
+  })();
+  if (diagnostics === null) return undefined;
   const catalog = decodeCatalogStatusProjection(value.catalog);
   if (value.catalog !== undefined && catalog === undefined) {
     return undefined;
@@ -482,6 +507,7 @@ export function decodeApplicationStatus(
       ? {}
       : { activeRequests: value.activeRequests as number }),
     ...(dataPlane === undefined ? {} : { dataPlane }),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(settings === undefined ? {} : { settings }),
     ...(models === undefined ? {} : { models }),
     ...(credentialProfiles === undefined ? {} : { credentialProfiles }),

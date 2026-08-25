@@ -1,4 +1,4 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import {
   createUpstreamFailureFact,
   type InvocationAttempt,
@@ -65,10 +65,14 @@ function semanticModel(): Model<string> {
 
 async function diagnosticsFileBytes(directory: string): Promise<Buffer> {
   const parts: Buffer[] = [];
-  for (const name of await readdir(directory)) {
-    if (!name.startsWith("diagnostics-v2.sqlite3")) continue;
-    parts.push(await readFile(join(directory, name)));
-  }
+  const visit = async (current: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else parts.push(await readFile(path));
+    }
+  };
+  await visit(directory);
   return Buffer.concat(parts);
 }
 
@@ -102,7 +106,159 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
     }
   });
 
-  it("locates a trusted Provider terminal failure without inventing Provider wire evidence", async () => {
+  it("captures the required Pi 0.84.2 request payload, response metadata, response IR, and Client response on success", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "Token-semantic-openai-success-journey-"),
+    );
+    const requestId = "70000000-0000-4000-8000-000000000003";
+    let authority: DiagnosticsAuthority | undefined;
+    let server: RunningTokenHttpServer | undefined;
+    try {
+      authority = await createDiagnosticsAuthority({
+        configuration: parseDiagnosticsConfiguration(
+          { directory: join(root, "diagnostics") },
+          root,
+        ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
+      });
+      const model = semanticModel();
+      const terminal: AssistantMessage = {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        content: [{ type: "text", text: "semantic success evidence" }],
+        usage: {
+          input: 5,
+          output: 3,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 8,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      };
+      const semanticExecution: ExecutionOperation = vi.fn(
+        async (_models, selectedModel, context, options) => {
+          await options.onPayload?.(
+            {
+              model: selectedModel.id,
+              messages: context.messages,
+              max_tokens: options.maxTokens,
+              stream: true,
+            },
+            selectedModel,
+          );
+          await options.onResponse?.(
+            {
+              status: 200,
+              headers: { "request-id": "openai-provider-success" },
+            },
+            selectedModel,
+          );
+          return terminal;
+        },
+      );
+      const models = {
+        getModels: () => [model],
+      } as unknown as Models;
+      const handler = createOpenAIResponsesHandler({
+        models,
+        executeOperation: semanticExecution,
+        stateFile: join(root, "responses-state.json"),
+        maxRequestBytes: 8_192,
+        createResponseId: () => "resp_semantic_success",
+        createSessionId: () => "70000000-0000-4000-8000-000000000004",
+        now: () => 1_787_600_000_100,
+      });
+      server = await startTokenHttpServer({
+        runtime: createTokenRuntime({ clientProtocols: [handler] }),
+        diagnostics: authority,
+        createRequestId: () => requestId,
+        port: 0,
+      });
+
+      const response = await fetch(`${server.origin}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${CLIENT_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "semantic-test-provider/semantic-test",
+          input: SAFE_INPUT_MARKER,
+          max_output_tokens: 32,
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("semantic success evidence");
+
+      await server.close();
+      server = undefined;
+      const detail = await authority.getRequestJourney({ requestId });
+      expect(detail).toMatchObject({
+        protocol: "openai-responses",
+        lane: "semantic_conversion",
+        outcome: "success",
+      });
+      expect(detail.artifacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            artifactId: "pi_provider_request_payload",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "pi_provider_response_metadata",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "pi_provider_response_ir",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "client_response_wire",
+            state: "captured",
+          }),
+        ]),
+      );
+      const artifactIds = detail.artifacts.map((artifact) => artifact.artifactId);
+      expect(artifactIds).not.toContain("pi_provider_final_request_wire");
+      expect(artifactIds).not.toContain("pi_provider_raw_response_wire");
+
+      const providerRequest = await authority.getRequestArtifact({
+        requestId,
+        artifactId: "pi_provider_request_payload",
+        offset: 0,
+        limit: 256 * 1_024,
+      });
+      const providerRequestText = Buffer.from(
+        providerRequest.dataBase64,
+        "base64",
+      ).toString("utf8");
+      expect(providerRequestText).toContain(SAFE_INPUT_MARKER);
+      expect(providerRequestText).not.toContain(CLIENT_TOKEN);
+    } finally {
+      await Promise.allSettled([
+        server?.close() ?? Promise.resolve(),
+        authority?.close() ?? Promise.resolve(),
+      ]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("locates a trusted Provider terminal failure and classifies unreached Provider evidence", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "Token-semantic-openai-journey-"),
     );
@@ -116,6 +272,12 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
           { directory: diagnosticsDirectory },
           root,
         ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
       });
 
       const model = semanticModel();
@@ -185,6 +347,15 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
                 sessionId: options.sessionId,
               },
             }),
+          );
+          await options.onPayload?.(
+            {
+              model: selectedModel.id,
+              messages: context.messages,
+              max_tokens: options.maxTokens,
+              stream: true,
+            },
+            selectedModel,
           );
           for (const attempt of trustedAttempts) factsSink?.attempt(attempt);
           throw new ExecutionFailure(
@@ -357,6 +528,13 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
         "base64",
       ).toString("utf8");
       expect(() => JSON.parse(invocationJson)).not.toThrow();
+      expect(JSON.parse(invocationJson)).toEqual(expect.objectContaining({
+        reasoning: expect.any(Object),
+        supplement: expect.any(Object),
+        context: expect.any(Object),
+        options: expect.any(Object),
+        client: expect.any(Object),
+      }));
       expect(invocationJson).toContain(SAFE_INPUT_MARKER);
       expect(invocationJson).not.toContain(CLIENT_TOKEN);
       expect(invocationJson).not.toContain(PROVIDER_HEADER_SECRET);
@@ -420,11 +598,11 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       const providerOutboundObservation = observations.find(
         (observation) =>
           observation.kind === "artifact_observed" &&
-          observation.artifactId === "pi_provider_outbound_request_evidence",
+          observation.artifactId === "pi_provider_request_payload",
       );
       expect(providerOutboundObservation).toMatchObject({
-        state: "unavailable",
-        reason: "provider_did_not_expose",
+        state: "captured",
+        mediaType: "application/json",
         location: {
           phase: "upstream_execution",
           lane: "semantic_conversion",
@@ -436,11 +614,11 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       const providerDecodeObservation = observations.find(
         (observation) =>
           observation.kind === "artifact_observed" &&
-          observation.artifactId === "pi_provider_response_decode_evidence",
+          observation.artifactId === "pi_provider_response_ir",
       );
       expect(providerDecodeObservation).toMatchObject({
         state: "unavailable",
-        reason: "provider_did_not_expose",
+        reason: "provider_response_not_decoded",
         location: {
           phase: "upstream_execution",
           lane: "semantic_conversion",
@@ -452,20 +630,49 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       expect(
         detail.artifacts.find(
           (artifact) =>
-            artifact.artifactId === "pi_provider_outbound_request_evidence",
+            artifact.artifactId === "pi_provider_request_payload",
         ),
       ).toMatchObject({
-        state: "unavailable",
-        reason: "provider_did_not_expose",
+        state: "captured",
+        mediaType: "application/json",
       });
+      const providerRequestArtifact = await authority.getRequestArtifact({
+        requestId: REQUEST_ID,
+        artifactId: "pi_provider_request_payload",
+        offset: 0,
+        limit: 256 * 1_024,
+      });
+      const providerRequestJson = JSON.parse(
+        Buffer.from(providerRequestArtifact.dataBase64, "base64").toString(
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      expect(providerRequestJson).toMatchObject({
+        model: "semantic-test",
+        max_tokens: 32,
+        stream: true,
+      });
+      expect(JSON.stringify(providerRequestJson)).toContain(SAFE_INPUT_MARKER);
+      expect(JSON.stringify(providerRequestJson)).not.toContain(CLIENT_TOKEN);
+      expect(JSON.stringify(providerRequestJson)).not.toContain(
+        PROVIDER_HEADER_SECRET,
+      );
       expect(
         detail.artifacts.find(
           (artifact) =>
-            artifact.artifactId === "pi_provider_response_decode_evidence",
+            artifact.artifactId === "pi_provider_response_ir",
         ),
       ).toMatchObject({
         state: "unavailable",
-        reason: "provider_did_not_expose",
+        reason: "provider_response_not_decoded",
+      });
+      expect(
+        detail.artifacts.find(
+          (artifact) => artifact.artifactId === "pi_provider_response_metadata",
+        ),
+      ).toMatchObject({
+        state: "unavailable",
+        reason: "provider_response_headers_not_reached",
       });
 
       const terminalDescriptor = detail.artifacts.find(
@@ -547,6 +754,9 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
           }),
         ]),
       );
+      const artifactIds = detail.artifacts.map((artifact) => artifact.artifactId);
+      expect(artifactIds).not.toContain("pi_provider_final_request_wire");
+      expect(artifactIds).not.toContain("pi_provider_raw_response_wire");
 
       const projectedDetail = JSON.stringify(detail);
       expect(projectedDetail).not.toContain(CLIENT_TOKEN);

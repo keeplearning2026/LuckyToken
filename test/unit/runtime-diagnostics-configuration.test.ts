@@ -25,8 +25,9 @@ describe("unified diagnostics configuration", () => {
     const root = resolve("config-root");
     expect(parseDiagnosticsConfiguration(undefined, root)).toMatchObject({
       directory: resolve(root, "state", "request-diagnostics"),
-      successArtifacts: { enabled: false },
-      maxJourneyArtifactBytes: 4_194_304,
+      maxJsonArtifactBytes: 67_108_864,
+      maxJourneyArtifactBytes: 536_870_912,
+      maxArtifactDiskBytes: 5_368_709_120,
       artifactRetentionAgeMs: 604_800_000,
       maxArtifactJourneys: 1_000,
     });
@@ -36,8 +37,9 @@ describe("unified diagnostics configuration", () => {
     const configuration = parseDiagnosticsConfiguration(
       {
         directory: "state/diagnostics",
-        successArtifacts: { enabled: true },
-        maxJourneyArtifactBytes: 1_024,
+        maxJsonArtifactBytes: 2_048,
+        maxJourneyArtifactBytes: 4_096,
+        maxArtifactDiskBytes: 8_192,
         artifactRetentionAgeMs: 2_000,
         maxArtifactJourneys: 25,
       },
@@ -46,13 +48,13 @@ describe("unified diagnostics configuration", () => {
 
     expect(configuration).toMatchObject({
       directory: resolve("root", "state", "diagnostics"),
-      successArtifacts: { enabled: true },
-      maxJourneyArtifactBytes: 1_024,
+      maxJsonArtifactBytes: 2_048,
+      maxJourneyArtifactBytes: 4_096,
+      maxArtifactDiskBytes: 8_192,
       artifactRetentionAgeMs: 2_000,
       maxArtifactJourneys: 25,
     });
     expect(Object.isFrozen(configuration)).toBe(true);
-    expect(Object.isFrozen(configuration.successArtifacts)).toBe(true);
     expect(bindDiagnosticsConfiguration(configuration)).toBe(configuration);
   });
 
@@ -67,8 +69,9 @@ describe("unified diagnostics configuration", () => {
     expect(() =>
       bindDiagnosticsConfiguration({
         directory: parsed.directory,
-        successArtifacts: parsed.successArtifacts,
+        maxJsonArtifactBytes: parsed.maxJsonArtifactBytes,
         maxJourneyArtifactBytes: parsed.maxJourneyArtifactBytes,
+        maxArtifactDiskBytes: parsed.maxArtifactDiskBytes,
         artifactRetentionAgeMs: parsed.artifactRetentionAgeMs,
         maxArtifactJourneys: parsed.maxArtifactJourneys,
       }),
@@ -77,14 +80,16 @@ describe("unified diagnostics configuration", () => {
 
   it.each([
     [{ retentionDays: 30 }, "diagnostics.retentionDays is unknown"],
+    [{ successArtifacts: {} }, "diagnostics.successArtifacts is unknown"],
     [
-      { successArtifacts: { extra: true } },
-      "diagnostics.successArtifacts.extra is unknown",
+      { maxJsonArtifactBytes: 67_108_865 },
+      "diagnostics.maxJsonArtifactBytes",
     ],
     [
-      { maxJourneyArtifactBytes: 4_194_305 },
+      { maxJourneyArtifactBytes: 536_870_913 },
       "diagnostics.maxJourneyArtifactBytes",
     ],
+    [{ maxArtifactDiskBytes: 0 }, "diagnostics.maxArtifactDiskBytes"],
     [{ artifactRetentionAgeMs: 0 }, "diagnostics.artifactRetentionAgeMs"],
     [{ maxArtifactJourneys: 1_001 }, "diagnostics.maxArtifactJourneys"],
   ] as const)("rejects invalid diagnostics input %#", (value, message) => {
@@ -103,8 +108,9 @@ describe("unified diagnostics configuration", () => {
         pi: { directory: "pi" },
         diagnostics: {
           directory: "custom/diagnostics",
-          successArtifacts: { enabled: true },
-          maxJourneyArtifactBytes: 2_048,
+          maxJsonArtifactBytes: 2_048,
+          maxJourneyArtifactBytes: 4_096,
+          maxArtifactDiskBytes: 8_192,
           artifactRetentionAgeMs: 3_000,
           maxArtifactJourneys: 30,
         },
@@ -115,8 +121,9 @@ describe("unified diagnostics configuration", () => {
     const config = await loadTokenCliConfig(path);
     expect(config.diagnostics).toMatchObject({
       directory: resolve(directory, "custom", "diagnostics"),
-      successArtifacts: { enabled: true },
-      maxJourneyArtifactBytes: 2_048,
+      maxJsonArtifactBytes: 2_048,
+      maxJourneyArtifactBytes: 4_096,
+      maxArtifactDiskBytes: 8_192,
       artifactRetentionAgeMs: 3_000,
       maxArtifactJourneys: 30,
     });

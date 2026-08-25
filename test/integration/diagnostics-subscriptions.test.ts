@@ -574,7 +574,7 @@ describe("Diagnostics durable subscriptions", () => {
       join(tmpdir(), "Token-subscriptions-unavailable-"),
     );
     roots.push(root);
-    const database = new DatabaseSync(join(root, "diagnostics-v2.sqlite3"));
+    const database = new DatabaseSync(join(root, "diagnostics-v3.sqlite3"));
     database.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);
       INSERT INTO meta (key, value) VALUES ('schema_name', 'foreign_diagnostics');

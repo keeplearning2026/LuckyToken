@@ -170,12 +170,12 @@ describe("unified Request Journey tracer", () => {
         expect.objectContaining({
           artifactKind: "client_request_wire",
           state: "unavailable",
-          reason: "success_artifacts_disabled",
+          reason: "full_journey_capture_disabled",
         }),
         expect.objectContaining({
           artifactKind: "client_response_wire",
           state: "unavailable",
-          reason: "success_artifacts_disabled",
+          reason: "full_journey_capture_disabled",
         }),
       ]),
     );

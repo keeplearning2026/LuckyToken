@@ -4,6 +4,7 @@ import {
   inflateSync,
   zstdDecompressSync,
 } from "node:zlib";
+import type { ArtifactRecorder } from "../../diagnostics/contract.js";
 
 export class ResponsesRequestBodyTooLargeError extends Error {
   readonly kind = "ResponsesRequestBodyTooLargeError" as const;
@@ -42,6 +43,7 @@ async function readBoundedBytes(
   stream: ReadableStream<Uint8Array> | null,
   maximumBytes: number,
   signal: AbortSignal,
+  recorder?: ArtifactRecorder,
 ): Promise<Uint8Array<ArrayBuffer>> {
   signal.throwIfAborted();
   if (stream === null) return new Uint8Array(0);
@@ -65,6 +67,7 @@ async function readBoundedBytes(
         void reader.cancel(error).catch(() => undefined);
         throw error;
       }
+      recorder?.append(value);
       if (required > buffer.byteLength) {
         const next = new Uint8Array(
           Math.min(maximumBytes, Math.max(required, buffer.byteLength * 2)),
@@ -133,20 +136,38 @@ function decodeBytes(
 export async function readResponsesRequestBody(
   request: Request,
   maximumBytes: number,
+  recorder?: ArtifactRecorder,
 ): Promise<ResponsesRequestBody> {
-  const declared = declaredLength(request);
-  if (declared !== undefined && declared > maximumBytes) {
-    throw new ResponsesRequestBodyTooLargeError(declared, maximumBytes);
+  try {
+    const declared = declaredLength(request);
+    if (declared !== undefined && declared > maximumBytes) {
+      throw new ResponsesRequestBodyTooLargeError(declared, maximumBytes);
+    }
+    const encoding =
+      (request.headers.get("content-encoding") ?? "identity")
+        .trim()
+        .toLowerCase();
+    const identity = encoding === "" || encoding === "identity";
+    const raw = await readBoundedBytes(
+      request.body,
+      maximumBytes,
+      request.signal,
+      identity ? recorder : undefined,
+    );
+    const decoded = decodeBytes(raw, encoding, maximumBytes);
+    if (decoded.byteLength > maximumBytes) {
+      throw new ResponsesRequestBodyTooLargeError(decoded.byteLength, maximumBytes);
+    }
+    if (!identity) recorder?.append(decoded);
+    recorder?.finish({ originalBytes: decoded.byteLength, complete: true });
+    const text = new TextDecoder().decode(decoded);
+    return Object.freeze({ wireBytes: raw, text, json: JSON.parse(text) as unknown });
+  } catch (error) {
+    recorder?.abandon(
+      error instanceof ResponsesRequestBodyTooLargeError
+        ? "request_body_exceeds_limit"
+        : "request_body_read_or_decode_failed",
+    );
+    throw error;
   }
-  const raw = await readBoundedBytes(request.body, maximumBytes, request.signal);
-  const decoded = decodeBytes(
-    raw,
-    request.headers.get("content-encoding"),
-    maximumBytes,
-  );
-  if (decoded.byteLength > maximumBytes) {
-    throw new ResponsesRequestBodyTooLargeError(decoded.byteLength, maximumBytes);
-  }
-  const text = new TextDecoder().decode(decoded);
-  return Object.freeze({ wireBytes: raw, text, json: JSON.parse(text) as unknown });
 }

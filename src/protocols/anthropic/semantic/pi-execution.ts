@@ -23,6 +23,10 @@ export interface AnthropicPiInvocation {
 export interface AnthropicPiExecutionCapabilities {
   readonly executeOperation?: ExecutionOperation;
   readonly factsSink?: ExecutionFactsSink;
+  readonly providerEvidence?: Readonly<{
+    request(payload: unknown): void;
+    response?(response: unknown): void;
+  }>;
 }
 
 export interface AnthropicPiExecutionResult {
@@ -82,6 +86,11 @@ export async function executeWithAnthropicPi(input: {
       "Anthropic Pi invocation must not supply onPayload",
     );
   }
+  if (input.pi.options.onResponse !== undefined) {
+    throw new InvalidAnthropicPiExecution(
+      "Anthropic Pi invocation must not supply onResponse",
+    );
+  }
   let projectionCalls = 0;
   let outcomes = input.projection.initialOutcomes;
   let retainedCallbackFailure: unknown | undefined;
@@ -98,6 +107,11 @@ export async function executeWithAnthropicPi(input: {
         }
         const projected = await input.projection.project(payload, input.model);
         outcomes = Object.freeze([...projected.outcomes]);
+        try {
+          input.infrastructure.providerEvidence?.request(projected.payload);
+        } catch {
+          // Observation failure cannot alter Anthropic-owned projection.
+        }
         return projected.payload;
       } catch (error) {
         const wrapped = error instanceof InvalidAnthropicPiExecution
@@ -105,6 +119,13 @@ export async function executeWithAnthropicPi(input: {
           : new AnthropicPayloadCallbackFailure(error);
         retainedCallbackFailure = wrapped;
         throw wrapped;
+      }
+    },
+    onResponse(response) {
+      try {
+        input.infrastructure.providerEvidence?.response?.(response);
+      } catch {
+        // Observation failure cannot alter Anthropic Provider handling.
       }
     },
   };

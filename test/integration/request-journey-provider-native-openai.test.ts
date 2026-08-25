@@ -112,10 +112,14 @@ interface OutboundAttempt {
 
 async function diagnosticsFileBytes(directory: string): Promise<Buffer> {
   const parts: Buffer[] = [];
-  for (const name of await readdir(directory)) {
-    if (!name.startsWith("diagnostics-v2.sqlite3")) continue;
-    parts.push(await readFile(join(directory, name)));
-  }
+  const visit = async (current: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else parts.push(await readFile(path));
+    }
+  };
+  await visit(directory);
   return Buffer.concat(parts);
 }
 
@@ -152,6 +156,12 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
           { directory: diagnosticsDirectory },
           root,
         ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
       });
       let resolveJourneyClosed!: (input: RequestJourneyCloseInput) => void;
       const journeyClosed = new Promise<RequestJourneyCloseInput>((resolve) => {
@@ -714,6 +724,16 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
             state: "captured",
           }),
           expect.objectContaining({
+            artifactId: "client_request_envelope",
+            artifactKind: "client_request_envelope",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_outbound_request_envelope.1",
+            artifactKind: "provider_native_outbound_request_envelope",
+            state: "captured",
+          }),
+          expect.objectContaining({
             artifactId: "provider_native_outbound_request_wire.1",
             artifactKind: "provider_native_outbound_request_wire",
             state: "captured",
@@ -724,6 +744,16 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
             artifactKind: "provider_native_upstream_response_wire",
             state: "unavailable",
             reason: "response_body_not_read_before_profile_switch",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_upstream_response_envelope.1",
+            artifactKind: "provider_native_upstream_response_envelope",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_outbound_request_envelope.2",
+            artifactKind: "provider_native_outbound_request_envelope",
+            state: "captured",
           }),
           expect.objectContaining({
             artifactId: "provider_native_outbound_request_wire.2",
@@ -738,6 +768,11 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
             originalBytes: Buffer.byteLength(upstreamBodies[1]),
           }),
           expect.objectContaining({
+            artifactId: "provider_native_upstream_response_envelope.2",
+            artifactKind: "provider_native_upstream_response_envelope",
+            state: "captured",
+          }),
+          expect.objectContaining({
             artifactId: "provider_native_preserved_response_wire",
             artifactKind: "provider_native_preserved_response_wire",
             state: "captured",
@@ -748,6 +783,11 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
             artifactKind: "client_response_wire",
             state: "captured",
             originalBytes: Buffer.byteLength(responseBody),
+          }),
+          expect.objectContaining({
+            artifactId: "client_response_envelope",
+            artifactKind: "client_response_envelope",
+            state: "captured",
           }),
         ]),
       );

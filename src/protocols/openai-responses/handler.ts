@@ -265,7 +265,7 @@ function observeResponsesWireArtifact(
     location: RequestJourneyLocation;
   }>,
 ): void {
-  const capturedBytes = Math.min(input.bytes.byteLength, 256 * 1_024);
+  const capturedBytes = input.bytes.byteLength;
   observeResponsesJourney(journey, {
     kind: "artifact_observed",
     artifactId: input.artifactId,
@@ -468,25 +468,34 @@ async function handleOpenAIResponses(
       "p1.read_and_decode_body",
       bodyLocation,
     );
+    const requestArtifact = journey?.openArtifact?.({
+      artifactId: "client_request_wire",
+      artifactKind: "client_request_wire",
+      mediaType: "application/json",
+      location: bodyLocation,
+    });
     const decodedBody = await readResponsesRequestBody(
       request,
       dependencies.maxRequestBytes,
+      requestArtifact,
     );
     const rawBody = decodedBody.text;
     const body: unknown = decodedBody.json;
     const rawRequestBytes = decodedBody.wireBytes;
-    observeResponsesJourney(journey, {
-      kind: "artifact_observed",
-      artifactId: "client_request_wire",
-      artifactKind: "client_request_wire",
-      state: "captured",
-      mediaType: "application/json",
-      bytes: rawRequestBytes,
-      originalBytes: rawRequestBytes.byteLength,
-      capturedBytes: rawRequestBytes.byteLength,
-      truncated: false,
-      location: bodyLocation,
-    });
+    if (requestArtifact === undefined) {
+      observeResponsesJourney(journey, {
+        kind: "artifact_observed",
+        artifactId: "client_request_wire",
+        artifactKind: "client_request_wire",
+        state: "captured",
+        mediaType: "application/json",
+        bytes: rawRequestBytes,
+        originalBytes: rawRequestBytes.byteLength,
+        capturedBytes: rawRequestBytes.byteLength,
+        truncated: false,
+        location: bodyLocation,
+      });
+    }
     completeResponsesJourneyStep(
       journey,
       "p1.read_and_decode_body",

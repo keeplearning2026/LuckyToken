@@ -10,6 +10,7 @@ import {
   type CatalogCommandHandler,
   type CatalogCommandResult,
   type CatalogStatusProjection,
+  type DiagnosticsStorageProjection,
   type AgentIntegrationsCommandHandler,
   type AgentIntegrationsCommandResult,
   type ControlPlaneEndpoint,
@@ -135,6 +136,8 @@ export interface StartControlPlaneOptions {
   readonly catalogProjection?: () => CatalogStatusProjection;
   /** Unified Request Journey and Runtime diagnostics management authority. */
   readonly diagnostics?: UnifiedDiagnosticsManagement;
+  /** Bounded, content-free storage projection merged into every snapshot. */
+  readonly diagnosticsProjection?: () => DiagnosticsStorageProjection;
   /**
    * Explicit Request Analytics ownership (Ticket 21): when present, the
    * Control Plane serves bounded, versioned analytics aggregates computed
@@ -220,6 +223,7 @@ export async function startApplicationStatusHost(
     const catalogProjection = options.catalogProjection?.();
     const recoveryProjection = options.recoveryProjection?.();
     const attentionProjection = options.attentionProjection?.(status);
+    const diagnosticsProjection = options.diagnosticsProjection?.();
     return {
       ...status,
       ...(options.ownership === undefined
@@ -241,6 +245,9 @@ export async function startApplicationStatusHost(
       ...(attentionProjection === undefined
         ? {}
         : { attention: attentionProjection }),
+      ...(diagnosticsProjection === undefined
+        ? {}
+        : { diagnostics: diagnosticsProjection }),
     };
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };

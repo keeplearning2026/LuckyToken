@@ -101,10 +101,14 @@ interface OutboundAttempt {
 
 async function diagnosticsFileBytes(directory: string): Promise<Buffer> {
   const parts: Buffer[] = [];
-  for (const name of await readdir(directory)) {
-    if (!name.startsWith("diagnostics-v2.sqlite3")) continue;
-    parts.push(await readFile(join(directory, name)));
-  }
+  const visit = async (current: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else parts.push(await readFile(path));
+    }
+  };
+  await visit(directory);
   return Buffer.concat(parts);
 }
 
@@ -146,6 +150,12 @@ describe("Anthropic Provider Native Request Journey", () => {
           { directory: diagnosticsDirectory },
           root,
         ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
       });
 
       const profileA = managedCapture(PROFILE_A, "Provider Profile A");
@@ -627,7 +637,17 @@ describe("Anthropic Provider Native Request Journey", () => {
             artifactKind: "client_request_wire",
             state: "captured",
           }),
+          expect.objectContaining({
+            artifactId: "client_request_envelope",
+            artifactKind: "client_request_envelope",
+            state: "captured",
+          }),
           ...([1, 2] as const).flatMap((attempt) => [
+            expect.objectContaining({
+              artifactId: `provider_native_outbound_request_envelope.${attempt}`,
+              artifactKind: "provider_native_outbound_request_envelope",
+              state: "captured",
+            }),
             expect.objectContaining({
               artifactId: `provider_native_outbound_request_wire.${attempt}`,
               artifactKind: "provider_native_outbound_request_wire",
@@ -650,6 +670,11 @@ describe("Anthropic Provider Native Request Journey", () => {
               ),
               truncated: false,
             }),
+            expect.objectContaining({
+              artifactId: `provider_native_upstream_response_envelope.${attempt}`,
+              artifactKind: "provider_native_upstream_response_envelope",
+              state: "captured",
+            }),
           ]),
           expect.objectContaining({
             artifactId: "provider_native_preserved_response_wire",
@@ -665,6 +690,11 @@ describe("Anthropic Provider Native Request Journey", () => {
             originalBytes: Buffer.byteLength(responseBody),
             capturedBytes: Buffer.byteLength(responseBody),
             truncated: false,
+          }),
+          expect.objectContaining({
+            artifactId: "client_response_envelope",
+            artifactKind: "client_response_envelope",
+            state: "captured",
           }),
         ]),
       );

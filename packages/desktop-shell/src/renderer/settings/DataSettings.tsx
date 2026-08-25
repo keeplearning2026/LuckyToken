@@ -5,6 +5,9 @@ import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 type DeleteResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeHistoryDelete"]>>;
 type BackupResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeBackup"]>>;
 
+const FULL_JOURNEY_SETTING = "diagnostics.fullJourneyCapture.enabled";
+const FAILED_JOURNEY_SETTING = "diagnostics.failedJourneyCapture.enabled";
+
 export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [counts, setCounts] = useState<{ readonly requestJourneys: number; readonly runtimeEvents: number }>();
   const [historyUnavailable, setHistoryUnavailable] = useState(false);
@@ -12,6 +15,11 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [backupGate, setBackupGate] = useState<BackupResult>();
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [captureEnabled, setCaptureEnabled] = useState<boolean>();
+  const [failedCaptureEnabled, setFailedCaptureEnabled] = useState<boolean>();
+  const [captureDirectory, setCaptureDirectory] = useState<string>();
+  const [captureAvailable, setCaptureAvailable] = useState(false);
+  const [captureBusy, setCaptureBusy] = useState(false);
 
   const refresh = async (): Promise<void> => {
     const result = await api.control.queryHistory("all").catch(() => undefined);
@@ -30,8 +38,79 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
   };
 
   useEffect(() => {
+    let active = true;
     void refresh();
+    void api.control
+      .executeSettings({
+        command: "query",
+        keys: [FULL_JOURNEY_SETTING, FAILED_JOURNEY_SETTING],
+      })
+      .then(
+        (result) => {
+          if (!active) return;
+          const value = result.settings[FULL_JOURNEY_SETTING]?.value;
+          setCaptureEnabled(typeof value === "boolean" ? value : undefined);
+          const failedValue = result.settings[FAILED_JOURNEY_SETTING]?.value;
+          setFailedCaptureEnabled(
+            typeof failedValue === "boolean" ? failedValue : undefined,
+          );
+        },
+        () => {
+          if (active) {
+            setCaptureEnabled(undefined);
+            setFailedCaptureEnabled(undefined);
+          }
+        },
+      );
+    void api.control.getBackendState().then(
+      (state) => {
+        if (!active || state.kind !== "ready") return;
+        setCaptureDirectory(state.status.diagnostics?.fullJourneyDirectory);
+        setCaptureAvailable(state.status.diagnostics?.available === true);
+      },
+      () => {
+        if (active) setCaptureAvailable(false);
+      },
+    );
+    return () => {
+      active = false;
+    };
   }, [api]);
+
+  const toggleJourneyCapture = async (
+    key: typeof FULL_JOURNEY_SETTING | typeof FAILED_JOURNEY_SETTING,
+    current: boolean | undefined,
+  ): Promise<void> => {
+    if (current === undefined) return;
+    const label = key === FULL_JOURNEY_SETTING
+      ? "Full journey capture"
+      : "Failed-request capture";
+    setCaptureBusy(true);
+    try {
+      const next = !current;
+      const result = await api.control.executeSettings({
+        command: "set",
+        key,
+        value: next,
+      });
+      if (
+        result.outcome === "storage_failure" ||
+        result.outcome === "invalid_value"
+      ) {
+        setNotice(result.error ?? `${label} could not be updated.`);
+        return;
+      }
+      if (key === FULL_JOURNEY_SETTING) setCaptureEnabled(next);
+      else setFailedCaptureEnabled(next);
+      setNotice(key === FULL_JOURNEY_SETTING
+        ? `Full journey capture ${next ? "enabled" : "disabled"}.`
+        : `Failed-request capture ${next ? "enabled" : "disabled"}.`);
+    } catch {
+      setNotice(`${label} could not be updated.`);
+    } finally {
+      setCaptureBusy(false);
+    }
+  };
 
   const deleteAll = async (): Promise<void> => {
     setBusy(true);
@@ -106,6 +185,85 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
   return (
     <section className="page-stack">
       {notice === undefined ? null : <p className="product-notice" role="status">{notice}</p>}
+      <div className="page-card settings-section">
+        <header className="settings-section-header">
+          <div className="settings-copy">
+            <p className="eyebrow">DIAGNOSTICS</p>
+            <h3>Full journey capture</h3>
+            <p>
+              Save lane-owned request, intermediate, upstream, and response
+              evidence for all three data-plane lanes.
+            </p>
+          </div>
+          <span className={`settings-status ${captureEnabled || failedCaptureEnabled ? "on" : "off"}`}>
+            {captureEnabled === undefined || failedCaptureEnabled === undefined
+              ? "Unavailable"
+              : captureEnabled
+                ? "All requests"
+                : failedCaptureEnabled
+                  ? "Failures only"
+                  : "Off"}
+          </span>
+        </header>
+        <div className="settings-action-row">
+          <div className="settings-action-copy">
+            <strong>Capture every request journey</strong>
+            <p>
+              64 MiB per JSON file, 512 MiB per journey. Capture runs in an
+              isolated diagnostics process and fails open.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            aria-pressed={captureEnabled === true}
+            disabled={captureBusy || captureEnabled === undefined}
+            onClick={() => void toggleJourneyCapture(
+              FULL_JOURNEY_SETTING,
+              captureEnabled,
+            )}
+          >
+            {captureEnabled
+              ? "Disable full journey capture"
+              : "Enable full journey capture"}
+          </button>
+        </div>
+        <div className="settings-action-row">
+          <div className="settings-action-copy">
+            <strong>Force capture when a request fails</strong>
+            <p>
+              Enabled by default. Failed, aborted, or interrupted journeys keep
+              their complete available scene even when all-request capture is off.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            aria-pressed={failedCaptureEnabled === true}
+            disabled={captureBusy || failedCaptureEnabled === undefined}
+            onClick={() => void toggleJourneyCapture(
+              FAILED_JOURNEY_SETTING,
+              failedCaptureEnabled,
+            )}
+          >
+            {failedCaptureEnabled
+              ? "Disable failed-request capture"
+              : "Enable failed-request capture"}
+          </button>
+        </div>
+        <div className="settings-action-copy">
+          <strong>Capture folder</strong>
+          <p>
+            {captureDirectory ??
+              "The capture folder is unavailable while the Backend is disconnected."}
+          </p>
+          <small>
+            {captureAvailable
+              ? "Diagnostics storage is available."
+              : "Diagnostics storage is currently unavailable."}
+          </small>
+        </div>
+      </div>
       <div className="page-card settings-section settings-danger-section">
         <header className="settings-section-header">
           <div className="settings-copy">
@@ -149,13 +307,13 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
           <div className="settings-copy">
             <p className="eyebrow">BACKUP</p>
             <h3>Create a full backup</h3>
-            <p>Export configuration and complete diagnostic data to a file you choose.</p>
+            <p>Export configuration and the diagnostic index to a file you choose.</p>
           </div>
         </header>
         <div className="settings-action-row">
           <div className="settings-action-copy">
             <strong>Sensitive diagnostic backup</strong>
-            <p>The file may contain sensitive request details and always requires confirmation.</p>
+            <p>The file contains the diagnostic index and may contain sensitive request details. Full-journey JSON files remain in the capture folder.</p>
           </div>
           <button type="button" className="secondary" disabled={busy} onClick={() => void createFullBackup()}>
             Choose location…

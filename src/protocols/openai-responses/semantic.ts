@@ -26,6 +26,7 @@ import type {
   RequestJourneyObservationInput,
   RequestJourneyObserver,
 } from "../../diagnostics/contract.js";
+import { publishSafeHttpEnvelopeArtifact } from "../../diagnostics/http-envelope.js";
 import type { RequestIdentity } from "../../request-identity.js";
 import {
   composeOptions,
@@ -72,11 +73,6 @@ export interface SemanticResponsesExecutionOptions {
   readonly journey?: RequestJourneyObserver;
 }
 
-const MAX_INVOCATION_ARTIFACT_BYTES = 256 * 1_024;
-const MAX_SNAPSHOT_MESSAGES = 16;
-const MAX_SNAPSHOT_CONTENT_BLOCKS = 8;
-const MAX_SNAPSHOT_TEXT_CHARACTERS = 256;
-
 function observeSemanticJourney(
   journey: RequestJourneyObserver | undefined,
   observation: RequestJourneyObservationInput,
@@ -85,6 +81,43 @@ function observeSemanticJourney(
     journey?.observe(observation);
   } catch {
     // Semantic execution remains authoritative over observation failure.
+  }
+}
+
+function observeSemanticJsonArtifact(
+  journey: RequestJourneyObserver | undefined,
+  input: Readonly<{
+    artifactId: string;
+    artifactKind: string;
+    value: unknown;
+    location: RequestJourneyLocation;
+  }>,
+): void {
+  try {
+    const serialized = JSON.stringify(input.value);
+    if (serialized === undefined) throw new Error("JSON value is unavailable");
+    const bytes = new TextEncoder().encode(serialized);
+    observeSemanticJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: input.artifactId,
+      artifactKind: input.artifactKind,
+      state: "captured",
+      mediaType: "application/json",
+      bytes,
+      originalBytes: bytes.byteLength,
+      capturedBytes: bytes.byteLength,
+      truncated: false,
+      location: input.location,
+    });
+  } catch {
+    observeSemanticJourney(journey, {
+      kind: "artifact_observed",
+      artifactId: input.artifactId,
+      artifactKind: input.artifactKind,
+      state: "unavailable",
+      reason: "snapshot_projection_failed",
+      location: input.location,
+    });
   }
 }
 
@@ -165,92 +198,6 @@ function observeProviderConversionNotice(
         : { sourcePath: notice.jsonPath }),
     },
   });
-}
-
-function boundedInvocationSnapshot(
-  invocation: ResponsesInvocation,
-  model: Model<string>,
-  options: ModelsSimpleStreamOptions,
-): { readonly bytes: Uint8Array<ArrayBuffer>; readonly truncated: boolean } {
-  let truncated = false;
-  const boundedText = (value: unknown): string | undefined => {
-    if (typeof value !== "string") return undefined;
-    if (value.length <= MAX_SNAPSHOT_TEXT_CHARACTERS) return value;
-    truncated = true;
-    return value.slice(0, MAX_SNAPSHOT_TEXT_CHARACTERS);
-  };
-  const boundedContent = (value: unknown): unknown => {
-    if (typeof value === "string") return boundedText(value);
-    if (!Array.isArray(value)) return undefined;
-    if (value.length > MAX_SNAPSHOT_CONTENT_BLOCKS) truncated = true;
-    return value.slice(0, MAX_SNAPSHOT_CONTENT_BLOCKS).map((entry) => {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-        return Object.freeze({ type: typeof entry });
-      }
-      const block = entry as Readonly<Record<string, unknown>>;
-      const type = boundedText(block.type) ?? "unknown";
-      return Object.freeze({
-        type,
-        ...(type === "text" && boundedText(block.text) !== undefined
-          ? { text: boundedText(block.text)! }
-          : {}),
-        ...(type === "thinking" && boundedText(block.thinking) !== undefined
-          ? { thinking: boundedText(block.thinking)! }
-          : {}),
-        ...((type === "toolCall" || type === "toolResult") &&
-        boundedText(block.name) !== undefined
-          ? { name: boundedText(block.name)! }
-          : {}),
-      });
-    });
-  };
-  if (invocation.invocation.pi.context.messages.length > MAX_SNAPSHOT_MESSAGES) {
-    truncated = true;
-  }
-  const messages = invocation.invocation.pi.context.messages
-    .slice(0, MAX_SNAPSHOT_MESSAGES)
-    .map((message) => {
-      const safe = message as unknown as Readonly<Record<string, unknown>>;
-      return Object.freeze({
-        role: boundedText(safe.role) ?? "unknown",
-        content: boundedContent(safe.content),
-      });
-    });
-  const snapshot = Object.freeze({
-    schema: "Token.pi_invocation_summary.v1",
-    selector: boundedText(invocation.selector),
-    model: Object.freeze({
-      provider: boundedText(model.provider),
-      id: boundedText(model.id),
-      api: boundedText(model.api),
-    }),
-    systemPrompt: boundedText(invocation.invocation.pi.context.systemPrompt),
-    messageCount: invocation.invocation.pi.context.messages.length,
-    messages: Object.freeze(messages),
-    options: Object.freeze({
-      maxTokens: options.maxTokens,
-      temperature: options.temperature,
-    }),
-    completeness: "bounded_summary",
-  });
-  let bytes = new TextEncoder().encode(JSON.stringify(snapshot));
-  if (bytes.byteLength > MAX_INVOCATION_ARTIFACT_BYTES) {
-    truncated = true;
-    bytes = new TextEncoder().encode(
-      JSON.stringify({
-        schema: "Token.pi_invocation_summary.v1",
-        selector: boundedText(invocation.selector),
-        model: {
-          provider: boundedText(model.provider),
-          id: boundedText(model.id),
-          api: boundedText(model.api),
-        },
-        messageCount: invocation.invocation.pi.context.messages.length,
-        completeness: "counts_only_due_to_byte_bound",
-      }),
-    );
-  }
-  return Object.freeze({ bytes, truncated });
 }
 
 function trustedTerminalSummaryBytes(
@@ -648,34 +595,46 @@ export async function executeSemanticResponses(
         options.routerDefaults,
       );
       if (options.journey !== undefined) {
-        try {
-          const snapshot = boundedInvocationSnapshot(
-            invocation,
-            options.model,
-            piOptions,
-          );
-          observeSemanticJourney(options.journey, {
-            kind: "artifact_observed",
-            artifactId: "pi_invocation_snapshot",
-            artifactKind: "pi_invocation_snapshot",
-            state: snapshot.truncated ? "partial" : "captured",
-            mediaType: "application/json",
-            bytes: snapshot.bytes,
-            originalBytes: snapshot.bytes.byteLength,
-            capturedBytes: snapshot.bytes.byteLength,
-            truncated: snapshot.truncated,
-            location: finalizeLocation,
-          });
-        } catch {
-          observeSemanticJourney(options.journey, {
-            kind: "artifact_observed",
-            artifactId: "pi_invocation_snapshot",
-            artifactKind: "pi_invocation_snapshot",
-            state: "unavailable",
-            reason: "snapshot_projection_failed",
-            location: finalizeLocation,
-          });
-        }
+        observeSemanticJsonArtifact(options.journey, {
+          artifactId: "pi_invocation_snapshot",
+          artifactKind: "pi_invocation_snapshot",
+          value: {
+            schema: "Token.openai_responses.pi_invocation.v2",
+            selector: invocation.selector,
+            model: {
+              provider: options.model.provider,
+              id: options.model.id,
+              api: options.model.api,
+            },
+            reasoning: invocation.invocation.reasoning,
+            supplement: invocation.invocation.supplement,
+            context: invocation.invocation.pi.context,
+            options: {
+              maxTokens: piOptions.maxTokens,
+              temperature: piOptions.temperature,
+              reasoning: piOptions.reasoning,
+              samplingParams: piOptions.samplingParams,
+              cacheRetention: piOptions.cacheRetention,
+              thinkingBudgets: piOptions.thinkingBudgets,
+              metadata: piOptions.metadata,
+              sessionId: piOptions.sessionId,
+            },
+            client: {
+              renderState: {
+                clientModel: invocation.client.renderState.clientModel,
+                stream: invocation.client.renderState.stream,
+                toolChoice: invocation.client.renderState.toolChoice,
+                freeformToolNames: invocation.client.renderState.freeformToolNames === undefined
+                  ? undefined
+                  : [...invocation.client.renderState.freeformToolNames],
+                namespaceReverse: invocation.client.renderState.namespaceReverse,
+                metadataEcho: invocation.client.renderState.metadataEcho,
+              },
+              notices: invocation.client.notices,
+            },
+          },
+          location: finalizeLocation,
+        });
       }
       completeSemanticJourneyStep(
         options.journey,
@@ -751,34 +710,22 @@ export async function executeSemanticResponses(
         });
       },
     });
-    observeSemanticJourney(options.journey, {
-      kind: "artifact_observed",
-      artifactId: "pi_provider_outbound_request_evidence",
-      artifactKind: "pi_provider_outbound_request_evidence",
-      state: "unavailable",
-      reason: "provider_did_not_expose",
-      location: {
-        phase: "upstream_execution",
-        lane: "semantic_conversion",
-        direction: "pi_to_provider",
-        step: "convert_pi_request",
-        subject: "envelope",
-      },
-    });
-    observeSemanticJourney(options.journey, {
-      kind: "artifact_observed",
-      artifactId: "pi_provider_response_decode_evidence",
-      artifactKind: "pi_provider_response_decode_evidence",
-      state: "unavailable",
-      reason: "provider_did_not_expose",
-      location: {
-        phase: "upstream_execution",
-        lane: "semantic_conversion",
-        direction: "provider_to_pi",
-        step: "decode_provider_events",
-        subject: "envelope",
-      },
-    });
+    const providerRequestLocation = {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "pi_to_provider",
+      step: "convert_pi_request",
+      subject: "envelope",
+    } as const;
+    const providerResponseLocation = {
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "provider_to_pi",
+      step: "decode_provider_events",
+      subject: "envelope",
+    } as const;
+    let providerRequestObserved = false;
+    let providerResponseMetadataObserved = false;
     const createStreamLocation = {
       phase: "upstream_execution",
       lane: "semantic_conversion",
@@ -804,6 +751,51 @@ export async function executeSemanticResponses(
         infrastructure: {
           executeOperation,
           factsSink: executionFacts,
+          providerEvidence: {
+            request(payload) {
+              if (providerRequestObserved) return;
+              providerRequestObserved = true;
+              observeSemanticJsonArtifact(options.journey, {
+                artifactId: "pi_provider_request_payload",
+                artifactKind: "pi_provider_request_payload",
+                value: payload,
+                location: providerRequestLocation,
+              });
+            },
+            response(response) {
+              if (providerResponseMetadataObserved) return;
+              providerResponseMetadataObserved = true;
+              try {
+                if (
+                  typeof response !== "object" ||
+                  response === null ||
+                  typeof (response as { status?: unknown }).status !== "number" ||
+                  typeof (response as { headers?: unknown }).headers !== "object" ||
+                  (response as { headers?: unknown }).headers === null
+                ) {
+                  throw new Error("Pi Provider response metadata is malformed");
+                }
+                publishSafeHttpEnvelopeArtifact(options.journey, {
+                  artifactId: "pi_provider_response_metadata",
+                  artifactKind: "pi_provider_response_metadata",
+                  status: (response as { status: number }).status,
+                  headers: new Headers(
+                    (response as { headers: Record<string, string> }).headers,
+                  ),
+                  location: providerResponseLocation,
+                });
+              } catch {
+                observeSemanticJourney(options.journey, {
+                  kind: "artifact_observed",
+                  artifactId: "pi_provider_response_metadata",
+                  artifactKind: "pi_provider_response_metadata",
+                  state: "unavailable",
+                  reason: "provider_response_metadata_invalid",
+                  location: providerResponseLocation,
+                });
+              }
+            },
+          },
         },
       });
       completeSemanticJourneyStep(
@@ -813,6 +805,34 @@ export async function executeSemanticResponses(
         "success",
       );
     } catch (error) {
+      if (!providerRequestObserved) {
+        observeSemanticJourney(options.journey, {
+          kind: "artifact_observed",
+          artifactId: "pi_provider_request_payload",
+          artifactKind: "pi_provider_request_payload",
+          state: "unavailable",
+          reason: "provider_request_not_reached",
+          location: providerRequestLocation,
+        });
+      }
+      if (!providerResponseMetadataObserved) {
+        observeSemanticJourney(options.journey, {
+          kind: "artifact_observed",
+          artifactId: "pi_provider_response_metadata",
+          artifactKind: "pi_provider_response_metadata",
+          state: "unavailable",
+          reason: "provider_response_headers_not_reached",
+          location: providerResponseLocation,
+        });
+      }
+      observeSemanticJourney(options.journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_provider_response_ir",
+        artifactKind: "pi_provider_response_ir",
+        state: "unavailable",
+        reason: "provider_response_not_decoded",
+        location: providerResponseLocation,
+      });
       completeSemanticJourneyStep(
         options.journey,
         "p4.create_pi_stream",
@@ -821,8 +841,24 @@ export async function executeSemanticResponses(
       );
       throw error;
     }
+    if (!providerResponseMetadataObserved) {
+      observeSemanticJourney(options.journey, {
+        kind: "artifact_observed",
+        artifactId: "pi_provider_response_metadata",
+        artifactKind: "pi_provider_response_metadata",
+        state: "unavailable",
+        reason: "pinned_pi_adapter_did_not_publish_response_metadata",
+        location: providerResponseLocation,
+      });
+    }
     options.request.signal.throwIfAborted();
     const message = semanticResult.message;
+    observeSemanticJsonArtifact(options.journey, {
+      artifactId: "pi_provider_response_ir",
+      artifactKind: "pi_provider_response_ir",
+      value: message,
+      location: providerResponseLocation,
+    });
 
     const responseProjectionLocation = {
       phase: "lane_response_processing",

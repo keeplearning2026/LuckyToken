@@ -44,17 +44,23 @@ const ALL_CANARIES = [
 interface PersistedArtifactRow {
   readonly artifactId: string;
   readonly descriptorJson: string;
-  readonly body: Uint8Array | null;
+  readonly bodyPath: string | null;
 }
 
 async function readDiagnosticsFiles(
   directory: string,
 ): Promise<ReadonlyMap<string, Buffer>> {
   const files = new Map<string, Buffer>();
-  for (const name of await readdir(directory)) {
-    if (!name.startsWith("diagnostics-v2.sqlite3")) continue;
+  const visit = async (current: string, relative: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const entryRelative = join(relative, entry.name);
+      const entryPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath, entryRelative);
+        continue;
+      }
     try {
-      files.set(name, await readFile(join(directory, name)));
+        files.set(entryRelative, await readFile(entryPath));
     } catch (error) {
       if (
         !(error instanceof Error) ||
@@ -64,7 +70,9 @@ async function readDiagnosticsFiles(
         throw error;
       }
     }
-  }
+    }
+  };
+  await visit(directory, "");
   return files;
 }
 
@@ -77,7 +85,7 @@ function expectPhysicalRedaction(
   phase: "running" | "closed",
 ): void {
   expect.soft([...files.keys()], `${phase}: diagnostics files`).toContain(
-    "diagnostics-v2.sqlite3",
+    "diagnostics-v3.sqlite3",
   );
   const bytes = combinedBytes(files);
   expect.soft(bytes.includes(Buffer.from(SAFE_MARKER)), `${phase}: safe marker`).toBe(
@@ -103,10 +111,10 @@ function artifact(
 }
 
 describe("Request Journey failure artifact redaction", () => {
-  it("persists useful failed request evidence without writing credential canaries to SQLite", async () => {
+  it("persists useful failed request evidence without writing credential canaries to the index or artifact files", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-artifact-redaction-"));
     const diagnosticsDirectory = join(root, "diagnostics");
-    const databasePath = join(diagnosticsDirectory, "diagnostics-v2.sqlite3");
+    const databasePath = join(diagnosticsDirectory, "diagnostics-v3.sqlite3");
     let authority: DiagnosticsAuthority | undefined;
     let server: RunningTokenHttpServer | undefined;
     let providerCalls = 0;
@@ -203,7 +211,19 @@ describe("Request Journey failure artifact redaction", () => {
         handoffOutcome: { outcome: "finished", transport: "http" },
       });
       expect(journey.lane).toBeUndefined();
-      expect(journey.artifacts).toHaveLength(2);
+      expect(journey.artifacts).toHaveLength(4);
+      expect(journey.artifacts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          artifactId: "client_request_envelope",
+          state: "captured",
+          redaction: "not_required",
+        }),
+        expect.objectContaining({
+          artifactId: "client_response_envelope",
+          state: "captured",
+          redaction: "not_required",
+        }),
+      ]));
       const requestDescriptor = artifact(
         journey.artifacts,
         "client_request_wire",
@@ -248,7 +268,7 @@ describe("Request Journey failure artifact redaction", () => {
           .prepare(
             `SELECT artifact_id AS artifactId,
                     descriptor_json AS descriptorJson,
-                    body
+                    body_path AS bodyPath
              FROM request_journey_artifacts
              WHERE request_id = ?
              ORDER BY artifact_id`,
@@ -257,18 +277,18 @@ describe("Request Journey failure artifact redaction", () => {
       } finally {
         database.close();
       }
-      expect(rows).toHaveLength(2);
+      expect(rows).toHaveLength(4);
       const requestRow = rows.find(
         (row) => row.artifactId === "client_request_wire",
       );
       const responseRow = rows.find(
         (row) => row.artifactId === "client_response_wire",
       );
-      expect(requestRow?.body).not.toBeNull();
-      expect(responseRow?.body).not.toBeNull();
+      expect(requestRow?.bodyPath).not.toBeNull();
+      expect(responseRow?.bodyPath).not.toBeNull();
 
       const storedRequest = JSON.parse(
-        Buffer.from(requestRow!.body!).toString("utf8"),
+        await readFile(join(diagnosticsDirectory, requestRow!.bodyPath!), "utf8"),
       ) as Record<string, unknown>;
       expect.soft(storedRequest).toMatchObject({
         model: SAFE_MODEL,
@@ -284,7 +304,7 @@ describe("Request Journey failure artifact redaction", () => {
       expect.soft(storedRequestDescriptor.redaction).toBe("applied");
 
       const storedResponse = JSON.parse(
-        Buffer.from(responseRow!.body!).toString("utf8"),
+        await readFile(join(diagnosticsDirectory, responseRow!.bodyPath!), "utf8"),
       ) as {
         readonly type: string;
         readonly error: Readonly<{ type: string; message: string }>;

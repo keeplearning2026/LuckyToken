@@ -23,6 +23,10 @@ export interface ResponsesPiInvocation {
 export interface ResponsesPiExecutionCapabilities {
   readonly executeOperation?: ExecutionOperation;
   readonly factsSink?: ExecutionFactsSink;
+  readonly providerEvidence?: Readonly<{
+    request(payload: unknown): void;
+    response?(response: unknown): void;
+  }>;
 }
 
 export interface ResponsesPiExecutionResult<TOutcome> {
@@ -72,6 +76,11 @@ export async function executeWithResponsesPi<TOutcome>(input: {
       "Pi invocation must not supply onPayload",
     );
   }
+  if (input.pi.options.onResponse !== undefined) {
+    throw new InvalidResponsesPiExecution(
+      "Pi invocation must not supply onResponse",
+    );
+  }
   if (input.projection.initialFailure !== undefined) {
     throw new ResponsesProjectionRejected(
       input.projection.initialFailure,
@@ -101,6 +110,12 @@ export async function executeWithResponsesPi<TOutcome>(input: {
             outcomes,
           );
         }
+        try {
+          input.infrastructure.providerEvidence?.request(projected.payload);
+        } catch {
+          // Provider-wire diagnostics are fail-open and cannot reject or
+          // rewrite the protocol-owned projection result.
+        }
         return projected.payload;
       } catch (error) {
         callbackFailed = true;
@@ -113,6 +128,13 @@ export async function executeWithResponsesPi<TOutcome>(input: {
         }
         callbackFailure = new PayloadProjectionCallbackFailure(error);
         throw callbackFailure;
+      }
+    },
+    onResponse(response) {
+      try {
+        input.infrastructure.providerEvidence?.response?.(response);
+      } catch {
+        // Provider response observation is fail-open.
       }
     },
   };

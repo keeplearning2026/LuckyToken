@@ -67,6 +67,12 @@ describe("Direct Mode Request Journey", () => {
         { directory: join(root, "diagnostics") },
         root,
       ),
+      journeyCapturePolicy: {
+        snapshot: () => Object.freeze({
+          allRequestsEnabled: true,
+          failedRequestsEnabled: true,
+        }),
+      },
     });
     authorities.push(authority);
 
@@ -334,6 +340,16 @@ describe("Direct Mode Request Journey", () => {
           mediaType: "application/json",
         }),
         expect.objectContaining({
+          artifactId: "client_request_envelope",
+          artifactKind: "client_request_envelope",
+          state: "captured",
+        }),
+        expect.objectContaining({
+          artifactId: "local_outbound_request_envelope",
+          artifactKind: "local_outbound_request_envelope",
+          state: "captured",
+        }),
+        expect.objectContaining({
           artifactId: "local_outbound_request_wire",
           artifactKind: "local_outbound_request_wire",
           state: "captured",
@@ -348,6 +364,16 @@ describe("Direct Mode Request Journey", () => {
           state: "unavailable",
           mediaType: "application/json",
           reason: "response_body_read_failed",
+        }),
+        expect.objectContaining({
+          artifactId: "local_upstream_response_envelope",
+          artifactKind: "local_upstream_response_envelope",
+          state: "captured",
+        }),
+        expect.objectContaining({
+          artifactId: "client_response_envelope",
+          artifactKind: "client_response_envelope",
+          state: "captured",
         }),
         expect.objectContaining({
           artifactId: "client_response_wire",

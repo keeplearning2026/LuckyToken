@@ -23,7 +23,6 @@ async function createFixture(options: {
     configuration: parseDiagnosticsConfiguration(
       {
         directory: join(root, "diagnostics"),
-        successArtifacts: { enabled: true },
         artifactRetentionAgeMs: options.artifactRetentionAgeMs,
         maxArtifactJourneys: options.maxArtifactJourneys,
       },
@@ -31,6 +30,12 @@ async function createFixture(options: {
     ),
     runtimeId: "artifact-retention-runtime",
     now: () => now,
+    journeyCapturePolicy: {
+      snapshot: () => ({
+        allRequestsEnabled: true,
+        failedRequestsEnabled: true,
+      }),
+    },
   });
   const writeJourney = async (
     requestId: string,
