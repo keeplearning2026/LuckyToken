@@ -362,7 +362,7 @@ test(
       assert.equal(catalogWhileStopped.outcome, "ok");
 
       // 3. Complete a CommandCode API-key login while the Gateway is
-      // stopped. API-key entry is scoped to a modal card.
+      // stopped. API-key entry is immediately available in the modal card.
       await commandCodeCard
         .getByRole("button", { name: /Add .*API key/u })
         .click();
@@ -371,7 +371,6 @@ test(
       });
       await commandCodeLogin.getByLabel("Profile name").fill("Packaged primary");
       await commandCodeLogin.getByLabel("Use this Profile for new requests").check();
-      await commandCodeLogin.getByRole("button", { name: "Continue" }).click();
       const secretInput = commandCodeLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill("sk-activation-commandcode-key");
@@ -525,7 +524,6 @@ test(
       });
       await anthropicLogin.getByLabel("Profile name").fill("Packaged Anthropic");
       await anthropicLogin.getByLabel("Use this Profile for new requests").check();
-      await anthropicLogin.getByRole("button", { name: "Continue" }).click();
       const anthropicSecret = anthropicLogin.locator('input[type="password"]');
       await anthropicSecret.waitFor();
       await anthropicSecret.fill(TEST_PROVIDER_KEY);

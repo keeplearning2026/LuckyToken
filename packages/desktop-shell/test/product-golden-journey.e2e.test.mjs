@@ -538,7 +538,6 @@ test(
       const anthropicLogin = page.getByRole("dialog", { name: "Anthropic sign in" });
       await anthropicLogin.getByLabel("Profile name").fill("Golden primary");
       await anthropicLogin.getByLabel("Use this Profile for new requests").check();
-      await anthropicLogin.getByRole("button", { name: "Continue" }).click();
       const secretInput = anthropicLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill(TEST_PROVIDER_KEY);

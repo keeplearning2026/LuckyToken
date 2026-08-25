@@ -205,6 +205,7 @@ async function render(options: {
   readonly profiles?: ProfilesResult;
   readonly executeCredentialProfiles?: DesktopControlPlaneApi["executeCredentialProfiles"];
   readonly executeProviderProfileAuth?: DesktopControlPlaneApi["executeProviderProfileAuth"];
+  readonly respondAuth?: DesktopControlPlaneApi["respondAuth"];
   readonly executePublicModels?: DesktopControlPlaneApi["executePublicModels"];
   readonly onRequestJourneys?: DesktopControlPlaneApi["onRequestJourneys"];
 } = {}): Promise<void> {
@@ -220,12 +221,12 @@ async function render(options: {
           state: initial.state,
           ...(initial.options === undefined ? {} : { options: initial.options }),
         })),
+      respondAuth: options.respondAuth ?? (async () => undefined),
       executeCatalog: async () => catalog(),
       executePublicModels:
         options.executePublicModels ?? (async () => publicModels()),
       onRequestJourneys:
         options.onRequestJourneys ?? (() => () => undefined),
-      respondAuth: async () => undefined,
     },
   });
   await act(async () => {
@@ -629,19 +630,33 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).not.toContain("Production role");
   });
 
-  it("adds a named Profile through the typed Profile auth command", async () => {
-    const executeProviderProfileAuth = vi.fn(async () => managedProfiles());
-    await render({ executeProviderProfileAuth });
+  it("shows API key entry immediately and adds a named Profile with one submit", async () => {
+    const respondAuth = vi.fn(async () => undefined);
+    const executeProviderProfileAuth = vi.fn(async (_command, onInteraction) => {
+      onInteraction?.({
+        type: "prompt",
+        promptId: "api-key-prompt",
+        kind: "secret",
+        message: "Enter API key",
+      });
+      await Promise.resolve();
+      return managedProfiles();
+    });
+    await render({ executeProviderProfileAuth, respondAuth });
 
     await clickAria("Add AWS credentials or bearer token");
     const name = container.querySelector('input[maxlength="64"]');
     const note = container.querySelector('textarea[maxlength="200"]');
+    const apiKey = container.querySelector('input[type="password"]');
     expect(name).toBeInstanceOf(HTMLInputElement);
     expect(note).toBeInstanceOf(HTMLTextAreaElement);
+    expect(apiKey).toBeInstanceOf(HTMLInputElement);
+    expect(executeProviderProfileAuth).not.toHaveBeenCalled();
     expect((name as HTMLInputElement).value).toBe("Profile 1");
     await act(async () => {
       setInput(name as HTMLInputElement, "Production role");
       setInput(note as HTMLTextAreaElement, "Release traffic");
+      setInput(apiKey as HTMLInputElement, "sk-direct-entry");
     });
     await click("Continue");
 
@@ -657,6 +672,11 @@ describe("Providers Profile product slice", () => {
       },
       expect.any(Function),
     );
+    expect(respondAuth).toHaveBeenCalledWith({
+      type: "prompt_response",
+      promptId: "api-key-prompt",
+      value: "sk-direct-entry",
+    });
   });
 
   it("sends local lifecycle commands with the authoritative Provider revision", async () => {

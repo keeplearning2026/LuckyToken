@@ -95,6 +95,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   const [externalInteraction, setExternalInteraction] = useState<ExternalAuthEvent>();
   const [interaction, setInteraction] = useState<InlineAuthEvent>();
   const [promptValue, setPromptValue] = useState("");
+  const [apiKeyValue, setApiKeyValue] = useState("");
   const [profileName, setProfileName] = useState("");
   const [profileNote, setProfileNote] = useState("");
   const [useNow, setUseNow] = useState(true);
@@ -299,6 +300,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
     setExternalInteraction(undefined);
     setInteraction(undefined);
     setPromptValue("");
+    setApiKeyValue("");
   };
 
   const openAdd = (
@@ -340,7 +342,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
     clearAuthInteraction();
   };
 
-  const startAuth = async (): Promise<void> => {
+  const startAuth = async (initialApiKey?: string): Promise<void> => {
     const modal = authModal;
     if (modal === undefined) return;
     const provider = providers.find(
@@ -365,6 +367,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
     setAuthOutcome(undefined);
     clearAuthInteraction();
     setNotice(undefined);
+    let pendingApiKey = initialApiKey;
     try {
       const result = await api.control.executeProviderProfileAuth(
         modal.mode === "add"
@@ -393,6 +396,20 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
           if (event.type === "device_code") {
             setExternalInteraction(event);
             void api.platform.openExternal(event.verificationUri);
+            return;
+          }
+          if (
+            event.type === "prompt" &&
+            event.kind === "secret" &&
+            pendingApiKey !== undefined
+          ) {
+            const value = pendingApiKey;
+            pendingApiKey = undefined;
+            void api.control.respondAuth({
+              type: "prompt_response",
+              promptId: event.promptId,
+              value,
+            });
             return;
           }
           setInteraction(event);
@@ -1653,7 +1670,9 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void startAuth();
+                    void startAuth(
+                      authModal.authType === "api_key" ? apiKeyValue : undefined,
+                    );
                   }}
                 >
                   {authModal.mode === "add" ? (
@@ -1663,7 +1682,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
                         <input
                           value={profileName}
                           maxLength={64}
-                          autoFocus
+                          autoFocus={authModal.authType !== "api_key"}
                           onChange={(event) => setProfileName(event.currentTarget.value)}
                         />
                       </label>
@@ -1679,6 +1698,18 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
                   ) : (
                     <p>Reconnect {profileName} using {authMethod?.authMethodLabel}.</p>
                   )}
+                  {authModal.authType === "api_key" ? (
+                    <label>
+                      <span>API key</span>
+                      <input
+                        type="password"
+                        value={apiKeyValue}
+                        autoFocus
+                        autoComplete="off"
+                        onChange={(event) => setApiKeyValue(event.currentTarget.value)}
+                      />
+                    </label>
+                  ) : null}
                   <label>
                     <input
                       type="checkbox"
@@ -1690,7 +1721,10 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
                   <div className="button-row">
                     <button
                       type="submit"
-                      disabled={authModal.mode === "add" && profileName.trim().length === 0}
+                      disabled={
+                        (authModal.mode === "add" && profileName.trim().length === 0) ||
+                        (authModal.authType === "api_key" && apiKeyValue.length === 0)
+                      }
                     >
                       {authModal.mode === "add" ? "Continue" : "Reconnect"}
                     </button>
@@ -1703,6 +1737,9 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
               <>
                 {authModal.authType === "oauth" && externalInteraction === undefined && interaction === undefined ? (
                   <p>Opening your browser…</p>
+                ) : null}
+                {authModal.authType === "api_key" && externalInteraction === undefined && interaction === undefined ? (
+                  <p>Connecting…</p>
                 ) : null}
 
                 {externalInteraction?.type === "auth_url" ? (
