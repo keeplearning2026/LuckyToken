@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalyticsQuery, StatusSnapshot } from "@luckytoken/application-control-plane/control-plane";
+import type { AnalyticsManagementResult, AnalyticsQuery, StatusSnapshot } from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
@@ -135,7 +135,12 @@ describe("Overview analytics", () => {
     } });
     await act(async () => root.render(<App api={api} />));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(queryRequestJourneys).toHaveBeenCalledWith({ limit: 1_000 });
+    expect(queryRequestJourneys).toHaveBeenCalledWith({
+      limit: 1_000,
+      from: new Date(2026, 7, 18, 0, 0).getTime(),
+      to: new Date(2026, 7, 19, 0, 0).getTime(),
+      excludeOperations: ["unsupported_transport"],
+    });
     expect(analyticsQueries.some((query) => query.command === "summary")).toBe(true);
   });
 
@@ -226,5 +231,98 @@ describe("Overview analytics", () => {
 
     expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("1");
     expect(getAnalytics.mock.calls.filter(([query]) => query.command === "summary")).toHaveLength(2);
+  });
+
+  it("repairs a missed live event from the authoritative store on the reconciliation interval", async () => {
+    let totalRequests = 0;
+    const getAnalytics = vi.fn(async (query: AnalyticsQuery) =>
+      query.command === "options"
+        ? { version: 2 as const, command: "options" as const, providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] }
+        : { version: 2 as const, command: "summary" as const, totals: { total: totalRequests, success: totalRequests, failed: 0, aborted: 0, other: 0, pending: 0, successRate: totalRequests === 0 ? 0 : 1, failureRate: 0, abortRate: 0, participating: totalRequests, totalRequests, excluded: 0, inputTokens: totalRequests * 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: totalRequests * 4, normalizedTokenTotal: totalRequests * 14, cacheHitNumerator: 0, cacheHitDenominator: totalRequests * 10 } },
+    );
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
+      onRequestJourneys: () => () => undefined,
+      getAnalytics,
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("0");
+
+    totalRequests = 1;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("1");
+    expect(getAnalytics.mock.calls.filter(([query]) => query.command === "summary")).toHaveLength(2);
+  });
+
+  it("coalesces refreshes and never publishes an obsolete synchronization", async () => {
+    let resolveFirstSummary: ((value: AnalyticsManagementResult) => void) | undefined;
+    let summaryCalls = 0;
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
+      getAnalytics: (query) => {
+        if (query.command === "options") {
+          return Promise.resolve({ version: 2, command: "options", providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] });
+        }
+        summaryCalls += 1;
+        const result = (total: number) => ({ version: 2 as const, command: "summary" as const, totals: { total, success: total, failed: 0, aborted: 0, other: 0, pending: 0, successRate: total === 0 ? 0 : 1, failureRate: 0, abortRate: 0, participating: total, totalRequests: total, excluded: 0, inputTokens: total, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: total, normalizedTokenTotal: total * 2, cacheHitNumerator: 0, cacheHitDenominator: total } });
+        if (summaryCalls === 1) {
+          return new Promise((resolve) => { resolveFirstSummary = resolve; });
+        }
+        return Promise.resolve(result(2));
+      },
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await act(async () => { await Promise.resolve(); });
+    const refresh = container.querySelector('button[aria-label="Refresh overview"]') as HTMLButtonElement;
+    await act(async () => {
+      refresh.click();
+      resolveFirstSummary?.({ version: 2, command: "summary", totals: { total: 1, success: 1, failed: 0, aborted: 0, other: 0, pending: 0, successRate: 1, failureRate: 0, abortRate: 0, participating: 1, totalRequests: 1, excluded: 0, inputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1, normalizedTokenTotal: 2, cacheHitNumerator: 0, cacheHitDenominator: 1 } });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("2");
+    expect(summaryCalls).toBe(2);
+  });
+
+  it("keeps the last successful analytics snapshot visible when reconciliation fails", async () => {
+    let unavailable = false;
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
+      getAnalytics: async (query) => unavailable
+        ? { outcome: "unavailable", error: { code: "diagnostics_unavailable", classification: "diagnostics_storage_unavailable", message: "Diagnostics storage is unavailable" } }
+        : query.command === "options"
+          ? { version: 2, command: "options", providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] }
+          : { version: 2, command: "summary", totals: { total: 3, success: 3, failed: 0, aborted: 0, other: 0, pending: 0, successRate: 1, failureRate: 0, abortRate: 0, participating: 3, totalRequests: 3, excluded: 0, inputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 15, normalizedTokenTotal: 45, cacheHitNumerator: 0, cacheHitDenominator: 30 } },
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("3");
+
+    unavailable = true;
+    await act(async () => {
+      (container.querySelector('button[aria-label="Refresh overview"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("3");
+    expect(container.textContent).toContain("Request analytics are temporarily unavailable.");
   });
 });

@@ -1,12 +1,11 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, SlidersHorizontal } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, RefreshCw, SlidersHorizontal } from "lucide-react";
 
 import {
   formatPercent,
   formatTimestamp,
   formatTokenCount,
   type AnalyticsFilter,
-  type AnalyticsOptionsResult,
   type AnalyticsSummary,
   type LuckyTokenDesktopApi,
   type RequestJourneyRecord,
@@ -18,25 +17,7 @@ import {
   REQUEST_COLUMN_DEFINITIONS,
   totalRequestColumnWidth,
 } from "./request-column-widths.js";
-
-const REQUEST_PAGE_SIZE = 1_000;
-
-async function queryAllRequestJourneys(api: LuckyTokenDesktopApi): Promise<readonly RequestJourneySummary[] | "unavailable"> {
-  const records: RequestJourneySummary[] = [];
-  let afterId: number | undefined;
-  for (;;) {
-    const response = await api.control.queryRequestJourneys({
-      limit: REQUEST_PAGE_SIZE,
-      ...(afterId === undefined ? {} : { afterId }),
-    });
-    if (response.outcome === "unavailable") return "unavailable";
-    records.push(...response.result.records);
-    const newest = response.result.records.at(-1)?.id;
-    if (!response.result.hasMore || newest === undefined || newest === afterId) break;
-    afterId = newest;
-  }
-  return records;
-}
+import { useOverviewReadModel } from "./overview-read-model.js";
 
 interface OverviewFilters {
   readonly from: number;
@@ -75,15 +56,6 @@ function inputDateTime(epochMs: number): string {
 function parseInputDateTime(value: string): number | undefined {
   const epochMs = new Date(value).getTime();
   return value.length > 0 && Number.isFinite(epochMs) ? epochMs : undefined;
-}
-
-function mergeSummaries(
-  current: readonly RequestJourneySummary[],
-  incoming: readonly RequestJourneySummary[],
-): RequestJourneySummary[] {
-  const byId = new Map(current.map((record) => [record.id, record]));
-  for (const record of incoming) byId.set(record.id, record);
-  return [...byId.values()].sort((left, right) => right.id - left.id);
 }
 
 function displayOutcome(outcome: RequestJourneySummary["outcome"]): string {
@@ -160,16 +132,19 @@ function RequestUsageCells({ record }: { readonly record: RequestJourneySummary 
     </>;
   }
   const usage = record.usage;
+  const input = formatTokenCount(usage.inputTokens);
+  const cacheRead = formatTokenCount(usage.cacheReadTokens);
+  const output = formatTokenCount(usage.outputTokens);
   return <>
-    <td className="request-column request-column-input">{formatTokenCount(usage.inputTokens)}</td>
-    <td className="request-column request-column-cacheRead">{formatTokenCount(usage.cacheReadTokens)}</td>
+    <td className="request-column request-column-input" title={input}>{input}</td>
+    <td className="request-column request-column-cacheRead" title={cacheRead}>{cacheRead}</td>
     {usage.cacheHitRate === undefined
       ? <UnavailableUsageCell column="hit" message="Cache hit is unavailable because no input or cache-read tokens were reported." />
-      : <td className="request-column request-column-hit">{formatPercent(usage.cacheHitRate)}</td>}
-    <td className="request-column request-column-output">{formatTokenCount(usage.outputTokens)}</td>
+      : <td className="request-column request-column-hit" title={formatPercent(usage.cacheHitRate)}>{formatPercent(usage.cacheHitRate)}</td>}
+    <td className="request-column request-column-output" title={output}>{output}</td>
     {usage.outputTokensPerSecond === undefined
       ? <UnavailableUsageCell column="tokenSpeed" message="Token speed is unavailable because execution timing was incomplete." />
-      : <td className="request-column request-column-tokenSpeed">{formatTokenSpeed(usage.outputTokensPerSecond)}</td>}
+      : <td className="request-column request-column-tokenSpeed" title={formatTokenSpeed(usage.outputTokensPerSecond)}>{formatTokenSpeed(usage.outputTokensPerSecond)}</td>}
   </>;
 }
 
@@ -440,13 +415,8 @@ function SummaryCards({ summary }: { readonly summary: AnalyticsSummary | undefi
 export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTokenDesktopApi; readonly backendAvailable: boolean }) {
   const [filters, setFilters] = useState<OverviewFilters>(defaultFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [summary, setSummary] = useState<AnalyticsSummary>();
-  const [options, setOptions] = useState<AnalyticsOptionsResult>();
-  const [records, setRecords] = useState<readonly RequestJourneySummary[]>([]);
   const [details, setDetails] = useState<Readonly<Record<string, RequestJourneyRecord | "unavailable">>>({});
   const [expandedRequestId, setExpandedRequestId] = useState<string>();
-  const [historyUnavailable, setHistoryUnavailable] = useState(false);
-  const [analyticsUnavailable, setAnalyticsUnavailable] = useState(false);
   const [columnWidths] = useState(() => loadRequestColumnWidths(getRequestColumnStorage()));
   const validRange = filters.from < filters.to;
   const analyticsFilters = useMemo<AnalyticsFilter | undefined>(
@@ -463,6 +433,20 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTok
     },
     [filters.model, filters.outcome, filters.profile, filters.protocol, filters.provider, filters.session],
   );
+  const {
+    analyticsUnavailable,
+    historyUnavailable,
+    options,
+    records,
+    refresh,
+    refreshing,
+    summary,
+  } = useOverviewReadModel(api, {
+    enabled: backendAvailable && validRange,
+    from: filters.from,
+    to: filters.to,
+    ...(analyticsFilters === undefined ? {} : { filters: analyticsFilters }),
+  });
   const filteredRecords = useMemo(
     () => records.filter((record) =>
       record.createdAt >= filters.from &&
@@ -475,50 +459,6 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTok
       (filters.outcome === "" || record.outcome === filters.outcome)),
     [filters.from, filters.model, filters.outcome, filters.profile, filters.protocol, filters.provider, filters.session, filters.to, records],
   );
-
-  useEffect(() => {
-    if (!validRange || !backendAvailable) { setSummary(undefined); return; }
-    let active = true;
-    void api.control.getAnalytics({ version: 2, command: "summary", from: filters.from, to: filters.to, ...(analyticsFilters === undefined ? {} : { filters: analyticsFilters }) }).then(
-      (result) => {
-        if (!active) return;
-        if ("outcome" in result) { setAnalyticsUnavailable(true); setSummary(undefined); return; }
-        setAnalyticsUnavailable(false);
-        if (result.command === "summary") setSummary(result.totals);
-      },
-      () => { if (active) setSummary(undefined); },
-    );
-    return () => { active = false; };
-  }, [analyticsFilters, api, backendAvailable, filters.from, filters.to, validRange]);
-
-  useEffect(() => {
-    if (!validRange || !backendAvailable) { setOptions(undefined); return; }
-    let active = true;
-    void api.control.getAnalytics({ version: 2, command: "options", from: filters.from, to: filters.to }).then(
-      (result) => { if (active && !("outcome" in result) && result.command === "options") setOptions(result); },
-      () => { if (active) setOptions(undefined); },
-    );
-    return () => { active = false; };
-  }, [api, backendAvailable, filters.from, filters.to, validRange]);
-
-  useEffect(() => {
-    if (!backendAvailable) { setRecords([]); setHistoryUnavailable(false); return; }
-    let active = true;
-    const observed = new Map<number, RequestJourneySummary>();
-    setRecords([]);
-    setHistoryUnavailable(false);
-    const unsubscribe = api.control.onRequestJourneys((record) => {
-      if (!active) return;
-      observed.set(record.id, record);
-      setRecords((current) => mergeSummaries(current, [record]));
-    });
-    void queryAllRequestJourneys(api).then((response) => {
-      if (!active) return;
-      if (response === "unavailable") { setHistoryUnavailable(true); return; }
-      setRecords(mergeSummaries(response, [...observed.values()]));
-    }, () => { if (active) setHistoryUnavailable(true); });
-    return () => { active = false; unsubscribe(); };
-  }, [api, backendAvailable]);
 
   const toggleDetails = async (requestId: string): Promise<void> => {
     if (expandedRequestId === requestId) { setExpandedRequestId(undefined); return; }
@@ -537,7 +477,8 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTok
     {summary !== undefined && summary.excluded > 0 ? <p className="overview-usage-exclusion" role="status">{summary.excluded} {summary.excluded === 1 ? "request does" : "requests do"} not have complete terminal usage and {summary.excluded === 1 ? "was" : "were"} excluded from usage totals.</p> : null}
     {analyticsUnavailable ? <p className="error-text">Request analytics are temporarily unavailable.</p> : null}
     <section className="overview-requests" aria-label="Requests">
-      <div className="overview-requests-toolbar"><h2>Requests</h2><button type="button" className={`overview-filter-toggle${filtersOpen ? " active" : ""}`} aria-label={filtersOpen ? "Hide overview filters" : "Show overview filters"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((current) => !current)}><SlidersHorizontal size={17} aria-hidden="true" /></button></div>
+      <div className="overview-requests-toolbar"><h2>Requests</h2><div className="overview-toolbar-actions"><button type="button" className="overview-filter-toggle" aria-label="Refresh overview" title="Refresh overview" disabled={!backendAvailable || !validRange} onClick={refresh}><RefreshCw className={refreshing ? "rotating" : undefined} size={17} aria-hidden="true" /></button><button type="button" className={`overview-filter-toggle${filtersOpen ? " active" : ""}`} aria-label={filtersOpen ? "Hide overview filters" : "Show overview filters"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((current) => !current)}><SlidersHorizontal size={17} aria-hidden="true" /></button></div></div>
+      {historyUnavailable && records.length > 0 ? <p className="error-text" role="status">Request history is temporarily unavailable. Showing the last successful snapshot.</p> : null}
       {filtersOpen ? <div className="overview-filters" aria-label="Overview filters">
         <label className="overview-filter-field overview-filter-time"><span>From</span><input type="datetime-local" aria-label="From time" value={inputDateTime(filters.from)} onChange={(event) => { const value = parseInputDateTime(event.currentTarget.value); if (value !== undefined) setFilters((current) => ({ ...current, from: value })); }} /></label>
         <label className="overview-filter-field overview-filter-time"><span>To</span><input type="datetime-local" aria-label="To time" value={inputDateTime(filters.to)} onChange={(event) => { const value = parseInputDateTime(event.currentTarget.value); if (value !== undefined) setFilters((current) => ({ ...current, to: value })); }} /></label>
@@ -551,15 +492,20 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTok
       <div className="overview-table-scroll"><table className="overview-request-table" style={{ width: totalRequestColumnWidth(columnWidths) }}>
         <colgroup>{REQUEST_COLUMN_DEFINITIONS.map((column) => <col key={column.id} data-request-column={column.id} style={{ width: columnWidths[column.id] }} />)}</colgroup>
         <thead><tr>{REQUEST_COLUMN_DEFINITIONS.map((column) => <th className={`request-column request-column-${column.id}`} key={column.id} data-request-column-header={column.id}>{column.label}</th>)}</tr></thead>
-        <tbody>{historyUnavailable ? <tr><td className="overview-empty" colSpan={12}>Request history is temporarily unavailable.</td></tr> : filteredRecords.length === 0 ? <tr><td className="overview-empty" colSpan={12}>No requests</td></tr> : filteredRecords.map((record) => {
+        <tbody>{historyUnavailable && records.length === 0 ? <tr><td className="overview-empty" colSpan={12}>Request history is temporarily unavailable.</td></tr> : filteredRecords.length === 0 ? <tr><td className="overview-empty" colSpan={12}>No requests</td></tr> : filteredRecords.map((record) => {
           const expanded = expandedRequestId === record.requestId;
           const detail = details[record.requestId];
           const duration = record.closedAt === undefined ? "-" : `${Math.max(0, record.closedAt - record.createdAt)} ms`;
+          const startTime = formatTimestamp(record.createdAt);
+          const session = record.clientSessionId ?? record.effectiveSessionId ?? "-";
+          const protocol = record.protocol ?? "-";
+          const model = record.requestedModel ?? "-";
+          const status = displayStatus(record);
           return <Fragment key={record.id}>
             <tr data-request-id={record.requestId} className={expanded ? "expanded" : undefined}>
-              <td className="request-column request-column-startTime"><button type="button" className="request-disclosure" aria-label={`${expanded ? "Hide" : "Show"} details for request ${record.requestId}`} aria-expanded={expanded} onClick={() => void toggleDetails(record.requestId)}>{expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}<span>{formatTimestamp(record.createdAt)}</span></button></td>
-              <td className="request-column request-column-session">{record.clientSessionId ?? record.effectiveSessionId ?? "-"}</td><td className="request-column request-column-requestId"><code title={record.requestId}>{record.requestId}</code></td><td className="request-column request-column-protocol">{record.protocol ?? "-"}</td>
-              <RequestUsageCells record={record} /><td className="request-column request-column-time">{duration}</td><td className="request-column request-column-model">{record.requestedModel ?? "-"}</td><td className="request-column request-column-status"><span className={`overview-status ${statusTone(record)}`} title={`Request outcome: ${displayOutcome(record.outcome)}`} aria-label={`${displayStatus(record)}; request outcome ${displayOutcome(record.outcome)}`}><span aria-hidden="true" />{displayStatus(record)}</span></td>
+              <td className="request-column request-column-startTime" title={startTime}><button type="button" className="request-disclosure" aria-label={`${expanded ? "Hide" : "Show"} details for request ${record.requestId}`} aria-expanded={expanded} onClick={() => void toggleDetails(record.requestId)}>{expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}<span>{startTime}</span></button></td>
+              <td className="request-column request-column-session" title={session}>{session}</td><td className="request-column request-column-requestId" title={record.requestId}><code>{record.requestId}</code></td><td className="request-column request-column-protocol" title={protocol}>{protocol}</td>
+              <RequestUsageCells record={record} /><td className="request-column request-column-time" title={duration}>{duration}</td><td className="request-column request-column-model" title={model}>{model}</td><td className="request-column request-column-status" title={status}><span className={`overview-status ${statusTone(record)}`} aria-label={`${status}; request outcome ${displayOutcome(record.outcome)}`}><span aria-hidden="true" />{status}</span></td>
             </tr>
             {expanded ? <tr className="overview-detail-row"><td colSpan={12}>
               {detail === undefined ? <div className="request-detail-loading"><p>Loading request details…</p></div> : detail === "unavailable" ? <div className="request-detail-loading"><p className="error-text">Request details are temporarily unavailable.</p></div> : <RequestDetailPanel record={detail} />}

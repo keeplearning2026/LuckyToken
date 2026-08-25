@@ -1164,7 +1164,16 @@ export function decodeRequestJourneyQuery(
   value: unknown,
 ): RequestJourneyQuery | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value) || !hasOnlyKeys(value, ["afterId", "limit"])) {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "afterId",
+      "limit",
+      "from",
+      "to",
+      "excludeOperations",
+    ])
+  ) {
     return undefined;
   }
   if (
@@ -1181,9 +1190,33 @@ export function decodeRequestJourneyQuery(
   ) {
     return undefined;
   }
+  if (
+    (value.from !== undefined && !isNonNegativeSafeInteger(value.from)) ||
+    (value.to !== undefined && !isNonNegativeSafeInteger(value.to)) ||
+    (value.from !== undefined &&
+      value.to !== undefined &&
+      (value.from as number) >= (value.to as number)) ||
+    (value.excludeOperations !== undefined &&
+      (!Array.isArray(value.excludeOperations) ||
+        value.excludeOperations.length > OPERATIONS.size ||
+        value.excludeOperations.some(
+          (operation) => !OPERATIONS.has(operation as RequestJourneyOperationCandidate),
+        )))
+  ) {
+    return undefined;
+  }
   return Object.freeze({
     ...(value.afterId === undefined ? {} : { afterId: value.afterId as number }),
     ...(value.limit === undefined ? {} : { limit: value.limit as number }),
+    ...(value.from === undefined ? {} : { from: value.from as number }),
+    ...(value.to === undefined ? {} : { to: value.to as number }),
+    ...(value.excludeOperations === undefined
+      ? {}
+      : {
+          excludeOperations: Object.freeze(
+            value.excludeOperations as RequestJourneyOperationCandidate[],
+          ),
+        }),
   });
 }
 

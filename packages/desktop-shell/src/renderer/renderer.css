@@ -100,8 +100,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .overview-requests { min-width: 0; position: relative; }
 .overview-requests-toolbar { height: 32px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .overview-requests-toolbar h2 { margin: 0; font-size: 14px; font-weight: 650; color: var(--text-secondary); }
+.overview-toolbar-actions { display: flex; align-items: center; gap: 4px; }
 .overview-filter-toggle { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--text-secondary); padding: 0; }
 .overview-filter-toggle:hover, .overview-filter-toggle.active { color: var(--text); background: var(--surface-muted); }
+.overview-filter-toggle:disabled { cursor: default; opacity: .4; }
+.overview-filter-toggle .rotating { animation: overview-refresh-spin 900ms linear infinite; }
+@keyframes overview-refresh-spin { to { transform: rotate(360deg); } }
 .overview-filters { display: grid; grid-template-columns: repeat(4, minmax(145px, 1fr)); gap: 12px; margin: 8px 0 14px; padding: 14px 16px; border: 0; border-radius: 14px; background: var(--surface-soft); }
 .overview-filter-field { min-width: 0; display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; }
 .overview-filter-field input, .overview-filter-field select { min-width: 0; width: 100%; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); color: var(--text); padding: 7px 8px; }

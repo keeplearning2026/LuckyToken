@@ -343,6 +343,12 @@ export interface RequestJourneyQuery {
   readonly afterId?: number;
   /** Defaults to 100 at the authority; the wire accepts 1..1,000. */
   readonly limit?: number;
+  /** Inclusive admission-time bound. */
+  readonly from?: number;
+  /** Exclusive admission-time bound. */
+  readonly to?: number;
+  /** Stored operations omitted from this read projection. */
+  readonly excludeOperations?: readonly RequestJourneyOperationCandidate[];
 }
 
 export interface RequestJourneyQueryResult {

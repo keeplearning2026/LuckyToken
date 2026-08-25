@@ -587,12 +587,19 @@ test(
       );
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
       await page.getByRole("button", { name: "Overview", exact: true }).click();
+      const refreshOverview = page.getByRole("button", { name: "Refresh overview" });
+      await refreshOverview.waitFor();
+      await refreshOverview.click();
       const firstRow = page.locator(`[data-request-id="${firstRequestId}"]`);
       await firstRow.waitFor();
       await firstRow
         .getByRole("button", { name: `Show details for request ${firstRequestId}` })
         .click();
       await firstRow.locator(".request-column-model").getByText(TEST_ALIAS, { exact: true }).waitFor();
+      assert.equal(
+        await firstRow.locator(".request-column-model").getAttribute("title"),
+        TEST_ALIAS,
+      );
       const firstDetail = firstRow.locator("xpath=following-sibling::tr[1]");
       await firstDetail
         .getByText(`anthropic / ${TEST_MODEL}`, { exact: true })

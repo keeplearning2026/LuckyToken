@@ -415,4 +415,35 @@ describe("Overview Request Journeys", () => {
     expect(container.textContent).toContain("Request history is temporarily unavailable.");
     expect(container.textContent).not.toContain("No requests");
   });
+
+  it("keeps the last successful request snapshot visible when reconciliation fails", async () => {
+    let unavailable = false;
+    const completed = summary(17, "success", {
+      completeness: "complete",
+      inputTokens: 10,
+      cacheReadTokens: 0,
+      outputTokens: 5,
+    });
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => unavailable
+        ? { outcome: "unavailable", error: { code: "diagnostics_unavailable", classification: "diagnostics_storage_unavailable", message: "Diagnostics storage is unavailable" } }
+        : { outcome: "ok", result: { records: [completed], hasMore: false } },
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    expect(container.querySelector('tr[data-request-id="request-17"]')).not.toBeNull();
+
+    unavailable = true;
+    await act(async () => {
+      (container.querySelector('button[aria-label="Refresh overview"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('tr[data-request-id="request-17"]')).not.toBeNull();
+    expect(container.textContent).toContain("Showing the last successful snapshot.");
+  });
 });

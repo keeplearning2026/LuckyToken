@@ -873,6 +873,7 @@ function diagnosticsWorkerMain(): void {
          FROM request_journeys
         WHERE (? IS NULL OR accepted_at >= ?)
           AND (? IS NULL OR accepted_at < ?)
+          AND operation <> 'unsupported_transport'
           AND record_id > ?
         ORDER BY record_id
         LIMIT ?`,
@@ -1628,9 +1629,38 @@ function diagnosticsWorkerMain(): void {
               : 100,
           ),
         );
+        const from =
+          typeof message.query?.from === "number" ? message.query.from : undefined;
+        const to =
+          typeof message.query?.to === "number" ? message.query.to : undefined;
+        const excludeOperations = Array.isArray(message.query?.excludeOperations)
+          ? message.query.excludeOperations.filter(
+              (operation): operation is string => typeof operation === "string",
+            )
+          : [];
+        const clauses = ["r.id > ?"];
+        const parameters: Array<number | string> = [afterId];
+        if (from !== undefined) {
+          clauses.push("j.accepted_at >= ?");
+          parameters.push(from);
+        }
+        if (to !== undefined) {
+          clauses.push("j.accepted_at < ?");
+          parameters.push(to);
+        }
+        if (excludeOperations.length > 0) {
+          clauses.push(
+            `j.operation NOT IN (${excludeOperations.map(() => "?").join(", ")})`,
+          );
+          parameters.push(...excludeOperations);
+        }
         const rows = database
-          .prepare(`${summarySelect} WHERE r.id > ? ORDER BY r.id LIMIT ?`)
-          .all(afterId, limit + 1) as Array<Parameters<typeof projectSummary>[0]>;
+          .prepare(
+            `${summarySelect} WHERE ${clauses.join(" AND ")} ORDER BY r.id LIMIT ?`,
+          )
+          .all(...parameters, limit + 1) as Array<
+            Parameters<typeof projectSummary>[0]
+          >;
         port.postMessage({
           type: "result",
           commandId: message.commandId,

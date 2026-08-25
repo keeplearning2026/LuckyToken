@@ -565,6 +565,10 @@ test(
         .getByRole("button", { name: `Show details for request ${requestId}` })
         .click();
       await row.locator(".request-column-model").getByText(CUSTOM_ALIAS, { exact: true }).waitFor();
+      assert.equal(
+        await row.locator(".request-column-model").getAttribute("title"),
+        CUSTOM_ALIAS,
+      );
       const detail = row.locator("xpath=following-sibling::tr[1]");
       await detail
         .getByText(`anthropic / ${TEST_MODEL}`, { exact: true })

@@ -454,6 +454,15 @@ describe("Request Journey Worker analytics projection", () => {
 
       const analytics = authority as unknown as FutureAnalyticsAuthority;
       const range = { from: at(10), to: at(15) } as const;
+      const overviewProjection = await authority.queryRequestJourneys({
+        limit: 100,
+        from: at(14),
+        to: at(15),
+        excludeOperations: ["unsupported_transport"],
+      });
+      expect(overviewProjection.records.map((record) => record.requestId)).toEqual([
+        "82000000-0000-4000-8000-000000000005",
+      ]);
       const totalsResult = requireSummary(
         await analytics.getAnalytics({
           version: 2,

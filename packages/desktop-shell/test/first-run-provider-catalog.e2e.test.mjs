@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -17,6 +18,66 @@ import { resolvePackagedExecutable } from "./support/packaged-executable.mjs";
 const desktopRoot = resolve(import.meta.dirname, "..");
 const delay = (milliseconds) =>
   new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+
+async function freePort() {
+  const server = createServer();
+  await new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    server.close();
+    throw new Error("failed to allocate isolated E2E TCP port");
+  }
+  const port = address.port;
+  await new Promise((resolvePromise, reject) => {
+    server.close((error) => error === undefined ? resolvePromise() : reject(error));
+  });
+  return port;
+}
+
+async function writeIsolatedFirstUseConfig(stateRoot, port) {
+  await mkdir(stateRoot, { recursive: true });
+  await writeFile(
+    join(stateRoot, "config.json"),
+    `${JSON.stringify({
+      schemaVersion: "luckytoken-config-v2",
+      server: { port },
+      clientProtocols: {
+        "anthropic-messages": {
+          conversion: {
+            request: { unknownContent: "error", localCacheControl: "ignore" },
+            response: { unknownPiContent: "error" },
+          },
+        },
+        "openai-responses": {
+          stateFile: "state/openai-responses.json",
+          conversion: {
+            request: {
+              privilegedMessages: "first",
+              unknownInputItem: "error",
+              orphanToolOutput: "error",
+              unresolvedToolCall: "xrepair",
+              futureReasoningEffort: "max",
+            },
+            response: { unknownPiContent: "error", storeFalse: "honor" },
+          },
+        },
+      },
+      diagnostics: {
+        directory: "state/request-diagnostics",
+        successArtifacts: { enabled: false },
+        maxJourneyArtifactBytes: 4194304,
+        artifactRetentionAgeMs: 604800000,
+        maxArtifactJourneys: 1000,
+      },
+      pi: { directory: "pi" },
+      limits: { maxRequestBytes: 1048576, requestTimeoutMs: 120000 },
+    }, null, 2)}\n`,
+    "utf8",
+  );
+}
 
 async function waitForEndpoint(descriptorPath) {
   let lastError;
@@ -78,7 +139,7 @@ async function openWindow(application) {
 }
 
 test(
-  "a blank installed-user profile starts and shows the built-in Provider catalog",
+  "an isolated fresh installed-user profile starts and shows the built-in Provider catalog",
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
     const executablePath = await resolvePackagedExecutable(desktopRoot);
@@ -86,9 +147,11 @@ test(
     const appData = join(home, "AppData", "Roaming");
     const localAppData = join(home, "AppData", "Local");
     const stateRoot = join(home, ".luckytoken");
+    const dataPlanePort = await freePort();
     await Promise.all([
       mkdir(appData, { recursive: true }),
       mkdir(localAppData, { recursive: true }),
+      writeIsolatedFirstUseConfig(stateRoot, dataPlanePort),
     ]);
 
     let application;
@@ -125,7 +188,7 @@ test(
       const config = JSON.parse(
         await readFile(join(stateRoot, "config.json"), "utf8"),
       );
-      assert.deepEqual(config.server, { port: 3000 });
+      assert.deepEqual(config.server, { port: dataPlanePort });
       assert.equal("host" in config.server, false);
       assert.equal(
         "authFile" in config.clientProtocols["anthropic-messages"],

@@ -276,8 +276,20 @@ describe("unified request diagnostics Control Plane contract", () => {
   it("strictly decodes the bounded Request Journey query", () => {
     expect(decodeRequestJourneyQuery(undefined)).toBeUndefined();
     expect(
-      decodeRequestJourneyQuery({ afterId: 7, limit: 25 }),
-    ).toEqual({ afterId: 7, limit: 25 });
+      decodeRequestJourneyQuery({
+        afterId: 7,
+        limit: 25,
+        from: 100,
+        to: 200,
+        excludeOperations: ["unsupported_transport"],
+      }),
+    ).toEqual({
+      afterId: 7,
+      limit: 25,
+      from: 100,
+      to: 200,
+      excludeOperations: ["unsupported_transport"],
+    });
 
     expect(decodeRequestJourneyQuery({ limit: 0 })).toBeUndefined();
     expect(
@@ -287,6 +299,10 @@ describe("unified request diagnostics Control Plane contract", () => {
     ).toBeUndefined();
     expect(
       decodeRequestJourneyQuery({ afterId: 7, limit: 25, unknown: true }),
+    ).toBeUndefined();
+    expect(decodeRequestJourneyQuery({ from: 200, to: 100 })).toBeUndefined();
+    expect(
+      decodeRequestJourneyQuery({ excludeOperations: ["not-an-operation"] }),
     ).toBeUndefined();
   });
 
