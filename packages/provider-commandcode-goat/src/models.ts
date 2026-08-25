@@ -23,7 +23,6 @@ export const COMMANDCODE_GOAT_MODELS: readonly Model<
         api: COMMANDCODE_GOAT_API_ID,
         baseUrl: COMMANDCODE_GOAT_BASE_URL,
       }),
-      headers: Object.freeze({ "x-cmd-zdr": "1" }),
       compat: Object.freeze({
         thinkingFormat: "openai" as const,
         supportsReasoningEffort: true,
