@@ -193,7 +193,7 @@ describe("unified history authority", () => {
         sensitive: true,
         snapshot: {
           contract: "luckytoken-diagnostics-sqlite",
-          schemaVersion: 1,
+          schemaVersion: 2,
           bytes: snapshot.byteLength,
         },
       },

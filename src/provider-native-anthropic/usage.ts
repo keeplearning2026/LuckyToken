@@ -1,13 +1,11 @@
 import {
-  decodeNormalizedTerminalUsage,
-  type NormalizedTerminalUsage,
+  decodeTerminalUsageFact,
+  type TerminalUsageFact,
 } from "@luckytoken/provider-contract/usage";
 import {
   parseSseFrames,
   sseFramePayload,
 } from "../protocols/sse-lines.js";
-
-const EVIDENCE = "anthropic-provider-native-terminal-usage-v1";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -24,7 +22,6 @@ interface UsageAccumulator {
   cacheRead?: number;
   cacheWrite?: number;
   output?: number;
-  reasoning?: number;
 }
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
@@ -46,55 +43,30 @@ function mergeReportedUsage(
     if (value === undefined) return false;
     accumulator[targetName] = value;
   }
-
-  if (!hasOwn(usage, "output_tokens_details")) return true;
-  const outputDetails = usage.output_tokens_details;
-  if (outputDetails === undefined || outputDetails === null) return true;
-  if (!isRecord(outputDetails)) return false;
-  if (!hasOwn(outputDetails, "thinking_tokens")) return true;
-  const reasoning = token(outputDetails.thinking_tokens);
-  if (reasoning === undefined) return false;
-  accumulator.reasoning = reasoning;
   return true;
 }
 
 function completeUsage(
   accumulator: UsageAccumulator,
-): NormalizedTerminalUsage | undefined {
-  const { input, cacheRead, cacheWrite, output, reasoning } = accumulator;
+): TerminalUsageFact | undefined {
+  const { input, cacheRead, cacheWrite, output } = accumulator;
   if (
     input === undefined ||
     cacheRead === undefined ||
     cacheWrite === undefined ||
-    output === undefined ||
-    (reasoning !== undefined && reasoning > output)
+    output === undefined
   ) {
     return undefined;
   }
-
-  const normalizedTotal = input + cacheRead + cacheWrite + output;
-  const denominator = input + cacheRead + cacheWrite;
-  if (
-    !Number.isSafeInteger(normalizedTotal) ||
-    !Number.isSafeInteger(denominator)
-  ) {
-    return undefined;
-  }
-  return decodeNormalizedTerminalUsage({
-    api: "anthropic-messages",
+  return decodeTerminalUsageFact({
     input,
     cacheRead,
-    cacheWrite,
     output,
-    ...(reasoning === undefined ? {} : { reasoning }),
-    normalizedTotal,
-    ...(denominator === 0 ? {} : { cacheHitRate: cacheRead / denominator }),
-    completeness: "complete",
-    evidence: EVIDENCE,
+    terminalClass: "done",
   });
 }
 
-function parseJsonUsage(text: string): NormalizedTerminalUsage | undefined {
+function parseJsonUsage(text: string): TerminalUsageFact | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
@@ -110,7 +82,7 @@ function parseJsonUsage(text: string): NormalizedTerminalUsage | undefined {
     : undefined;
 }
 
-function parseSseUsage(text: string): NormalizedTerminalUsage | undefined {
+function parseSseUsage(text: string): TerminalUsageFact | undefined {
   const accumulator: UsageAccumulator = {};
   let sawMessageStart = false;
   let sawMessageStop = false;
@@ -168,7 +140,7 @@ function parseSseUsage(text: string): NormalizedTerminalUsage | undefined {
 export function extractAnthropicNativeTerminalUsage(
   body: Uint8Array,
   contentType: string,
-): NormalizedTerminalUsage | undefined {
+): TerminalUsageFact | undefined {
   const normalizedContentType = contentType.toLowerCase();
   const text = new TextDecoder().decode(body);
   if (normalizedContentType.includes("text/event-stream")) {

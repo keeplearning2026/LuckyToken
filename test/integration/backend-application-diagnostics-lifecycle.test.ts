@@ -415,16 +415,16 @@ describe("Backend Application DiagnosticsAuthority lifecycle", () => {
       "the unified DiagnosticsAuthority must create state/request-diagnostics",
     ).toBeDefined();
     if (unifiedFiles === undefined) return;
-    expect(unifiedFiles).toContain("diagnostics.sqlite3");
+    expect(unifiedFiles).toContain("diagnostics-v2.sqlite3");
     expect(unifiedFiles).toEqual(
-      expect.arrayContaining(["diagnostics.sqlite3"]),
+      expect.arrayContaining(["diagnostics-v2.sqlite3"]),
     );
     expect(
       unifiedFiles.filter(
         (name) =>
-          name !== "diagnostics.sqlite3" &&
-          name !== "diagnostics.sqlite3-wal" &&
-          name !== "diagnostics.sqlite3-shm",
+          name !== "diagnostics-v2.sqlite3" &&
+          name !== "diagnostics-v2.sqlite3-wal" &&
+          name !== "diagnostics-v2.sqlite3-shm",
       ),
     ).toEqual([]);
   });

@@ -102,7 +102,7 @@ interface OutboundAttempt {
 async function diagnosticsFileBytes(directory: string): Promise<Buffer> {
   const parts: Buffer[] = [];
   for (const name of await readdir(directory)) {
-    if (!name.startsWith("diagnostics.sqlite3")) continue;
+    if (!name.startsWith("diagnostics-v2.sqlite3")) continue;
     parts.push(await readFile(join(directory, name)));
   }
   return Buffer.concat(parts);

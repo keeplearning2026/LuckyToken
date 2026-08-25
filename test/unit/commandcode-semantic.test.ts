@@ -57,12 +57,6 @@ function result(
     content: [],
     finish: { type: "finish", finishReason: "stop" },
     ...(rawUsage === undefined ? {} : { rawUsage }),
-    usage: {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    },
     notices: [],
     ...overrides,
   });
@@ -150,7 +144,7 @@ describe("committed CommandCode to Pi semantics", () => {
     );
   });
 
-  it("uses normalized zero usage when final usage is completely absent", () => {
+  it("uses Pi all-zero usage when final usage is completely absent", () => {
     const authority = captureCommandCodeResponseAuthority(model(), () => 10);
     const message = convertCommittedCommandCodeResult(
       result(undefined),
@@ -170,12 +164,6 @@ describe("committed CommandCode to Pi semantics", () => {
     const mutable: CommandCodeResult = {
       content: [],
       finish: { type: "finish", finishReason: "stop" },
-      usage: {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-      },
       notices: [],
     };
 

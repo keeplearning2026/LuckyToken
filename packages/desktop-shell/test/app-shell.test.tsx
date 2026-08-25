@@ -69,18 +69,17 @@ describe("desktop command-router shell", () => {
         }),
         getAnalytics: async (query) => query.command === "options"
           ? {
-              version: 2,
+              version: 3,
               command: "options",
               providers: [],
               profiles: [],
               models: [],
               protocols: [],
-              projects: [],
               sessions: [],
               outcomes: [],
             }
           : {
-              version: 2,
+              version: 3,
               command: "summary",
               totals: {
                 total: 0,
@@ -92,15 +91,12 @@ describe("desktop command-router shell", () => {
                 successRate: 0,
                 failureRate: 0,
                 abortRate: 0,
-                participating: 0,
-                totalRequests: 0,
-                excluded: 0,
+                usageRequests: 0,
+                missingUsageRequests: 0,
+                speedRequests: 0,
                 inputTokens: 0,
                 cacheReadTokens: 0,
-                cacheWriteTokens: 0,
                 outputTokens: 0,
-                cacheHitNumerator: 0,
-                cacheHitDenominator: 0,
               },
             },
       },
@@ -222,18 +218,17 @@ describe("desktop command-router shell", () => {
     const onRequestJourneys = vi.fn(() => () => undefined);
     const getAnalytics = vi.fn(async (query) => query.command === "options"
       ? {
-          version: 2 as const,
+          version: 3 as const,
           command: "options" as const,
           providers: [],
           profiles: [],
           models: [],
           protocols: [],
-          projects: [],
           sessions: [],
           outcomes: [],
         }
       : {
-          version: 2 as const,
+          version: 3 as const,
           command: "summary" as const,
           totals: {
             total: 0,
@@ -245,15 +240,12 @@ describe("desktop command-router shell", () => {
             successRate: 0,
             failureRate: 0,
             abortRate: 0,
-            participating: 0,
-            totalRequests: 0,
-            excluded: 0,
+            usageRequests: 0,
+            missingUsageRequests: 0,
+            speedRequests: 0,
             inputTokens: 0,
             cacheReadTokens: 0,
-            cacheWriteTokens: 0,
             outputTokens: 0,
-            cacheHitNumerator: 0,
-            cacheHitDenominator: 0,
           },
         });
     const api = createFakeDesktopApi({
@@ -385,18 +377,17 @@ describe("desktop command-router shell", () => {
         getAnalytics: async (query) =>
           query.command === "options"
             ? {
-                version: 2,
+                version: 3,
                 command: "options",
                 providers: [],
                 profiles: [],
                 models: [],
                 protocols: [],
-                projects: [],
                 sessions: [],
                 outcomes: [],
               }
             : {
-                version: 2,
+                version: 3,
                 command: "summary",
                 totals: {
                   total: 0,
@@ -408,15 +399,12 @@ describe("desktop command-router shell", () => {
                   successRate: 0,
                   failureRate: 0,
                   abortRate: 0,
-                  participating: 0,
-                  totalRequests: 0,
-                  excluded: 0,
+                  usageRequests: 0,
+                  missingUsageRequests: 0,
+                  speedRequests: 0,
                   inputTokens: 0,
                   cacheReadTokens: 0,
-                  cacheWriteTokens: 0,
                   outputTokens: 0,
-                  cacheHitNumerator: 0,
-                  cacheHitDenominator: 0,
                 },
               },
       },

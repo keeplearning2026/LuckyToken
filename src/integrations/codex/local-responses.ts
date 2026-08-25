@@ -116,7 +116,6 @@ async function executeDirect(
     const usage = extractResponsesPassthroughUsage(
       upstream.body,
       upstream.headers.get("content-type") ?? "",
-      "openai-codex-responses",
       upstream.status >= 200 && upstream.status < 300 && input.streamRequested
         ? "event-stream"
         : "json",

@@ -105,7 +105,7 @@ function decodeManifest(value: unknown): HistoryExportManifestSummary | undefine
   if (!isRecord(value) || !exactKeys(value, ["manifestVersion", "exportedAt", "sensitive", "snapshot"]) ||
       value.manifestVersion !== 2 || !isSafeTime(value.exportedAt) || value.sensitive !== true ||
       !isRecord(value.snapshot) || !exactKeys(value.snapshot, ["contract", "schemaVersion", "bytes"]) ||
-      value.snapshot.contract !== "luckytoken-diagnostics-sqlite" || value.snapshot.schemaVersion !== 1 ||
+      value.snapshot.contract !== "luckytoken-diagnostics-sqlite" || value.snapshot.schemaVersion !== 2 ||
       !isCount(value.snapshot.bytes)) return undefined;
   return Object.freeze({
     manifestVersion: 2,
@@ -113,7 +113,7 @@ function decodeManifest(value: unknown): HistoryExportManifestSummary | undefine
     sensitive: true,
     snapshot: Object.freeze({
       contract: "luckytoken-diagnostics-sqlite",
-      schemaVersion: 1,
+      schemaVersion: 2,
       bytes: value.snapshot.bytes,
     }),
   });

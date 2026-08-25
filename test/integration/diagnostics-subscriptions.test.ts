@@ -271,14 +271,10 @@ describe("Diagnostics durable subscriptions", () => {
     observer.observe({
       kind: "terminal_usage_observed",
       usage: {
-        api: "anthropic-messages",
         input: 11,
         cacheRead: 3,
-        cacheWrite: 2,
         output: 7,
-        normalizedTotal: 23,
-        cacheHitRate: 3 / 16,
-        completeness: "complete",
+        terminalClass: "done",
       },
       location: {
         phase: "upstream_execution",
@@ -312,7 +308,7 @@ describe("Diagnostics durable subscriptions", () => {
 
     const page = await authority.queryRequestJourneys({ limit: 10 });
     const expectedUsage = {
-      completeness: "complete",
+      terminalClass: "done",
       inputTokens: 11,
       cacheReadTokens: 3,
       outputTokens: 7,
@@ -351,13 +347,10 @@ describe("Diagnostics durable subscriptions", () => {
     partialObserver.observe({
       kind: "terminal_usage_observed",
       usage: {
-        api: "commandcode-chat",
         input: 99,
         cacheRead: 88,
-        cacheWrite: 77,
         output: 66,
-        completeness: "partial",
-        reason: "component_unreported",
+        terminalClass: "failed",
       },
       location: {
         phase: "upstream_execution",
@@ -370,8 +363,11 @@ describe("Diagnostics durable subscriptions", () => {
 
     const updatedPage = await authority.queryRequestJourneys({ limit: 10 });
     const expectedPartialUsage = {
-      completeness: "partial",
-      reason: "component_unreported",
+      terminalClass: "failed",
+      inputTokens: 99,
+      cacheReadTokens: 88,
+      outputTokens: 66,
+      cacheHitRate: 88 / 187,
     } as const;
     expect(updatedPage.records).toContainEqual(expect.objectContaining({
       requestId: partialRequestId,
@@ -578,7 +574,7 @@ describe("Diagnostics durable subscriptions", () => {
       join(tmpdir(), "luckytoken-subscriptions-unavailable-"),
     );
     roots.push(root);
-    const database = new DatabaseSync(join(root, "diagnostics.sqlite3"));
+    const database = new DatabaseSync(join(root, "diagnostics-v2.sqlite3"));
     database.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);
       INSERT INTO meta (key, value) VALUES ('schema_name', 'foreign_diagnostics');

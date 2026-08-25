@@ -336,7 +336,7 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
             await durableJourney;
             analytics = requireSummary(
               await authority.getAnalytics({
-                version: 2,
+                version: 3,
                 command: "summary",
                 from: 0,
                 to: Number.MAX_SAFE_INTEGER,
@@ -413,16 +413,12 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
       expect(enabled.analytics?.totals).toMatchObject({
         total: 1,
         success: 1,
-        participating: 1,
-        excluded: 0,
+        usageRequests: 1,
+        missingUsageRequests: 0,
+        speedRequests: 1,
         inputTokens: 8,
         cacheReadTokens: 3,
-        cacheWriteTokens: 2,
         outputTokens: 5,
-        reasoningTokens: 2,
-        normalizedTokenTotal: 18,
-        cacheHitNumerator: 3,
-        cacheHitDenominator: 11,
         cacheHitRate: 3 / 11,
         outputTokensPerSecond: 5,
       });

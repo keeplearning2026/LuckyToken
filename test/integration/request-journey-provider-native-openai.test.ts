@@ -113,7 +113,7 @@ interface OutboundAttempt {
 async function diagnosticsFileBytes(directory: string): Promise<Buffer> {
   const parts: Buffer[] = [];
   for (const name of await readdir(directory)) {
-    if (!name.startsWith("diagnostics.sqlite3")) continue;
+    if (!name.startsWith("diagnostics-v2.sqlite3")) continue;
     parts.push(await readFile(join(directory, name)));
   }
   return Buffer.concat(parts);
@@ -651,11 +651,11 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
       });
 
       const analyticsOptions = await authority.getAnalytics({
-        version: 2,
+        version: 3,
         command: "options",
       });
       expect(analyticsOptions).toEqual({
-        version: 2,
+        version: 3,
         command: "options",
         providers: ["openai"],
         profiles: [
@@ -672,7 +672,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
       });
 
       const analyticsSummary = await authority.getAnalytics({
-        version: 2,
+        version: 3,
         command: "summary",
         from: 0,
         to: Number.MAX_SAFE_INTEGER,
@@ -692,14 +692,12 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
       expect(analyticsSummary.totals).toMatchObject({
         total: 1,
         failed: 1,
-        participating: 0,
-        excluded: 1,
+        usageRequests: 0,
+        missingUsageRequests: 1,
+        speedRequests: 0,
         inputTokens: 0,
         cacheReadTokens: 0,
-        cacheWriteTokens: 0,
         outputTokens: 0,
-        cacheHitNumerator: 0,
-        cacheHitDenominator: 0,
       });
       expect(analyticsSummary.totals).not.toHaveProperty(
         "normalizedTokenTotal",

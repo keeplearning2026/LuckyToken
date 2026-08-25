@@ -30,13 +30,6 @@ export interface CommandCodeFinishEvent {
   rawFinishReason?: string;
 }
 
-export interface CommandCodeNormalizedUsage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
-}
-
 export interface CommandCodeResponseIdentity {
   readonly responseId: string;
   readonly responseModel: string;
@@ -51,7 +44,6 @@ export interface CommandCodeResult {
   readonly content: readonly CommandCodeContentBlock[];
   readonly finish: Readonly<CommandCodeFinishEvent>;
   readonly rawUsage?: Readonly<Record<string, unknown>>;
-  readonly usage: Readonly<CommandCodeNormalizedUsage>;
   readonly systemPromptTokens?: number;
   readonly responseIdentity?: Readonly<CommandCodeResponseIdentity>;
   readonly notices: readonly ConversionNotice[];
@@ -206,13 +198,6 @@ interface ToolSlot extends BaseSlot {
 
 type Slot = TextSlot | ReasoningSlot | ToolSlot;
 
-const ZERO_USAGE: CommandCodeNormalizedUsage = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-};
-
 const DEFAULT_RESPONSE_POLICY: CommandCodeResponsePolicy = Object.freeze({
   pauseTurn: "stop",
   unknownEvent: "error",
@@ -229,12 +214,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function numberOrZero(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : 0;
-}
-
 function safeFailureMessage(value: string): string {
   const sanitized = value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").trim();
   return sanitized.length === 0 ? "CommandCode stream failed" : sanitized;
@@ -246,21 +225,6 @@ function safeProviderMetadata(value: unknown): string | undefined {
     .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
     .trim();
   return sanitized.length === 0 ? undefined : sanitized;
-}
-
-function normalizeUsage(
-  value: Record<string, unknown> | undefined,
-): CommandCodeNormalizedUsage {
-  if (value === undefined) return { ...ZERO_USAGE };
-  const inputDetails = isRecord(value.inputTokenDetails)
-    ? value.inputTokenDetails
-    : undefined;
-  return {
-    inputTokens: numberOrZero(value.inputTokens),
-    outputTokens: numberOrZero(value.outputTokens),
-    cacheReadTokens: numberOrZero(inputDetails?.cacheReadTokens),
-    cacheWriteTokens: numberOrZero(inputDetails?.cacheWriteTokens),
-  };
 }
 
 function requireString(
@@ -290,7 +254,6 @@ export class CommandCodeContentAssembler {
   private readonly toolById = new Map<string, ToolSlot>();
   private finishEvent: CommandCodeFinishEvent | undefined;
   private rawUsage: Record<string, unknown> | undefined;
-  private usage: CommandCodeNormalizedUsage = { ...ZERO_USAGE };
   private systemPromptTokens: number | undefined;
   private responseIdentity: CommandCodeResponseIdentity | undefined;
   private readonly notices: ConversionNotice[] = [];
@@ -397,7 +360,6 @@ export class CommandCodeContentAssembler {
     const result: CommandCodeResult = {
       content,
       finish: this.finishEvent,
-      usage: { ...this.usage },
       notices: [...this.notices],
       ...(this.rawUsage === undefined ? {} : { rawUsage: this.rawUsage }),
       ...(this.systemPromptTokens === undefined
@@ -606,7 +568,6 @@ export class CommandCodeContentAssembler {
               "CommandCode finish.totalUsage",
             )
           : undefined;
-        this.usage = normalizeUsage(this.rawUsage);
         this.systemPromptTokens =
           typeof event.systemPromptTokens === "number"
             ? event.systemPromptTokens
@@ -818,7 +779,6 @@ export class CommandCodeContentAssembler {
     this.toolById.clear();
     this.finishEvent = undefined;
     this.rawUsage = undefined;
-    this.usage = { ...ZERO_USAGE };
     this.systemPromptTokens = undefined;
     this.responseIdentity = undefined;
     this.notices.length = 0;

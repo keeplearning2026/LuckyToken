@@ -15,10 +15,9 @@ import type { DiagnosticsUnavailableResult } from "./request-diagnostics-contrac
  * boundaries partition exactly and a request is attributed to the bucket
  * containing its `acceptedAt` even when its completion/usage arrives later.
  *
- * Count semantics (AC-4): every matching request counts, regardless of
- * usage completeness. Token semantics (AC-5/6): only requests whose
- * normalized terminal usage is Complete contribute to token/cache sums;
- * `reasoning` is an output subset and is never added to any total; the
+ * Count semantics (AC-4): every matching request counts. Every request with
+ * a terminal usage fact contributes its three product metrics, including
+ * failed, aborted, and all-zero observations. The
  * aggregate `cacheHitRate` is ΣcacheRead / Σ(input+cacheRead),
  * never an average of per-request rates. No cost, price, subscription, or
  * billing value exists anywhere in this contract (AC-8); the wire decoders
@@ -26,7 +25,7 @@ import type { DiagnosticsUnavailableResult } from "./request-diagnostics-contrac
  */
 
 /** One versioned analytics result/query namespace. */
-export const ANALYTICS_CONTRACT_VERSION = 2 as const;
+export const ANALYTICS_CONTRACT_VERSION = 3 as const;
 
 /** Single-dimension group-by choices over ledger snapshot columns. */
 export type AnalyticsGroupBy =
@@ -73,7 +72,7 @@ export interface AnalyticsFilter {
 
 export type AnalyticsQuery =
   | {
-      readonly version: 2;
+      readonly version: 3;
       readonly command: "summary";
       /** Inclusive acceptedAt bound (safe integer ≥ 0). */
       readonly from: number;
@@ -86,7 +85,7 @@ export type AnalyticsQuery =
       readonly series?: { readonly granularity: AnalyticsSeriesGranularity };
     }
   | {
-      readonly version: 2;
+      readonly version: 3;
       readonly command: "options";
       /** Optional acceptedAt lower bound; absent = unbounded. */
       readonly from?: number;
@@ -96,8 +95,7 @@ export type AnalyticsQuery =
 
 /**
  * One aggregate over the matching scope. Outcome counts/rates include every
- * matching request regardless of usage completeness; token/cache sums
- * include only Complete terminal-usage snapshots.
+ * matching request; token/cache sums include every terminal usage fact.
  */
 export interface AnalyticsSummary {
   /** Every matching request, including `running` rows. */
@@ -113,34 +111,20 @@ export interface AnalyticsSummary {
   readonly successRate: number;
   readonly failureRate: number;
   readonly abortRate: number;
-  /** Requests whose normalized terminal usage is Complete. */
-  readonly participating: number;
-  /** Identical to `total`; explicit for the UI. */
-  readonly totalRequests: number;
-  /** total − participating (Partial/Unavailable usage or none). */
-  readonly excluded: number;
-  /** Σ input over participating snapshots. */
+  /** Requests carrying a terminal usage fact. */
+  readonly usageRequests: number;
+  /** Requests with no terminal usage fact. */
+  readonly missingUsageRequests: number;
+  /** Usage requests with a positive execution duration. */
+  readonly speedRequests: number;
+  /** Sums over all terminal usage facts. */
   readonly inputTokens: number;
   readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
   readonly outputTokens: number;
-  /** Σoutput / Σ(execution duration) × 1000 over Complete usage snapshots
+  /** Σoutput / Σ(execution duration) × 1000 over usage snapshots
    * with executionStartedAt/terminalAt and a positive duration. */
   readonly outputTokensPerSecond?: number;
-  /** Σ reasoning over participating snapshots that reported it; present
-   *  only when at least one did. A subset of output; never added to any
-   *  total. */
-  readonly reasoningTokens?: number;
-  /** Σ (input+cacheRead+cacheWrite+output) over participating snapshots;
-   *  present when participating > 0. */
-  readonly normalizedTokenTotal?: number;
-  /** Σ cacheRead over participating snapshots (aggregate numerator). */
-  readonly cacheHitNumerator: number;
-  /** Σ (input+cacheRead) over participating snapshots. Cache writes are
-   *  excluded from the product read-hit denominator. */
-  readonly cacheHitDenominator: number;
-  /** numerator / denominator; present only when participating > 0 and the
-   *  denominator > 0 — never 0 when undefined (Ticket 20 rule). */
+  /** ΣcacheRead / Σ(input+cacheRead); absent when the denominator is zero. */
   readonly cacheHitRate?: number;
 }
 
@@ -161,7 +145,7 @@ export interface AnalyticsBucket {
 }
 
 export interface AnalyticsResult {
-  readonly version: 2;
+  readonly version: 3;
   readonly command: "summary";
   /** Full-scope aggregate, independent of rows/buckets. */
   readonly totals: AnalyticsSummary;
@@ -184,7 +168,7 @@ export interface AnalyticsProfileOption {
 }
 
 export interface AnalyticsOptionsResult {
-  readonly version: 2;
+  readonly version: 3;
   readonly command: "options";
   /** Distinct ledger facts within the range, ascending; never the catalog. */
   readonly providers: readonly string[];

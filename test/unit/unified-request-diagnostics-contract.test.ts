@@ -242,14 +242,10 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
     {
       kind: "terminal_usage_observed",
       usage: {
-        api: "anthropic-messages",
         input: 5,
         cacheRead: 0,
-        cacheWrite: 0,
         output: 2,
-        normalizedTotal: 7,
-        cacheHitRate: 0,
-        completeness: "complete",
+        terminalClass: "done",
       },
       location: { phase: "upstream_execution", step: "normalize_terminal_usage" },
     },
@@ -348,7 +344,7 @@ describe("unified request diagnostics Control Plane contract", () => {
     const complete = {
       ...JOURNEY_SUMMARY,
       usage: {
-        completeness: "complete",
+        terminalClass: "done",
         inputTokens: 11,
         cacheReadTokens: 3,
         outputTokens: 7,
@@ -358,16 +354,16 @@ describe("unified request diagnostics Control Plane contract", () => {
     } as const;
     expect(decodeRequestJourneySummary(complete)).toEqual(complete);
 
-    const partial = {
+    const failed = {
       ...JOURNEY_SUMMARY,
-      usage: { completeness: "partial", reason: "component_unreported" },
+      usage: {
+        terminalClass: "failed",
+        inputTokens: 0,
+        cacheReadTokens: 0,
+        outputTokens: 0,
+      },
     } as const;
-    const unavailable = {
-      ...JOURNEY_SUMMARY,
-      usage: { completeness: "unavailable", reason: "unsupported_terminal" },
-    } as const;
-    expect(decodeRequestJourneySummary(partial)).toEqual(partial);
-    expect(decodeRequestJourneySummary(unavailable)).toEqual(unavailable);
+    expect(decodeRequestJourneySummary(failed)).toEqual(failed);
 
     expect(
       decodeRequestJourneySummary({
@@ -395,14 +391,14 @@ describe("unified request diagnostics Control Plane contract", () => {
     ).toBeUndefined();
     expect(
       decodeRequestJourneySummary({
-        ...partial,
-        usage: { ...partial.usage, inputTokens: 11 },
+        ...failed,
+        usage: { ...failed.usage, terminalClass: "partial" },
       }),
     ).toBeUndefined();
     expect(
       decodeRequestJourneySummary({
-        ...partial,
-        usage: { completeness: "partial", reason: "not-a-reason" },
+        ...failed,
+        usage: { terminalClass: "failed", inputTokens: 0, cacheReadTokens: 0 },
       }),
     ).toBeUndefined();
   });

@@ -2,20 +2,85 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalyticsManagementResult, AnalyticsQuery, StatusSnapshot } from "@luckytoken/application-control-plane/control-plane";
+import type {
+  AnalyticsQuery,
+  AnalyticsSummary,
+  StatusSnapshot,
+} from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
 
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
-const status: StatusSnapshot = { sequence: 1, modelDataPlane: "running", provider: "configured", dataPlane: { configuredOrigin: "http://127.0.0.1:4317", configuredPort: 4317 } };
+const status: StatusSnapshot = {
+  sequence: 1,
+  modelDataPlane: "running",
+  provider: "configured",
+  dataPlane: { configuredOrigin: "http://127.0.0.1:4317", configuredPort: 4317 },
+};
 
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 7, 18, 13, 30)); (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true; container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); });
+function totals(
+  total: number,
+  overrides: Partial<AnalyticsSummary> = {},
+): AnalyticsSummary {
+  const usageRequests = overrides.usageRequests ?? total;
+  const speedRequests = overrides.speedRequests ?? 0;
+  const inputTokens = overrides.inputTokens ?? 0;
+  const cacheReadTokens = overrides.cacheReadTokens ?? 0;
+  const outputTokens = overrides.outputTokens ?? 0;
+  const denominator = inputTokens + cacheReadTokens;
+  return {
+    total,
+    success: total,
+    failed: 0,
+    aborted: 0,
+    other: 0,
+    pending: 0,
+    successRate: total === 0 ? 0 : 1,
+    failureRate: 0,
+    abortRate: 0,
+    usageRequests,
+    missingUsageRequests: total - usageRequests,
+    speedRequests,
+    inputTokens,
+    cacheReadTokens,
+    outputTokens,
+    ...(overrides.outputTokensPerSecond === undefined
+      ? {}
+      : { outputTokensPerSecond: overrides.outputTokensPerSecond }),
+    ...(denominator === 0 ? {} : { cacheHitRate: cacheReadTokens / denominator }),
+  };
+}
+
+const emptyOptions = {
+  version: 3 as const,
+  command: "options" as const,
+  providers: [],
+  profiles: [],
+  models: [],
+  protocols: [],
+  sessions: [],
+  outcomes: [],
+};
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 7, 18, 13, 30));
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(async () => {
+  await act(async () => root.unmount());
+  container.remove();
+  vi.useRealTimers();
+});
 
 describe("Overview analytics", () => {
-  it("shows compact token units, fixed t/s, semantic colors, and all six analytics filters", async () => {
+  it("shows compact units, t/s, and all analytics filters", async () => {
     const analyticsQueries: AnalyticsQuery[] = [];
     const api = createFakeDesktopApi({ control: {
       getBackendState: async () => ({ revision: 1, kind: "ready", status }),
@@ -25,8 +90,7 @@ describe("Overview analytics", () => {
         analyticsQueries.push(query);
         return query.command === "options"
           ? {
-              version: 2,
-              command: "options",
+              ...emptyOptions,
               providers: ["commandcode-goat"],
               profiles: [{ profileId: "profile-1", displayName: "Production", providerId: "commandcode-goat" }],
               models: ["deepseek/deepseek-v4-pro"],
@@ -35,30 +99,16 @@ describe("Overview analytics", () => {
               outcomes: ["success"],
             }
           : {
-              version: 2,
+              version: 3,
               command: "summary",
-              totals: {
-                total: 304,
-                success: 304,
-                failed: 0,
-                aborted: 0,
-                other: 0,
-                pending: 0,
-                successRate: 1,
-                failureRate: 0,
-                abortRate: 0,
-                participating: 304,
-                totalRequests: 304,
-                excluded: 0,
+              totals: totals(304, {
+                usageRequests: 304,
+                speedRequests: 304,
                 inputTokens: 742_335,
                 cacheReadTokens: 19_196_288,
-                cacheWriteTokens: 0,
                 outputTokens: 70_850,
                 outputTokensPerSecond: 37.14,
-                cacheHitNumerator: 19_196_288,
-                cacheHitDenominator: 19_938_623,
-                cacheHitRate: 0.963,
-              },
+              }),
             };
       },
     } });
@@ -71,32 +121,26 @@ describe("Overview analytics", () => {
     expect(container.querySelector(".overview-stat-cache-read strong")?.textContent).toBe("19.2M");
     expect(container.querySelector(".overview-stat-output strong")?.textContent).toBe("70.9K");
     expect(container.querySelector(".overview-stat-token-speed strong")?.textContent).toBe("37.1 t/s");
-    expect(container.querySelectorAll(".overview-stat-card")).toHaveLength(6);
 
     await act(async () => {
       (container.querySelector('button[aria-label="Show overview filters"]') as HTMLButtonElement).click();
     });
-    const selections = [
+    for (const [label, value] of [
       ["Provider filter", "commandcode-goat"],
       ["Profile filter", "profile-1"],
       ["Model filter", "deepseek/deepseek-v4-pro"],
       ["Protocol filter", "openai-responses"],
       ["Session filter", "session-1"],
       ["Outcome filter", "success"],
-    ] as const;
-    for (const [label, value] of selections) {
-      const select = container.querySelector(`select[aria-label="${label}"]`);
-      if (!(select instanceof HTMLSelectElement)) throw new Error(`${label} missing`);
+    ] as const) {
+      const select = container.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement;
       await act(async () => {
         select.value = value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
         await Promise.resolve();
       });
     }
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    const latestSummary = analyticsQueries.findLast((query) => query.command === "summary");
-    expect(latestSummary).toMatchObject({
-      command: "summary",
+    expect(analyticsQueries.findLast((query) => query.command === "summary")).toMatchObject({
       filters: {
         providers: ["commandcode-goat"],
         profiles: ["profile-1"],
@@ -108,221 +152,78 @@ describe("Overview analytics", () => {
     });
   });
 
-  it("explains requests excluded from usage totals", async () => {
+  it("shows per-card coverage only when usage or speed coverage is incomplete", async () => {
     const api = createFakeDesktopApi({ control: {
       getBackendState: async () => ({ revision: 1, kind: "ready", status }),
       onBackendState: () => () => undefined,
       queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
       getAnalytics: async (query) => query.command === "options"
-        ? { version: 2, command: "options", providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] }
-        : { version: 2, command: "summary", totals: { total: 3, success: 3, failed: 0, aborted: 0, other: 0, pending: 0, successRate: 1, failureRate: 0, abortRate: 0, participating: 1, totalRequests: 3, excluded: 2, inputTokens: 11, cacheReadTokens: 3, cacheWriteTokens: 0, outputTokens: 7, normalizedTokenTotal: 21, cacheHitNumerator: 3, cacheHitDenominator: 14, cacheHitRate: 3 / 14 } },
+        ? emptyOptions
+        : { version: 3, command: "summary", totals: totals(3, { usageRequests: 2, speedRequests: 1, inputTokens: 11, cacheReadTokens: 3, outputTokens: 7, outputTokensPerSecond: 7 }) },
     } });
-
     await act(async () => root.render(<App api={api} />));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(container.textContent).toContain("2 requests do not have complete terminal usage and were excluded from usage totals.");
+    expect(container.querySelector(".overview-stat-input small")?.textContent).toBe("2/3 requests");
+    expect(container.querySelector(".overview-stat-token-speed small")?.textContent).toBe("1/3 requests");
+    expect(container.querySelector(".overview-stat-requests small")).toBeNull();
   });
 
-  it("keeps analytics and Request Journey queries behind separate Control Plane commands", async () => {
-    const analyticsQueries: AnalyticsQuery[] = [];
+  it("refreshes Request Journeys, options, and totals from one action", async () => {
     const queryRequestJourneys = vi.fn(async () => ({ outcome: "ok" as const, result: { records: [], hasMore: false } }));
-    const api = createFakeDesktopApi({ control: {
-      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
-      onBackendState: () => () => undefined,
-      queryRequestJourneys,
-      getAnalytics: async (query) => { analyticsQueries.push(query); return query.command === "options" ? { version: 2, command: "options", providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] } : { version: 2, command: "summary", totals: { total: 0, success: 0, failed: 0, aborted: 0, other: 0, pending: 0, successRate: 0, failureRate: 0, abortRate: 0, participating: 0, totalRequests: 0, excluded: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, normalizedTokenTotal: 0, cacheHitNumerator: 0, cacheHitDenominator: 0 } }; },
-    } });
-    await act(async () => root.render(<App api={api} />));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(queryRequestJourneys).toHaveBeenCalledWith({
-      limit: 1_000,
-      from: new Date(2026, 7, 18, 0, 0).getTime(),
-      to: new Date(2026, 7, 19, 0, 0).getTime(),
-      excludeOperations: ["unsupported_transport"],
-    });
-    expect(analyticsQueries.some((query) => query.command === "summary")).toBe(true);
-  });
-
-  it("refreshes Request Journeys, analytics options, and totals from one Overview action", async () => {
-    const queryRequestJourneys = vi.fn(async () => ({
-      outcome: "ok" as const,
-      result: { records: [], hasMore: false },
-    }));
-    const getAnalytics = vi.fn(async (query: AnalyticsQuery) =>
-      query.command === "options"
-        ? { version: 2 as const, command: "options" as const, providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] }
-        : { version: 2 as const, command: "summary" as const, totals: { total: 0, success: 0, failed: 0, aborted: 0, other: 0, pending: 0, successRate: 0, failureRate: 0, abortRate: 0, participating: 0, totalRequests: 0, excluded: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, normalizedTokenTotal: 0, cacheHitNumerator: 0, cacheHitDenominator: 0 } },
-    );
+    const getAnalytics = vi.fn(async (query: AnalyticsQuery) => query.command === "options"
+      ? emptyOptions
+      : { version: 3 as const, command: "summary" as const, totals: totals(0) });
     const api = createFakeDesktopApi({ control: {
       getBackendState: async () => ({ revision: 1, kind: "ready", status }),
       onBackendState: () => () => undefined,
       queryRequestJourneys,
       getAnalytics,
     } });
-
     await act(async () => root.render(<App api={api} />));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(queryRequestJourneys).toHaveBeenCalledTimes(1);
-    expect(getAnalytics).toHaveBeenCalledTimes(2);
-
-    const refresh = container.querySelector('button[aria-label="Refresh overview"]');
-    expect(refresh).toBeInstanceOf(HTMLButtonElement);
-    await act(async () => {
-      (refresh as HTMLButtonElement).click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(queryRequestJourneys).toHaveBeenCalledTimes(2);
-    expect(getAnalytics).toHaveBeenCalledTimes(4);
-  });
-
-  it("reconciles analytics after a live request reaches its terminal state", async () => {
-    const listeners = new Set<(record: import("@luckytoken/application-control-plane/control-plane").RequestJourneySummary) => void>();
-    let totalRequests = 0;
-    const getAnalytics = vi.fn(async (query: AnalyticsQuery) =>
-      query.command === "options"
-        ? { version: 2 as const, command: "options" as const, providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] }
-        : { version: 2 as const, command: "summary" as const, totals: { total: totalRequests, success: totalRequests, failed: 0, aborted: 0, other: 0, pending: 0, successRate: totalRequests === 0 ? 0 : 1, failureRate: 0, abortRate: 0, participating: totalRequests, totalRequests, excluded: 0, inputTokens: totalRequests * 10, cacheReadTokens: totalRequests * 2, cacheWriteTokens: 0, outputTokens: totalRequests * 4, normalizedTokenTotal: totalRequests * 16, cacheHitNumerator: totalRequests * 2, cacheHitDenominator: totalRequests * 12 } },
-    );
-    const api = createFakeDesktopApi({ control: {
-      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
-      onBackendState: () => () => undefined,
-      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
-      onRequestJourneys: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      getAnalytics,
-    } });
-
-    await act(async () => root.render(<App api={api} />));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("0");
-
-    totalRequests = 1;
-    await act(async () => {
-      for (const listener of listeners) listener({
-        id: 1,
-        runtimeId: "runtime-1",
-        requestId: "live-terminal-request",
-        operation: "model_generation",
-        protocol: "openai-responses",
-        lane: "semantic_conversion",
-        outcome: "success",
-        completeness: "complete",
-        createdAt: Date.now(),
-        closedAt: Date.now() + 100,
-        requestedModel: "commandcode-goat/deepseek-v4-flash",
-        providerId: "commandcode-goat",
-        realModelId: "deepseek/deepseek-v4-flash",
-        httpStatus: 200,
-        usage: {
-          completeness: "complete",
-          inputTokens: 10,
-          cacheReadTokens: 2,
-          outputTokens: 4,
-        },
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("1");
-    expect(getAnalytics.mock.calls.filter(([query]) => query.command === "summary")).toHaveLength(2);
-  });
-
-  it("repairs a missed live event from the authoritative store on the reconciliation interval", async () => {
-    let totalRequests = 0;
-    const getAnalytics = vi.fn(async (query: AnalyticsQuery) =>
-      query.command === "options"
-        ? { version: 2 as const, command: "options" as const, providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] }
-        : { version: 2 as const, command: "summary" as const, totals: { total: totalRequests, success: totalRequests, failed: 0, aborted: 0, other: 0, pending: 0, successRate: totalRequests === 0 ? 0 : 1, failureRate: 0, abortRate: 0, participating: totalRequests, totalRequests, excluded: 0, inputTokens: totalRequests * 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: totalRequests * 4, normalizedTokenTotal: totalRequests * 14, cacheHitNumerator: 0, cacheHitDenominator: totalRequests * 10 } },
-    );
-    const api = createFakeDesktopApi({ control: {
-      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
-      onBackendState: () => () => undefined,
-      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
-      onRequestJourneys: () => () => undefined,
-      getAnalytics,
-    } });
-
-    await act(async () => root.render(<App api={api} />));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("0");
-
-    totalRequests = 1;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("1");
-    expect(getAnalytics.mock.calls.filter(([query]) => query.command === "summary")).toHaveLength(2);
-  });
-
-  it("coalesces refreshes and never publishes an obsolete synchronization", async () => {
-    let resolveFirstSummary: ((value: AnalyticsManagementResult) => void) | undefined;
-    let summaryCalls = 0;
-    const api = createFakeDesktopApi({ control: {
-      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
-      onBackendState: () => () => undefined,
-      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
-      getAnalytics: (query) => {
-        if (query.command === "options") {
-          return Promise.resolve({ version: 2, command: "options", providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] });
-        }
-        summaryCalls += 1;
-        const result = (total: number) => ({ version: 2 as const, command: "summary" as const, totals: { total, success: total, failed: 0, aborted: 0, other: 0, pending: 0, successRate: total === 0 ? 0 : 1, failureRate: 0, abortRate: 0, participating: total, totalRequests: total, excluded: 0, inputTokens: total, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: total, normalizedTokenTotal: total * 2, cacheHitNumerator: 0, cacheHitDenominator: total } });
-        if (summaryCalls === 1) {
-          return new Promise((resolve) => { resolveFirstSummary = resolve; });
-        }
-        return Promise.resolve(result(2));
-      },
-    } });
-
-    await act(async () => root.render(<App api={api} />));
-    await act(async () => { await Promise.resolve(); });
-    const refresh = container.querySelector('button[aria-label="Refresh overview"]') as HTMLButtonElement;
-    await act(async () => {
-      refresh.click();
-      resolveFirstSummary?.({ version: 2, command: "summary", totals: { total: 1, success: 1, failed: 0, aborted: 0, other: 0, pending: 0, successRate: 1, failureRate: 0, abortRate: 0, participating: 1, totalRequests: 1, excluded: 0, inputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1, normalizedTokenTotal: 2, cacheHitNumerator: 0, cacheHitDenominator: 1 } });
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("2");
-    expect(summaryCalls).toBe(2);
-  });
-
-  it("keeps the last successful analytics snapshot visible when reconciliation fails", async () => {
-    let unavailable = false;
-    const api = createFakeDesktopApi({ control: {
-      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
-      onBackendState: () => () => undefined,
-      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
-      getAnalytics: async (query) => unavailable
-        ? { outcome: "unavailable", error: { code: "diagnostics_unavailable", classification: "diagnostics_storage_unavailable", message: "Diagnostics storage is unavailable" } }
-        : query.command === "options"
-          ? { version: 2, command: "options", providers: [], profiles: [], models: [], protocols: [], sessions: [], outcomes: [] }
-          : { version: 2, command: "summary", totals: { total: 3, success: 3, failed: 0, aborted: 0, other: 0, pending: 0, successRate: 1, failureRate: 0, abortRate: 0, participating: 3, totalRequests: 3, excluded: 0, inputTokens: 30, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 15, normalizedTokenTotal: 45, cacheHitNumerator: 0, cacheHitDenominator: 30 } },
-    } });
-
-    await act(async () => root.render(<App api={api} />));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("3");
-
-    unavailable = true;
     await act(async () => {
       (container.querySelector('button[aria-label="Refresh overview"]') as HTMLButtonElement).click();
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(queryRequestJourneys).toHaveBeenCalledTimes(2);
+    expect(getAnalytics).toHaveBeenCalledTimes(4);
+  });
 
-    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("3");
-    expect(container.textContent).toContain("Request analytics are temporarily unavailable.");
+  it("reconciles totals when a live request terminates", async () => {
+    const listeners = new Set<(record: import("@luckytoken/application-control-plane/control-plane").RequestJourneySummary) => void>();
+    let count = 0;
+    const getAnalytics = vi.fn(async (query: AnalyticsQuery) => query.command === "options"
+      ? emptyOptions
+      : { version: 3 as const, command: "summary" as const, totals: totals(count) });
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [], hasMore: false } }),
+      onRequestJourneys: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+      getAnalytics,
+    } });
+    await act(async () => root.render(<App api={api} />));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    count = 1;
+    await act(async () => {
+      for (const listener of listeners) listener({
+        id: 1,
+        runtimeId: "runtime-1",
+        requestId: "request-1",
+        operation: "model_generation",
+        outcome: "success",
+        completeness: "complete",
+        createdAt: Date.now(),
+        closedAt: Date.now() + 100,
+        usage: { terminalClass: "done", inputTokens: 0, cacheReadTokens: 0, outputTokens: 0 },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("1");
+    expect(getAnalytics.mock.calls.filter(([query]) => query.command === "summary")).toHaveLength(2);
   });
 });

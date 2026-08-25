@@ -25,16 +25,33 @@ function openAICompletion(text: string): Response {
       model: "deepseek/deepseek-v4-flash",
       choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
       usage: {
-        prompt_tokens: 1,
-        completion_tokens: 1,
-        total_tokens: 2,
+        prompt_tokens: 4,
+        completion_tokens: 2,
+        total_tokens: 6,
+        prompt_tokens_details: {
+          cached_tokens: 1,
+          audio_tokens: 0,
+        },
+        completion_tokens_details: { reasoning_tokens: 1 },
+        cache_creation_input_tokens: 1,
       },
     },
   ];
-  return new Response(
-    `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
-    { status: 200, headers: { "content-type": "text/event-stream" } },
+  const bytes = new TextEncoder().encode(
+    `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\r\n\r\n`).join("")}data: [DONE]\r\n\r\n`,
   );
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < bytes.length; offset += 13) {
+        controller.enqueue(bytes.slice(offset, offset + 13));
+      }
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
 }
 
 describe("CommandCode Goat Provider Package", () => {
@@ -100,6 +117,11 @@ describe("CommandCode Goat Provider Package", () => {
     expect(result.content).toEqual([
       { type: "text", text: "hello from goat" },
     ]);
+    expect(result.usage).toMatchObject({
+      input: 3,
+      cacheRead: 1,
+      output: 2,
+    });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(
       "https://api.commandcode.ai/provider/v1/chat/completions",

@@ -174,7 +174,7 @@ function requireSummary(
 }
 
 describe("Anthropic Provider Native terminal usage analytics producer", () => {
-  it("projects Complete usage without changing Profile execution or either wire", async () => {
+  it("projects terminal usage without changing Profile execution or either wire", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "luckytoken-anthropic-native-analytics-"),
     );
@@ -346,7 +346,7 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
           await durableJourney;
           analytics = requireSummary(
             await authority.getAnalytics({
-              version: 2,
+              version: 3,
               command: "summary",
               from: 0,
               to: Number.MAX_SAFE_INTEGER,
@@ -423,16 +423,12 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
       expect(enabled.analytics?.totals).toMatchObject({
         total: 1,
         success: 1,
-        participating: 1,
-        excluded: 0,
+        usageRequests: 1,
+        missingUsageRequests: 0,
+        speedRequests: 1,
         inputTokens: 5,
         cacheReadTokens: 3,
-        cacheWriteTokens: 2,
         outputTokens: 7,
-        reasoningTokens: 2,
-        normalizedTokenTotal: 17,
-        cacheHitNumerator: 3,
-        cacheHitDenominator: 8,
         cacheHitRate: 3 / 8,
         outputTokensPerSecond: 7,
       });
@@ -491,16 +487,12 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
       expect(sseEnabled.analytics?.totals).toMatchObject({
         total: 1,
         success: 1,
-        participating: 1,
-        excluded: 0,
+        usageRequests: 1,
+        missingUsageRequests: 0,
+        speedRequests: 1,
         inputTokens: 5,
         cacheReadTokens: 3,
-        cacheWriteTokens: 2,
         outputTokens: 7,
-        reasoningTokens: 2,
-        normalizedTokenTotal: 17,
-        cacheHitNumerator: 3,
-        cacheHitDenominator: 8,
         cacheHitRate: 3 / 8,
         outputTokensPerSecond: 7,
       });

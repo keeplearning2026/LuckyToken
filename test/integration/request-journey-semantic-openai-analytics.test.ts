@@ -23,7 +23,6 @@ import {
   createExecutionOperation,
   type ExecutionOperation,
 } from "../../src/execution.js";
-import { resolveUsageSemantics } from "../../src/providers/usage-declarations.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createLuckyTokenRuntime } from "../../src/runtime.js";
 import {
@@ -33,6 +32,7 @@ import {
 
 const REQUEST_ID = "89000000-0000-4000-8000-000000000001";
 const SESSION_ID = "89000000-0000-4000-8000-000000000002";
+const GOAT_REQUEST_ID = "89000000-0000-4000-8000-000000000003";
 const CLIENT_TOKEN = "client-semantic-usage-token-canary";
 
 const model: Model<string> = {
@@ -235,7 +235,7 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
           getModels: () => [model],
           streamSimple,
         } as unknown as Models;
-        const realExecution = createExecutionOperation(resolveUsageSemantics);
+        const realExecution = createExecutionOperation();
         const executeOperation: ExecutionOperation = async (...args) => {
           const message = await realExecution(...args);
           workOutcomes.push({
@@ -285,7 +285,7 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
           await durableJourney;
           analytics = requireSummary(
             await authority.getAnalytics({
-              version: 2,
+              version: 3,
               command: "summary",
               from: 0,
               to: Number.MAX_SAFE_INTEGER,
@@ -389,19 +389,165 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
       expect(enabled.analytics?.totals).toMatchObject({
         total: 1,
         success: 1,
-        participating: 1,
-        excluded: 0,
+        usageRequests: 1,
+        missingUsageRequests: 0,
+        speedRequests: 1,
         inputTokens: 5,
         cacheReadTokens: 3,
-        cacheWriteTokens: 2,
         outputTokens: 2,
-        reasoningTokens: 1,
-        normalizedTokenTotal: 12,
-        cacheHitNumerator: 3,
-        cacheHitDenominator: 8,
         cacheHitRate: 3 / 8,
       });
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes certified CommandCode Goat usage to the Journey row and Overview analytics", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "luckytoken-commandcode-goat-usage-"),
+    );
+    const goatModel: Model<string> = {
+      id: "deepseek/deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: "openai-completions",
+      provider: "commandcode-goat",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    };
+    const goatUsage: Usage = {
+      input: 87,
+      cacheRead: 0,
+      cacheWrite: 0,
+      output: 25,
+      reasoning: 23,
+      totalTokens: 112,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    };
+    const goatTerminal: AssistantMessage = {
+      role: "assistant",
+      api: goatModel.api,
+      provider: goatModel.provider,
+      model: goatModel.id,
+      content: [{ type: "text", text: "OK" }],
+      usage: goatUsage,
+      stopReason: "stop",
+      timestamp: 1_700_000_000_000,
+    };
+    let authority: DiagnosticsManagementAuthority | undefined;
+    let server: RunningLuckyTokenHttpServer | undefined;
+    let unsubscribe: (() => void) | undefined;
+
+    try {
+      authority = await createDiagnosticsAuthority({
+        configuration: parseDiagnosticsConfiguration(
+          { directory: join(root, "diagnostics") },
+          root,
+        ),
+        now: () => 2_000,
+      });
+      let resolveDurableJourney!: () => void;
+      const durableJourney = new Promise<void>((resolve) => {
+        resolveDurableJourney = resolve;
+      });
+      const subscription = authority.subscribeRequestJourneys((record) => {
+        if (record.requestId === GOAT_REQUEST_ID) resolveDurableJourney();
+      });
+      unsubscribe = () => subscription.unsubscribe();
+
+      const models = {
+        getModels: () => [goatModel],
+        streamSimple: (
+          selectedModel: Model<string>,
+          _context: Context,
+          options: ModelsSimpleStreamOptions,
+        ) => {
+          void options.onPayload?.(
+            {
+              model: selectedModel.id,
+              messages: [],
+              stream: true,
+              max_tokens: options.maxTokens,
+            },
+            selectedModel,
+          );
+          return terminalStream(goatTerminal, () => undefined);
+        },
+      } as unknown as Models;
+      const handler = createOpenAIResponsesHandler({
+        models,
+        executeOperation: createExecutionOperation(),
+        stateFile: join(root, "responses-state.json"),
+        maxRequestBytes: 4_096,
+        createResponseId: () => "resp_goat_usage",
+        createSessionId: () => SESSION_ID,
+        now: () => 1_700_000_000_000,
+      });
+      server = await startLuckyTokenHttpServer({
+        runtime: createLuckyTokenRuntime({ clientProtocols: [handler] }),
+        diagnostics: authority,
+        createRequestId: () => GOAT_REQUEST_ID,
+        port: 0,
+      });
+
+      const response = await fetch(`${server.origin}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${CLIENT_TOKEN}`,
+          "content-type": "application/json",
+          "x-client-request-id": SESSION_ID,
+        },
+        body: JSON.stringify({
+          model: "commandcode-goat/deepseek/deepseek-v4-flash",
+          input: "measure Goat usage",
+          max_output_tokens: 64,
+          store: false,
+        }),
+      });
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+      await durableJourney;
+
+      const page = await authority.queryRequestJourneys({ limit: 10 });
+      expect(page.records).toHaveLength(1);
+      expect(page.records[0]?.usage).toEqual({
+        terminalClass: "done",
+        inputTokens: 87,
+        cacheReadTokens: 0,
+        outputTokens: 25,
+        cacheHitRate: 0,
+      });
+
+      const analytics = requireSummary(
+        await authority.getAnalytics({
+          version: 3,
+          command: "summary",
+          from: 0,
+          to: Number.MAX_SAFE_INTEGER,
+        }),
+      );
+      expect(analytics.totals).toMatchObject({
+        total: 1,
+        usageRequests: 1,
+        missingUsageRequests: 0,
+        speedRequests: 0,
+        inputTokens: 87,
+        cacheReadTokens: 0,
+        outputTokens: 25,
+      });
+    } finally {
+      unsubscribe?.();
+      await server?.close();
+      await authority?.close();
       await rm(root, { recursive: true, force: true });
     }
   });

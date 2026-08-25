@@ -1,11 +1,11 @@
 import {
-  decodeNormalizedTerminalUsage,
-  type NormalizedTerminalUsage,
+  decodeTerminalUsageFact,
+  type TerminalUsageClass,
+  type TerminalUsageFact,
 } from "@luckytoken/provider-contract/usage";
 
 import { parseSseFrames, sseFramePayload, type SseFrame } from "../sse-lines.js";
 
-const EVIDENCE = "responses-terminal-usage-v1";
 const TERMINAL_EVENTS = new Set([
   "response.completed",
   "response.incomplete",
@@ -33,8 +33,7 @@ function frameEvent(frame: SseFrame): string | undefined {
 
 function responseFromPayload(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
-  if (isRecord(value.response)) return value.response;
-  return value;
+  return isRecord(value.response) ? value.response : value;
 }
 
 function terminalSseResponse(text: string): Record<string, unknown> | undefined {
@@ -64,111 +63,48 @@ function terminalSseResponse(text: string): Record<string, unknown> | undefined 
   return terminal;
 }
 
-function partial(
-  api: string,
-  reason: "usage_absent" | "component_unreported" | "invalid_components",
-  components: {
-    input: number;
-    cacheRead: number;
-    cacheWrite: number;
-    output: number;
-    reasoning?: number;
-  },
-): NormalizedTerminalUsage | undefined {
-  return decodeNormalizedTerminalUsage({
-    api,
-    ...components,
-    completeness: "partial",
-    reason,
-    evidence: EVIDENCE,
-  });
+function terminalClass(response: Record<string, unknown>): TerminalUsageClass {
+  return response.status === "completed" ? "done" : "failed";
 }
 
-function normalizeUsage(
-  api: string,
+function extractUsage(
   response: Record<string, unknown>,
-): NormalizedTerminalUsage | undefined {
-  if (response.usage === undefined || response.usage === null) {
-    return partial(api, "usage_absent", {
-      input: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      output: 0,
-    });
-  }
+): TerminalUsageFact | undefined {
   if (!isRecord(response.usage)) return undefined;
-  const usage = response.usage;
-  const rawInput = token(usage.input_tokens);
-  const output = token(usage.output_tokens);
-  const wireTotal = token(usage.total_tokens);
-  if (
-    (usage.input_tokens !== undefined && rawInput === undefined) ||
-    (usage.output_tokens !== undefined && output === undefined) ||
-    (usage.total_tokens !== undefined && wireTotal === undefined)
-  ) {
+  const rawInput = token(response.usage.input_tokens);
+  const output = token(response.usage.output_tokens);
+  if (rawInput === undefined || output === undefined) return undefined;
+
+  const details = response.usage.input_tokens_details;
+  if (details !== undefined && details !== null && !isRecord(details)) {
     return undefined;
   }
-
-  const details = usage.input_tokens_details;
-  if (details !== undefined && details !== null && !isRecord(details)) return undefined;
   const cachedValue = isRecord(details) ? details.cached_tokens : undefined;
   const writeValue = isRecord(details) ? details.cache_write_tokens : undefined;
   const cacheRead = cachedValue === undefined ? 0 : token(cachedValue);
   const cacheWrite = writeValue === undefined ? 0 : token(writeValue);
-  if (cacheRead === undefined || cacheWrite === undefined) return undefined;
-
-  const outputDetails = usage.output_tokens_details;
-  if (outputDetails !== undefined && outputDetails !== null && !isRecord(outputDetails)) {
+  if (
+    cacheRead === undefined ||
+    cacheWrite === undefined ||
+    cacheRead + cacheWrite > rawInput
+  ) {
     return undefined;
   }
-  const reasoningValue = isRecord(outputDetails)
-    ? outputDetails.reasoning_tokens
-    : undefined;
-  const reasoning = reasoningValue === undefined ? undefined : token(reasoningValue);
-  if (reasoningValue !== undefined && reasoning === undefined) return undefined;
 
-  const partitionedInput = Math.max(0, (rawInput ?? 0) - cacheRead - cacheWrite);
-  const components = {
-    input: partitionedInput,
+  return decodeTerminalUsageFact({
+    input: rawInput - cacheRead - cacheWrite,
+    output,
     cacheRead,
-    cacheWrite,
-    output: output ?? 0,
-    ...(reasoning === undefined || reasoning > (output ?? 0) ? {} : { reasoning }),
-  };
-  if (rawInput === undefined || output === undefined || wireTotal === undefined) {
-    return partial(api, "component_unreported", components);
-  }
-
-  const normalizedTotal =
-    partitionedInput + cacheRead + cacheWrite + output;
-  if (
-    !Number.isSafeInteger(normalizedTotal) ||
-    normalizedTotal !== wireTotal ||
-    (reasoning !== undefined && reasoning > output)
-  ) {
-    return partial(api, "invalid_components", components);
-  }
-  const denominator = partitionedInput + cacheRead + cacheWrite;
-  return decodeNormalizedTerminalUsage({
-    api,
-    ...components,
-    normalizedTotal,
-    ...(denominator > 0 ? { cacheHitRate: cacheRead / denominator } : {}),
-    completeness: "complete",
-    evidence: EVIDENCE,
+    terminalClass: terminalClass(response),
   });
 }
 
-/**
- * Extract terminal Responses-wire usage from one buffered passthrough result.
- * The function never derives Complete usage from a non-terminal SSE event.
- */
+/** Extract one product usage fact from a terminal native Responses result. */
 export function extractResponsesPassthroughUsage(
   body: Uint8Array,
   contentType: string,
-  api: string,
   missingContentTypeBodyKind: "json" | "event-stream" = "json",
-): NormalizedTerminalUsage | undefined {
+): TerminalUsageFact | undefined {
   const text = new TextDecoder().decode(body);
   let response: Record<string, unknown> | undefined;
   const normalizedContentType = contentType.trim().toLowerCase();
@@ -185,5 +121,5 @@ export function extractResponsesPassthroughUsage(
       return undefined;
     }
   }
-  return response === undefined ? undefined : normalizeUsage(api, response);
+  return response === undefined ? undefined : extractUsage(response);
 }

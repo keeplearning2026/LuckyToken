@@ -1,6 +1,6 @@
 import type {
-  NormalizedTerminalUsage,
-  UsageCompletenessReason,
+  TerminalUsageClass,
+  TerminalUsageFact,
 } from "@luckytoken/provider-contract/usage";
 
 /** Maximum records returned by one unified diagnostics query. */
@@ -65,22 +65,15 @@ export type RequestJourneyOutcome =
   | "aborted"
   | "interrupted";
 
-/** Bounded row-level usage projection for management clients. Incomplete
- * terminal usage never carries component values because those values are not
- * certified for product display or aggregation. */
-export type RequestJourneyUsageSummary =
-  | Readonly<{
-      readonly completeness: "complete";
-      readonly inputTokens: number;
-      readonly cacheReadTokens: number;
-      readonly outputTokens: number;
-      readonly cacheHitRate?: number;
-      readonly outputTokensPerSecond?: number;
-    }>
-  | Readonly<{
-      readonly completeness: "partial" | "unavailable";
-      readonly reason: UsageCompletenessReason;
-    }>;
+/** Bounded row-level projection of one authoritative terminal usage fact. */
+export interface RequestJourneyUsageSummary {
+  readonly terminalClass: TerminalUsageClass;
+  readonly inputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly outputTokens: number;
+  readonly cacheHitRate?: number;
+  readonly outputTokensPerSecond?: number;
+}
 
 export interface RequestJourneyLocation {
   readonly phase: RequestJourneyPhase;
@@ -249,7 +242,7 @@ export interface WorkOutcomeCommittedPersistedObservation
 export interface TerminalUsagePersistedObservation
   extends LocatedPersistedObservation {
   readonly kind: "terminal_usage_observed";
-  readonly usage: NormalizedTerminalUsage;
+  readonly usage: TerminalUsageFact;
 }
 
 export interface ClientResponsePreparedPersistedObservation

@@ -3,9 +3,8 @@
  * allowlist decoders: a frame carrying an unknown key (including any
  * monetary field — cost, price, billing, amount — which has no key in the
  * contract) or a value outside the bounded grammar is rejected, never
- * projected. Semantic identities of the aggregation (count partition,
- * participating/excluded split, reasoning subset, aggregate cache quotient)
- * are verified again at this boundary.
+ * projected. Count, usage coverage, speed coverage, and aggregate cache
+ * quotient identities are verified again at this boundary.
  */
 import {
   ANALYTICS_CONTRACT_VERSION,
@@ -49,18 +48,13 @@ const SUMMARY_KEYS: ReadonlySet<string> = new Set([
   "successRate",
   "failureRate",
   "abortRate",
-  "participating",
-  "totalRequests",
-  "excluded",
+  "usageRequests",
+  "missingUsageRequests",
+  "speedRequests",
   "inputTokens",
   "cacheReadTokens",
-  "cacheWriteTokens",
   "outputTokens",
   "outputTokensPerSecond",
-  "reasoningTokens",
-  "normalizedTokenTotal",
-  "cacheHitNumerator",
-  "cacheHitDenominator",
   "cacheHitRate",
 ]);
 
@@ -96,10 +90,9 @@ function boundedText(value: unknown, maximum: number): string | undefined {
 
 /**
  * Strict summary decode with the aggregation identities re-verified:
- * the outcome buckets partition `total` exactly, participating/excluded
- * split `total`, reasoning is a subset of output, and a present cacheHitRate
- * is exactly the aggregate numerator/denominator quotient (never an average
- * of per-request rates).
+ * the outcome buckets partition `total`, usage/missing split `total`, speed
+ * coverage is a subset of usage coverage, and a present cacheHitRate is the
+ * quotient derived from aggregate input and cache-read tokens.
  */
 export function decodeAnalyticsSummary(
   value: unknown,
@@ -118,18 +111,13 @@ export function decodeAnalyticsSummary(
     successRate,
     failureRate,
     abortRate,
-    participating,
-    totalRequests,
-    excluded,
+    usageRequests,
+    missingUsageRequests,
+    speedRequests,
     inputTokens,
     cacheReadTokens,
-    cacheWriteTokens,
     outputTokens,
     outputTokensPerSecond,
-    reasoningTokens,
-    normalizedTokenTotal,
-    cacheHitNumerator,
-    cacheHitDenominator,
     cacheHitRate,
   } = value;
   for (const entry of [
@@ -139,15 +127,12 @@ export function decodeAnalyticsSummary(
     aborted,
     other,
     pending,
-    participating,
-    totalRequests,
-    excluded,
+    usageRequests,
+    missingUsageRequests,
+    speedRequests,
     inputTokens,
     cacheReadTokens,
-    cacheWriteTokens,
     outputTokens,
-    cacheHitNumerator,
-    cacheHitDenominator,
   ]) {
     if (!isNonNegativeSafeInteger(entry)) return undefined;
   }
@@ -155,10 +140,6 @@ export function decodeAnalyticsSummary(
     !isRate(successRate) ||
     !isRate(failureRate) ||
     !isRate(abortRate) ||
-    (reasoningTokens !== undefined &&
-      !isNonNegativeSafeInteger(reasoningTokens)) ||
-    (normalizedTokenTotal !== undefined &&
-      !isNonNegativeSafeInteger(normalizedTokenTotal)) ||
     (outputTokensPerSecond !== undefined &&
       !isNonNegativeFiniteNumber(outputTokensPerSecond)) ||
     (cacheHitRate !== undefined && !isRate(cacheHitRate))
@@ -166,7 +147,9 @@ export function decodeAnalyticsSummary(
     return undefined;
   }
   const totalN = total as number;
-  const participatingN = participating as number;
+  const usageRequestsN = usageRequests as number;
+  const missingUsageRequestsN = missingUsageRequests as number;
+  const speedRequestsN = speedRequests as number;
   // Count partition identity: every matching request lands in exactly one
   // outcome bucket.
   if (
@@ -179,52 +162,31 @@ export function decodeAnalyticsSummary(
   ) {
     return undefined;
   }
-  // Token-stat count vocabulary.
   if (
-    totalRequests !== totalN ||
-    excluded !== totalN - participatingN
+    usageRequestsN + missingUsageRequestsN !== totalN ||
+    speedRequestsN > usageRequestsN
   ) {
     return undefined;
   }
-  // Reasoning is a subset of output; an absent value is never fabricated.
-  if (
-    reasoningTokens !== undefined &&
-    (reasoningTokens as number) > (outputTokens as number)
-  ) {
-    return undefined;
-  }
-  if (participatingN === 0) {
-    // Sums over an empty participating set are zero; totals that only exist
-    // over Complete snapshots are absent.
+  if (usageRequestsN === 0) {
     if (
       inputTokens !== 0 ||
       cacheReadTokens !== 0 ||
-      cacheWriteTokens !== 0 ||
       outputTokens !== 0 ||
-      outputTokensPerSecond !== undefined ||
-      reasoningTokens !== undefined ||
-      normalizedTokenTotal !== undefined
+      speedRequestsN !== 0
     ) {
       return undefined;
     }
   }
-  // The aggregate quotient, never an average.
-  const numerator = cacheHitNumerator as number;
-  const denominator = cacheHitDenominator as number;
-  const expectedDenominator =
-    (inputTokens as number) + (cacheReadTokens as number);
-  if (
-    numerator !== cacheReadTokens ||
-    !Number.isSafeInteger(expectedDenominator) ||
-    denominator !== expectedDenominator
-  ) {
-    return undefined;
-  }
+  if (speedRequestsN === 0 && outputTokensPerSecond !== undefined) return undefined;
+  if (speedRequestsN > 0 && outputTokensPerSecond === undefined) return undefined;
+  const denominator = (inputTokens as number) + (cacheReadTokens as number);
+  if (!Number.isSafeInteger(denominator)) return undefined;
   if (denominator === 0) {
     if (cacheHitRate !== undefined) return undefined;
   } else if (
     cacheHitRate === undefined ||
-    cacheHitRate !== numerator / denominator
+    cacheHitRate !== (cacheReadTokens as number) / denominator
   ) {
     return undefined;
   }
@@ -238,22 +200,15 @@ export function decodeAnalyticsSummary(
     successRate: successRate as number,
     failureRate: failureRate as number,
     abortRate: abortRate as number,
-    participating: participatingN,
-    totalRequests,
-    excluded: excluded as number,
+    usageRequests: usageRequestsN,
+    missingUsageRequests: missingUsageRequestsN,
+    speedRequests: speedRequestsN,
     inputTokens: inputTokens as number,
     cacheReadTokens: cacheReadTokens as number,
-    cacheWriteTokens: cacheWriteTokens as number,
     outputTokens: outputTokens as number,
     ...(outputTokensPerSecond === undefined
       ? {}
       : { outputTokensPerSecond }),
-    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-    ...(normalizedTokenTotal === undefined
-      ? {}
-      : { normalizedTokenTotal }),
-    cacheHitNumerator: numerator,
-    cacheHitDenominator: denominator,
     ...(cacheHitRate === undefined ? {} : { cacheHitRate }),
   });
 }

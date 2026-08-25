@@ -26,20 +26,13 @@ describe("Responses passthrough terminal usage extraction", () => {
     const snapshot = extractResponsesPassthroughUsage(
       new TextEncoder().encode(JSON.stringify(responseObject(usage))),
       "application/json",
-      "openai-codex-responses",
     );
 
     expect(snapshot).toEqual({
-      api: "openai-codex-responses",
       input: 5,
       cacheRead: 3,
-      cacheWrite: 2,
       output: 4,
-      reasoning: 1,
-      normalizedTotal: 14,
-      cacheHitRate: 0.3,
-      completeness: "complete",
-      evidence: "responses-terminal-usage-v1",
+      terminalClass: "done",
     });
   });
 
@@ -68,38 +61,23 @@ describe("Responses passthrough terminal usage extraction", () => {
     const snapshot = extractResponsesPassthroughUsage(
       new TextEncoder().encode(sse),
       "text/event-stream",
-      "openai-responses",
     );
 
     expect(snapshot).toMatchObject({
-      api: "openai-responses",
-      completeness: "complete",
       input: 5,
       cacheRead: 3,
-      cacheWrite: 2,
       output: 4,
-      reasoning: 1,
-      normalizedTotal: 14,
+      terminalClass: "done",
     });
   });
 
-  it("records a truthful partial snapshot when a successful terminal omits usage", () => {
+  it("returns no fact when a successful terminal omits usage", () => {
     const snapshot = extractResponsesPassthroughUsage(
       new TextEncoder().encode(JSON.stringify(responseObject(undefined))),
       "application/json",
-      "openai-responses",
     );
 
-    expect(snapshot).toEqual({
-      api: "openai-responses",
-      input: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      output: 0,
-      completeness: "partial",
-      reason: "usage_absent",
-      evidence: "responses-terminal-usage-v1",
-    });
+    expect(snapshot).toBeUndefined();
   });
 
   it("does not claim complete usage when required terminal components are missing", () => {
@@ -110,15 +88,13 @@ describe("Responses passthrough terminal usage extraction", () => {
         ),
       ),
       "application/json",
-      "openai-responses",
     );
 
-    expect(snapshot).toMatchObject({
-      completeness: "partial",
-      reason: "component_unreported",
+    expect(snapshot).toEqual({
       input: 10,
+      cacheRead: 0,
       output: 4,
+      terminalClass: "done",
     });
-    expect(snapshot?.normalizedTotal).toBeUndefined();
   });
 });

@@ -29,7 +29,6 @@ import { createAnthropicProviderNativeLane } from "./provider-native-anthropic/i
 import { createProviderNativeResponses } from "./provider-native-responses/index.js";
 import { bindProviderNativeResponsesConfiguration } from "./provider-native-responses/configuration.js";
 import { resolveRequestModel } from "./providers/request-composition.js";
-import { resolveUsageSemantics } from "./providers/usage-declarations.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import {
   anthropicMessagesProtocolId,
@@ -116,7 +115,7 @@ export async function createConfiguredLuckyTokenDataPlane(
   const createSessionId = options.createSessionId ?? randomUUID;
   const semanticExecution = createProfileBoundPiExecution({
     bindings: options.providerAuthBindings,
-    execute: createExecutionOperation(resolveUsageSemantics),
+    execute: createExecutionOperation(),
     resolveCredentialActivity: credentialActivityForExecutionFacts,
   });
   const anthropicProviderNativeLane = createAnthropicProviderNativeLane({

@@ -56,7 +56,7 @@ async function flush(): Promise<void> { await act(async () => { await Promise.re
 describe("Overview Request Journeys", () => {
   it("shows complete row usage before request details are loaded", async () => {
     const completed = summary(9, "success", {
-      completeness: "complete",
+      terminalClass: "done",
       inputTokens: 11,
       cacheReadTokens: 3,
       outputTokens: 7,
@@ -99,10 +99,14 @@ describe("Overview Request Journeys", () => {
     expect(getRequestJourney).not.toHaveBeenCalled();
   });
 
-  it("hides incomplete row usage and explains why it is unavailable", async () => {
+  it("shows available Pi usage values even when the terminal is partial", async () => {
     const partial = summary(8, "success", {
-      completeness: "partial",
-      reason: "component_unreported",
+      terminalClass: "aborted",
+      inputTokens: 88,
+      cacheReadTokens: 7_680,
+      outputTokens: 27,
+      cacheHitRate: 7_680 / 7_768,
+      outputTokensPerSecond: 13.5,
     });
     const api = createFakeDesktopApi({ control: {
       getBackendState: async () => ({ revision: 1, kind: "ready", status }),
@@ -114,19 +118,21 @@ describe("Overview Request Journeys", () => {
     await flush();
 
     const usageCells = [...container.querySelectorAll('tr[data-request-id="request-8"] > td')].slice(4, 9);
-    expect(usageCells.map((cell) => cell.textContent)).toEqual(["—", "—", "—", "—", "—"]);
-    for (const cell of usageCells) {
-      expect(cell.getAttribute("title")).toBe("Provider did not report all required usage components.");
-      expect(cell.getAttribute("aria-label")).toBe("Provider did not report all required usage components.");
-    }
+    expect(usageCells.map((cell) => cell.textContent)).toEqual([
+      "88",
+      "7,680",
+      "98.9%",
+      "27",
+      "13.5 t/s",
+    ]);
   });
 
-  it("explains unavailable derived metrics without hiding complete token counts", async () => {
+  it("renders an all-zero usage fact as zero while explaining unavailable derived metrics", async () => {
     const completed = summary(7, "success", {
-      completeness: "complete",
+      terminalClass: "done",
       inputTokens: 0,
       cacheReadTokens: 0,
-      outputTokens: 2,
+      outputTokens: 0,
     });
     const api = createFakeDesktopApi({ control: {
       getBackendState: async () => ({ revision: 1, kind: "ready", status }),
@@ -138,7 +144,7 @@ describe("Overview Request Journeys", () => {
     await flush();
 
     const usageCells = [...container.querySelectorAll('tr[data-request-id="request-7"] > td')].slice(4, 9);
-    expect(usageCells.map((cell) => cell.textContent)).toEqual(["0", "0", "—", "2", "—"]);
+    expect(usageCells.map((cell) => cell.textContent)).toEqual(["0", "0", "—", "0", "—"]);
     expect(usageCells[2]?.getAttribute("title")).toBe("Cache hit is unavailable because no input or cache-read tokens were reported.");
     expect(usageCells[4]?.getAttribute("title")).toBe("Token speed is unavailable because execution timing was incomplete.");
   });
@@ -186,7 +192,7 @@ describe("Overview Request Journeys", () => {
     expect(container.textContent).toContain("request-11");
     await act(async () => {
       for (const listener of listeners) listener(summary(11, "success", {
-        completeness: "complete",
+        terminalClass: "done",
         inputTokens: 5,
         cacheReadTokens: 1,
         outputTokens: 4,
@@ -218,7 +224,7 @@ describe("Overview Request Journeys", () => {
       httpStatus: 200,
       closedAt: stale.closedAt! + 1_000,
       usage: {
-        completeness: "complete",
+        terminalClass: "done",
         inputTokens: 120,
         cacheReadTokens: 30,
         outputTokens: 20,
@@ -278,7 +284,7 @@ describe("Overview Request Journeys", () => {
     };
     const request: RequestJourneySummary = {
       ...summary(15, "success", {
-        completeness: "complete",
+        terminalClass: "done",
         inputTokens: 8,
         cacheReadTokens: 2,
         outputTokens: 4,
@@ -308,7 +314,7 @@ describe("Overview Request Journeys", () => {
   it("exposes every truncated request value through a native tooltip", async () => {
     const request: RequestJourneySummary = {
       ...summary(16, "success", {
-        completeness: "complete",
+        terminalClass: "done",
         inputTokens: 120_000,
         cacheReadTokens: 30_000,
         outputTokens: 20_000,
@@ -419,7 +425,7 @@ describe("Overview Request Journeys", () => {
   it("keeps the last successful request snapshot visible when reconciliation fails", async () => {
     let unavailable = false;
     const completed = summary(17, "success", {
-      completeness: "complete",
+      terminalClass: "done",
       inputTokens: 10,
       cacheReadTokens: 0,
       outputTokens: 5,

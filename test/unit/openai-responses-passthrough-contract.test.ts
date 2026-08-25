@@ -168,14 +168,10 @@ describe("Provider Native Responses contract", () => {
     expect(recorded.observations).toContainEqual(expect.objectContaining({
       kind: "terminal_usage_observed",
       usage: expect.objectContaining({
-        api: "openai-responses",
-        completeness: "complete",
         input: 12,
         cacheRead: 5,
-        cacheWrite: 3,
         output: 7,
-        reasoning: 2,
-        normalizedTotal: 27,
+        terminalClass: "done",
       }),
     }));
   });
@@ -218,14 +214,10 @@ describe("Provider Native Responses contract", () => {
     expect(recorded.observations).toContainEqual(expect.objectContaining({
       kind: "terminal_usage_observed",
       usage: expect.objectContaining({
-        api: "openai-responses",
-        completeness: "complete",
         input: 12,
         cacheRead: 5,
-        cacheWrite: 3,
         output: 7,
-        reasoning: 2,
-        normalizedTotal: 27,
+        terminalClass: "done",
       }),
     }));
   });

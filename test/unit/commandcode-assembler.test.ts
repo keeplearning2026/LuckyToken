@@ -58,12 +58,7 @@ describe("CommandCode atomic content assembler", () => {
         input: { exact: true },
       },
     ]);
-    expect(result.usage).toEqual({
-      inputTokens: 2,
-      outputTokens: 3,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    });
+    expect(result.rawUsage).toMatchObject({ inputTokens: 2, outputTokens: 3 });
   });
 
   it("uses final tool authority and never repairs it from preview input", () => {
@@ -293,12 +288,6 @@ describe("CommandCode atomic content assembler", () => {
     ]);
     expect(result.finish.finishReason).toBe("stop");
     expect(result.rawUsage).toBeUndefined();
-    expect(result.usage).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    });
   });
 
   it("classifies EOF, open blocks, pause policies, abort, and stream errors", () => {
@@ -471,7 +460,6 @@ describe("CommandCode atomic content assembler", () => {
     ).toBe(true);
     expect(Object.isFrozen(first.finish)).toBe(true);
     expect(Object.isFrozen(first.rawUsage)).toBe(true);
-    expect(Object.isFrozen(first.usage)).toBe(true);
     expect(Object.isFrozen(first.responseIdentity)).toBe(true);
     expect(Object.isFrozen(first.notices)).toBe(true);
   });

@@ -45,7 +45,7 @@ describe("CommandCode bare JSONL decoder", () => {
     expect(result.content).toEqual([
       { type: "text", id: "t", text: "A😀B" },
     ]);
-    expect(result.usage).toMatchObject({ inputTokens: 1, outputTokens: 2 });
+    expect(result.rawUsage).toMatchObject({ inputTokens: 1, outputTokens: 2 });
   });
 
   it("handles several complete events in one network chunk", async () => {

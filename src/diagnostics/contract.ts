@@ -1,4 +1,4 @@
-import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
 
 export const REQUEST_JOURNEY_PHASES = Object.freeze([
   "http_admission",
@@ -190,7 +190,7 @@ export interface WorkOutcomeCommittedObservation extends LocatedObservation {
 
 export interface TerminalUsageObservedObservation extends LocatedObservation {
   readonly kind: "terminal_usage_observed";
-  readonly usage: NormalizedTerminalUsage;
+  readonly usage: TerminalUsageFact;
 }
 
 export interface ClientResponsePreparedObservation extends LocatedObservation {

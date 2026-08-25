@@ -166,8 +166,8 @@ function convertUsage(
 
   // Online CommandCode evidence for deepseek-v4-flash consistently exposes
   // these direct fields. They are the only authoritative sources for the
-  // product-facing Input / Cache read / Output components. Never reconstruct
-  // Input by subtracting cache fields from inputTokens.
+  // Pi Usage input / cache-read / output components. Never reconstruct input
+  // by subtracting cache fields from inputTokens.
   const input = optionalCount(rawInputDetails, "noCacheTokens");
   const cacheRead = optionalCount(rawInputDetails, "cacheReadTokens");
   const output = optionalCount(raw, "outputTokens");
@@ -404,7 +404,7 @@ export function convertCommittedCommandCodeResult(
     trustworthyUsage = convertUsage(result, authority);
   } catch {
     // Usage is accounting/observability, never model-visible semantics.
-    // Malformed or inconsistent usage degrades to Pi's absence encoding and
+    // Malformed or inconsistent usage degrades to Pi's all-zero fallback and
     // a bounded warning; content/tool/finish conversion continues normally.
     usageNotices = [usageUnavailableNotice()];
   }

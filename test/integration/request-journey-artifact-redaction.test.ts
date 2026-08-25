@@ -52,7 +52,7 @@ async function readDiagnosticsFiles(
 ): Promise<ReadonlyMap<string, Buffer>> {
   const files = new Map<string, Buffer>();
   for (const name of await readdir(directory)) {
-    if (!name.startsWith("diagnostics.sqlite3")) continue;
+    if (!name.startsWith("diagnostics-v2.sqlite3")) continue;
     try {
       files.set(name, await readFile(join(directory, name)));
     } catch (error) {
@@ -77,7 +77,7 @@ function expectPhysicalRedaction(
   phase: "running" | "closed",
 ): void {
   expect.soft([...files.keys()], `${phase}: diagnostics files`).toContain(
-    "diagnostics.sqlite3",
+    "diagnostics-v2.sqlite3",
   );
   const bytes = combinedBytes(files);
   expect.soft(bytes.includes(Buffer.from(SAFE_MARKER)), `${phase}: safe marker`).toBe(
@@ -106,7 +106,7 @@ describe("Request Journey failure artifact redaction", () => {
   it("persists useful failed request evidence without writing credential canaries to SQLite", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-artifact-redaction-"));
     const diagnosticsDirectory = join(root, "diagnostics");
-    const databasePath = join(diagnosticsDirectory, "diagnostics.sqlite3");
+    const databasePath = join(diagnosticsDirectory, "diagnostics-v2.sqlite3");
     let authority: DiagnosticsAuthority | undefined;
     let server: RunningLuckyTokenHttpServer | undefined;
     let providerCalls = 0;

@@ -14,9 +14,8 @@ import {
   type UpstreamFailureFact,
 } from "@luckytoken/provider-contract/diagnostics";
 import {
-  normalizeTerminalUsage,
+  createTerminalUsageFact,
   type TerminalUsageClass,
-  type UsageSemanticsResolver,
 } from "@luckytoken/provider-contract/usage";
 
 function isPlainObject(value: object): boolean {
@@ -47,14 +46,7 @@ export function freezePiInvocation(
   deepFreezeInvocationData(options);
 }
 
-/**
- * Ticket 20: the neutral Pi execution operation Client Protocol handlers
- * call. It is the plain `execute` surface without the usage-semantics
- * resolver parameter: the handler never names or carries any usage-semantics
- * type — the Provider/composition side binds the resolver into the operation
- * via `createExecutionOperation` and hands the bound operation to the
- * handler through its options.
- */
+/** The neutral Pi execution operation used by Client Protocol handlers. */
 export type ExecutionOperation = (
   models: Models,
   model: Model<string>,
@@ -63,24 +55,9 @@ export type ExecutionOperation = (
   factsSink?: ExecutionFactsSink,
 ) => Promise<AssistantMessage>;
 
-/**
- * Binds the narrow usage-semantics resolver (Provider integration side) into
- * a neutral execution operation. `createExecutionOperation()` with no
- * resolver is the honest default: every api is undeclared and every
- * terminal-usage snapshot is Partial (`undeclared_semantics`).
- */
-export function createExecutionOperation(
-  resolveUsageSemantics?: UsageSemanticsResolver,
-): ExecutionOperation {
+export function createExecutionOperation(): ExecutionOperation {
   return (models, model, context, options, factsSink) =>
-    execute(
-      models,
-      model,
-      context,
-      options,
-      factsSink,
-      resolveUsageSemantics,
-    );
+    execute(models, model, context, options, factsSink);
 }
 
 export async function execute(
@@ -89,32 +66,16 @@ export async function execute(
   context: Context,
   options: ModelsSimpleStreamOptions,
   factsSink?: ExecutionFactsSink,
-  /**
-   * Ticket 20: the narrow Provider/composition-side operation that resolves
-   * the declared usage semantics for one Pi api id. Core never imports the
-   * Provider integration directory; the composition root wires this through
-   * the handler seam (same pattern as `resolveRequestModel`). Absent means
-   * every api is undeclared (Partial undeclared_semantics snapshots).
-   */
-  resolveUsageSemantics?: UsageSemanticsResolver,
 ): Promise<AssistantMessage> {
   const signal = options.signal;
   throwIfExecutionAborted(signal);
-  /** Ticket 20: capture the canonical terminal-usage snapshot at the Pi
-   *  terminal, before execute() returns or throws, so the error-terminal
-   *  message is never discarded. Delivered only to an opted-in sink. */
+  /** Capture Pi's terminal AssistantMessage usage as a fail-open observation. */
   const observeTerminal = (
     terminalClass: TerminalUsageClass,
     message: AssistantMessage,
   ): void => {
-    factsSink?.terminalUsage?.(
-      normalizeTerminalUsage(
-        model.api,
-        message.usage,
-        terminalClass,
-        resolveUsageSemantics?.(model.api),
-      ),
-    );
+    const fact = createTerminalUsageFact(message.usage, terminalClass);
+    if (fact !== undefined) factsSink?.terminalUsage?.(fact);
   };
   let iterator: AsyncIterator<AssistantMessageEvent>;
   try {

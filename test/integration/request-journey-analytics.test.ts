@@ -4,7 +4,7 @@ import type {
   AnalyticsQueryResult,
   AnalyticsResult,
 } from "@luckytoken/application-control-plane/control-plane";
-import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,7 +58,7 @@ interface FutureProfileAttributedObservation {
 
 interface FutureTerminalUsageObservation {
   readonly kind: "terminal_usage_observed";
-  readonly usage: NormalizedTerminalUsage;
+  readonly usage: TerminalUsageFact;
   readonly location: RequestJourneyLocation;
 }
 
@@ -100,50 +100,22 @@ interface FixtureJourney {
   readonly workOutcome: "success" | "failed" | "aborted";
   readonly requestOutcome?: FixtureOutcome;
   readonly journeyOutcome: "success" | "failed" | "aborted";
-  readonly usage?: NormalizedTerminalUsage;
+  readonly usage?: TerminalUsageFact;
   readonly executionDurationMs?: number;
   readonly operation?: "model_generation" | "unsupported_transport";
 }
 
-function completeUsage(
-  input: number,
-  cacheRead: number,
-  cacheWrite: number,
-  output: number,
-  reasoning: number,
-  api: string,
-): NormalizedTerminalUsage {
-  const denominator = input + cacheRead + cacheWrite;
-  return Object.freeze({
-    api,
-    input,
-    cacheRead,
-    cacheWrite,
-    output,
-    reasoning,
-    normalizedTotal: input + cacheRead + cacheWrite + output,
-    ...(denominator === 0
-      ? {}
-      : { cacheHitRate: cacheRead / denominator }),
-    completeness: "complete",
-  });
-}
-
-function partialUsage(
+function usageFact(
   input: number,
   cacheRead: number,
   output: number,
-  reason: "failed" | "aborted",
-  api: string,
-): NormalizedTerminalUsage {
+  terminalClass: TerminalUsageFact["terminalClass"] = "done",
+): TerminalUsageFact {
   return Object.freeze({
-    api,
     input,
     cacheRead,
-    cacheWrite: 0,
     output,
-    completeness: "partial",
-    reason,
+    terminalClass,
   });
 }
 
@@ -172,17 +144,17 @@ function requireOptions(result: AnalyticsQueryResult): AnalyticsOptionsResult {
  *
  *  A 10:00 anthropic/claude-x semantic success, Complete (5,3,2,2,r1),
  *    execution 120s, but the overall Journey later fails Client rendering.
- *  B 11:30 anthropic/claude-x provider-native failed, Partial, execution 30s.
+ *  B 11:30 anthropic/claude-x provider-native failed, terminal usage, execution 30s.
  *  C 12:00 commandcode-private/cc-mini local success, Complete (4,0,0,3,r0),
  *    execution 60s.
- *  D 13:00 openai/gpt-r semantic aborted, Partial, execution 45s.
+ *  D 13:00 openai/gpt-r semantic aborted, terminal usage, execution 45s.
  *  E 14:00 unresolved OpenAI request, unknown-alias, no execution/usage.
  *  F 15:00 is exactly the exclusive upper bound and must not participate.
  *  G 14:30 is an expected unsupported transport probe and is not product
  *    analytics work.
  *
  * Therefore totals are 5 requests: success=2, failed=1, aborted=1, other=1;
- * Complete usage sums are input=9, cacheRead=3, cacheWrite=2, output=5,
+ * Terminal usage sums are input=9, cacheRead=3, output=5,
  * reasoning=1, normalized=19; cache hit is 3/(9+3)=0.25 and throughput is
  * 5 output / (120+60)s.
  */
@@ -369,7 +341,7 @@ describe("Request Journey Worker analytics projection", () => {
         },
         workOutcome: "failed",
         journeyOutcome: "failed",
-        usage: partialUsage(7, 1, 0, "failed", "anthropic-messages"),
+        usage: usageFact(7, 1, 0, "failed"),
         executionDurationMs: 30_000,
       });
       appendJourney({
@@ -388,7 +360,7 @@ describe("Request Journey Worker analytics projection", () => {
         requestOutcome: "success",
         // A later Client rendering failure must not rewrite Pi work success.
         journeyOutcome: "failed",
-        usage: completeUsage(5, 3, 2, 2, 1, "anthropic-messages"),
+        usage: usageFact(5, 3, 2),
         executionDurationMs: 120_000,
       });
       appendJourney({
@@ -401,7 +373,7 @@ describe("Request Journey Worker analytics projection", () => {
         clientSessionId: SESSION_BETA,
         workOutcome: "success",
         journeyOutcome: "success",
-        usage: completeUsage(4, 0, 0, 3, 0, "local-responses"),
+        usage: usageFact(4, 0, 3),
         executionDurationMs: 60_000,
       });
       appendJourney({
@@ -418,7 +390,7 @@ describe("Request Journey Worker analytics projection", () => {
         },
         workOutcome: "aborted",
         journeyOutcome: "aborted",
-        usage: partialUsage(2, 1, 0, "aborted", "responses"),
+        usage: usageFact(2, 1, 0, "aborted"),
         executionDurationMs: 45_000,
       });
       appendJourney({
@@ -439,7 +411,7 @@ describe("Request Journey Worker analytics projection", () => {
         clientSessionId: SESSION_ALPHA,
         workOutcome: "success",
         journeyOutcome: "success",
-        usage: completeUsage(900, 900, 900, 900, 900, "boundary"),
+        usage: usageFact(900, 900, 900),
         executionDurationMs: 1,
       });
       appendJourney({
@@ -465,7 +437,7 @@ describe("Request Journey Worker analytics projection", () => {
       ]);
       const totalsResult = requireSummary(
         await analytics.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           ...range,
           series: { granularity: "hour" },
@@ -482,20 +454,15 @@ describe("Request Journey Worker analytics projection", () => {
         successRate: 0.4,
         failureRate: 0.2,
         abortRate: 0.2,
-        participating: 2,
-        totalRequests: 5,
-        excluded: 3,
-        inputTokens: 9,
-        cacheReadTokens: 3,
-        cacheWriteTokens: 2,
+        usageRequests: 4,
+        missingUsageRequests: 1,
+        speedRequests: 4,
+        inputTokens: 18,
+        cacheReadTokens: 5,
         outputTokens: 5,
-        reasoningTokens: 1,
-        normalizedTokenTotal: 19,
-        cacheHitNumerator: 3,
-        cacheHitDenominator: 12,
-        cacheHitRate: 0.25,
+        cacheHitRate: 5 / 23,
       });
-      expect(outputTokensPerSecond).toBeCloseTo(5 / 180, 12);
+      expect(outputTokensPerSecond).toBeCloseTo(5 / 255, 12);
       expect(totalsResult.buckets?.map((bucket) => ({
         start: bucket.start,
         end: bucket.end,
@@ -510,7 +477,7 @@ describe("Request Journey Worker analytics projection", () => {
 
       const provider = requireSummary(
         await analytics.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           ...range,
           groupBy: "provider",
@@ -560,7 +527,7 @@ describe("Request Journey Worker analytics projection", () => {
 
       const model = requireSummary(
         await analytics.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           ...range,
           groupBy: "model",
@@ -575,7 +542,7 @@ describe("Request Journey Worker analytics projection", () => {
 
       const protocol = requireSummary(
         await analytics.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           ...range,
           groupBy: "protocol",
@@ -609,7 +576,7 @@ describe("Request Journey Worker analytics projection", () => {
 
       const outcome = requireSummary(
         await analytics.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           ...range,
           groupBy: "outcome",
@@ -624,7 +591,7 @@ describe("Request Journey Worker analytics projection", () => {
 
       const session = requireSummary(
         await analytics.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           ...range,
           filters: { sessions: [SESSION_ALPHA] },
@@ -634,21 +601,21 @@ describe("Request Journey Worker analytics projection", () => {
         total: 2,
         success: 1,
         failed: 1,
-        participating: 1,
-        excluded: 1,
-        inputTokens: 5,
+        usageRequests: 2,
+        missingUsageRequests: 0,
+        inputTokens: 12,
         outputTokens: 2,
       });
 
       const options = requireOptions(
         await analytics.getAnalytics({
-          version: 2,
+          version: 3,
           command: "options",
           ...range,
         }),
       );
       expect(options).toEqual({
-        version: 2,
+        version: 3,
         command: "options",
         providers: ["anthropic", "commandcode-private", "openai"],
         profiles: [

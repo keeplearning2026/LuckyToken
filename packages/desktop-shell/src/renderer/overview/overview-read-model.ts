@@ -228,7 +228,7 @@ class OverviewCoordinator {
           () => ({ outcome: "unavailable" }),
         ),
         this.#control.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           from: input.from,
           to: input.to,
@@ -240,7 +240,7 @@ class OverviewCoordinator {
           () => ({ outcome: "unavailable" }),
         ),
         this.#control.getAnalytics({
-          version: 2,
+          version: 3,
           command: "options",
           from: input.from,
           to: input.to,

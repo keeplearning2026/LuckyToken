@@ -1983,15 +1983,8 @@ flowchart LR
 ├── state/
 │   ├── openai-responses.json
 │   │   owner: Responses session-state capability
-│   ├── diagnostics/diagnostics.sqlite3
-│   │   owner: RuntimeDiagnosticsStore
-│   ├── request-ledger/ledger.sqlite3
-│   │   owner: RequestLedgerStore
-│   └── deep-diagnostics/capture.sqlite3
-│       owner: DeepCaptureStore
-│
-├── logs/failed-requests/*.json
-│   owner: invocation diagnostics failure journal
+│   └── request-diagnostics/diagnostics-v2.sqlite3
+│       owner: RequestJourneyDiagnosticsAuthority
 │
 └── pi/
     ├── credential-profiles/
@@ -2046,7 +2039,7 @@ conversation store 或全量 request logging subsystem。
 
 ```text
 resolveRequestIdentity + request identity types
-createRuntimeDiagnosticsStoreFactory + diagnostics types/redaction helpers
+createRequestJourneyDiagnosticsAuthority + diagnostics observation types
 createLuckyTokenRuntime + Runtime types
 createFileCredentialStore
 createFileProviderCredentialRecordStore / createProviderCredentialProfiles

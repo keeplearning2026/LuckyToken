@@ -173,7 +173,7 @@ describe("Diagnostics runtime-event management", () => {
     await authority.close();
     authorities.splice(authorities.indexOf(authority), 1);
 
-    const databasePath = join(root, "diagnostics.sqlite3");
+    const databasePath = join(root, "diagnostics-v2.sqlite3");
     expect((await readFile(databasePath)).byteLength).toBeGreaterThan(0);
     const database = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -202,7 +202,7 @@ describe("Diagnostics runtime-event management", () => {
       join(tmpdir(), "luckytoken-runtime-events-unavailable-"),
     );
     roots.push(root);
-    const databasePath = join(root, "diagnostics.sqlite3");
+    const databasePath = join(root, "diagnostics-v2.sqlite3");
     const incompatible = new DatabaseSync(databasePath);
     incompatible.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);

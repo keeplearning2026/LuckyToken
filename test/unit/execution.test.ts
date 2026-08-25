@@ -27,7 +27,6 @@ import {
   createUpstreamFailureDiagnostic,
   createUpstreamFailureFact,
 } from "@luckytoken/provider-contract/diagnostics";
-import { resolveUsageSemantics } from "../../src/providers/usage-declarations.js";
 
 const usage: Usage = {
   input: 0,
@@ -523,19 +522,12 @@ describe("Core atomic execution", () => {
 
     expect(result).toBe(complete);
     expect(sink.terminalUsage).toHaveBeenCalledOnce();
-    // The fixture terminal carries the IR's all-zero absence encoding, so
-    // the snapshot is Partial usage_absent (never inferred from values);
-    // the fixture model api ("api") is also undeclared, but absence wins
-    // first.
     expect(sink.terminalUsage).toHaveBeenCalledWith(
       expect.objectContaining({
-        api: "api",
-        completeness: "partial",
-        reason: "usage_absent",
         input: 0,
         cacheRead: 0,
-        cacheWrite: 0,
         output: 0,
+        terminalClass: "done",
       }),
     );
   });
@@ -556,7 +548,7 @@ describe("Core atomic execution", () => {
     ).rejects.toBeInstanceOf(ExecutionFailure);
     expect(sink.terminalUsage).toHaveBeenCalledOnce();
     expect(sink.terminalUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ completeness: "partial", reason: "failed" }),
+      expect.objectContaining({ terminalClass: "failed" }),
     );
   });
 
@@ -578,7 +570,7 @@ describe("Core atomic execution", () => {
     ).rejects.toBeInstanceOf(ExecutionAbortedError);
     expect(sink.terminalUsage).toHaveBeenCalledOnce();
     expect(sink.terminalUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ completeness: "partial", reason: "aborted" }),
+      expect.objectContaining({ terminalClass: "aborted" }),
     );
   });
 
@@ -599,10 +591,7 @@ describe("Core atomic execution", () => {
     ).rejects.toBeInstanceOf(UnsupportedExecutionOutcomeError);
     expect(sink.terminalUsage).toHaveBeenCalledOnce();
     expect(sink.terminalUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        completeness: "unavailable",
-        reason: "unsupported_terminal",
-      }),
+      expect.objectContaining({ terminalClass: "unsupported" }),
     );
   });
 
@@ -624,7 +613,7 @@ describe("Core atomic execution", () => {
     expect(sink.terminalUsage).not.toHaveBeenCalled();
   });
 
-  it("resolves the real declaration for a declared api and yields a complete snapshot", async () => {
+  it("copies only product usage from the terminal Pi AssistantMessage", async () => {
     const declaredModel: Model<string> = {
       ...model,
       api: "anthropic-messages",
@@ -653,21 +642,20 @@ describe("Core atomic execution", () => {
       context,
       { maxTokens: 10 },
       sink,
-      resolveUsageSemantics,
     );
 
     expect(result).toBe(complete);
     expect(sink.terminalUsage).toHaveBeenCalledWith(
       expect.objectContaining({
-        api: "anthropic-messages",
-        completeness: "complete",
-        normalizedTotal: 7,
-        cacheHitRate: 0,
+        input: 5,
+        output: 2,
+        cacheRead: 0,
+        terminalClass: "done",
       }),
     );
   });
 
-  it("binds the resolver into the neutral execution operation used by handlers", async () => {
+  it("exposes the same narrow contract through the handler operation", async () => {
     const declaredModel: Model<string> = {
       ...model,
       api: "anthropic-messages",
@@ -690,7 +678,7 @@ describe("Core atomic execution", () => {
       terminalUsage: vi.fn(),
     };
 
-    const bound = createExecutionOperation(resolveUsageSemantics);
+    const bound = createExecutionOperation();
     const result = await bound(
       fixture.models,
       declaredModel,
@@ -702,32 +690,10 @@ describe("Core atomic execution", () => {
     expect(result).toBe(complete);
     expect(boundSink.terminalUsage).toHaveBeenCalledWith(
       expect.objectContaining({
-        api: "anthropic-messages",
-        completeness: "complete",
-        normalizedTotal: 7,
-      }),
-    );
-
-    // The unbound operation is the honest default: undeclared semantics.
-    const defaultSink: ExecutionFactsSink = {
-      notice: vi.fn(),
-      attempt: vi.fn(),
-      terminalUsage: vi.fn(),
-    };
-    const defaultFixture = modelsFor(
-      streamFrom([{ type: "done", reason: "stop", message: complete }]),
-    );
-    await createExecutionOperation()(
-      defaultFixture.models,
-      declaredModel,
-      context,
-      { maxTokens: 10 },
-      defaultSink,
-    );
-    expect(defaultSink.terminalUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        completeness: "partial",
-        reason: "undeclared_semantics",
+        input: 5,
+        output: 2,
+        cacheRead: 0,
+        terminalClass: "done",
       }),
     );
   });

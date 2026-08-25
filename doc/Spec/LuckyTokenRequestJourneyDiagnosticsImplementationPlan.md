@@ -1,6 +1,6 @@
 # LuckyToken Request Journey Diagnostics Implementation Plan
 
-- **Status:** implementation complete; guarded release certification passed on 2026-08-23
+- **Status:** implementation complete; Usage v2/Analytics v3 revision implemented on 2026-08-24
 - **Authority:** `LuckyTokenRequestJourneyDiagnosticsSpec.md`
 - **Method:** test-driven replacement; no dual-write compatibility period
 - **Release rule:** the production cutover is atomic and is not releasable until every final gate is green
@@ -26,7 +26,7 @@ Data Plane producers
   -> synchronous no-throw RequestJourneyObserver
   -> bounded in-process admission/flight recorder
   -> one Diagnostics Worker
-  -> state/request-diagnostics/diagnostics.sqlite3
+  -> state/request-diagnostics/diagnostics-v2.sqlite3
 
 Application Control Plane
   -> Diagnostics management Interface on the same Authority object
@@ -75,7 +75,7 @@ Implement behind one deep module:
 - bounded ordinary queue, reserved terminal capacity, and per-admitted-Journey close reservation;
 - bounded failed-request flight recorder;
 - centralized serialization, redaction, truncation, and artifact completeness;
-- one Worker-owned `luckytoken_diagnostics v1` SQLite schema;
+- one Worker-owned `luckytoken_diagnostics v2` SQLite schema;
 - append ACK/NACK, idempotent replay after lost ACK, and same-runtime Worker restart;
 - startup incompatibility and Worker-construction failure as fail-open diagnostics unavailability;
 - post-COMMIT subscriptions with hostile listener containment;
@@ -141,7 +141,7 @@ Add Worker commands over the same database for:
 
 History count and deletion include only sealed Journeys. An active Journey remains writable and cannot be turned into orphan events by a concurrent management cleanup.
 
-Analytics producers publish only facts known at their real ownership seam. Missing or partial usage is excluded according to the current analytics contract; no adapter invents tokens, duration, Profile, model, or outcome.
+Analytics producers publish only facts known at their real ownership seam. Semantic Conversion copies `input`, `output`, and `cacheRead` only from terminal Pi `AssistantMessage.usage`; native lanes publish the same three-field fact from their own response boundary. A complete all-zero fact is valid. Requests without a fact contribute only to `missingUsageRequests`; no adapter invents tokens, duration, Profile, model, outcome, cost, cache-write, reasoning usage, or normalized totals.
 
 **Green gate:** large paged analytics input is not materialized as one row array, backups are consistent and temporary files are removed, and all management failure returns typed unavailability rather than a fabricated empty-complete result.
 
@@ -177,7 +177,7 @@ In one coordinated change:
 
 Do not read deprecated configuration fields. Do not open, import, migrate, rewrite, or delete any legacy store during startup.
 
-**Green gate:** an Application lifecycle test observes one Authority factory call, one runtime ID, reuse across restart, one close after drain, and creation of only `state/request-diagnostics/diagnostics.sqlite3`; seeded legacy trees remain byte- and metadata-identical.
+**Green gate:** an Application lifecycle test observes one Authority factory call, one runtime ID, reuse across restart, one close after drain, and creation of only `state/request-diagnostics/diagnostics-v2.sqlite3`; a seeded v1 `diagnostics.sqlite3` remains byte-identical and is never read.
 
 ### Slice 7 — Remove legacy production paths
 

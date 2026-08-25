@@ -1,7 +1,7 @@
 # LuckyToken Request Journey Diagnostics Specification
 
-- **Status:** IMPLEMENTED CONTRACT — guarded release certification passed on 2026-08-23
-- **Date:** 2026-08-23
+- **Status:** IMPLEMENTED CONTRACT — Usage v2/Analytics v3 revision implemented on 2026-08-24
+- **Date:** 2026-08-24
 - **Scope:** Data Plane request journey, failure location, investigation artifacts, fail-open observation runtime, and one diagnostics persistence authority
 - **Out of scope:** physical SQL/index tuning, final Desktop layout, and legacy data migration/import (not provided)
 
@@ -474,12 +474,16 @@ Normal Backend shutdown drains Data Plane work first, then gives diagnostics at 
 
 ### 14.6 One diagnostics persistence authority
 
-Version 1 uses one new authority and one database:
+Version 2 uses one authority and one database:
 
 ```text
-state/request-diagnostics/diagnostics.sqlite3
-logical schema: luckytoken_diagnostics v1
+state/request-diagnostics/diagnostics-v2.sqlite3
+logical schema: luckytoken_diagnostics v2
 ```
+
+The former `diagnostics.sqlite3` v1 file is not read, migrated, rewritten, or
+deleted. Version selection is expressed by the file name and schema together;
+there is no dual reader or compatibility projection.
 
 The current configuration contract is intentionally new and has no legacy aliases:
 
@@ -534,17 +538,38 @@ The Application Control Plane is the only management seam into the running diagn
 - `getAnalytics(query)`, preserving current product analytics semantics while sourcing them from Journeys.
 
 Each `queryRequestJourneys` result and closed-Journey subscription may include
-one bounded row-level usage projection. Complete usage exposes only input,
-cache-read, output, product cache-hit rate, and Provider-execution token speed.
-Partial or unavailable usage exposes only its closed completeness reason; its
-uncertified numeric components do not cross the management summary seam. The
-projection is derived from the existing terminal-usage and execution-timing
-facts and does not create another persistence authority or a detail-query
-dependency.
+one bounded row-level usage projection. The authoritative Semantic Conversion
+source is the terminal Pi `AssistantMessage.usage`; native preservation lanes
+may publish the same product fact from their lane-owned response boundary. The
+product fact contains exactly non-negative safe-integer `input`, `output`, and
+`cacheRead` values plus `done`, `failed`, `aborted`, or `unsupported` terminal
+class. All three numbers are present together and zero is a real value. A
+runtime observation that violates this contract is dropped without changing
+the model response.
+
+The row projection exposes those three values and, when calculable, cache-hit
+rate and Provider-execution token speed. A request without a terminal usage
+fact has no usage projection. No completeness declaration, Provider semantics,
+raw Provider usage field, cost, cache-write, reasoning-token, or normalized
+total value crosses this management seam.
+
+Analytics contract v3 counts every request in `totalRequests`. Every request
+with a usage fact, including failed and aborted requests, contributes to
+`usageRequests` and to the three token sums; the remainder is
+`missingUsageRequests`. `speedRequests` counts usage-bearing requests with a
+positive execution duration. Derived values are:
+
+```text
+cache hit   = sum(cacheRead) / sum(input + cacheRead), when denominator > 0
+token speed = sum(output) / sum(execution duration seconds), for speedRequests
+```
+
+An undefined derived value is omitted from the wire contract and rendered as
+`—`. Coverage is shown only when the relevant request count is below the total.
 
 Artifact reads return at most 256 KiB of base64 per call. Subscriber failure is contained in the Control Plane and cannot affect the Worker or Data Plane. When the Worker/database is unavailable, reads return a typed `unavailable` result with diagnostics-health facts; they do not return a fabricated empty-complete result and do not open SQLite directly.
 
-The production cutover replaces the legacy Request Ledger, Invocation Diagnostics, Deep Capture, and request-owned Runtime Diagnostics paths atomically. It does not dual-write. The new config contract, Control Plane contract, and `luckytoken_diagnostics v1` schema do not read deprecated fields, command aliases, journals, databases, or capture directories. Legacy data is not migrated, imported, modified, or deleted. A new run creates only the new diagnostics database; incompatible or corrupt new-schema storage raises operational attention while Data Plane serving remains fail-open.
+The production cutover replaces the legacy Request Ledger, Invocation Diagnostics, Deep Capture, and request-owned Runtime Diagnostics paths atomically. It does not dual-write. The new config contract, Control Plane contract, and `luckytoken_diagnostics v2` schema do not read deprecated fields, command aliases, journals, databases, or capture directories. Legacy data is not migrated, imported, modified, or deleted. A new run creates only the new diagnostics database; incompatible or corrupt new-schema storage raises operational attention while Data Plane serving remains fail-open.
 
 ### 14.9 Runtime certification requirements
 

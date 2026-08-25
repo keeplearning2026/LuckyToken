@@ -41,7 +41,7 @@ function diagnosticsWorkerMain(): void {
       ? data.maxArtifactJourneys
       : 1_000;
   mkdirSync(data.directory, { recursive: true });
-  const database = new DatabaseSync(join(data.directory, "diagnostics.sqlite3"));
+  const database = new DatabaseSync(join(data.directory, "diagnostics-v2.sqlite3"));
   const permanentStartupFailure = (): void => {
     database.close();
     port.postMessage({
@@ -74,7 +74,7 @@ function diagnosticsWorkerMain(): void {
     const existingVersion = database
       .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
       .get() as { readonly value: number } | undefined;
-    if (existingVersion === undefined || Number(existingVersion.value) !== 1) {
+    if (existingVersion === undefined || Number(existingVersion.value) !== 2) {
       permanentStartupFailure();
       return;
     }
@@ -102,13 +102,10 @@ function diagnosticsWorkerMain(): void {
         "analytics_outcome",
         "execution_started_at",
         "execution_terminal_at",
-        "usage_completeness",
+        "usage_terminal_class",
         "usage_input",
         "usage_cache_read",
-        "usage_cache_write",
         "usage_output",
-        "usage_reasoning",
-        "usage_normalized_total",
       ];
       if (
         requiredColumns.some(
@@ -130,7 +127,7 @@ function diagnosticsWorkerMain(): void {
   }
   database.exec(`
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_name', 'luckytoken_diagnostics');
-    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 1);
+    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 2);
     CREATE TABLE IF NOT EXISTS records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       record_kind TEXT NOT NULL,
@@ -162,13 +159,10 @@ function diagnosticsWorkerMain(): void {
       analytics_outcome TEXT NOT NULL,
       execution_started_at INTEGER,
       execution_terminal_at INTEGER,
-      usage_completeness TEXT,
+      usage_terminal_class TEXT,
       usage_input INTEGER,
       usage_cache_read INTEGER,
-      usage_cache_write INTEGER,
-      usage_output INTEGER,
-      usage_reasoning INTEGER,
-      usage_normalized_total INTEGER
+      usage_output INTEGER
     );
     CREATE INDEX IF NOT EXISTS request_journeys_accepted_at_record
       ON request_journeys (accepted_at, record_id);
@@ -321,16 +315,6 @@ function diagnosticsWorkerMain(): void {
     throw error;
   }
 
-  const incompleteUsageReasons = new Set([
-    "failed",
-    "aborted",
-    "unsupported_terminal",
-    "usage_absent",
-    "component_unreported",
-    "invalid_components",
-    "undeclared_semantics",
-  ]);
-
   const projectSummary = (row: {
     readonly id: number;
     readonly runtimeId: string;
@@ -355,11 +339,10 @@ function diagnosticsWorkerMain(): void {
     readonly primaryFailureJson: string | null;
     readonly executionStartedAt: number | null;
     readonly executionTerminalAt: number | null;
-    readonly usageCompleteness: string | null;
+    readonly usageTerminalClass: string | null;
     readonly usageInput: number | null;
     readonly usageCacheRead: number | null;
     readonly usageOutput: number | null;
-    readonly usageReason: string | null;
   }): Record<string, unknown> => {
     const primaryFailure =
       row.primaryFailureJson === null
@@ -368,7 +351,7 @@ function diagnosticsWorkerMain(): void {
     const primaryFailureLocation = primaryFailure?.location;
     let usage: Record<string, unknown> | undefined;
     if (
-      row.usageCompleteness === "complete" &&
+      row.usageTerminalClass !== null &&
       row.usageInput !== null &&
       row.usageCacheRead !== null &&
       row.usageOutput !== null
@@ -382,7 +365,7 @@ function diagnosticsWorkerMain(): void {
           ? undefined
           : Number(row.executionTerminalAt) - Number(row.executionStartedAt);
       usage = {
-        completeness: "complete",
+        terminalClass: row.usageTerminalClass,
         inputTokens,
         cacheReadTokens,
         outputTokens,
@@ -392,16 +375,6 @@ function diagnosticsWorkerMain(): void {
         ...(executionDurationMs !== undefined && executionDurationMs > 0
           ? { outputTokensPerSecond: (outputTokens / executionDurationMs) * 1_000 }
           : {}),
-      };
-    } else if (
-      (row.usageCompleteness === "partial" ||
-        row.usageCompleteness === "unavailable") &&
-      row.usageReason !== null &&
-      incompleteUsageReasons.has(row.usageReason)
-    ) {
-      usage = {
-        completeness: row.usageCompleteness,
-        reason: row.usageReason,
       };
     }
     return {
@@ -455,7 +428,7 @@ function diagnosticsWorkerMain(): void {
            j.primary_failure_id AS primaryFailureId,
            j.execution_started_at AS executionStartedAt,
            j.execution_terminal_at AS executionTerminalAt,
-           j.usage_completeness AS usageCompleteness,
+           j.usage_terminal_class AS usageTerminalClass,
            j.usage_input AS usageInput,
            j.usage_cache_read AS usageCacheRead,
            j.usage_output AS usageOutput,
@@ -471,12 +444,6 @@ function diagnosticsWorkerMain(): void {
                AND e.kind = 'client_response_prepared'
              ORDER BY e.sequence DESC
              LIMIT 1) AS httpStatus,
-           (SELECT json_extract(e.payload_json, '$.usage.reason')
-              FROM request_journey_events e
-             WHERE e.request_id = j.request_id
-               AND e.kind = 'terminal_usage_observed'
-             ORDER BY e.sequence
-             LIMIT 1) AS usageReason,
            (SELECT e.payload_json
               FROM request_journey_events e
              WHERE e.request_id = j.request_id
@@ -548,61 +515,37 @@ function diagnosticsWorkerMain(): void {
     value: unknown,
   ):
     | Readonly<{
-        completeness: string;
+        terminalClass: string;
         input: number;
         cacheRead: number;
-        cacheWrite: number;
         output: number;
-        reasoning: number | null;
-        normalizedTotal: number | null;
       }>
     | undefined => {
     if (!isRecord(value)) return undefined;
-    const completeness = value.completeness;
+    const terminalClass = value.terminalClass;
     if (
-      completeness !== "complete" &&
-      completeness !== "partial" &&
-      completeness !== "unavailable"
+      terminalClass !== "done" &&
+      terminalClass !== "failed" &&
+      terminalClass !== "aborted" &&
+      terminalClass !== "unsupported"
     ) {
       return undefined;
     }
     const input = value.input;
     const cacheRead = value.cacheRead;
-    const cacheWrite = value.cacheWrite;
     const output = value.output;
-    const reasoning = value.reasoning;
-    const normalizedTotal = value.normalizedTotal;
     if (
-      !isSafeFact(value.api, 128) ||
       !isNonNegativeSafeInteger(input) ||
       !isNonNegativeSafeInteger(cacheRead) ||
-      !isNonNegativeSafeInteger(cacheWrite) ||
-      !isNonNegativeSafeInteger(output) ||
-      (reasoning !== undefined &&
-        (!isNonNegativeSafeInteger(reasoning) || reasoning > output)) ||
-      (normalizedTotal !== undefined &&
-        !isNonNegativeSafeInteger(normalizedTotal))
+      !isNonNegativeSafeInteger(output)
     ) {
-      return undefined;
-    }
-    if (
-      completeness === "complete" &&
-      normalizedTotal !== input + cacheRead + cacheWrite + output
-    ) {
-      return undefined;
-    }
-    if (completeness !== "complete" && normalizedTotal !== undefined) {
       return undefined;
     }
     return {
-      completeness,
+      terminalClass,
       input,
       cacheRead,
-      cacheWrite,
       output,
-      reasoning: reasoning === undefined ? null : reasoning,
-      normalizedTotal:
-        normalizedTotal === undefined ? null : normalizedTotal,
     };
   };
 
@@ -709,13 +652,10 @@ function diagnosticsWorkerMain(): void {
     readonly outcome: string;
     readonly executionStartedAt: number | null;
     readonly executionTerminalAt: number | null;
-    readonly usageCompleteness: string | null;
+    readonly usageTerminalClass: string | null;
     readonly usageInput: number | null;
     readonly usageCacheRead: number | null;
-    readonly usageCacheWrite: number | null;
     readonly usageOutput: number | null;
-    readonly usageReasoning: number | null;
-    readonly usageNormalizedTotal: number | null;
   }
 
   interface AnalyticsAccumulator {
@@ -725,14 +665,11 @@ function diagnosticsWorkerMain(): void {
     aborted: number;
     other: number;
     pending: number;
-    participating: number;
+    usageRequests: number;
+    speedRequests: number;
     input: number;
     cacheRead: number;
-    cacheWrite: number;
     output: number;
-    reasoning: number;
-    reasoningReported: boolean;
-    normalizedTotal: number;
     speedOutput: number;
     executionDurationMs: number;
   }
@@ -744,14 +681,11 @@ function diagnosticsWorkerMain(): void {
     aborted: 0,
     other: 0,
     pending: 0,
-    participating: 0,
+    usageRequests: 0,
+    speedRequests: 0,
     input: 0,
     cacheRead: 0,
-    cacheWrite: 0,
     output: 0,
-    reasoning: 0,
-    reasoningReported: false,
-    normalizedTotal: 0,
     speedOutput: 0,
     executionDurationMs: 0,
   });
@@ -778,27 +712,28 @@ function diagnosticsWorkerMain(): void {
         accumulator.other += 1;
         break;
     }
-    if (row.usageCompleteness !== "complete") return;
-    const input = row.usageInput ?? 0;
-    const cacheRead = row.usageCacheRead ?? 0;
-    const cacheWrite = row.usageCacheWrite ?? 0;
-    const output = row.usageOutput ?? 0;
-    accumulator.participating += 1;
+    if (
+      row.usageTerminalClass === null ||
+      row.usageInput === null ||
+      row.usageCacheRead === null ||
+      row.usageOutput === null
+    ) {
+      return;
+    }
+    const input = row.usageInput;
+    const cacheRead = row.usageCacheRead;
+    const output = row.usageOutput;
+    accumulator.usageRequests += 1;
     accumulator.input += input;
     accumulator.cacheRead += cacheRead;
-    accumulator.cacheWrite += cacheWrite;
     accumulator.output += output;
-    accumulator.normalizedTotal += row.usageNormalizedTotal ?? 0;
-    if (row.usageReasoning !== null) {
-      accumulator.reasoning += row.usageReasoning;
-      accumulator.reasoningReported = true;
-    }
     if (
       row.executionStartedAt !== null &&
       row.executionTerminalAt !== null
     ) {
       const duration = row.executionTerminalAt - row.executionStartedAt;
       if (duration > 0) {
+        accumulator.speedRequests += 1;
         accumulator.speedOutput += output;
         accumulator.executionDurationMs += duration;
       }
@@ -820,12 +755,11 @@ function diagnosticsWorkerMain(): void {
       successRate: total === 0 ? 0 : accumulator.success / total,
       failureRate: total === 0 ? 0 : accumulator.failed / total,
       abortRate: total === 0 ? 0 : accumulator.aborted / total,
-      participating: accumulator.participating,
-      totalRequests: total,
-      excluded: total - accumulator.participating,
+      usageRequests: accumulator.usageRequests,
+      missingUsageRequests: total - accumulator.usageRequests,
+      speedRequests: accumulator.speedRequests,
       inputTokens: accumulator.input,
       cacheReadTokens: accumulator.cacheRead,
-      cacheWriteTokens: accumulator.cacheWrite,
       outputTokens: accumulator.output,
       ...(accumulator.executionDurationMs > 0
         ? {
@@ -834,14 +768,6 @@ function diagnosticsWorkerMain(): void {
               1_000,
           }
         : {}),
-      ...(accumulator.participating > 0 && accumulator.reasoningReported
-        ? { reasoningTokens: accumulator.reasoning }
-        : {}),
-      ...(accumulator.participating > 0
-        ? { normalizedTokenTotal: accumulator.normalizedTotal }
-        : {}),
-      cacheHitNumerator: accumulator.cacheRead,
-      cacheHitDenominator: denominator,
       ...(denominator > 0
         ? { cacheHitRate: accumulator.cacheRead / denominator }
         : {}),
@@ -863,13 +789,10 @@ function diagnosticsWorkerMain(): void {
               protocol, analytics_outcome AS outcome,
               execution_started_at AS executionStartedAt,
               execution_terminal_at AS executionTerminalAt,
-              usage_completeness AS usageCompleteness,
+              usage_terminal_class AS usageTerminalClass,
               usage_input AS usageInput,
               usage_cache_read AS usageCacheRead,
-              usage_cache_write AS usageCacheWrite,
-              usage_output AS usageOutput,
-              usage_reasoning AS usageReasoning,
-              usage_normalized_total AS usageNormalizedTotal
+              usage_output AS usageOutput
          FROM request_journeys
         WHERE (? IS NULL OR accepted_at >= ?)
           AND (? IS NULL OR accepted_at < ?)
@@ -968,7 +891,7 @@ function diagnosticsWorkerMain(): void {
   const runAnalyticsQuery = (
     query: Record<string, unknown> | undefined,
   ): Record<string, unknown> => {
-    if (query?.version !== 2) throw new Error("Analytics query is invalid");
+    if (query?.version !== 3) throw new Error("Analytics query is invalid");
     if (query.command === "options") {
       if (
         (query.from !== undefined && !validAnalyticsBound(query.from)) ||
@@ -1045,7 +968,7 @@ function diagnosticsWorkerMain(): void {
         sessions.size > cap ||
         outcomes.size > cap;
       return {
-        version: 2,
+        version: 3,
         command: "options",
         providers: sortStrings(providers).slice(0, cap),
         profiles: profileOptions.slice(0, cap).map((profile) => ({
@@ -1140,7 +1063,7 @@ function diagnosticsWorkerMain(): void {
       }
     });
     const result: Record<string, unknown> = {
-      version: 2,
+      version: 3,
       command: "summary",
       totals: analyticsSummary(totals),
     };
@@ -1152,8 +1075,8 @@ function diagnosticsWorkerMain(): void {
           summary: analyticsSummary(accumulator),
         }))
         .sort((left, right) => {
-          const leftTotal = (left.summary.totalRequests as number) ?? 0;
-          const rightTotal = (right.summary.totalRequests as number) ?? 0;
+          const leftTotal = (left.summary.total as number) ?? 0;
+          const rightTotal = (right.summary.total as number) ?? 0;
           if (leftTotal !== rightTotal) return rightTotal - leftTotal;
           if (left.value === null) return 1;
           if (right.value === null) return -1;
@@ -1473,20 +1396,15 @@ function diagnosticsWorkerMain(): void {
                 database
                   .prepare(
                     `UPDATE request_journeys
-                     SET usage_completeness = ?, usage_input = ?,
-                         usage_cache_read = ?, usage_cache_write = ?,
-                         usage_output = ?, usage_reasoning = ?,
-                         usage_normalized_total = ?
-                     WHERE request_id = ? AND usage_completeness IS NULL`,
+                     SET usage_terminal_class = ?, usage_input = ?,
+                         usage_cache_read = ?, usage_output = ?
+                     WHERE request_id = ? AND usage_terminal_class IS NULL`,
                   )
                   .run(
-                    usage.completeness,
+                    usage.terminalClass,
                     usage.input,
                     usage.cacheRead,
-                    usage.cacheWrite,
                     usage.output,
-                    usage.reasoning,
-                    usage.normalizedTotal,
                     requestId,
                   );
               }

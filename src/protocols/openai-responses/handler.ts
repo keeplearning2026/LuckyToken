@@ -94,13 +94,7 @@ export interface OpenAIResponsesHandlerOptions {
   readonly routerDefaults?: RouterOptionDefaults;
   readonly createResponseId?: () => string;
   readonly now?: () => number;
-  /**
-   * Ticket 20: the neutral Pi execution operation. The composition root
-   * binds the Provider usage-semantics resolver into the operation
-   * (`createExecutionOperation`); the handler never names or carries
-   * Provider semantics data. Absent defaults to plain `execute`, whose
-   * snapshots are honest Partial undeclared_semantics.
-   */
+  /** Neutral Pi execution operation; terminal usage is observed at Pi IR. */
   readonly executeOperation?: ExecutionOperation;
 }
 
@@ -1010,7 +1004,6 @@ async function providerNativeBranch(
   const terminalUsage = extractResponsesPassthroughUsage(
     upstream.body,
     upstream.headers["content-type"] ?? "",
-    model.api,
     upstream.status >= 200 && upstream.status < 300 && streamRequested
       ? "event-stream"
       : "json",

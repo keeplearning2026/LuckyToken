@@ -1,6 +1,6 @@
 import {
-  decodeNormalizedTerminalUsage,
-  type UsageCompletenessReason,
+  decodeTerminalUsageFact,
+  type TerminalUsageClass,
 } from "@luckytoken/provider-contract/usage";
 
 import {
@@ -127,14 +127,11 @@ const ARTIFACT_STATES = new Set<RequestArtifactState>([
   "unavailable",
   "not_applicable",
 ]);
-const USAGE_INCOMPLETE_REASONS = new Set<UsageCompletenessReason>([
+const TERMINAL_USAGE_CLASSES = new Set<TerminalUsageClass>([
+  "done",
   "failed",
   "aborted",
-  "unsupported_terminal",
-  "usage_absent",
-  "component_unreported",
-  "invalid_components",
-  "undeclared_semantics",
+  "unsupported",
 ]);
 const ANALYTICS_OUTCOMES = new Set<RequestAnalyticsOutcome>([
   "success",
@@ -172,48 +169,35 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
 function decodeRequestJourneyUsageSummary(
   value: unknown,
 ): RequestJourneyUsageSummary | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value.completeness === "complete") {
-    if (
-      !hasOnlyKeys(value, [
-        "completeness",
-        "inputTokens",
-        "cacheReadTokens",
-        "outputTokens",
-        "cacheHitRate",
-        "outputTokensPerSecond",
-      ]) ||
-      !isNonNegativeSafeInteger(value.inputTokens) ||
-      !isNonNegativeSafeInteger(value.cacheReadTokens) ||
-      !isNonNegativeSafeInteger(value.outputTokens) ||
-      (value.cacheHitRate !== undefined && !isRate(value.cacheHitRate)) ||
-      (value.outputTokensPerSecond !== undefined &&
-        !isNonNegativeFiniteNumber(value.outputTokensPerSecond))
-    ) {
-      return undefined;
-    }
-    return Object.freeze({
-      completeness: "complete" as const,
-      inputTokens: value.inputTokens,
-      cacheReadTokens: value.cacheReadTokens,
-      outputTokens: value.outputTokens,
-      ...(value.cacheHitRate === undefined ? {} : { cacheHitRate: value.cacheHitRate }),
-      ...(value.outputTokensPerSecond === undefined
-        ? {}
-        : { outputTokensPerSecond: value.outputTokensPerSecond }),
-    });
-  }
   if (
-    (value.completeness !== "partial" && value.completeness !== "unavailable") ||
-    !hasOnlyKeys(value, ["completeness", "reason"]) ||
-    typeof value.reason !== "string" ||
-    !USAGE_INCOMPLETE_REASONS.has(value.reason as UsageCompletenessReason)
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "terminalClass",
+      "inputTokens",
+      "cacheReadTokens",
+      "outputTokens",
+      "cacheHitRate",
+      "outputTokensPerSecond",
+    ]) ||
+    !TERMINAL_USAGE_CLASSES.has(value.terminalClass as TerminalUsageClass) ||
+    !isNonNegativeSafeInteger(value.inputTokens) ||
+    !isNonNegativeSafeInteger(value.cacheReadTokens) ||
+    !isNonNegativeSafeInteger(value.outputTokens) ||
+    (value.cacheHitRate !== undefined && !isRate(value.cacheHitRate)) ||
+    (value.outputTokensPerSecond !== undefined &&
+      !isNonNegativeFiniteNumber(value.outputTokensPerSecond))
   ) {
     return undefined;
   }
   return Object.freeze({
-    completeness: value.completeness,
-    reason: value.reason as UsageCompletenessReason,
+    terminalClass: value.terminalClass as TerminalUsageClass,
+    inputTokens: value.inputTokens,
+    cacheReadTokens: value.cacheReadTokens,
+    outputTokens: value.outputTokens,
+    ...(value.cacheHitRate === undefined ? {} : { cacheHitRate: value.cacheHitRate }),
+    ...(value.outputTokensPerSecond === undefined
+      ? {}
+      : { outputTokensPerSecond: value.outputTokensPerSecond }),
   });
 }
 
@@ -710,7 +694,7 @@ function decodePersistedObservation(
   }
   if (value.kind === "terminal_usage_observed") {
     if (!hasOnlyKeys(value, ["kind", "location", "usage"])) return undefined;
-    const usage = decodeNormalizedTerminalUsage(value.usage);
+    const usage = decodeTerminalUsageFact(value.usage);
     return usage === undefined
       ? undefined
       : Object.freeze({ kind: "terminal_usage_observed", usage, location }) satisfies TerminalUsagePersistedObservation;

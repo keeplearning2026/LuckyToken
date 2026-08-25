@@ -659,7 +659,7 @@ export interface ControlPlaneEndpoint {
   readonly capability: string;
 }
 
-export type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+export type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
 
 import type {
   HistoryCommand,

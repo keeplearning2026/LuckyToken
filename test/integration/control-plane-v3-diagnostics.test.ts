@@ -92,7 +92,7 @@ const JOURNEY_SUMMARY: RequestJourneySummary = Object.freeze({
   createdAt: 1_787_558_400_000,
   closedAt: 1_787_558_400_100,
   usage: Object.freeze({
-    completeness: "complete",
+    terminalClass: "done",
     inputTokens: 11,
     cacheReadTokens: 3,
     outputTokens: 7,
@@ -377,7 +377,7 @@ describe("Application Control Plane v4 unified diagnostics", () => {
     ).resolves.toEqual(typedUnavailable);
     await expect(
       unavailableClient.getAnalytics({
-        version: 2,
+        version: 3,
         command: "summary",
         from: 0,
         to: 1,

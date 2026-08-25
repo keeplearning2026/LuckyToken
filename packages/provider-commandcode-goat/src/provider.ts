@@ -27,10 +27,7 @@ function bindFetch(
   if (fetch === undefined) return streams;
   const bound: ProviderStreams = {
     stream: (model, context, options) =>
-      streams.stream(model, context, {
-        ...options,
-        fetch: options?.fetch ?? fetch,
-      }),
+      streams.stream(model, context, { ...options, fetch: options?.fetch ?? fetch }),
     streamSimple: (model, context, options) =>
       streams.streamSimple(model, context, {
         ...options,

@@ -42,20 +42,14 @@ describe("Anthropic Provider Native terminal usage extraction", () => {
     );
 
     expect(usage).toEqual({
-      api: "anthropic-messages",
       input: 5,
       cacheRead: 3,
-      cacheWrite: 2,
       output: 7,
-      reasoning: 2,
-      normalizedTotal: 17,
-      cacheHitRate: 3 / 10,
-      completeness: "complete",
-      evidence: "anthropic-provider-native-terminal-usage-v1",
+      terminalClass: "done",
     });
   });
 
-  it("does not construct Complete usage from a non-terminal stream", () => {
+  it("does not construct a terminal usage fact from a non-terminal stream", () => {
     expect(
       extractAnthropicNativeTerminalUsage(
         sse(messageStart, {
@@ -75,13 +69,11 @@ describe("Anthropic Provider Native terminal usage extraction", () => {
       "text/event-stream",
     );
     expect(completeWithoutReasoning).toMatchObject({
-      completeness: "complete",
+      terminalClass: "done",
       input: 5,
       cacheRead: 3,
-      cacheWrite: 2,
       output: 1,
     });
-    expect(completeWithoutReasoning).not.toHaveProperty("reasoning");
 
     expect(
       extractAnthropicNativeTerminalUsage(

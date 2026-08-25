@@ -1,4 +1,4 @@
-import { readFile, mkdtemp, rm, stat } from "node:fs/promises";
+import { readFile, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -94,10 +94,54 @@ describe("Diagnostics startup fail-open", () => {
     );
   });
 
+  it("leaves diagnostics v1 unread and untouched while creating diagnostics v2", async () => {
+    const root = await mkdtemp(join(tmpdir(), "luckytoken-diagnostics-v2-"));
+    roots.push(root);
+    const v1Path = join(root, "diagnostics.sqlite3");
+    const v1Bytes = Buffer.from("legacy diagnostics v1 must remain untouched");
+    await writeFile(v1Path, v1Bytes);
+    const v1Mtime = (await stat(v1Path)).mtimeMs;
+
+    const authority = await createDiagnosticsAuthority({
+      configuration: parseDiagnosticsConfiguration({ directory: root }, root),
+    });
+    authorities.push(authority);
+    await expect(authority.queryRequestJourneys({ limit: 10 })).resolves.toEqual({
+      records: [],
+      hasMore: false,
+    });
+    await authority.close();
+    authorities.splice(authorities.indexOf(authority), 1);
+
+    expect(await readFile(v1Path)).toEqual(v1Bytes);
+    expect((await stat(v1Path)).mtimeMs).toBe(v1Mtime);
+    const v2 = new DatabaseSync(join(root, "diagnostics-v2.sqlite3"), {
+      readOnly: true,
+    });
+    try {
+      expect(
+        v2.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get(),
+      ).toEqual({ value: 2 });
+      const usageColumns = v2
+        .prepare("PRAGMA table_info(request_journeys)")
+        .all()
+        .map((column) => (column as { name: string }).name)
+        .filter((name) => name.startsWith("usage_"));
+      expect(usageColumns).toEqual([
+        "usage_terminal_class",
+        "usage_input",
+        "usage_cache_read",
+        "usage_output",
+      ]);
+    } finally {
+      v2.close();
+    }
+  });
+
   it("preserves the Data Plane and reports typed unavailability without mutating incompatible storage", async () => {
     const root = await mkdtemp(join(tmpdir(), "luckytoken-diagnostics-fail-open-"));
     roots.push(root);
-    const databasePath = join(root, "diagnostics.sqlite3");
+    const databasePath = join(root, "diagnostics-v2.sqlite3");
     const database = new DatabaseSync(databasePath);
     database.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);

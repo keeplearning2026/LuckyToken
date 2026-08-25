@@ -91,38 +91,15 @@ function formatTokenSpeed(value: number): string {
   return `${value.toFixed(1)} t/s`;
 }
 
-function incompleteUsageMessage(
-  usage: Exclude<NonNullable<RequestJourneySummary["usage"]>, { completeness: "complete" }>,
-): string {
-  switch (usage.reason) {
-    case "failed":
-      return "Provider execution failed before complete usage was available.";
-    case "aborted":
-      return "The request was aborted before complete usage was available.";
-    case "unsupported_terminal":
-      return "The terminal response did not provide supported usage.";
-    case "usage_absent":
-      return "The terminal response did not contain usage.";
-    case "component_unreported":
-      return "Provider did not report all required usage components.";
-    case "invalid_components":
-      return "Reported usage components were inconsistent.";
-    case "undeclared_semantics":
-      return "Provider usage semantics are not certified.";
-  }
-}
-
 function UnavailableUsageCell({ message, column }: { readonly message: string; readonly column: string }) {
   return <td className={`request-column request-column-${column}`} title={message} aria-label={message}>—</td>;
 }
 
 function RequestUsageCells({ record }: { readonly record: RequestJourneySummary }) {
-  if (record.usage === undefined || record.usage.completeness !== "complete") {
-    const message = record.usage === undefined
-      ? record.outcome === "running"
-        ? "Terminal usage is pending."
-        : "Terminal usage was not reported."
-      : incompleteUsageMessage(record.usage);
+  if (record.usage === undefined) {
+    const message = record.outcome === "running"
+      ? "Terminal usage is pending."
+      : "Terminal usage was not reported.";
     return <>
       <UnavailableUsageCell column="input" message={message} />
       <UnavailableUsageCell column="cacheRead" message={message} />
@@ -399,16 +376,22 @@ function RequestDetailPanel({ record }: { readonly record: RequestJourneyRecord 
 }
 
 function SummaryCards({ summary }: { readonly summary: AnalyticsSummary | undefined }) {
+  const usageCoverage = summary !== undefined && summary.usageRequests < summary.total
+    ? `${summary.usageRequests}/${summary.total} requests`
+    : undefined;
+  const speedCoverage = summary !== undefined && summary.speedRequests < summary.total
+    ? `${summary.speedRequests}/${summary.total} requests`
+    : undefined;
   const cards = [
-    { id: "requests", label: "Requests", value: summary === undefined ? "-" : formatTokenCount(summary.totalRequests), exact: summary === undefined ? undefined : formatTokenCount(summary.totalRequests) },
-    { id: "input", label: "Input", value: summary === undefined ? "-" : formatCompactTokenCount(summary.inputTokens), exact: summary === undefined ? undefined : formatTokenCount(summary.inputTokens) },
-    { id: "cache-read", label: "Cache read", value: summary === undefined ? "-" : formatCompactTokenCount(summary.cacheReadTokens), exact: summary === undefined ? undefined : formatTokenCount(summary.cacheReadTokens) },
-    { id: "output", label: "Output", value: summary === undefined ? "-" : formatCompactTokenCount(summary.outputTokens), exact: summary === undefined ? undefined : formatTokenCount(summary.outputTokens) },
-    { id: "token-speed", label: "Token speed", value: summary?.outputTokensPerSecond === undefined ? "-" : formatTokenSpeed(summary.outputTokensPerSecond), exact: summary?.outputTokensPerSecond === undefined ? undefined : formatTokenSpeed(summary.outputTokensPerSecond) },
-    { id: "cache-hit", label: "Cache hit", value: summary?.cacheHitRate === undefined ? "-" : formatPercent(summary.cacheHitRate), exact: summary?.cacheHitRate === undefined ? undefined : formatPercent(summary.cacheHitRate) },
+    { id: "requests", label: "Requests", value: summary === undefined ? "—" : formatTokenCount(summary.total), exact: summary === undefined ? undefined : formatTokenCount(summary.total), coverage: undefined },
+    { id: "input", label: "Input", value: summary === undefined ? "—" : formatCompactTokenCount(summary.inputTokens), exact: summary === undefined ? undefined : formatTokenCount(summary.inputTokens), coverage: usageCoverage },
+    { id: "cache-read", label: "Cache read", value: summary === undefined ? "—" : formatCompactTokenCount(summary.cacheReadTokens), exact: summary === undefined ? undefined : formatTokenCount(summary.cacheReadTokens), coverage: usageCoverage },
+    { id: "output", label: "Output", value: summary === undefined ? "—" : formatCompactTokenCount(summary.outputTokens), exact: summary === undefined ? undefined : formatTokenCount(summary.outputTokens), coverage: usageCoverage },
+    { id: "token-speed", label: "Token speed", value: summary?.outputTokensPerSecond === undefined ? "—" : formatTokenSpeed(summary.outputTokensPerSecond), exact: summary?.outputTokensPerSecond === undefined ? undefined : formatTokenSpeed(summary.outputTokensPerSecond), coverage: speedCoverage },
+    { id: "cache-hit", label: "Cache hit", value: summary?.cacheHitRate === undefined ? "—" : formatPercent(summary.cacheHitRate), exact: summary?.cacheHitRate === undefined ? undefined : formatPercent(summary.cacheHitRate), coverage: usageCoverage },
   ] as const;
   return <section className="overview-stats" aria-label="Overview statistics">
-    {cards.map((card) => <div className={`overview-stat-card overview-stat-${card.id}`} key={card.id}><span>{card.label}</span><strong title={card.exact}>{card.value}</strong></div>)}
+    {cards.map((card) => <div className={`overview-stat-card overview-stat-${card.id}`} key={card.id}><span>{card.label}</span><strong title={card.exact}>{card.value}</strong>{card.coverage === undefined ? null : <small>{card.coverage}</small>}</div>)}
   </section>;
 }
 
@@ -474,7 +457,6 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTok
 
   return <div className="overview-page">
     <SummaryCards summary={summary} />
-    {summary !== undefined && summary.excluded > 0 ? <p className="overview-usage-exclusion" role="status">{summary.excluded} {summary.excluded === 1 ? "request does" : "requests do"} not have complete terminal usage and {summary.excluded === 1 ? "was" : "were"} excluded from usage totals.</p> : null}
     {analyticsUnavailable ? <p className="error-text">Request analytics are temporarily unavailable.</p> : null}
     <section className="overview-requests" aria-label="Requests">
       <div className="overview-requests-toolbar"><h2>Requests</h2><div className="overview-toolbar-actions"><button type="button" className="overview-filter-toggle" aria-label="Refresh overview" title="Refresh overview" disabled={!backendAvailable || !validRange} onClick={refresh}><RefreshCw className={refreshing ? "rotating" : undefined} size={17} aria-hidden="true" /></button><button type="button" className={`overview-filter-toggle${filtersOpen ? " active" : ""}`} aria-label={filtersOpen ? "Hide overview filters" : "Show overview filters"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((current) => !current)}><SlidersHorizontal size={17} aria-hidden="true" /></button></div></div>

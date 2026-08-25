@@ -875,7 +875,7 @@ async function startNormalApplication(options: {
           contract: "luckytoken-diagnostics-sqlite",
           version: 1,
           category: "history" as const,
-          sourcePath: join(config.diagnostics.directory, "diagnostics.sqlite3"),
+          sourcePath: join(config.diagnostics.directory, "diagnostics-v2.sqlite3"),
           snapshot: (signal: AbortSignal) =>
             diagnosticsManagement.createBackupSnapshot(signal),
         },

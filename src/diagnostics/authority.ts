@@ -18,7 +18,7 @@ import type {
   RuntimeEventRecord,
   RuntimeEventSubscriber,
 } from "@luckytoken/application-control-plane/control-plane";
-import { decodeNormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import { decodeTerminalUsageFact } from "@luckytoken/provider-contract/usage";
 
 import {
   type ArtifactObservedObservation,
@@ -411,7 +411,7 @@ function copyObservation(
     const candidate = input as unknown as Record<string, unknown>;
     let copied: RequestJourneyObservationInput;
     if (input.kind === "terminal_usage_observed") {
-      const usage = decodeNormalizedTerminalUsage(candidate.usage);
+      const usage = decodeTerminalUsageFact(candidate.usage);
       if (usage === undefined) return undefined;
       copied = structuredClone({ ...input, usage }) as RequestJourneyObservationInput;
     } else {

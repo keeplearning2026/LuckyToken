@@ -2,7 +2,7 @@ import type {
   AnalyticsOptionsResult,
   AnalyticsResult,
 } from "@luckytoken/application-control-plane/control-plane";
-import type { NormalizedTerminalUsage } from "@luckytoken/provider-contract/usage";
+import type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,41 +40,28 @@ interface JourneyFixture {
   readonly workOutcome: "success" | "failed" | "aborted";
   readonly requestOutcome?: "success" | "failed" | "aborted" | "unknown-alias";
   readonly journeyOutcome: "success" | "failed" | "aborted";
-  readonly usage?: NormalizedTerminalUsage;
+  readonly usage?: TerminalUsageFact;
 }
 
 function completeUsage(
   input: number,
   cacheRead: number,
-  cacheWrite: number,
   output: number,
-  reasoning: number,
-): NormalizedTerminalUsage {
-  const denominator = input + cacheRead + cacheWrite;
+): TerminalUsageFact {
   return Object.freeze({
-    api: "analytics-pagination",
     input,
     cacheRead,
-    cacheWrite,
     output,
-    reasoning,
-    normalizedTotal: input + cacheRead + cacheWrite + output,
-    ...(denominator === 0
-      ? {}
-      : { cacheHitRate: cacheRead / denominator }),
-    completeness: "complete",
+    terminalClass: "done",
   });
 }
 
-function partialUsage(): NormalizedTerminalUsage {
+function failedUsage(): TerminalUsageFact {
   return Object.freeze({
-    api: "analytics-pagination",
     input: 900,
     cacheRead: 900,
-    cacheWrite: 900,
     output: 900,
-    completeness: "partial",
-    reason: "failed",
+    terminalClass: "failed",
   });
 }
 
@@ -210,7 +197,7 @@ describe("Request Journey analytics bounded pagination", () => {
           workOutcome: "success",
           requestOutcome: "success",
           journeyOutcome: "success",
-          usage: completeUsage(2, 1, 0, 1, 0),
+          usage: completeUsage(2, 1, 1),
         },
         {
           requestId: "57000000-0000-4000-8000-000000000003",
@@ -222,7 +209,7 @@ describe("Request Journey analytics bounded pagination", () => {
           workOutcome: "failed",
           requestOutcome: "failed",
           journeyOutcome: "failed",
-          usage: partialUsage(),
+          usage: failedUsage(),
         },
         {
           requestId: "57000000-0000-4000-8000-000000000004",
@@ -238,7 +225,7 @@ describe("Request Journey analytics bounded pagination", () => {
           workOutcome: "success",
           requestOutcome: "success",
           journeyOutcome: "success",
-          usage: completeUsage(3, 0, 1, 2, 1),
+          usage: completeUsage(3, 0, 2),
         },
         {
           requestId: "57000000-0000-4000-8000-000000000005",
@@ -265,7 +252,7 @@ describe("Request Journey analytics bounded pagination", () => {
 
       const result = summary(
         await authority.getAnalytics({
-          version: 2,
+          version: 3,
           command: "summary",
           from: T0,
           to: T0 + 2 * HOUR,
@@ -279,16 +266,13 @@ describe("Request Journey analytics bounded pagination", () => {
         failed: 1,
         aborted: 1,
         other: 1,
-        participating: 2,
-        excluded: 3,
-        inputTokens: 5,
-        cacheReadTokens: 1,
-        cacheWriteTokens: 1,
-        outputTokens: 3,
-        reasoningTokens: 1,
-        normalizedTokenTotal: 10,
-        cacheHitNumerator: 1,
-        cacheHitDenominator: 6,
+        usageRequests: 3,
+        missingUsageRequests: 2,
+        speedRequests: 0,
+        inputTokens: 905,
+        cacheReadTokens: 901,
+        outputTokens: 903,
+        cacheHitRate: 901 / 1_806,
       });
       expect(result.rows?.map((row) => [
         row.value,
@@ -309,7 +293,7 @@ describe("Request Journey analytics bounded pagination", () => {
 
       const optionResult = options(
         await authority.getAnalytics({
-          version: 2,
+          version: 3,
           command: "options",
           from: T0,
           to: T0 + 2 * HOUR,

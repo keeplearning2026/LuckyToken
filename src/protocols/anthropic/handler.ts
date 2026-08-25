@@ -318,13 +318,7 @@ export interface AnthropicMessagesHandlerOptions {
   readonly maxRequestBytes: number;
   readonly routerDefaults?: RouterOptionDefaults;
   readonly now?: () => number;
-  /**
-   * Ticket 20: the neutral Pi execution operation. The composition root
-   * binds the Provider usage-semantics resolver into the operation
-   * (`createExecutionOperation`); the handler never names or carries
-   * Provider semantics data. Absent defaults to plain `execute`, whose
-   * snapshots are honest Partial undeclared_semantics.
-   */
+  /** Neutral Pi execution operation; terminal usage is observed at Pi IR. */
   readonly executeOperation?: ExecutionOperation;
 }
 

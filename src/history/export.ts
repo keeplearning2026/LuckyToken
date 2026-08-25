@@ -108,7 +108,7 @@ export async function runHistoryExport(
     sensitive: true,
     snapshot: Object.freeze({
       contract: "luckytoken-diagnostics-sqlite",
-      schemaVersion: 1,
+      schemaVersion: 2,
       bytes: snapshot.byteLength,
     }),
   });

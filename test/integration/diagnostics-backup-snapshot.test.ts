@@ -98,7 +98,7 @@ describe("unified Diagnostics backup snapshot", () => {
       postSnapshotRequestId,
     ]);
 
-    await writeFile(join(restoredRoot, "diagnostics.sqlite3"), snapshot);
+    await writeFile(join(restoredRoot, "diagnostics-v2.sqlite3"), snapshot);
     const restored = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
         { directory: restoredRoot },
