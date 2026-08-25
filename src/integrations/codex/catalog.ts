@@ -165,7 +165,7 @@ function codexEntry(
     context_window: contextWindow,
     max_context_window: contextWindow,
     effective_context_window_percent: 95,
-    supports_reasoning_summaries: false,
+    supports_reasoning_summaries: model.reasoning,
   });
 }
 

@@ -201,7 +201,7 @@ In addition to the required fields, routed entries must explicitly emit these co
 | `supports_parallel_tool_calls` | `false` | `true` only after the provider/model and Token conversion are both certified |
 | `supports_image_detail_original` | `false` | `true` only after original-detail semantics are preserved end to end; image input alone is insufficient |
 | `supports_search_tool` | `false` | `true` only after Token supports the matching deferred discovery lifecycle |
-| `supports_reasoning_summaries` | `false` | `true` only after request control and response summary semantics are certified |
+| `supports_reasoning_summaries` | `false` when `Model.reasoning === false` | Exactly `Model.reasoning`; this is the Pi model capability authority and is never inferred from model names or from the emitted reasoning ladder |
 
 `input_modalities` must be emitted even though it is optional to the parser. On 0.149.0, omission normalized to `['text','image']`, which can over-advertise vision.
 

@@ -195,6 +195,7 @@ describe("Codex catalog projection", () => {
       { effort: "max", description: "Native max" },
     ]);
     expect(parsed.models[1]?.default_reasoning_level).toBe("max");
+    expect(parsed.models[1]?.supports_reasoning_summaries).toBe(true);
   });
 
   it("projects a Pi minimal-only model into the Codex low slot", () => {
@@ -326,6 +327,7 @@ describe("Codex catalog projection", () => {
       expect(entry).toHaveProperty(required);
     }
     expect(entry.supported_reasoning_levels).toEqual([]);
+    expect(entry.supports_reasoning_summaries).toBe(false);
     expect(entry).not.toHaveProperty("default_reasoning_level");
   });
 
@@ -347,6 +349,7 @@ describe("Codex catalog projection", () => {
       models: Array<Record<string, unknown>>;
     };
     expect(parsed.models[0]?.supported_reasoning_levels).toEqual([]);
+    expect(parsed.models[0]?.supports_reasoning_summaries).toBe(true);
   });
 
   it("lets a native Codex slug win over a colliding injected alias", () => {
