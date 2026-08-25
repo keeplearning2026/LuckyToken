@@ -171,7 +171,7 @@ function buildProvider(
     left.alias.localeCompare(right.alias),
   );
   return Object.freeze({
-    name: "LuckyToken",
+    name: "Token",
     baseUrl: snapshot.endpoint.origin,
     apiKey: "luckytoken-local",
     api: "anthropic-messages",

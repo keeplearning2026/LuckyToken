@@ -521,6 +521,7 @@ test(
       page = await openWindow(application);
       page.setDefaultTimeout(10_000);
       await page.getByRole("button", { name: "Providers" }).waitFor();
+      await page.getByLabel("Token is running").waitFor();
       const uiColdOpenMs = Date.now() - openStartedAt;
       const uiOpen = await sampleProcessRoots([
         backendPid,
@@ -577,6 +578,8 @@ test(
       // before returning to Overview for request/analytics verification.
       await page.getByRole("button", { name: "Settings" }).click();
       await page.getByRole("heading", { name: "Settings", exact: true, level: 1 }).waitFor();
+      await page.getByRole("heading", { name: "Start Token automatically" }).waitFor();
+      await page.getByRole("button", { name: "Enable auto-start" }).waitFor();
 
       const firstRequestId = await sendResponsesRequest(
         running.dataPlane.configuredOrigin,
@@ -589,10 +592,15 @@ test(
       await firstRow
         .getByRole("button", { name: `Show details for request ${firstRequestId}` })
         .click();
-      await firstRow.getByText(TEST_MODEL, { exact: true }).waitFor();
+      await firstRow.locator(".request-column-model").getByText(TEST_ALIAS, { exact: true }).waitFor();
+      const firstDetail = firstRow.locator("xpath=following-sibling::tr[1]");
+      await firstDetail
+        .getByText(`anthropic / ${TEST_MODEL}`, { exact: true })
+        .first()
+        .waitFor();
+      await firstRow.getByLabel("200; request outcome Success").waitFor();
       await assert.doesNotReject(async () => {
-        assert.match((await firstRow.textContent()) ?? "", /Success/u);
-        assert.match((await firstRow.textContent()) ?? "", new RegExp(TEST_MODEL, "u"));
+        assert.match((await firstRow.textContent()) ?? "", new RegExp(TEST_ALIAS, "u"));
       });
       await page
         .locator(".overview-stat-card", { hasText: "Requests" })
@@ -613,7 +621,11 @@ test(
       await page.getByRole("button", { name: "Overview", exact: true }).click();
       const secondRow = page.locator(`[data-request-id="${secondRequestId}"]`);
       await secondRow.waitFor();
-      assert.match((await secondRow.textContent()) ?? "", /Success/u);
+      await secondRow
+        .locator(".request-column-model")
+        .getByText(TEST_ALIAS, { exact: true })
+        .waitFor();
+      await secondRow.getByLabel("200; request outcome Success").waitFor();
       await page.close();
       page = undefined;
       await waitForNoWindows(application);

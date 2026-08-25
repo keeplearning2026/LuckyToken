@@ -13,6 +13,9 @@ let root: Root;
 type ProfilesResult = Awaited<
   ReturnType<DesktopControlPlaneApi["executeCredentialProfiles"]>
 >;
+type RequestJourneyListener = Parameters<
+  DesktopControlPlaneApi["onRequestJourneys"]
+>[0];
 
 const providerOptions = {
   providers: [
@@ -99,6 +102,40 @@ const managedProfiles = () => ({
   options: providerOptions,
 });
 
+const notYetVerifiedProfiles = (): ProfilesResult => {
+  const managed = managedProfiles();
+  return {
+    ...managed,
+    state: {
+      providers: managed.state.providers.map((provider) => ({
+        ...provider,
+        profiles: provider.profiles.map((profile) =>
+          profile.credentialId === "credential-a"
+            ? { ...profile, health: "not_yet_verified" as const }
+            : profile,
+        ),
+      })),
+    },
+  };
+};
+
+const verifiedProfiles = (): ProfilesResult => {
+  const managed = managedProfiles();
+  return {
+    ...managed,
+    state: {
+      providers: managed.state.providers.map((provider) => ({
+        ...provider,
+        profiles: provider.profiles.map((profile) =>
+          profile.credentialId === "credential-a"
+            ? { ...profile, lastSucceededAt: 1_725_000_000_000 }
+            : profile,
+        ),
+      })),
+    },
+  };
+};
+
 const catalog = () => ({
   outcome: "ok" as const,
   snapshot: {
@@ -169,6 +206,7 @@ async function render(options: {
   readonly executeCredentialProfiles?: DesktopControlPlaneApi["executeCredentialProfiles"];
   readonly executeProviderProfileAuth?: DesktopControlPlaneApi["executeProviderProfileAuth"];
   readonly executePublicModels?: DesktopControlPlaneApi["executePublicModels"];
+  readonly onRequestJourneys?: DesktopControlPlaneApi["onRequestJourneys"];
 } = {}): Promise<void> {
   const initial = options.profiles ?? emptyProfiles();
   const api = createFakeDesktopApi({
@@ -185,6 +223,8 @@ async function render(options: {
       executeCatalog: async () => catalog(),
       executePublicModels:
         options.executePublicModels ?? (async () => publicModels()),
+      onRequestJourneys:
+        options.onRequestJourneys ?? (() => () => undefined),
       respondAuth: async () => undefined,
     },
   });
@@ -237,6 +277,44 @@ function setInput(input: HTMLInputElement | HTMLTextAreaElement, value: string):
 }
 
 describe("Providers Profile product slice", () => {
+  it("refreshes an open Profile card after that Profile serves a successful request", async () => {
+    let listener: RequestJourneyListener | undefined;
+    const executeCredentialProfiles = vi
+      .fn<DesktopControlPlaneApi["executeCredentialProfiles"]>()
+      .mockResolvedValueOnce(notYetVerifiedProfiles())
+      .mockResolvedValue(verifiedProfiles());
+    await render({
+      executeCredentialProfiles,
+      onRequestJourneys: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    });
+
+    await clickAria("Manage AWS Provider profiles");
+    expect(container.textContent).toContain("not yet verified");
+
+    await act(async () => {
+      listener?.({
+        id: 9,
+        runtimeId: "runtime-1",
+        requestId: "request-9",
+        operation: "model_generation",
+        profileId: "credential-a",
+        outcome: "success",
+        completeness: "complete",
+        createdAt: 1_725_000_000_000,
+        closedAt: 1_725_000_001_000,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(executeCredentialProfiles).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Last success");
+    expect(container.textContent).not.toContain("not yet verified");
+  });
+
   it("keeps Provider facts on the outer card and Profile facts in secondary cards", async () => {
     await render({ profiles: managedProfiles() });
     const providerCard = container.querySelector(".provider-card");
@@ -311,6 +389,32 @@ describe("Providers Profile product slice", () => {
     ).toBe("false");
   });
 
+  it("opens one cross-Provider list containing only favorite models", async () => {
+    await render({ profiles: managedProfiles() });
+
+    const favorites = container.querySelector(
+      'button[aria-label="Show favorite models (1)"]',
+    );
+    expect(favorites).toBeInstanceOf(HTMLButtonElement);
+    expect(favorites?.querySelector(".provider-favorite-model-count")?.textContent).toBe("1");
+
+    await act(async () => {
+      (favorites as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    const dialog = container.querySelector(
+      '[role="dialog"][aria-label="Favorite models"]',
+    );
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain("model-beta");
+    expect(dialog?.textContent).toContain("Provider: AWS Provider");
+    expect(dialog?.textContent).not.toContain("model-a");
+    expect(
+      dialog?.querySelector('[data-model-id="model-b"]')?.getAttribute("draggable"),
+    ).toBe("false");
+  });
+
   it("uses the shared secondary-card UI for model-specific controls", async () => {
     await render({ profiles: managedProfiles() });
     await clickAria("Manage AWS Provider models");
@@ -335,6 +439,49 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).not.toContain("Published");
   });
 
+  it("retries an idempotent Public Models update once after a stale revision", async () => {
+    const initial = publicModels();
+    const refreshed = {
+      ...initial,
+      outcome: "conflict" as const,
+      state: { ...initial.state, revision: 2, version: 2 },
+    };
+    const applied = {
+      ...initial,
+      state: {
+        ...initial.state,
+        revision: 3,
+        version: 3,
+        providers: initial.state.providers.map((provider) => ({
+          ...provider,
+          favorite: true,
+        })),
+      },
+    };
+    const executePublicModels = vi.fn(async (command) => {
+      if (command.command === "query") return initial;
+      if (command.command !== "set_provider_favorite") return initial;
+      return command.revision === 1 ? refreshed : applied;
+    }) as DesktopControlPlaneApi["executePublicModels"];
+    await render({ profiles: managedProfiles(), executePublicModels });
+
+    await clickAria("Favorite AWS Provider");
+
+    expect(executePublicModels).toHaveBeenNthCalledWith(2, {
+      command: "set_provider_favorite",
+      revision: 1,
+      providerId: "aws-provider",
+      favorite: true,
+    });
+    expect(executePublicModels).toHaveBeenNthCalledWith(3, {
+      command: "set_provider_favorite",
+      revision: 2,
+      providerId: "aws-provider",
+      favorite: true,
+    });
+    expect(container.querySelector('button[aria-label="Unfavorite AWS Provider"]')).not.toBeNull();
+  });
+
   it("uses icon-only actions while editing a model name", async () => {
     await render({ profiles: managedProfiles() });
     await clickAria("Manage AWS Provider models");
@@ -353,6 +500,48 @@ describe("Providers Profile product slice", () => {
     expect(editor?.textContent).not.toContain("Save");
     expect(editor?.textContent).not.toContain("Cancel");
     expect(editor?.textContent).not.toContain("Restore default");
+  });
+
+  it("edits the model-name input and publishes the returned Public Models state", async () => {
+    const initial = publicModels();
+    const applied = {
+      ...initial,
+      state: {
+        ...initial.state,
+        revision: 2,
+        version: 2,
+        providers: initial.state.providers.map((provider) => ({
+          ...provider,
+          models: provider.models.map((model) =>
+            model.target === "model-b"
+              ? { ...model, alias: "aws-provider/custom-beta" }
+              : model,
+          ),
+        })),
+      },
+    };
+    const executePublicModels = vi.fn(async (command) =>
+      command.command === "rename_model" ? applied : initial,
+    ) as DesktopControlPlaneApi["executePublicModels"];
+    await render({ profiles: managedProfiles(), executePublicModels });
+    await clickAria("Manage AWS Provider models");
+    await clickAria("Rename model-beta");
+    const input = container.querySelector('.model-name-editor input[type="text"]');
+    expect(input).toBeInstanceOf(HTMLInputElement);
+
+    await act(async () => setInput(input as HTMLInputElement, "custom-beta"));
+    expect((input as HTMLInputElement).value).toBe("custom-beta");
+    await clickAria("Save model name");
+
+    expect(executePublicModels).toHaveBeenCalledWith({
+      command: "rename_model",
+      revision: 1,
+      providerId: "aws-provider",
+      modelId: "model-b",
+      modelName: "custom-beta",
+    });
+    expect(container.textContent).toContain("custom-beta");
+    expect(container.querySelector(".model-name-editor")).toBeNull();
   });
 
   it("persists a dragged model order through the typed Public Models command", async () => {

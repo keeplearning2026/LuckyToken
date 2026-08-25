@@ -1,13 +1,13 @@
-# LuckyToken Windows release process
+# Token Windows release process
 
 ## Release authority
 
 The Windows release artifact is the per-user Squirrel.Windows
-`LuckyToken-Setup.exe`. `RELEASES` and the full `.nupkg` belong to the same
+`Token-Setup.exe`. `RELEASES` and the full `.nupkg` belong to the same
 update set. A portable ZIP is not published for Windows.
 
 One Forge Make invocation owns one candidate. Tests receive the absolute path
-of that invocation's packaged `LuckyToken.exe`; no release test may select a
+of that invocation's packaged `Token.exe`; no release test may select a
 candidate by modification time. The tested Setup.exe is copied to the release
 directory without rebuilding or recompressing it.
 

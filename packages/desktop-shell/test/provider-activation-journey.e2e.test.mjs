@@ -422,12 +422,18 @@ test(
       );
       assert.equal(await page.getByText("model-aliases.json").count(), 0);
       const modelNameInput = modelNameEditor.locator('input[type="text"]');
-      assert.equal(await modelNameInput.inputValue(), "deepseek-deepseek-v4-flash");
+      assert.equal(await modelNameInput.inputValue(), "deepseek-v4-flash");
       await modelNameInput.fill(COMMANDCODE_CUSTOM_MODEL_NAME);
       await modelNameEditor.getByRole("button", { name: "Save" }).click();
-      await commandCodeModels
+      const renamedCommandCodeRow = commandCodeModels
         .locator("li[data-model-id]")
-        .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME })
+        .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME });
+      await renamedCommandCodeRow.waitFor();
+      await renamedCommandCodeRow
+        .getByRole("button", { name: `Favorite ${COMMANDCODE_CUSTOM_MODEL_NAME}` })
+        .click();
+      await renamedCommandCodeRow
+        .getByRole("button", { name: `Unfavorite ${COMMANDCODE_CUSTOM_MODEL_NAME}` })
         .waitFor();
       await commandCodeModels.getByRole("button", { name: "Close models" }).click();
 
@@ -439,6 +445,15 @@ test(
       page = await openWindow(application);
       page.setDefaultTimeout(10_000);
       await page.getByRole("button", { name: "Providers" }).click();
+      await page
+        .getByRole("button", { name: "Show favorite models (1)" })
+        .click();
+      const favoriteModels = page.getByRole("dialog", { name: "Favorite models" });
+      await favoriteModels
+        .locator("li[data-model-id]")
+        .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME })
+        .waitFor();
+      await favoriteModels.getByRole("button", { name: "Close models" }).click();
       const reopenedCommandCodeCard = page
         .locator("article.provider-card")
         .filter({
@@ -494,7 +509,7 @@ test(
         {
           target: "deepseek/deepseek-v4-flash",
           enabled: true,
-          favorite: false,
+          favorite: true,
         },
       );
 
@@ -541,18 +556,23 @@ test(
       assert.ok(origin);
       const requestId = await sendAnthropicRequest(origin, CUSTOM_ALIAS);
       assert.equal(upstream.requests.at(-1)?.apiKey, TEST_PROVIDER_KEY);
-      // 10. Overview shows the successful request through Request Journey
-      // diagnostics, whose P2 model fact is the resolved real Provider model.
+      // 10. Overview shows the request-time alias in the summary and the
+      // resolved real Provider model in Request Journey details.
       await page.getByRole("button", { name: "Overview", exact: true }).click();
       const row = page.locator(`[data-request-id="${requestId}"]`);
       await row.waitFor();
       await row
         .getByRole("button", { name: `Show details for request ${requestId}` })
         .click();
-      await row.getByText(TEST_MODEL, { exact: true }).waitFor();
+      await row.locator(".request-column-model").getByText(CUSTOM_ALIAS, { exact: true }).waitFor();
+      const detail = row.locator("xpath=following-sibling::tr[1]");
+      await detail
+        .getByText(`anthropic / ${TEST_MODEL}`, { exact: true })
+        .first()
+        .waitFor();
+      await row.getByLabel("200; request outcome Success").waitFor();
       const rowText = (await row.textContent()) ?? "";
-      assert.match(rowText, /Success/u);
-      assert.match(rowText, new RegExp(TEST_MODEL, "u"));
+      assert.match(rowText, new RegExp(CUSTOM_ALIAS, "u"));
 
       const quit = await client.executeApplicationCommand({
         command: "quit",

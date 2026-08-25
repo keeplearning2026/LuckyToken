@@ -30,6 +30,14 @@ const JOURNEY_SUMMARY: RequestJourneySummary = Object.freeze({
   operation: "model_generation",
   protocol: "anthropic-messages",
   lane: "semantic_conversion",
+  requestedModel: "anthropic/sonnet",
+  providerId: "anthropic",
+  realModelId: "claude-sonnet",
+  clientSessionId: "client-session",
+  effectiveSessionId: "effective-session",
+  profileId: "profile-1",
+  profileDisplayName: "Production",
+  httpStatus: 502,
   outcome: "failed",
   completeness: "complete",
   createdAt: 1_787_558_400_000,
@@ -155,6 +163,7 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
     },
     {
       kind: "model_resolved",
+      requestedModel: "anthropic/sonnet",
       providerId: "anthropic",
       modelId: "claude-sonnet",
       location: { phase: "request_resolution", step: "resolve_public_model" },
@@ -300,6 +309,9 @@ describe("unified request diagnostics Control Plane contract", () => {
     ).toBeUndefined();
     expect(
       decodeRequestJourneySummary({ ...JOURNEY_SUMMARY, protocol: "x".repeat(129) }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({ ...JOURNEY_SUMMARY, httpStatus: 99 }),
     ).toBeUndefined();
     expect(
       decodeRequestJourneySummary({ ...JOURNEY_SUMMARY, outcome: "running" }),

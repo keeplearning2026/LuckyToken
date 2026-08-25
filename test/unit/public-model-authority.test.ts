@@ -53,6 +53,46 @@ const runtime: PublicModelRuntimeFacts = {
 };
 
 describe("PublicModelAuthority", () => {
+  it("uses the final model-id segment for default aliases and keeps collisions unique", async () => {
+    const { fileSystem } = memoryFileSystem();
+    const authority = createPublicModelAuthority({ path, fileSystem });
+
+    const state = await authority.reconcile({
+      version: 1,
+      providers: [
+        {
+          providerId: "commandcode-goat",
+          usable: true,
+          models: [
+            "deepseek/deepseek-v4-pro",
+            "alternate/deepseek-v4-pro",
+            "gpt-5.6-sol",
+          ],
+        },
+      ],
+    });
+
+    expect(
+      state.snapshot.providers[0]?.models.map((model) => ({
+        alias: model.alias,
+        target: model.target,
+      })),
+    ).toEqual([
+      {
+        alias: "commandcode-goat/deepseek-v4-pro",
+        target: "deepseek/deepseek-v4-pro",
+      },
+      {
+        alias: "commandcode-goat/deepseek-v4-pro-2",
+        target: "alternate/deepseek-v4-pro",
+      },
+      {
+        alias: "commandcode-goat/gpt-5.6-sol",
+        target: "gpt-5.6-sol",
+      },
+    ]);
+  });
+
   it("upgrades schema v1 in place with non-favorite providers and models", async () => {
     const initial = {
       schemaVersion: 1,
@@ -246,13 +286,13 @@ describe("PublicModelAuthority", () => {
         favorite: false,
         models: [
           {
-            alias: "anthropic/claude-opus",
+            alias: "anthropic/opus",
             target: "claude/opus",
             on: true,
             favorite: false,
           },
           {
-            alias: "anthropic/claude-sonnet",
+            alias: "anthropic/sonnet",
             target: "claude/sonnet",
             on: true,
             favorite: false,
@@ -262,12 +302,12 @@ describe("PublicModelAuthority", () => {
     ]);
     expect(state.snapshot.publishedModels()).toEqual([
       {
-        alias: "anthropic/claude-opus",
+        alias: "anthropic/opus",
         providerId: "anthropic",
         modelId: "claude/opus",
       },
       {
-        alias: "anthropic/claude-sonnet",
+        alias: "anthropic/sonnet",
         providerId: "anthropic",
         modelId: "claude/sonnet",
       },
@@ -282,12 +322,12 @@ describe("PublicModelAuthority", () => {
           enabled: true,
           favorite: false,
           models: {
-            "anthropic/claude-opus": {
+            "anthropic/opus": {
               target: "claude/opus",
               enabled: true,
               favorite: false,
             },
-            "anthropic/claude-sonnet": {
+            "anthropic/sonnet": {
               target: "claude/sonnet",
               enabled: true,
               favorite: false,
@@ -421,7 +461,7 @@ describe("PublicModelAuthority", () => {
             favorite: false,
           },
           {
-            alias: "anthropic/claude-sonnet",
+            alias: "anthropic/sonnet",
             target: "claude/sonnet",
             on: true,
             favorite: false,
@@ -452,7 +492,7 @@ describe("PublicModelAuthority", () => {
               enabled: true,
               favorite: false,
             },
-            "anthropic/claude-sonnet": {
+            "anthropic/sonnet": {
               target: "claude/sonnet",
               enabled: true,
               favorite: false,
@@ -537,13 +577,13 @@ describe("PublicModelAuthority", () => {
         favorite: false,
         models: [
           {
-            alias: "anthropic/claude-opus",
+            alias: "anthropic/opus",
             target: "claude/opus",
             on: true,
             favorite: false,
           },
           {
-            alias: "anthropic/claude-sonnet",
+            alias: "anthropic/sonnet",
             target: "claude/sonnet",
             on: true,
             favorite: false,
@@ -557,12 +597,12 @@ describe("PublicModelAuthority", () => {
       enabled: false,
       favorite: false,
       models: {
-        "anthropic/claude-opus": {
+        "anthropic/opus": {
           target: "claude/opus",
           enabled: true,
           favorite: false,
         },
-        "anthropic/claude-sonnet": {
+        "anthropic/sonnet": {
           target: "claude/sonnet",
           enabled: true,
           favorite: false,
@@ -629,7 +669,7 @@ describe("PublicModelAuthority", () => {
       providerId: "anthropic",
       modelId: "claude/opus",
     });
-    expect(renamed.state.snapshot.resolve("anthropic/claude-opus")).toBeUndefined();
+    expect(renamed.state.snapshot.resolve("anthropic/opus")).toBeUndefined();
     expect(
       renamed.state.snapshot.providers[0]?.models.find(
         (model) => model.target === "claude/opus",
@@ -648,7 +688,7 @@ describe("PublicModelAuthority", () => {
     });
 
     expect(restored.outcome).toBe("ok");
-    expect(restored.state.snapshot.resolve("anthropic/claude-opus")).toEqual({
+    expect(restored.state.snapshot.resolve("anthropic/opus")).toEqual({
       providerId: "anthropic",
       modelId: "claude/opus",
     });
@@ -669,7 +709,7 @@ describe("PublicModelAuthority", () => {
 
     expect(result.outcome).toBe("invalid");
     expect(result.state.revision).toBe(initial.revision);
-    expect(result.state.snapshot.resolve("anthropic/claude-opus")).toEqual({
+    expect(result.state.snapshot.resolve("anthropic/opus")).toEqual({
       providerId: "anthropic",
       modelId: "claude/opus",
     });
@@ -690,13 +730,13 @@ describe("PublicModelAuthority", () => {
     expect(result.outcome).toBe("ok");
     expect(result.state.snapshot.providers[0]?.models).toEqual([
       {
-        alias: "anthropic/claude-opus",
+        alias: "anthropic/opus",
         target: "claude/opus",
         on: false,
         favorite: false,
       },
       {
-        alias: "anthropic/claude-sonnet",
+        alias: "anthropic/sonnet",
         target: "claude/sonnet",
         on: true,
         favorite: false,
@@ -704,12 +744,12 @@ describe("PublicModelAuthority", () => {
     ]);
     expect(result.state.snapshot.publishedModels()).toEqual([
       {
-        alias: "anthropic/claude-sonnet",
+        alias: "anthropic/sonnet",
         providerId: "anthropic",
         modelId: "claude/sonnet",
       },
     ]);
-    expect(result.state.snapshot.resolve("anthropic/claude-opus")).toEqual({
+    expect(result.state.snapshot.resolve("anthropic/opus")).toEqual({
       providerId: "anthropic",
       modelId: "claude/opus",
     });
@@ -739,13 +779,13 @@ describe("PublicModelAuthority", () => {
       favorite: true,
     });
     expect(favorited.state.snapshot.publishedModels()).not.toContainEqual({
-      alias: "anthropic/claude-opus",
+      alias: "anthropic/opus",
       providerId: "anthropic",
       modelId: "claude/opus",
     });
     expect(favorited.state.snapshot.favoriteModels()).toEqual([
       {
-        alias: "anthropic/claude-opus",
+        alias: "anthropic/opus",
         providerId: "anthropic",
         modelId: "claude/opus",
       },
@@ -877,7 +917,7 @@ describe("PublicModelAuthority", () => {
     const durable = JSON.parse(memory.files.get(path) ?? "null");
     expect(durable.endpoint.port).toBe(4321);
     expect(durable.providers.anthropic.models).toHaveProperty(
-      "anthropic/claude-opus",
+      "anthropic/opus",
     );
   });
 

@@ -213,7 +213,7 @@ For example:
 
 ```text
 anthropic/claude-sonnet-4-6
-commandcode-private/deepseek-deepseek-v4-flash
+commandcode-private/deepseek-v4-flash
 ```
 
 The canonical Provider/model target is an internal routing fact. The product UI must not ask the user to create or understand that mapping.
@@ -370,7 +370,7 @@ Catalog target
   commandcode-private + deepseek/deepseek-v4-flash
         ↓
 generated default alias
-  commandcode-private/deepseek-deepseek-v4-flash
+  commandcode-private/deepseek-v4-flash
         ↓ user chooses Model name "flash"
 user override
   commandcode-private/flash → same internal target
@@ -990,11 +990,11 @@ deepseek/deepseek-v4-flash
 therefore normally produces:
 
 ```text
-modelName = deepseek-deepseek-v4-flash
-alias     = commandcode-private/deepseek-deepseek-v4-flash
+modelName = deepseek-v4-flash
+alias     = commandcode-private/deepseek-v4-flash
 ```
 
-Default-name allocation is Provider-scoped and deterministic for one Catalog snapshot plus the currently valid user-owned Model names. The final external alias is bounded to 128 characters: after slash normalization, an overlong base Model name is deterministically shortened to the space left by `${providerId}/`, and numeric collision suffixes are fitted inside the same bound. When multiple model ids normalize/shorten to the same base name, a canonical model id that already equals that base keeps the natural name when that name is not user-reserved; remaining collisions receive the first available `-2`, `-3`, ... suffix, skipping names that are another model's natural normalized name, already allocated, or reserved by a user override. Allocation must not depend on Catalog array order.
+Default-name allocation is Provider-scoped and deterministic for one Catalog snapshot plus the currently valid user-owned Model names. The default Model name is the final segment after splitting the canonical Model ID on `/`. The final external alias is bounded to 128 characters: an overlong base Model name is deterministically shortened to the space left by `${providerId}/`, and numeric collision suffixes are fitted inside the same bound. When multiple model ids produce or shorten to the same base name, a canonical model id that already equals that base keeps the natural name when that name is not user-reserved; remaining collisions receive the first available `-2`, `-3`, ... suffix, skipping names that are another model's natural name, already allocated, or reserved by a user override. Allocation must not depend on Catalog array order.
 
 A valid user Model name is a Provider-local reservation. Catalog growth never steals it: if a new or existing generated default would use that name, the generated default is renumbered instead. Removing the user override releases the reservation and the derived defaults recompute from current Catalog facts.
 
@@ -1474,7 +1474,7 @@ For an untouched model:
 CommandCode Private — Models
 
 Model name
-  deepseek-deepseek-v4-flash                     [ Rename ]
+  deepseek-v4-flash                              [ Rename ]
   Original model: deepseek/deepseek-v4-flash
 ```
 
@@ -1483,7 +1483,7 @@ Clicking **Rename** opens an inline editor within the Models card:
 ```text
 Model name
 ┌────────────────────────────────────────────────────────┐
-│ commandcode-private/ │ deepseek-deepseek-v4-flash     │
+│ commandcode-private/ │ deepseek-v4-flash              │
 └────────────────────────────────────────────────────────┘
   fixed Provider prefix     editable, prefilled suffix
 
@@ -1505,8 +1505,8 @@ Therefore:
 ```text
 no override
 → canonical modelId = deepseek/deepseek-v4-flash
-→ default modelName = deepseek-deepseek-v4-flash
-→ client-visible model = commandcode-private/deepseek-deepseek-v4-flash
+→ default modelName = deepseek-v4-flash
+→ client-visible model = commandcode-private/deepseek-v4-flash
 
 custom model name "flash"
 → client-visible model = commandcode-private/flash
@@ -1867,8 +1867,8 @@ model = deepseek/deepseek-v4-flash
 expect:
 
 ```text
-modelName = deepseek-deepseek-v4-flash
-alias     = commandcode-private/deepseek-deepseek-v4-flash
+modelName = deepseek-v4-flash
+alias     = commandcode-private/deepseek-v4-flash
 ```
 
 and prove resolution still uses the explicit canonical target `{ provider: "commandcode-private", model: "deepseek/deepseek-v4-flash" }` rather than parsing the alias string.
@@ -2117,7 +2117,7 @@ This specification is complete only when every item below is true.
 
 - [ ] Every model in the active Catalog has exactly one effective alias without user configuration.
 - [ ] Every active Provider ID is one safe 1–64 character namespace segment, and every generated default alias is `${providerId}/${defaultModelName}`, contains exactly one `/`, and is at most 128 characters.
-- [ ] `defaultModelName` is derived from the canonical model id by slash normalization, deterministic length fitting, Provider-local user-name reservation, and collision numbering.
+- [ ] `defaultModelName` is derived from the canonical model id's final `/`-delimited segment, deterministic length fitting, Provider-local user-name reservation, and collision numbering.
 - [ ] Generated defaults are derived from current Catalog targets plus valid Provider-local user-name reservations and are not persisted.
 - [ ] The static curated default alias table and redundant defaults generation counter are removed.
 - [ ] A valid custom alias replaces the generated default for exactly one canonical model target; both are never simultaneously effective.

@@ -621,6 +621,7 @@ async function handleOpenAIResponses(
     const model = resolution.model;
     observeResponsesJourney(journey, {
       kind: "model_resolved",
+      requestedModel: selector,
       providerId: model.provider,
       modelId: model.id,
       location: resolutionLocation,

@@ -171,7 +171,7 @@ export const MAX_FAVORITE_MODELS = 10;
 export const MAX_FAVORITE_PROVIDERS = 5;
 
 function normalizeModelName(modelId: string): string {
-  return modelId.replaceAll("/", "-");
+  return modelId.slice(modelId.lastIndexOf("/") + 1);
 }
 
 function allocateDefaultAlias(

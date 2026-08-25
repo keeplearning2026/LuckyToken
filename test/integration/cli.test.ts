@@ -140,7 +140,7 @@ describe("LuckyToken CLI", () => {
     const result = await captureChild(child).result;
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("LuckyToken");
+    expect(result.stdout).toContain("Token");
     expect(result.stdout).toContain("--config <path>");
     expect(result.stdout).toContain("control profiles");
     expect(result.stdout).toContain("add|reconnect");

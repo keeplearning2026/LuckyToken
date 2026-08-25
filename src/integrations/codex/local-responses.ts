@@ -198,6 +198,7 @@ export function createCodexDirectResponsesLane(
     ): Promise<Response> {
       observeCodexDirectJourney(input.journey, {
         kind: "model_resolved",
+        requestedModel: input.selector,
         providerId: "codex-local",
         modelId: input.selector,
         location: {

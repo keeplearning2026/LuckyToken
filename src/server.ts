@@ -29,6 +29,8 @@ export interface LuckyTokenHttpServerOptions {
   readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly createRequestId?: () => string;
   readonly webSocketUpgrade?: WebSocketUpgradeHandler;
+  /** Fail-open observation of the server-owned in-flight request count. */
+  readonly onActiveRequestCountChanged?: (count: number) => void;
 }
 
 /** Deterministic time adapter for the quit drain (Ticket 05): production uses
@@ -432,6 +434,19 @@ export async function startLuckyTokenHttpServer(
   }
   const activeRequests = new Set<ActiveRequest>();
   const activeWebSocketUpgrades = new Set<Promise<void>>();
+  let lastPublishedActiveRequestCount = -1;
+  const publishActiveRequestCount = (): void => {
+    const count = activeRequests.size + activeWebSocketUpgrades.size;
+    if (count === lastPublishedActiveRequestCount) return;
+    lastPublishedActiveRequestCount = count;
+    queueMicrotask(() => {
+      try {
+        options.onActiveRequestCountChanged?.(count);
+      } catch {
+        // Product observation cannot affect request admission or completion.
+      }
+    });
+  };
   let accepting = true;
   const server = createServer((request, response) => {
     const controller = new AbortController();
@@ -523,6 +538,7 @@ export async function startLuckyTokenHttpServer(
     });
     const activeRequest: ActiveRequest = { controller, response, completion };
     activeRequests.add(activeRequest);
+    publishActiveRequestCount();
     let journeyClosed = false;
     let handoffStarted = false;
     let unstartedHandoffObserved = false;
@@ -726,6 +742,7 @@ export async function startLuckyTokenHttpServer(
         }
       } finally {
         activeRequests.delete(activeRequest);
+        publishActiveRequestCount();
         request.off("aborted", onRequestAborted);
         response.off("close", onResponseClose);
         settleCompletion?.();
@@ -816,7 +833,11 @@ export async function startLuckyTokenHttpServer(
           });
         });
       activeWebSocketUpgrades.add(completion);
-      void completion.finally(() => activeWebSocketUpgrades.delete(completion));
+      publishActiveRequestCount();
+      void completion.finally(() => {
+        activeWebSocketUpgrades.delete(completion);
+        publishActiveRequestCount();
+      });
       return;
     }
     rejectWebSocketUpgrade(socket, context);
@@ -830,6 +851,7 @@ export async function startLuckyTokenHttpServer(
   }
   const port = address.port;
   origin = `http://${host}:${port}`;
+  publishActiveRequestCount();
   let closed = false;
   let closing: Promise<void> | undefined;
   let draining: Promise<DrainOutcome> | undefined;

@@ -47,6 +47,8 @@ export interface ApplicationStatus {
   readonly modelDataPlane:
     "stopped" | "starting" | "running" | "stopping" | "failed";
   readonly provider: "configured" | "unconfigured";
+  /** Live in-flight requests owned by the running Data Plane. */
+  readonly activeRequests?: number;
   readonly dataPlane?: DataPlaneStatus;
 }
 

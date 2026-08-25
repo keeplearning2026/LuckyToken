@@ -107,6 +107,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const [profilesProviderId, setProfilesProviderId] = useState<string>();
   const [profileActionsId, setProfileActionsId] = useState<string>();
   const [modelsProviderId, setModelsProviderId] = useState<string>();
+  const [favoriteModelsOpen, setFavoriteModelsOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const [editingRow, setEditingRow] = useState<ProviderModelRow>();
   const [modelNameValue, setModelNameValue] = useState("");
@@ -213,6 +214,28 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         },
         () => undefined,
       );
+    });
+    return () => {
+      active = false;
+      stop();
+    };
+  }, [api]);
+
+  useEffect(() => {
+    let active = true;
+    const stop = api.control.onRequestJourneys((record) => {
+      if (record.outcome !== "success" || record.profileId === undefined) return;
+      void api.control
+        .executeCredentialProfiles({ command: "query" })
+        .then((profiles) => {
+          if (!active) return;
+          setProviders(profiles.options?.providers ?? []);
+          setProfileState(profiles.state);
+          setAuthError(profiles.outcome !== "ok");
+        })
+        .catch(() => {
+          if (active) setAuthError(true);
+        });
     });
     return () => {
       active = false;
@@ -492,11 +515,11 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     if (provider.revision === undefined) return;
     const action =
       profile.authType === "oauth"
-        ? "Disconnect from LuckyToken"
-        : "Remove from LuckyToken";
+        ? "Disconnect from Token"
+        : "Remove from Token";
     if (
       !window.confirm(
-        `${action}: ${profile.displayName} (${profile.authMethodLabel})? This removes only LuckyToken's local credential. The credential may remain valid at the Provider; revoke it in the Provider's account or security settings when needed. Historical Activity snapshots remain.`,
+        `${action}: ${profile.displayName} (${profile.authMethodLabel})? This removes only Token's local credential. The credential may remain valid at the Provider; revoke it in the Provider's account or security settings when needed. Historical Activity snapshots remain.`,
       )
     ) {
       return;
@@ -516,6 +539,27 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     setEditingRow(row);
   };
 
+  const executePublicModelMutation = async (
+    commandForRevision: (
+      revision: number,
+    ) => Parameters<LuckyTokenDesktopApi["control"]["executePublicModels"]>[0],
+  ): Promise<Awaited<
+    ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
+  > | undefined> => {
+    const revision = publicModels?.state.revision;
+    if (revision === undefined) return undefined;
+    let result = await api.control.executePublicModels(
+      commandForRevision(revision),
+    );
+    if (result.outcome === "conflict") {
+      result = await api.control.executePublicModels(
+        commandForRevision(result.state.revision),
+      );
+    }
+    setPublicModels(result);
+    return result;
+  };
+
   const saveModelName = async (): Promise<void> => {
     const row = editingRow;
     if (row === undefined) return;
@@ -527,17 +571,16 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     setModelNameBusy(true);
     setModelNameError(undefined);
     try {
-      const revision = publicModels?.state.revision ?? 0;
-      const result = await api.control.executePublicModels({
+      const result = await executePublicModelMutation((revision) => ({
         command: "rename_model",
         revision,
         providerId: row.providerId,
         modelId: row.modelId,
         modelName: trimmed,
-      });
-      if (result.outcome !== "ok") {
+      }));
+      if (result === undefined || result.outcome !== "ok") {
         setModelNameError(
-          result.outcome === "conflict"
+          result?.outcome === "conflict"
             ? "Model names changed. Refresh and try again."
             : "The model name could not be saved.",
         );
@@ -547,7 +590,6 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         if (next !== undefined) setPublicModels(next);
         return;
       }
-      setPublicModels(result);
       setEditingRow(undefined);
       setNotice(`Model name saved for ${row.modelId}.`);
     } catch {
@@ -561,22 +603,20 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     setModelNameBusy(true);
     setModelNameError(undefined);
     try {
-      const revision = publicModels?.state.revision ?? 0;
-      const result = await api.control.executePublicModels({
+      const result = await executePublicModelMutation((revision) => ({
         command: "restore_model_name",
         revision,
         providerId: row.providerId,
         modelId: row.modelId,
-      });
-      if (result.outcome !== "ok") {
+      }));
+      if (result === undefined || result.outcome !== "ok") {
         setModelNameError(
-          result.outcome === "conflict"
+          result?.outcome === "conflict"
             ? "Model names changed. Refresh and try again."
             : "The default model name could not be restored.",
         );
         return;
       }
-      setPublicModels(result);
       setEditingRow(undefined);
       setNotice(`Default model name restored for ${row.modelId}.`);
     } catch {
@@ -590,17 +630,17 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     providerId: string,
     on: boolean,
   ): Promise<void> => {
-    const state = publicModels?.state;
-    if (state === undefined) return;
-    const result = await api.control.executePublicModels({
+    const result = await executePublicModelMutation((revision) => ({
       command: "set_provider",
-      revision: state.revision,
+      revision,
       providerId,
       on,
-    });
-    setPublicModels(result);
+    }));
+    if (result === undefined) return;
     if (result.outcome === "unavailable") {
       setNotice("Sign in before turning this provider on.");
+    } else if (result.outcome !== "ok") {
+      setNotice("Provider publication could not be updated. Try again.");
     }
   };
 
@@ -608,49 +648,49 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     providerId: string,
     favorite: boolean,
   ): Promise<void> => {
-    const state = publicModels?.state;
-    if (state === undefined) return;
-    const result = await api.control.executePublicModels({
+    const result = await executePublicModelMutation((revision) => ({
       command: "set_provider_favorite",
-      revision: state.revision,
+      revision,
       providerId,
       favorite,
-    });
-    setPublicModels(result);
+    }));
+    if (result === undefined) return;
     if (result.outcome === "limit_exceeded") {
       setNotice("You can favorite up to 5 providers.");
+    } else if (result.outcome !== "ok") {
+      setNotice("Provider favorite could not be updated. Try again.");
     }
   };
 
   const setModelOn = async (row: ProviderModelRow, on: boolean): Promise<void> => {
-    const state = publicModels?.state;
-    if (state === undefined) return;
-    const result = await api.control.executePublicModels({
+    const result = await executePublicModelMutation((revision) => ({
       command: "set_model",
-      revision: state.revision,
+      revision,
       providerId: row.providerId,
       modelId: row.modelId,
       on,
-    });
-    setPublicModels(result);
+    }));
+    if (result !== undefined && result.outcome !== "ok") {
+      setNotice("Model publication could not be updated. Try again.");
+    }
   };
 
   const setModelFavorite = async (
     row: ProviderModelRow,
     favorite: boolean,
   ): Promise<void> => {
-    const state = publicModels?.state;
-    if (state === undefined) return;
-    const result = await api.control.executePublicModels({
+    const result = await executePublicModelMutation((revision) => ({
       command: "set_model_favorite",
-      revision: state.revision,
+      revision,
       providerId: row.providerId,
       modelId: row.modelId,
       favorite,
-    });
-    setPublicModels(result);
+    }));
+    if (result === undefined) return;
     if (result.outcome === "limit_exceeded") {
       setNotice("You can favorite up to 10 models.");
+    } else if (result.outcome !== "ok") {
+      setNotice("Model favorite could not be updated. Try again.");
     }
   };
 
@@ -808,13 +848,22 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
     modelsProviderId === undefined
       ? []
       : modelRows.filter((row) => row.providerId === modelsProviderId);
+  const favoriteModelRows = modelRows.filter((row) => row.favorite);
   const normalizedModelSearch = modelSearch.trim().toLowerCase();
-  const selectedModelRows = selectedProviderModelRows.filter(
+  const selectedModelRows = (
+    favoriteModelsOpen ? favoriteModelRows : selectedProviderModelRows
+  ).filter(
     (row) =>
       normalizedModelSearch.length === 0 ||
       row.modelName.toLowerCase().includes(normalizedModelSearch) ||
-      row.modelId.toLowerCase().includes(normalizedModelSearch),
+      row.modelId.toLowerCase().includes(normalizedModelSearch) ||
+      row.providerId.toLowerCase().includes(normalizedModelSearch),
   );
+  const modelsDialogOpen =
+    favoriteModelsOpen || selectedModelsProvider !== undefined;
+  const modelsDialogLabel = favoriteModelsOpen
+    ? "Favorite models"
+    : `${selectedModelsProvider?.name ?? "Provider"} models`;
   const authProvider =
     authModal === undefined
       ? undefined
@@ -1021,6 +1070,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
             onClick={() => {
               setEditingRow(undefined);
               setModelSearch("");
+              setFavoriteModelsOpen(false);
               setModelsProviderId(provider.providerId);
             }}
           >
@@ -1065,7 +1115,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
       {authError ? (
         <section className="page-card" role="alert">
           <h3>Provider state is temporarily unavailable</h3>
-          <p>LuckyToken could not reach Provider management.</p>
+          <p>Token could not reach Provider management.</p>
           <button type="button" onClick={queryPageFacts}>Retry</button>
         </section>
       ) : (
@@ -1080,20 +1130,46 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 onChange={(event) => setSearch(event.currentTarget.value)}
               />
             </label>
-            <button
-              type="button"
-              className="card-icon-button provider-refresh-button"
-              aria-label="Refresh models"
-              title="Refresh models"
-              disabled={refreshing}
-              onClick={() => void refresh()}
-            >
-              <RefreshCw
-                className={refreshing ? "spinning" : undefined}
-                size={20}
-                aria-hidden="true"
-              />
-            </button>
+            <div className="provider-toolbar-actions">
+              <button
+                type="button"
+                className={`card-icon-button provider-favorite-models-button${favoriteModelRows.length > 0 ? " active" : ""}`}
+                aria-label={`Show favorite models${favoriteModelRows.length === 0 ? "" : ` (${favoriteModelRows.length})`}`}
+                title="Favorite models"
+                disabled={publicModels === undefined}
+                onClick={() => {
+                  setEditingRow(undefined);
+                  setModelSearch("");
+                  setModelsProviderId(undefined);
+                  setFavoriteModelsOpen(true);
+                }}
+              >
+                <Star
+                  size={19}
+                  fill={favoriteModelRows.length > 0 ? "currentColor" : "none"}
+                  aria-hidden="true"
+                />
+                {favoriteModelRows.length === 0 ? null : (
+                  <span className="provider-favorite-model-count" aria-hidden="true">
+                    {favoriteModelRows.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="card-icon-button provider-refresh-button"
+                aria-label="Refresh models"
+                title="Refresh models"
+                disabled={refreshing}
+                onClick={() => void refresh()}
+              >
+                <RefreshCw
+                  className={refreshing ? "spinning" : undefined}
+                  size={20}
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
           </div>
 
           {catalogError ? (
@@ -1525,7 +1601,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 <Trash2 size={18} aria-hidden="true" />
                 <span>
                   <strong>Remove</strong>
-                  <small>Disconnect from LuckyToken</small>
+                  <small>Disconnect from Token</small>
                 </span>
               </button>
             </div>
@@ -1706,18 +1782,22 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
         </div>
       )}
 
-      {modelsProviderId === undefined || selectedModelsProvider === undefined ? null : (
+      {!modelsDialogOpen ? null : (
         <div className="modal-backdrop" role="presentation">
           <section
-            className="page-card task-modal models-modal"
+            className={`page-card task-modal models-modal${favoriteModelsOpen ? " favorite-models-modal" : ""}`}
             role="dialog"
             aria-modal="true"
-            aria-label={`${selectedModelsProvider.name} models`}
+            aria-label={modelsDialogLabel}
           >
             <div className="task-modal-header">
               <div>
-                <h3>Models</h3>
-                <p>{selectedModelsProvider.name}</p>
+                <h3>{favoriteModelsOpen ? "Favorite models" : "Models"}</h3>
+                <p>
+                  {favoriteModelsOpen
+                    ? `${favoriteModelRows.length} favorite model${favoriteModelRows.length === 1 ? "" : "s"} across all Providers`
+                    : selectedModelsProvider?.name}
+                </p>
               </div>
               <button
                 type="button"
@@ -1726,6 +1806,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 onClick={() => {
                   setEditingRow(undefined);
                   setModelSearch("");
+                  setFavoriteModelsOpen(false);
                   setModelsProviderId(undefined);
                 }}
               >
@@ -1745,7 +1826,13 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                 />
               </label>
               {selectedModelRows.length === 0 ? (
-                <p>No models are currently available for this provider.</p>
+                <p className="models-empty-state">
+                  {favoriteModelsOpen
+                    ? normalizedModelSearch.length === 0
+                      ? "No favorite models yet. Open a Provider's Models list and select the star beside a model."
+                      : "No favorite models match this search."
+                    : "No models are currently available for this provider."}
+                </p>
               ) : (
                 <ul className="secondary-card-list model-card-list">
                   {selectedModelRows.map((row) => {
@@ -1756,9 +1843,9 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                     <li
                       className="secondary-card model-card"
                       data-model-id={row.modelId}
-                      draggable={normalizedModelSearch.length === 0}
+                      draggable={!favoriteModelsOpen && normalizedModelSearch.length === 0}
                       onDragStart={(event) => {
-                        if (normalizedModelSearch.length !== 0) {
+                        if (favoriteModelsOpen || normalizedModelSearch.length !== 0) {
                           event.preventDefault();
                           return;
                         }
@@ -1768,7 +1855,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                         }
                       }}
                       onDragOver={(event) => {
-                        if (normalizedModelSearch.length === 0) {
+                        if (!favoriteModelsOpen && normalizedModelSearch.length === 0) {
                           event.preventDefault();
                           if (event.dataTransfer !== undefined) {
                             event.dataTransfer.dropEffect = "move";
@@ -1796,9 +1883,11 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                         className="drag-handle"
                         aria-label={`Drag ${row.modelName} to reorder`}
                         title={
-                          normalizedModelSearch.length === 0
+                          !favoriteModelsOpen && normalizedModelSearch.length === 0
                             ? "Drag to reorder"
-                            : "Clear search to reorder"
+                            : favoriteModelsOpen
+                              ? "Open this Provider's Models list to reorder"
+                              : "Clear search to reorder"
                         }
                       >
                         <GripVertical size={20} aria-hidden="true" />
@@ -1813,7 +1902,12 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
                           />
                           <span>{row.modelName}</span>
                         </strong>
-                        {row.modelName === row.modelId ? null : (
+                        {favoriteModelsOpen ? (
+                          <span className="canonical-model-id">
+                            Provider: {allProviders.find((provider) => provider.providerId === row.providerId)?.name ?? row.providerId}
+                            {row.modelName === row.modelId ? "" : ` · Original model: ${row.modelId}`}
+                          </span>
+                        ) : row.modelName === row.modelId ? null : (
                           <span className="canonical-model-id">Original model: {row.modelId}</span>
                         )}
                       </div>

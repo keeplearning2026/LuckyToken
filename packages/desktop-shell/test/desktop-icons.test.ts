@@ -64,11 +64,11 @@ describe("Electron desktop icons", () => {
     });
   });
 
-  it("ships transparent master and tray PNG assets at their contracted sizes", () => {
+  it("ships an opaque application master and transparent tray PNG assets at their contracted sizes", () => {
     expect(pngMetadata(join(assetRoot, "icon.png"))).toEqual({
       width: 1024,
       height: 1024,
-      colorType: 6,
+      colorType: 2,
     });
     expect(pngMetadata(join(assetRoot, "tray-icon.png"))).toEqual({
       width: 32,

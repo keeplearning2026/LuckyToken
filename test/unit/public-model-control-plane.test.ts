@@ -57,7 +57,7 @@ describe("Public Models Control Plane", () => {
         favorite: false,
         models: [
           {
-            alias: "anthropic/claude-opus",
+          alias: "anthropic/opus",
             target: "claude/opus",
             on: true,
             favorite: false,

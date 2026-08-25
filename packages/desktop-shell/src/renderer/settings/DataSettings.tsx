@@ -68,8 +68,8 @@ export function DataSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
 
   const createFullBackup = async (): Promise<void> => {
     const destinationPath = await api.platform.pickSaveFile({
-      title: "Create LuckyToken backup",
-      defaultPath: "luckytoken-backup.json",
+      title: "Create Token backup",
+      defaultPath: "token-backup.json",
     });
     if (destinationPath === undefined) return;
     setBusy(true);
@@ -106,15 +106,34 @@ export function DataSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
   return (
     <section className="page-stack">
       {notice === undefined ? null : <p className="product-notice" role="status">{notice}</p>}
-      <div className="page-card settings-section">
-        <div className="settings-copy">
-          <p className="eyebrow">DATA</p>
-          <h3>History</h3>
-          <p>{historyUnavailable || total === undefined ? "History is temporarily unavailable." : `${total.toLocaleString()} stored history record${total === 1 ? "" : "s"}`}</p>
+      <div className="page-card settings-section settings-danger-section">
+        <header className="settings-section-header">
+          <div className="settings-copy">
+            <p className="eyebrow">DATA &amp; PRIVACY</p>
+            <h3>Stored history</h3>
+            <p>Request activity and runtime events used by Overview and diagnostics.</p>
+          </div>
+          <span className={`settings-status ${historyUnavailable ? "unavailable" : "off"}`}>
+            {historyUnavailable || total === undefined
+              ? "Unavailable"
+              : `${total.toLocaleString()} record${total === 1 ? "" : "s"}`}
+          </span>
+        </header>
+        <div className="settings-action-row">
+          <div className="settings-action-copy">
+            <strong>Delete all stored history</strong>
+            <p>
+              {historyUnavailable || total === undefined
+                ? "History cannot be inspected or deleted right now."
+                : total === 0
+                  ? "There is no stored history to delete."
+                  : `${total.toLocaleString()} stored history record${total === 1 ? "" : "s"} will be removed after confirmation.`}
+            </p>
+          </div>
+          <button type="button" className="danger-button" disabled={busy || total === undefined || total === 0} onClick={() => void deleteAll()}>
+            Delete history
+          </button>
         </div>
-        <button type="button" className="danger-button" disabled={busy || total === undefined || total === 0} onClick={() => void deleteAll()}>
-          Delete all history
-        </button>
         {deleteGate?.outcome === "confirmation_required" ? (
           <div className="confirmation-panel">
             <p>{deleteGate.confirmationMessage}</p>
@@ -126,14 +145,22 @@ export function DataSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
       </div>
 
       <div className="page-card settings-section">
-        <div className="settings-copy">
-          <p className="eyebrow">BACKUP</p>
-          <h3>Product backup</h3>
-          <p>Ordinary history is sanitized. A full sensitive backup requires a second explicit confirmation.</p>
+        <header className="settings-section-header">
+          <div className="settings-copy">
+            <p className="eyebrow">BACKUP</p>
+            <h3>Create a full backup</h3>
+            <p>Export configuration and complete diagnostic data to a file you choose.</p>
+          </div>
+        </header>
+        <div className="settings-action-row">
+          <div className="settings-action-copy">
+            <strong>Sensitive diagnostic backup</strong>
+            <p>The file may contain sensitive request details and always requires confirmation.</p>
+          </div>
+          <button type="button" className="secondary" disabled={busy} onClick={() => void createFullBackup()}>
+            Choose location…
+          </button>
         </div>
-        <button type="button" disabled={busy} onClick={() => void createFullBackup()}>
-          Create full backup
-        </button>
         {backupGate?.outcome === "confirmation_required" ? (
           <div className="confirmation-panel">
             <p>{backupGate.confirmationMessage}</p>

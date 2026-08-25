@@ -100,6 +100,16 @@ export interface RequestJourneySummary {
   readonly operation: RequestJourneyOperationCandidate;
   readonly protocol?: string;
   readonly lane?: DataPlaneLane;
+  /** Client-visible model selector captured at request time. */
+  readonly requestedModel?: string;
+  readonly providerId?: string;
+  readonly realModelId?: string;
+  readonly clientSessionId?: string;
+  readonly effectiveSessionId?: string;
+  readonly profileId?: string;
+  readonly profileDisplayName?: string;
+  /** Final HTTP status prepared for the client. */
+  readonly httpStatus?: number;
   readonly outcome: RequestJourneyOutcome | "running";
   readonly completeness: "complete" | "degraded";
   readonly createdAt: number;
@@ -152,6 +162,7 @@ export interface LaneCommittedPersistedObservation
 export interface ModelResolvedPersistedObservation
   extends LocatedPersistedObservation {
   readonly kind: "model_resolved";
+  readonly requestedModel: string;
   readonly providerId: string;
   readonly modelId: string;
 }

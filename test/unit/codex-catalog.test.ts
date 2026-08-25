@@ -101,7 +101,7 @@ describe("Codex catalog projection", () => {
       models: { getModels: () => [routed] } as unknown as Models,
       aliases: [
         {
-          alias: "commandcode-private/deepseek-deepseek-v4-flash",
+          alias: "commandcode-private/deepseek-v4-flash",
           target: {
             providerId: "commandcode-private",
             modelId: "deepseek/deepseek-v4-flash",
@@ -113,8 +113,8 @@ describe("Codex catalog projection", () => {
     const parsed = JSON.parse(result.content) as { models: Array<Record<string, unknown>> };
     expect(parsed.models).toContainEqual(
       expect.objectContaining({
-        slug: "commandcode-private/deepseek-deepseek-v4-flash",
-        display_name: "deepseek-deepseek-v4-flash [commandcode-private]",
+        slug: "commandcode-private/deepseek-v4-flash",
+        display_name: "deepseek-v4-flash [commandcode-private]",
       }),
     );
     expect(result.content).not.toContain("marketing:deepseek/deepseek-v4-flash");

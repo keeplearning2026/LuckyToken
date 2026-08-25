@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Activity,
-  ChartNoAxesColumnIncreasing,
   LoaderCircle,
   Play,
   RefreshCw,
@@ -21,7 +19,6 @@ import { OverviewPage } from "../overview/OverviewPage.js";
 import { ProvidersPage } from "../providers/ProvidersPage.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
 import { productPages as pages, type ProductPage } from "./navigation.js";
-import { useActiveRequests } from "./useActiveRequests.js";
 import codexMark from "../assets/codex.png";
 
 export interface AppProps {
@@ -100,7 +97,7 @@ export function App({ api }: AppProps) {
 
   const status = backendState?.kind === "ready" ? backendState.status : undefined;
   const backendAvailable = backendState?.kind === "ready";
-  const activeRequests = useActiveRequests(api, backendAvailable);
+  const activeRequests = status?.activeRequests;
 
   const executeRuntime = async (): Promise<void> => {
     const command = runtimeAction(status);
@@ -261,7 +258,7 @@ export function App({ api }: AppProps) {
                 <Wifi size={17} strokeWidth={1.9} aria-hidden="true" />
                 <span>{endpoint.host}:</span>
                 <input
-                  aria-label="LuckyToken port"
+                  aria-label="Token port"
                   inputMode="numeric"
                   value={portDraft}
                   onChange={(event) => setPortDraft(event.currentTarget.value)}
@@ -277,7 +274,7 @@ export function App({ api }: AppProps) {
               <button
                 type="button"
                 className="runtime-endpoint runtime-endpoint-button"
-                aria-label="Edit LuckyToken port"
+                aria-label="Edit Token port"
                 title={endpointText}
                 disabled={endpoint === undefined}
                 onClick={() => {
@@ -356,13 +353,18 @@ export function App({ api }: AppProps) {
             </button>
           </div>
 
-          <span className="toolbar-group runtime-state" title={`LuckyToken is ${runtimeLabel(status).toLowerCase()}`}>
-            <Activity className={status?.modelDataPlane ?? "unavailable"} size={18} strokeWidth={1.9} aria-hidden="true" />
-            {runtimeLabel(status)}
+          <span
+            className="toolbar-group runtime-state"
+            title={`Token is ${runtimeLabel(status).toLowerCase()}`}
+            aria-label={`Token is ${runtimeLabel(status).toLowerCase()}`}
+          >
+            <span
+              className={`runtime-state-dot ${status?.modelDataPlane ?? "unavailable"}`}
+              aria-hidden="true"
+            />
           </span>
 
           <span className="toolbar-group runtime-active" title={activeRequests === undefined ? "Active requests unavailable" : `${activeRequests} active requests`} aria-label={activeRequests === undefined ? "Active requests unavailable" : `${activeRequests} active requests`}>
-            <ChartNoAxesColumnIncreasing size={18} strokeWidth={1.8} aria-hidden="true" />
             <strong className="active-request-count">{activeRequests ?? "-"}</strong>
           </span>
 
@@ -372,9 +374,9 @@ export function App({ api }: AppProps) {
             disabled={action === undefined || runtimePending}
             onClick={() => void executeRuntime()}
             aria-label={runtimePending
-              ? action === "stop" ? "Stopping LuckyToken" : "Starting LuckyToken"
-              : action === "stop" ? "Stop LuckyToken" : "Start LuckyToken"}
-            title={action === "stop" ? "Stop LuckyToken" : "Start LuckyToken"}
+              ? action === "stop" ? "Stopping Token" : "Starting Token"
+              : action === "stop" ? "Stop Token" : "Start Token"}
+            title={action === "stop" ? "Stop Token" : "Start Token"}
           >
             {runtimePending ? (
               <LoaderCircle className="spinning" size={19} strokeWidth={2} aria-hidden="true" />

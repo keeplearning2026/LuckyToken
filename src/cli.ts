@@ -29,7 +29,7 @@ async function readControlPlaneDescriptor(path: string) {
   return endpoint;
 }
 
-const HELP = `LuckyToken
+const HELP = `Token
 
 Usage:
   luckytoken --config <path>
@@ -59,7 +59,7 @@ Commands:
   control backup ordinary|full|confirm  Create a redacted or explicitly confirmed full-sensitive backup
 
 Options:
-  --config <path>  Strict LuckyToken JSON configuration
+  --config <path>  Strict Token JSON configuration
   --owner <kind>   Ownership identity for serve: cli (default) or desktop
   --descriptor <path>  Control-command discovery descriptor
   --help           Show this help
@@ -203,13 +203,13 @@ async function runServe(
     events: {
       onRoute: (route) => {
         stdout.write(
-          `LuckyToken ${route.method} ${route.origin}${route.pathname}\n`,
+          `Token ${route.method} ${route.origin}${route.pathname}\n`,
         );
       },
       onAttached: (ownership) => {
         const owner = ownership?.owner;
         stdout.write(
-          `LuckyToken is already running: attached to the active instance${
+          `Token is already running: attached to the active instance${
             owner === undefined
               ? ""
               : ` owned by PID ${owner.pid} (${owner.kind})`
@@ -248,7 +248,7 @@ async function runServe(
   }
   if (exit.reason === "drained" || exit.reason === "timed_out") {
     stdout.write(
-      `LuckyToken: application quit — ${
+      `Token: application quit — ${
         exit.reason === "drained"
           ? "active requests drained"
           : "drain timed out; remaining requests aborted"
@@ -883,7 +883,7 @@ if (
 ) {
   void runLuckyTokenCli(process.argv.slice(2)).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`LuckyToken: ${message}\n`);
+    process.stderr.write(`Token: ${message}\n`);
     process.exitCode = 1;
   });
 }

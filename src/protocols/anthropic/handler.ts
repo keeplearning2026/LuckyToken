@@ -624,6 +624,7 @@ async function handleAnthropicMessages(
     const model = resolution.model;
     observeJourney(journey, {
       kind: "model_resolved",
+      requestedModel: selector,
       providerId: model.provider,
       modelId: model.id,
       location: resolutionLocation,

@@ -112,7 +112,7 @@ describe("Pi integration adapter", () => {
     };
     expect(parsed.providers.other).toEqual({ apiKey: "user-placeholder" });
     expect(parsed.providers.luckytoken).toEqual({
-      name: "LuckyToken",
+      name: "Token",
       baseUrl: "http://127.0.0.1:3000",
       apiKey: "luckytoken-local",
       api: "anthropic-messages",

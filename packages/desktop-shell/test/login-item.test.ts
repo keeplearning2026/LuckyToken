@@ -21,22 +21,22 @@ describe("Windows desktop login-item ownership", () => {
       openAtLogin: false,
       launchItems: [
         {
-          name: "LuckyToken-old-test",
-          path: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\LuckyToken.exe",
+          name: "Token-old-test",
+          path: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
           args: [],
           scope: "user",
           enabled: true,
         },
         {
-          name: "LuckyToken",
-          path: "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+          name: "Token",
+          path: "C:\\Program Files\\Token\\Token.exe",
           args: [],
           scope: "user",
           enabled: true,
         },
         {
-          name: "LuckyToken-machine",
-          path: "D:\\project\\LuckyToken\\.electron-out\\machine\\LuckyToken.exe",
+          name: "Token-machine",
+          path: "D:\\project\\LuckyToken\\.electron-out\\machine\\Token.exe",
           args: [],
           scope: "machine",
           enabled: true,
@@ -48,26 +48,26 @@ describe("Windows desktop login-item ownership", () => {
     expect(set).toHaveBeenCalledTimes(1);
     expect(set).toHaveBeenCalledWith({
       openAtLogin: false,
-      path: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\LuckyToken.exe",
+      path: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
       args: [],
-      name: "LuckyToken-old-test",
+      name: "Token-old-test",
     });
   });
 
-  it("migrates legacy per-user LuckyToken startup entries to the current installed executable", () => {
+  it("reconciles stale per-user Token startup entries to the current installed executable", () => {
     const { api, set } = platform({
       openAtLogin: false,
       launchItems: [
         {
           name: "legacy-luckytoken",
-          path: "C:\\old\\LuckyToken.exe",
+          path: "C:\\old\\Token.exe",
           args: ["--legacy"],
           scope: "user",
           enabled: true,
         },
         {
           name: "test-luckytoken",
-          path: "D:\\repo\\.electron-out\\42\\LuckyToken.exe",
+          path: "D:\\repo\\.electron-out\\42\\Token.exe",
           args: [],
           scope: "user",
           enabled: false,
@@ -76,37 +76,37 @@ describe("Windows desktop login-item ownership", () => {
     });
 
     expect(
-      reconcileInstalledLoginItem(api, "C:\\Program Files\\LuckyToken\\LuckyToken.exe"),
+      reconcileInstalledLoginItem(api, "C:\\Program Files\\Token\\Token.exe"),
     ).toBe(true);
     expect(set).toHaveBeenNthCalledWith(1, {
       openAtLogin: false,
-      path: "C:\\old\\LuckyToken.exe",
+      path: "C:\\old\\Token.exe",
       args: ["--legacy"],
       name: "legacy-luckytoken",
     });
     expect(set).toHaveBeenNthCalledWith(2, {
       openAtLogin: false,
-      path: "D:\\repo\\.electron-out\\42\\LuckyToken.exe",
+      path: "D:\\repo\\.electron-out\\42\\Token.exe",
       args: [],
       name: "test-luckytoken",
     });
     expect(set).toHaveBeenNthCalledWith(3, {
       openAtLogin: true,
-      path: "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+      path: "C:\\Program Files\\Token\\Token.exe",
       args: [],
       enabled: true,
-      name: "LuckyToken",
+      name: "Token",
     });
   });
 
-  it("normalizes a same-path legacy registration name to one canonical LuckyToken item", () => {
+  it("normalizes a stale registration name to one canonical Token item", () => {
     const { api, set } = platform({
       openAtLogin: true,
       executableWillLaunchAtLogin: true,
       launchItems: [
         {
           name: "legacy-electron-app-id",
-          path: "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+          path: "C:\\Program Files\\Token\\Token.exe",
           args: ["--old"],
           scope: "user",
           enabled: true,
@@ -115,20 +115,20 @@ describe("Windows desktop login-item ownership", () => {
     });
 
     expect(
-      reconcileInstalledLoginItem(api, "C:\\Program Files\\LuckyToken\\LuckyToken.exe"),
+      reconcileInstalledLoginItem(api, "C:\\Program Files\\Token\\Token.exe"),
     ).toBe(true);
     expect(set).toHaveBeenNthCalledWith(1, {
       openAtLogin: false,
-      path: "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+      path: "C:\\Program Files\\Token\\Token.exe",
       args: ["--old"],
       name: "legacy-electron-app-id",
     });
     expect(set).toHaveBeenNthCalledWith(2, {
       openAtLogin: true,
-      path: "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+      path: "C:\\Program Files\\Token\\Token.exe",
       args: [],
       enabled: true,
-      name: "LuckyToken",
+      name: "Token",
     });
   });
 
@@ -137,8 +137,8 @@ describe("Windows desktop login-item ownership", () => {
       openAtLogin: false,
       launchItems: [
         {
-          name: "LuckyToken",
-          path: "C:\\old\\LuckyToken.exe",
+          name: "Token",
+          path: "C:\\old\\Token.exe",
           args: [],
           scope: "user",
           enabled: false,
@@ -147,14 +147,14 @@ describe("Windows desktop login-item ownership", () => {
     });
 
     expect(
-      reconcileInstalledLoginItem(api, "C:\\new\\LuckyToken.exe"),
+      reconcileInstalledLoginItem(api, "C:\\new\\Token.exe"),
     ).toBe(false);
     expect(set).toHaveBeenLastCalledWith({
       openAtLogin: true,
-      path: "C:\\new\\LuckyToken.exe",
+      path: "C:\\new\\Token.exe",
       args: [],
       enabled: false,
-      name: "LuckyToken",
+      name: "Token",
     });
   });
 
@@ -163,17 +163,17 @@ describe("Windows desktop login-item ownership", () => {
       openAtLogin: true,
       executableWillLaunchAtLogin: false,
     });
-    expect(effectiveDesktopAutoStart(api, "C:\\LuckyToken.exe")).toBe(false);
+    expect(effectiveDesktopAutoStart(api, "C:\\Token.exe")).toBe(false);
   });
 
-  it("enabling replaces stale user entries and disabling removes every per-user LuckyToken entry", () => {
+  it("enabling replaces stale user entries and disabling removes every per-user Token entry", () => {
     const stale: DesktopLoginItemSnapshot = {
       openAtLogin: false,
       executableWillLaunchAtLogin: true,
       launchItems: [
         {
           name: "old",
-          path: "C:\\old\\LuckyToken.exe",
+          path: "C:\\old\\Token.exe",
           args: [],
           scope: "user",
           enabled: true,
@@ -182,14 +182,14 @@ describe("Windows desktop login-item ownership", () => {
     };
     const enabled = platform(stale);
     expect(
-      setInstalledDesktopAutoStart(enabled.api, "C:\\new\\LuckyToken.exe", true),
+      setInstalledDesktopAutoStart(enabled.api, "C:\\new\\Token.exe", true),
     ).toBe(true);
     expect(enabled.set).toHaveBeenCalledWith({
       openAtLogin: true,
-      path: "C:\\new\\LuckyToken.exe",
+      path: "C:\\new\\Token.exe",
       args: [],
       enabled: true,
-      name: "LuckyToken",
+      name: "Token",
     });
 
     const disabled = platform({
@@ -198,8 +198,8 @@ describe("Windows desktop login-item ownership", () => {
       launchItems: [
         ...(stale.launchItems ?? []),
         {
-          name: "LuckyToken",
-          path: "C:\\new\\LuckyToken.exe",
+          name: "Token",
+          path: "C:\\new\\Token.exe",
           args: [],
           scope: "user" as const,
           enabled: true,
@@ -207,13 +207,13 @@ describe("Windows desktop login-item ownership", () => {
       ],
     });
     expect(
-      setInstalledDesktopAutoStart(disabled.api, "C:\\new\\LuckyToken.exe", false),
+      setInstalledDesktopAutoStart(disabled.api, "C:\\new\\Token.exe", false),
     ).toBe(false);
     expect(disabled.set).toHaveBeenCalledWith({
       openAtLogin: false,
-      path: "C:\\new\\LuckyToken.exe",
+      path: "C:\\new\\Token.exe",
       args: [],
-      name: "LuckyToken",
+      name: "Token",
     });
   });
 });

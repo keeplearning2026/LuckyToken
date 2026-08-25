@@ -15,6 +15,7 @@ import {
   type BackupCommandHandler,
   type CompatibilityIssue,
   type ControlPlaneEndpoint,
+  type RequestJourneySummary,
 } from "@luckytoken/application-control-plane/control-plane";
 
 import {
@@ -235,7 +236,7 @@ async function acquireInstanceAuthorityOrAttach(options: {
 
   throw lastAttachError instanceof Error
     ? lastAttachError
-    : new Error("Active LuckyToken Backend is not management-ready yet");
+    : new Error("Active Token Backend is not management-ready yet");
 }
 
 function createAutoStartRegistrar(options: {
@@ -245,7 +246,7 @@ function createAutoStartRegistrar(options: {
 }): AutoStartRegistrar {
   if (process.platform !== "win32") return createUnsupportedAutoStartRegistrar();
   return createWindowsAutoStartRegistrar({
-    name: "LuckyToken",
+    name: "Token",
     command: buildServeAutoStartCommand({
       ownerKind: options.ownerKind,
       nodeExecutable: process.execPath,
@@ -440,6 +441,9 @@ async function startNormalApplication(options: {
   let attentionDiagnosticsSubscription:
     | { readonly unsubscribe: () => void }
     | undefined;
+  let profileUsageDiagnosticsSubscription:
+    | { readonly unsubscribe: () => void }
+    | undefined;
   let attentionRefreshTimer: ReturnType<typeof setInterval> | undefined;
   let cleanupPromise: Promise<void> | undefined;
   let lifecycle: ControlledLuckyTokenApplication | undefined;
@@ -456,7 +460,9 @@ async function startNormalApplication(options: {
   let lastPublishedStatus: ApplicationStatus = Object.freeze({
     modelDataPlane: "stopped",
     provider: "unconfigured",
+    activeRequests: 0,
   });
+  let activeRequestCount = 0;
 
   const closeOwnedResources = async (): Promise<readonly unknown[]> => {
     const failures: unknown[] = [];
@@ -474,6 +480,12 @@ async function startNormalApplication(options: {
       failures.push(error);
     }
     attentionDiagnosticsSubscription = undefined;
+    try {
+      profileUsageDiagnosticsSubscription?.unsubscribe();
+    } catch (error) {
+      failures.push(error);
+    }
+    profileUsageDiagnosticsSubscription = undefined;
     await restoreAgentsForCleanup?.().catch((error: unknown) => failures.push(error));
     if (supervisor !== undefined) {
       await supervisor
@@ -521,6 +533,48 @@ async function startNormalApplication(options: {
       diagnosticsAuthority = createUnavailableDiagnosticsAuthority();
     }
     const ownedDiagnosticsAuthority = diagnosticsAuthority;
+    const credentialUsageById = new Map<
+      string,
+      {
+        readonly credentialId: string;
+        readonly lastUsedAt: number;
+        readonly lastSucceededAt?: number;
+      }
+    >();
+    const observeCredentialUsage = (
+      record: RequestJourneySummary,
+    ): void => {
+      if (record.profileId === undefined || record.closedAt === undefined) return;
+      const current = credentialUsageById.get(record.profileId);
+      const lastUsedAt = Math.max(current?.lastUsedAt ?? 0, record.closedAt);
+      const succeededAt = record.outcome === "success" ? record.closedAt : undefined;
+      const lastSucceededAt = Math.max(
+        current?.lastSucceededAt ?? 0,
+        succeededAt ?? 0,
+      );
+      credentialUsageById.set(record.profileId, {
+        credentialId: record.profileId,
+        lastUsedAt,
+        ...(lastSucceededAt === 0 ? {} : { lastSucceededAt }),
+      });
+    };
+    try {
+      let afterId: number | undefined;
+      for (;;) {
+        const page = await ownedDiagnosticsAuthority.queryRequestJourneys({
+          limit: 1_000,
+          ...(afterId === undefined ? {} : { afterId }),
+        });
+        for (const record of page.records) observeCredentialUsage(record);
+        const newestId = page.records.at(-1)?.id;
+        if (!page.hasMore || newestId === undefined) break;
+        afterId = newestId;
+      }
+    } catch {
+      // Profile usage is a fail-open diagnostic projection only.
+    }
+    profileUsageDiagnosticsSubscription =
+      ownedDiagnosticsAuthority.subscribeRequestJourneys(observeCredentialUsage);
     const controlPipe = await createProductionControlPipe();
     const modelsAuthority = createModelsJsonAuthority({
       path: config.pi.modelsJson,
@@ -541,6 +595,22 @@ async function startNormalApplication(options: {
       },
     });
     publicModelAuthorityForCleanup = publicModelAuthority;
+    type PublicModelCatalogSnapshot = Parameters<
+      typeof publicModelRuntimeFacts
+    >[0];
+    let reconcilePublicModelsNow: (
+      snapshot: PublicModelCatalogSnapshot,
+    ) => Promise<void> = () => Promise.resolve();
+    let publicModelReconciliation = Promise.resolve();
+    const reconcilePublicModels = (
+      snapshot: PublicModelCatalogSnapshot,
+    ): Promise<void> => {
+      const scheduled = publicModelReconciliation
+        .catch(() => undefined)
+        .then(() => reconcilePublicModelsNow(snapshot));
+      publicModelReconciliation = scheduled;
+      return scheduled;
+    };
     const settingsCommandHandler = createSettingsControlPlaneHandler(settingsRegistry);
     const drainTimeoutMs = (): number => {
       const setting = settingsRegistry.query([
@@ -569,8 +639,9 @@ async function startNormalApplication(options: {
             provider: nextProvider,
           });
         }
-        void reconcilePublicModels(snapshot).catch(() => undefined);
-        controlPlane?.publishStatus(lastPublishedStatus).catch(() => undefined);
+        void reconcilePublicModels(snapshot)
+          .then(() => controlPlane?.publishStatus(lastPublishedStatus))
+          .catch(() => undefined);
       },
     });
     catalogControllerForCleanup = catalogController;
@@ -601,10 +672,15 @@ async function startNormalApplication(options: {
             "Provider credential storage lock release was degraded after a completed operation.",
         });
       },
+      credentialUsage: (credentialIds) =>
+        credentialIds.flatMap((credentialId) => {
+          const usage = credentialUsageById.get(credentialId);
+          return usage === undefined ? [] : [usage];
+        }),
     });
     const credentialManagement = providerRuntime.credentialManagement;
-    const reconcilePublicModels = (
-      snapshot: Parameters<typeof publicModelRuntimeFacts>[0],
+    reconcilePublicModelsNow = (
+      snapshot: PublicModelCatalogSnapshot,
     ): Promise<void> =>
       publicModelAuthority
         .reconcile(
@@ -812,6 +888,7 @@ async function startNormalApplication(options: {
     lastPublishedStatus = Object.freeze({
       modelDataPlane: "stopped",
       provider: lastPublishedStatus.provider,
+      activeRequests: activeRequestCount,
     });
     const initialPublicEndpoint = publicModelAuthority.snapshot().endpoint;
     let dataPlaneStartedOnce = false;
@@ -843,6 +920,16 @@ async function startNormalApplication(options: {
             port: address.port,
             shutdownController,
             diagnostics: ownedDiagnosticsAuthority,
+            onActiveRequestCountChanged: (count) => {
+              if (count === activeRequestCount) return;
+              activeRequestCount = count;
+              const nextStatus = Object.freeze({
+                ...lastPublishedStatus,
+                activeRequests: count,
+              });
+              lastPublishedStatus = nextStatus;
+              void controlPlane?.publishStatus(nextStatus).catch(() => undefined);
+            },
           });
           dataPlaneStartedOnce = true;
           for (const route of composition.runtime.routes) {
@@ -885,11 +972,15 @@ async function startNormalApplication(options: {
 
     const autoStartRegistrar = createAutoStartRegistrar(options);
     const publish = (status: ApplicationStatus): Promise<void> => {
-      lastPublishedStatus = status;
+      const nextStatus = Object.freeze({
+        ...status,
+        activeRequests: activeRequestCount,
+      });
+      lastPublishedStatus = nextStatus;
       const plane = controlPlane;
       return plane === undefined
         ? Promise.reject(new Error("Control Plane is not ready"))
-        : plane.publishStatus(status);
+        : plane.publishStatus(nextStatus);
     };
     const basePublicModelsCommandHandler = createPublicModelsControlPlaneHandler(
       publicModelAuthority,
@@ -897,6 +988,7 @@ async function startNormalApplication(options: {
     const publicModelsCommandHandler = async (
       command: Parameters<typeof basePublicModelsCommandHandler>[0],
     ): ReturnType<typeof basePublicModelsCommandHandler> => {
+      await reconcilePublicModels(catalogController.snapshot());
       const previousPort = publicModelAuthority.snapshot().endpoint.port;
       const result = await basePublicModelsCommandHandler(command);
       if (
@@ -943,7 +1035,10 @@ async function startNormalApplication(options: {
         version: LUCKYTOKEN_RELEASE_VERSION,
         ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       },
-      initialStatus: supervisor.initialStatus,
+      initialStatus: Object.freeze({
+        ...supervisor.initialStatus,
+        activeRequests: activeRequestCount,
+      }),
       ownership,
       // Provider Activation (Spec v1.0 §14.3): runtime transitions must
       // also update the application's lastPublishedStatus, because the

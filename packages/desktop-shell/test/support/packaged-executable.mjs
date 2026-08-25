@@ -8,14 +8,14 @@ export async function resolvePackagedExecutable(
   const selected = environment.LUCKYTOKEN_PACKAGED_EXECUTABLE?.trim();
   if (selected) {
     if (!isAbsolute(selected)) {
-      throw new Error("selected packaged LuckyToken executable must be an absolute path");
+      throw new Error("selected packaged Token executable must be an absolute path");
     }
     const executable = resolve(selected);
     try {
       await access(executable);
     } catch {
       throw new Error(
-        `selected packaged LuckyToken executable does not exist: ${executable}`,
+        `selected packaged Token executable does not exist: ${executable}`,
       );
     }
     return executable;
@@ -29,8 +29,8 @@ export async function resolvePackagedExecutable(
     const executable = join(
       outputRoot,
       entry.name,
-      "LuckyToken-win32-x64",
-      "LuckyToken.exe",
+      "Token-win32-x64",
+      "Token.exe",
     );
     try {
       const metadata = await stat(executable);
@@ -41,6 +41,6 @@ export async function resolvePackagedExecutable(
   }
   candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
   const latest = candidates[0];
-  if (latest === undefined) throw new Error("no packaged LuckyToken executable found");
+  if (latest === undefined) throw new Error("no packaged Token executable found");
   return latest.executable;
 }

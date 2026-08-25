@@ -3,10 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  RequestJourneySummary,
-  StatusSnapshot,
-} from "@luckytoken/application-control-plane/control-plane";
+import type { StatusSnapshot } from "@luckytoken/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import type { DesktopBackendState } from "../src/shared/desktop-api.js";
@@ -19,28 +16,12 @@ const runningStatus: StatusSnapshot = {
   sequence: 1,
   modelDataPlane: "running",
   provider: "configured",
+  activeRequests: 2,
   dataPlane: {
     configuredOrigin: "http://127.0.0.1:4317",
     configuredPort: 4317,
   },
 };
-
-function journeySummary(
-  id: number,
-  outcome: RequestJourneySummary["outcome"],
-): RequestJourneySummary {
-  return {
-    id,
-    runtimeId: "52000000-0000-4000-8000-000000000001",
-    requestId: `10000000-0000-4000-8000-000000000${String(id).padStart(3, "0")}`,
-    operation: "model_generation",
-    protocol: "anthropic-messages",
-    outcome,
-    completeness: "complete",
-    createdAt: 1_700_000_000_000 + id,
-    ...(outcome === "running" ? {} : { closedAt: 1_700_000_001_000 + id }),
-  };
-}
 
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
@@ -64,9 +45,7 @@ async function flush(): Promise<void> {
 
 describe("desktop command-router shell", () => {
   it("switches the three color pages and keeps endpoint, runtime state, active count, and start/stop control in the header", async () => {
-    const journeyListeners = new Set<(record: RequestJourneySummary) => void>();
     const backendStateListeners = new Set<(state: DesktopBackendState) => void>();
-    let runningRecords = [journeySummary(1, "running"), journeySummary(2, "running")];
     const executeRuntime = vi.fn(async (command: "start" | "stop" | "restart") => ({
       command,
       outcome: "completed" as const,
@@ -86,12 +65,8 @@ describe("desktop command-router shell", () => {
         executeRuntime,
         queryRequestJourneys: async () => ({
           outcome: "ok",
-          result: { records: runningRecords, hasMore: false },
+          result: { records: [], hasMore: false },
         }),
-        onRequestJourneys: (listener) => {
-          journeyListeners.add(listener);
-          return () => journeyListeners.delete(listener);
-        },
         getAnalytics: async (query) => query.command === "options"
           ? {
               version: 2,
@@ -137,9 +112,32 @@ describe("desktop command-router shell", () => {
     expect(container.querySelectorAll(".color-nav-button")).toHaveLength(3);
     expect(container.querySelector("h1")?.textContent).toBe("Overview");
     expect(container.textContent).toContain("127.0.0.1:4317");
-    expect(container.textContent).toContain("Running");
+    expect(container.querySelector(".runtime-state-dot.running")).not.toBeNull();
     expect(container.querySelector(".runtime-endpoint svg")).not.toBeNull();
     expect(container.textContent).toContain("2");
+    expect(container.querySelector(".runtime-active svg")).toBeNull();
+
+    act(() => {
+      for (const listener of backendStateListeners) {
+        listener({
+          revision: 2,
+          kind: "ready",
+          status: { ...runningStatus, sequence: 2, activeRequests: 3 },
+        });
+      }
+    });
+    expect(container.querySelector(".active-request-count")?.textContent).toBe("3");
+
+    act(() => {
+      for (const listener of backendStateListeners) {
+        listener({
+          revision: 3,
+          kind: "ready",
+          status: { ...runningStatus, sequence: 3, activeRequests: 2 },
+        });
+      }
+    });
+    expect(container.querySelector(".active-request-count")?.textContent).toBe("2");
 
     await act(async () => {
       const providers = container.querySelector('button[aria-label="Providers"]');
@@ -163,7 +161,7 @@ describe("desktop command-router shell", () => {
     expect(container.querySelector("h1")?.textContent).toBe("Overview");
 
     await act(async () => {
-      const stop = container.querySelector('button[aria-label="Stop LuckyToken"]');
+      const stop = container.querySelector('button[aria-label="Stop Token"]');
       if (!(stop instanceof HTMLButtonElement)) throw new Error("Stop control missing");
       stop.click();
     });
@@ -172,42 +170,42 @@ describe("desktop command-router shell", () => {
     act(() => {
       for (const listener of backendStateListeners) {
         listener({
-          revision: 2,
+          revision: 4,
           kind: "ready",
-          status: { ...runningStatus, sequence: 2, modelDataPlane: "stopped" },
+          status: {
+            ...runningStatus,
+            sequence: 4,
+            modelDataPlane: "stopped",
+            activeRequests: 0,
+          },
         });
       }
     });
     await flush();
-    expect(container.textContent).toContain("Stopped");
-
-    act(() => {
-      const record = journeySummary(3, "running");
-      for (const listener of journeyListeners) listener(record);
-    });
-    expect(container.querySelector(".active-request-count")?.textContent).toBe("3");
-
-    act(() => {
-      const record = journeySummary(3, "success");
-      for (const listener of journeyListeners) listener(record);
-    });
-    expect(container.querySelector(".active-request-count")?.textContent).toBe("2");
+    expect(container.querySelector(".runtime-state-dot.stopped")).not.toBeNull();
+    expect(container.querySelector(".runtime-state")?.getAttribute("aria-label")).toBe("Token is stopped");
+    expect(container.querySelector(".active-request-count")?.textContent).toBe("0");
 
     act(() => {
       for (const listener of backendStateListeners) {
-        listener({ revision: 3, kind: "unavailable" });
+        listener({ revision: 5, kind: "unavailable" });
       }
     });
-    expect(container.textContent).toContain("Unavailable");
+    expect(container.querySelector(".runtime-state-dot.unavailable")).not.toBeNull();
+    expect(container.querySelector(".runtime-state")?.getAttribute("aria-label")).toBe("Token is unavailable");
     expect(container.querySelector<HTMLButtonElement>(".runtime-toggle")?.disabled).toBe(true);
 
-    runningRecords = [];
     act(() => {
       for (const listener of backendStateListeners) {
         listener({
-          revision: 4,
+          revision: 6,
           kind: "ready",
-          status: { ...runningStatus, sequence: 0, modelDataPlane: "stopped" },
+          status: {
+            ...runningStatus,
+            sequence: 6,
+            modelDataPlane: "stopped",
+            activeRequests: 0,
+          },
         });
       }
     });
@@ -291,7 +289,7 @@ describe("desktop command-router shell", () => {
     expect(queryRequestJourneys).toHaveBeenCalledTimes(journeyQueries);
     expect(onRequestJourneys).toHaveBeenCalledTimes(journeySubscriptions);
     expect(getAnalytics).toHaveBeenCalledTimes(analyticsQueries);
-    expect(container.textContent).toContain("Stopped");
+    expect(container.querySelector(".runtime-state-dot.stopped")).not.toBeNull();
   });
 
   it("edits only the port and provides two icon toggles, two scopes, and one shared sync", async () => {
@@ -427,10 +425,10 @@ describe("desktop command-router shell", () => {
     await act(async () => root.render(<App api={api} />));
     await flush();
 
-    const endpoint = container.querySelector('button[aria-label="Edit LuckyToken port"]');
+    const endpoint = container.querySelector('button[aria-label="Edit Token port"]');
     expect(endpoint?.textContent).toBe("127.0.0.1:4317");
     await act(async () => (endpoint as HTMLButtonElement).click());
-    const input = container.querySelector('input[aria-label="LuckyToken port"]');
+    const input = container.querySelector('input[aria-label="Token port"]');
     if (!(input instanceof HTMLInputElement)) throw new Error("port editor missing");
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     await act(async () => {

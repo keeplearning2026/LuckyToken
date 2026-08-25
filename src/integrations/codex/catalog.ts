@@ -122,7 +122,7 @@ function codexEntry(
   return Object.freeze({
     slug,
     display_name: selectorTool.displayName(slug),
-    description: `LuckyToken model: ${slug}`,
+    description: `Token model: ${slug}`,
     supported_reasoning_levels: reasoningLevels,
     shell_type: "shell_command",
     visibility: "list",

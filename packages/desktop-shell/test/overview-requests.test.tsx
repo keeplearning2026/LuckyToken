@@ -25,11 +25,22 @@ function detail(base: RequestJourneySummary): RequestJourneyRecord {
   const location = { phase: "upstream_execution" as const, lane: "provider_native" as const, step: "send_provider_request", attempt: 2 };
   return {
     ...base,
+    requestedModel: "commandcode-goat/deepseek-v4-pro",
+    providerId: "commandcode-goat",
+    realModelId: "deepseek/deepseek-v4-pro",
+    clientSessionId: "session-client-1",
+    effectiveSessionId: "session-effective-1",
+    profileId: "profile-1",
+    profileDisplayName: "Production",
+    httpStatus: 504,
     primaryFailureLocation: location,
     admission: { operationCandidate: "model_generation", transport: "http", method: "POST", path: "/v1/messages", acceptedAt: base.createdAt, cancellation: { caller: "active", shutdown: "active" } },
     timeline: [{ runtimeId: base.runtimeId, requestId: base.requestId, sequence: 1, time: base.createdAt, observation: { kind: "profile_attributed", location, profileId: "profile-1", displayName: "Production" } }],
     artifacts: [{ artifactId: "response-body", artifactKind: "response_body", state: "captured", redaction: "applied", truncated: false }],
     incident: { primaryFailureId: "failure-1", failures: [{ kind: "failure_detected", failureId: "failure-1", role: "primary", classification: "provider_timeout", origin: "provider", originPrecision: "external_boundary", safeMessage: "The provider timed out", location }] },
+    workOutcome: { outcome: "failed", terminalAuthority: "provider_native_handler", location },
+    clientPresentation: { status: 504, mediaType: "application/json", location },
+    handoffOutcome: { outcome: "finished", transport: "http", writableFinished: true, location },
   };
 }
 
@@ -52,11 +63,22 @@ describe("Overview Request Journeys", () => {
       cacheHitRate: 3 / 14,
       outputTokensPerSecond: 7,
     });
+    const completedSummary: RequestJourneySummary = {
+      ...completed,
+      requestedModel: "commandcode-goat/deepseek-v4-pro",
+      providerId: "commandcode-goat",
+      realModelId: "deepseek/deepseek-v4-pro",
+      clientSessionId: "session-client-9",
+      effectiveSessionId: "session-effective-9",
+      profileId: "credential-production",
+      profileDisplayName: "Production",
+      httpStatus: 200,
+    };
     const getRequestJourney = vi.fn();
     const api = createFakeDesktopApi({ control: {
       getBackendState: async () => ({ revision: 1, kind: "ready", status }),
       onBackendState: () => () => undefined,
-      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [completed], hasMore: false } }),
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [completedSummary], hasMore: false } }),
       getRequestJourney,
     } });
 
@@ -69,8 +91,11 @@ describe("Overview Request Journeys", () => {
       "3",
       "21.4%",
       "7",
-      "7.0 tokens/s",
+      "7.0 t/s",
     ]);
+    expect(cells[1]?.textContent).toBe("session-client-9");
+    expect(cells[10]?.textContent).toBe("commandcode-goat/deepseek-v4-pro");
+    expect(cells[11]?.textContent).toBe("200");
     expect(getRequestJourney).not.toHaveBeenCalled();
   });
 
@@ -150,9 +175,13 @@ describe("Overview Request Journeys", () => {
     expect(getRequestJourney).toHaveBeenCalledWith({ requestId: "request-10" });
     expect(container.textContent).toContain("provider_timeout");
     expect(container.textContent).toContain("The provider timed out");
-    expect(container.textContent).toContain("upstream_execution · send_provider_request · attempt 2");
-    expect(container.textContent).toContain("response_body · captured · redacted");
+    expect(container.textContent).toContain("Why this request failed");
+    expect(container.textContent).toContain("Upstream execution · Send provider request · Provider native · Attempt 2");
+    expect(container.textContent).toContain("Response body");
+    expect(container.textContent).toContain("Captured · Redacted");
     expect(container.textContent).toContain("Production");
+    expect(container.textContent).toContain("What happened");
+    expect(container.textContent).toContain("These are stored observations in sequence, not inferred causes.");
     await act(async () => { for (const listener of listeners) listener(summary(11, "running")); });
     expect(container.textContent).toContain("request-11");
     await act(async () => {
@@ -171,8 +200,212 @@ describe("Overview Request Journeys", () => {
       "1",
       "16.7%",
       "4",
-      "8.0 tokens/s",
+      "8.0 t/s",
     ]);
+  });
+
+  it("does not let a delayed stale snapshot replace a newer terminal request update", async () => {
+    const stale: RequestJourneySummary = {
+      ...summary(13, "success"),
+      requestedModel: "deepseek/deepseek-v4-flash",
+      providerId: "commandcode-goat",
+      realModelId: "deepseek/deepseek-v4-flash",
+      httpStatus: 426,
+    };
+    const current: RequestJourneySummary = {
+      ...stale,
+      requestedModel: "commandcode-goat/deepseek-v4-flash",
+      httpStatus: 200,
+      closedAt: stale.closedAt! + 1_000,
+      usage: {
+        completeness: "complete",
+        inputTokens: 120,
+        cacheReadTokens: 30,
+        outputTokens: 20,
+        cacheHitRate: 0.2,
+        outputTokensPerSecond: 10,
+      },
+    };
+    const listeners = new Set<(record: RequestJourneySummary) => void>();
+    let resolveSnapshot: ((value: {
+      outcome: "ok";
+      result: { records: RequestJourneySummary[]; hasMore: false };
+    }) => void) | undefined;
+    const delayedSnapshot = new Promise<{
+      outcome: "ok";
+      result: { records: RequestJourneySummary[]; hasMore: false };
+    }>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => delayedSnapshot,
+      onRequestJourneys: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    expect(listeners.size).toBe(1);
+
+    await act(async () => {
+      for (const listener of listeners) listener(current);
+    });
+    resolveSnapshot?.({ outcome: "ok", result: { records: [stale], hasMore: false } });
+    await flush();
+
+    const cells = [...container.querySelectorAll('tr[data-request-id="request-13"] > td')];
+    expect(cells.slice(4, 9).map((cell) => cell.textContent)).toEqual([
+      "120",
+      "30",
+      "20.0%",
+      "20",
+      "10.0 t/s",
+    ]);
+    expect(cells[10]?.textContent).toBe("commandcode-goat/deepseek-v4-flash");
+    expect(cells[11]?.textContent).toBe("200");
+  });
+
+  it("omits expected unsupported WebSocket upgrade probes from Overview", async () => {
+    const probe: RequestJourneySummary = {
+      ...summary(14, "failed"),
+      operation: "unsupported_transport",
+      protocol: "unsupported",
+      httpStatus: 426,
+    };
+    const request: RequestJourneySummary = {
+      ...summary(15, "success", {
+        completeness: "complete",
+        inputTokens: 8,
+        cacheReadTokens: 2,
+        outputTokens: 4,
+      }),
+      requestedModel: "commandcode-goat/deepseek-v4-flash",
+      providerId: "commandcode-goat",
+      realModelId: "deepseek/deepseek-v4-flash",
+      httpStatus: 200,
+    };
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({
+        outcome: "ok",
+        result: { records: [probe, request], hasMore: false },
+      }),
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+
+    expect(container.querySelector('tr[data-request-id="request-14"]')).toBeNull();
+    expect(container.querySelector('tr[data-request-id="request-15"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("426");
+  });
+
+  it("exposes every truncated request value through a native tooltip", async () => {
+    const request: RequestJourneySummary = {
+      ...summary(16, "success", {
+        completeness: "complete",
+        inputTokens: 120_000,
+        cacheReadTokens: 30_000,
+        outputTokens: 20_000,
+        cacheHitRate: 0.2,
+        outputTokensPerSecond: 10.25,
+      }),
+      protocol: "openai-responses",
+      requestedModel: "commandcode-goat/deepseek-v4-flash-with-a-very-long-suffix",
+      providerId: "commandcode-goat",
+      realModelId: "deepseek/deepseek-v4-flash-with-a-very-long-suffix",
+      clientSessionId: "session-with-a-very-long-identifier",
+      profileId: "profile-production-long",
+      profileDisplayName: "Production profile with a long display name",
+      httpStatus: 200,
+    };
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({
+        outcome: "ok",
+        result: { records: [request], hasMore: false },
+      }),
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+
+    const cells = [...container.querySelectorAll('tr[data-request-id="request-16"] > td')];
+    for (const cell of cells.slice(1)) {
+      expect(cell.getAttribute("title"), cell.className).toBe(cell.textContent);
+    }
+    expect(cells[10]?.getAttribute("title")).toBe(
+      "commandcode-goat/deepseek-v4-flash-with-a-very-long-suffix",
+    );
+  });
+
+  it("keeps successful request facts separate from failure diagnosis and does not invent a Profile", async () => {
+    const succeeded: RequestJourneySummary = {
+      ...summary(12, "success"),
+      requestedModel: "commandcode-goat/gpt-5.6-sol",
+      providerId: "commandcode-goat",
+      realModelId: "openai/gpt-5.6-sol",
+      httpStatus: 200,
+    };
+    const location = {
+      phase: "outcome_commit" as const,
+      lane: "semantic_conversion" as const,
+      step: "commit_request_outcome",
+    };
+    const succeededDetail: RequestJourneyRecord = {
+      ...succeeded,
+      admission: {
+        operationCandidate: "model_generation",
+        transport: "http",
+        method: "POST",
+        path: "/v1/responses",
+        acceptedAt: succeeded.createdAt,
+        cancellation: { caller: "active", shutdown: "active" },
+      },
+      timeline: [],
+      artifacts: [],
+      workOutcome: {
+        outcome: "success",
+        terminalAuthority: "openai_responses_handler",
+        location,
+      },
+      clientPresentation: {
+        status: 200,
+        mediaType: "application/json",
+        location,
+      },
+      handoffOutcome: {
+        outcome: "finished",
+        transport: "http",
+        writableFinished: true,
+        location,
+      },
+    };
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [succeeded], hasMore: false } }),
+      getRequestJourney: async () => ({ outcome: "ok", result: succeededDetail }),
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    await act(async () => {
+      (container.querySelector('button[aria-label="Show details for request request-12"]') as HTMLButtonElement).click();
+    });
+    await flush();
+
+    expect(container.querySelector(".request-primary-failure")).toBeNull();
+    expect(container.querySelector(".request-detail-facts > div:nth-child(3) strong")?.textContent).toBe("Not recorded");
+    expect(container.querySelectorAll(".request-journey li")).toHaveLength(5);
+    expect(container.textContent).toContain("commandcode-goat / openai/gpt-5.6-sol");
+    expect(container.textContent).toContain("HTTP 200");
   });
 
   it("renders typed diagnostics unavailability", async () => {

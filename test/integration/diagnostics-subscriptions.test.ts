@@ -211,8 +211,12 @@ describe("Diagnostics durable subscriptions", () => {
     const published: RequestJourneySummary[] = [];
     const subscription = management.subscribeRequestJourneys((record) => {
       published.push(record);
-      if (published.length === 1) completeDelivered.resolve(record);
-      if (published.length === 2) incompleteDelivered.resolve(record);
+      if (record.requestId.endsWith("11") && record.outcome !== "running") {
+        completeDelivered.resolve(record);
+      }
+      if (record.requestId.endsWith("12") && record.outcome !== "running") {
+        incompleteDelivered.resolve(record);
+      }
     });
 
     const requestId = "51000000-0000-4000-8000-000000000011";
@@ -224,6 +228,35 @@ describe("Diagnostics durable subscriptions", () => {
       path: "/v1/messages",
       acceptedAt: clock,
       cancellation: { caller: "active", shutdown: "not_bound" },
+    });
+    observer.observe({
+      kind: "request_identity_established",
+      clientSessionId: "session-client-1",
+      effectiveSessionId: "session-effective-1",
+      location: {
+        phase: "protocol_ingress",
+        step: "establish_request_identity",
+      },
+    });
+    observer.observe({
+      kind: "model_resolved",
+      requestedModel: "commandcode-goat/deepseek-v4-pro",
+      providerId: "commandcode-goat",
+      modelId: "deepseek/deepseek-v4-pro",
+      location: {
+        phase: "request_resolution",
+        step: "resolve_public_model",
+      },
+    });
+    observer.observe({
+      kind: "profile_attributed",
+      profileId: "credential-production",
+      displayName: "Production",
+      location: {
+        phase: "lane_request_preparation",
+        lane: "provider_native",
+        step: "capture_provider_profile",
+      },
     });
     observer.observe({
       kind: "step_entered",
@@ -265,6 +298,16 @@ describe("Diagnostics durable subscriptions", () => {
         step: "commit_request_outcome",
       },
     });
+    observer.observe({
+      kind: "client_response_prepared",
+      status: 200,
+      mediaType: "application/json",
+      location: {
+        phase: "client_response_preparation",
+        lane: "provider_native",
+        step: "render_client_response",
+      },
+    });
     observer.close({ outcome: "success" });
 
     const page = await authority.queryRequestJourneys({ limit: 10 });
@@ -277,7 +320,18 @@ describe("Diagnostics durable subscriptions", () => {
       outputTokensPerSecond: 7,
     } as const;
     expect(page.records).toHaveLength(1);
-    expect(page.records[0]).toMatchObject({ requestId, usage: expectedUsage });
+    expect(page.records[0]).toMatchObject({
+      requestId,
+      requestedModel: "commandcode-goat/deepseek-v4-pro",
+      providerId: "commandcode-goat",
+      realModelId: "deepseek/deepseek-v4-pro",
+      clientSessionId: "session-client-1",
+      effectiveSessionId: "session-effective-1",
+      profileId: "credential-production",
+      profileDisplayName: "Production",
+      httpStatus: 200,
+      usage: expectedUsage,
+    });
     await expect(completeDelivered.promise).resolves.toMatchObject({
       requestId,
       usage: expectedUsage,

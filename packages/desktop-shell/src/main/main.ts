@@ -261,13 +261,13 @@ function openManagementWindow(): void {
 function trayStatusLabel(health: TrayHealth): string {
   switch (health) {
     case "ready":
-      return "LuckyToken — Ready";
+      return "Token — Ready";
     case "starting":
-      return "LuckyToken — Starting";
+      return "Token — Starting";
     case "attention":
-      return "LuckyToken — Attention needed";
+      return "Token — Attention needed";
     case "stopped":
-      return "LuckyToken — Gateway stopped";
+      return "Token — Gateway stopped";
   }
 }
 
@@ -279,8 +279,8 @@ function updateTray(health: TrayHealth): void {
     Menu.buildFromTemplate([
       { label, enabled: false },
       { type: "separator" },
-      { label: "Open LuckyToken", click: trayActions.open },
-      { label: "Quit LuckyToken", click: trayActions.quit },
+      { label: "Open Token", click: trayActions.open },
+      { label: "Quit Token", click: trayActions.quit },
     ]),
   );
 }
@@ -324,14 +324,14 @@ function createTray(actions: { readonly open: () => void; readonly quit: () => v
   trayActions = actions;
   const icon = nativeImage.createFromPath(desktopIcons.tray);
   if (icon.isEmpty()) {
-    throw new Error(`LuckyToken tray icon is missing or invalid: ${desktopIcons.tray}`);
+    throw new Error(`Token tray icon is missing or invalid: ${desktopIcons.tray}`);
   }
   tray = new Tray(icon);
   tray.on("double-click", actions.open);
   updateTray(controlPlaneSession.trayHealth());
 }
 
-app.setAppUserModelId("com.squirrel.LuckyToken.LuckyToken");
+app.setAppUserModelId("com.squirrel.Token.Token");
 
 if (!squirrelStartup) void startElectronDesktopLifecycle({
   buildId: currentDesktopBuildId,
@@ -342,6 +342,7 @@ if (!squirrelStartup) void startElectronDesktopLifecycle({
     new Promise<void>((resolve) => setTimeout(resolve, 200)),
   whenReady: async () => {
     await app.whenReady();
+    Menu.setApplicationMenu(null);
     reconcileDesktopLoginItem();
     controlPlaneSession.subscribeState((state) => {
       updateTray(controlPlaneSession.trayHealth());

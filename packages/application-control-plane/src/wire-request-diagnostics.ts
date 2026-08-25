@@ -546,13 +546,26 @@ function decodePersistedObservation(
   }
   if (value.kind === "model_resolved") {
     if (
-      !hasOnlyKeys(value, ["kind", "location", "providerId", "modelId"]) ||
+      !hasOnlyKeys(value, [
+        "kind",
+        "location",
+        "requestedModel",
+        "providerId",
+        "modelId",
+      ]) ||
+      !boundedText(value.requestedModel, MAX_ID_TEXT) ||
       !boundedText(value.providerId, MAX_ID_TEXT) ||
       !boundedText(value.modelId, MAX_ID_TEXT)
     ) {
       return undefined;
     }
-    return Object.freeze({ kind: "model_resolved", providerId: value.providerId, modelId: value.modelId, location }) satisfies ModelResolvedPersistedObservation;
+    return Object.freeze({
+      kind: "model_resolved",
+      requestedModel: value.requestedModel,
+      providerId: value.providerId,
+      modelId: value.modelId,
+      location,
+    }) satisfies ModelResolvedPersistedObservation;
   }
   if (value.kind === "request_identity_established") {
     if (
@@ -919,6 +932,14 @@ export function decodeRequestJourneySummary(
       "operation",
       "protocol",
       "lane",
+      "requestedModel",
+      "providerId",
+      "realModelId",
+      "clientSessionId",
+      "effectiveSessionId",
+      "profileId",
+      "profileDisplayName",
+      "httpStatus",
       "outcome",
       "completeness",
       "createdAt",
@@ -934,6 +955,24 @@ export function decodeRequestJourneySummary(
     (value.protocol !== undefined &&
       !boundedText(value.protocol, MAX_PROTOCOL_TEXT)) ||
     (value.lane !== undefined && !LANES.has(value.lane as DataPlaneLane)) ||
+    (value.requestedModel !== undefined &&
+      !boundedText(value.requestedModel, MAX_ID_TEXT)) ||
+    (value.providerId !== undefined &&
+      !boundedText(value.providerId, MAX_ID_TEXT)) ||
+    (value.realModelId !== undefined &&
+      !boundedText(value.realModelId, MAX_ID_TEXT)) ||
+    (value.clientSessionId !== undefined &&
+      !boundedText(value.clientSessionId, MAX_ID_TEXT)) ||
+    (value.effectiveSessionId !== undefined &&
+      !boundedText(value.effectiveSessionId, MAX_ID_TEXT)) ||
+    (value.profileId !== undefined &&
+      !boundedText(value.profileId, MAX_ID_TEXT)) ||
+    (value.profileDisplayName !== undefined &&
+      !boundedText(value.profileDisplayName, 256)) ||
+    (value.httpStatus !== undefined &&
+      (!Number.isSafeInteger(value.httpStatus) ||
+        (value.httpStatus as number) < 100 ||
+        (value.httpStatus as number) > 599)) ||
     !OUTCOMES.has(value.outcome as RequestJourneyOutcome | "running") ||
     (value.completeness !== "complete" && value.completeness !== "degraded") ||
     !isNonNegativeSafeInteger(value.createdAt) ||
@@ -966,6 +1005,24 @@ export function decodeRequestJourneySummary(
     operation: value.operation as RequestJourneyOperationCandidate,
     ...(value.protocol === undefined ? {} : { protocol: value.protocol }),
     ...(value.lane === undefined ? {} : { lane: value.lane as DataPlaneLane }),
+    ...(value.requestedModel === undefined
+      ? {}
+      : { requestedModel: value.requestedModel }),
+    ...(value.providerId === undefined ? {} : { providerId: value.providerId }),
+    ...(value.realModelId === undefined ? {} : { realModelId: value.realModelId }),
+    ...(value.clientSessionId === undefined
+      ? {}
+      : { clientSessionId: value.clientSessionId }),
+    ...(value.effectiveSessionId === undefined
+      ? {}
+      : { effectiveSessionId: value.effectiveSessionId }),
+    ...(value.profileId === undefined ? {} : { profileId: value.profileId }),
+    ...(value.profileDisplayName === undefined
+      ? {}
+      : { profileDisplayName: value.profileDisplayName }),
+    ...(value.httpStatus === undefined
+      ? {}
+      : { httpStatus: value.httpStatus as number }),
     outcome: value.outcome as RequestJourneyOutcome | "running",
     completeness: value.completeness,
     createdAt: value.createdAt,
@@ -987,6 +1044,14 @@ export function decodeRequestJourneyRecord(
       "operation",
       "protocol",
       "lane",
+      "requestedModel",
+      "providerId",
+      "realModelId",
+      "clientSessionId",
+      "effectiveSessionId",
+      "profileId",
+      "profileDisplayName",
+      "httpStatus",
       "outcome",
       "completeness",
       "createdAt",
@@ -1015,6 +1080,22 @@ export function decodeRequestJourneyRecord(
     operation: value.operation,
     ...(value.protocol === undefined ? {} : { protocol: value.protocol }),
     ...(value.lane === undefined ? {} : { lane: value.lane }),
+    ...(value.requestedModel === undefined
+      ? {}
+      : { requestedModel: value.requestedModel }),
+    ...(value.providerId === undefined ? {} : { providerId: value.providerId }),
+    ...(value.realModelId === undefined ? {} : { realModelId: value.realModelId }),
+    ...(value.clientSessionId === undefined
+      ? {}
+      : { clientSessionId: value.clientSessionId }),
+    ...(value.effectiveSessionId === undefined
+      ? {}
+      : { effectiveSessionId: value.effectiveSessionId }),
+    ...(value.profileId === undefined ? {} : { profileId: value.profileId }),
+    ...(value.profileDisplayName === undefined
+      ? {}
+      : { profileDisplayName: value.profileDisplayName }),
+    ...(value.httpStatus === undefined ? {} : { httpStatus: value.httpStatus }),
     outcome: value.outcome,
     completeness: value.completeness,
     createdAt: value.createdAt,

@@ -3,9 +3,24 @@ import { useEffect, useState } from "react";
 import type { LuckyTokenDesktopApi, RuntimeEventRecord } from "../../shared/desktop-api.js";
 
 const codexRestoreFields = Object.freeze([
-  { key: "integrations.codex.preimage.modelProvider", label: "model_provider" },
-  { key: "integrations.codex.preimage.openaiBaseUrl", label: "openai_base_url" },
-  { key: "integrations.codex.preimage.modelCatalogJson", label: "model_catalog_json" },
+  {
+    key: "integrations.codex.preimage.modelProvider",
+    label: "Model provider",
+    code: "model_provider",
+    description: "The provider Codex used before Token integration was enabled.",
+  },
+  {
+    key: "integrations.codex.preimage.openaiBaseUrl",
+    label: "OpenAI base URL",
+    code: "openai_base_url",
+    description: "The previous OpenAI-compatible endpoint, if one was configured.",
+  },
+  {
+    key: "integrations.codex.preimage.modelCatalogJson",
+    label: "Model catalog file",
+    code: "model_catalog_json",
+    description: "The previous path to Codex's model catalog JSON file.",
+  },
 ]);
 
 async function queryRecentWarnings(api: LuckyTokenDesktopApi): Promise<readonly RuntimeEventRecord[] | "unavailable"> {
@@ -26,6 +41,7 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
   const [events, setEvents] = useState<readonly RuntimeEventRecord[]>();
   const [eventsUnavailable, setEventsUnavailable] = useState(false);
   const [storageNotice, setStorageNotice] = useState<string>();
+  const [storageNoticeError, setStorageNoticeError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [codexRestoreDraft, setCodexRestoreDraft] = useState<Readonly<Record<string, string>>>({});
 
@@ -37,7 +53,11 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
         const value = settings.settings[field.key]?.value;
         return [field.key, typeof value === "string" ? value : ""];
       }))));
-    }, () => { if (active) setStorageNotice("Codex restore values are temporarily unavailable."); });
+    }, () => {
+      if (!active) return;
+      setStorageNotice("Codex restore values are temporarily unavailable.");
+      setStorageNoticeError(true);
+    });
     void queryRecentWarnings(api).then((response) => {
       if (!active) return;
       if (response === "unavailable") { setEventsUnavailable(true); return; }
@@ -55,25 +75,45 @@ export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }
         const result = await api.control.executeSettings({ command: "set", key: field.key, value: trimmed.length === 0 ? null : trimmed });
         if (result.outcome === "storage_failure" || result.outcome === "invalid_value") {
           setStorageNotice(result.error ?? "Codex restore values could not be saved.");
+          setStorageNoticeError(true);
           return;
         }
       }
-      setStorageNotice(undefined);
+      setStorageNotice("Codex restore values saved.");
+      setStorageNoticeError(false);
     } catch {
       setStorageNotice("Codex restore values could not be saved.");
+      setStorageNoticeError(true);
     } finally { setBusy(false); }
   };
 
   return <section className="page-stack">
     <div className="page-card settings-section">
-      <div className="settings-copy"><p className="eyebrow">CODEX</p><h3>Codex restore values</h3><p>While enabled, LuckyToken replaces these three root fields in Codex config.toml.</p><p>Leave a field blank to remove it from Codex config.toml when the integration is turned off.</p></div>
-      {codexRestoreFields.map((field) => <label className="codex-restore-field" key={field.key}><span>{field.label}</span><input type="text" aria-label={`${field.label} restore value`} value={codexRestoreDraft[field.key] ?? ""} onChange={(event) => { const value = event.currentTarget.value; setCodexRestoreDraft((current) => ({ ...current, [field.key]: value })); }} /></label>)}
-      {storageNotice === undefined ? null : <p className="error-text">{storageNotice}</p>}
-      <button type="button" disabled={busy} onClick={() => void saveCodexRestoreValues()}>{busy ? "Saving…" : "Save Codex restore values"}</button>
+      <header className="settings-section-header">
+        <div className="settings-copy">
+          <p className="eyebrow">CODEX</p>
+          <h3>Restore values when integration is disabled</h3>
+          <p>Token temporarily replaces these Codex settings while the integration is enabled.</p>
+        </div>
+      </header>
+      <p className="settings-callout">Leave a field blank to remove that setting from <code>config.toml</code> when integration is turned off.</p>
+      <div className="codex-restore-fields">
+        {codexRestoreFields.map((field) => <label className="codex-restore-field" key={field.key}>
+          <span className="codex-restore-label"><strong>{field.label}</strong><code>{field.code}</code></span>
+          <small>{field.description}</small>
+          <input type="text" aria-label={`${field.label} restore value`} value={codexRestoreDraft[field.key] ?? ""} onChange={(event) => { const value = event.currentTarget.value; setCodexRestoreDraft((current) => ({ ...current, [field.key]: value })); }} />
+        </label>)}
+      </div>
+      {storageNotice === undefined ? null : <p className={storageNoticeError ? "error-text" : "setting-state"} role="status">{storageNotice}</p>}
+      <div className="settings-form-actions">
+        <button type="button" disabled={busy} onClick={() => void saveCodexRestoreValues()}>{busy ? "Saving…" : "Save restore values"}</button>
+      </div>
     </div>
     <div className="page-card settings-section">
-      <div className="settings-copy"><p className="eyebrow">WARNINGS</p><h3>Recent Runtime Events</h3></div>
-      {eventsUnavailable ? <p className="error-text">Recent Runtime Events are temporarily unavailable.</p> : events === undefined ? <p>Loading Runtime Events…</p> : events.length === 0 ? <p>No warning-or-worse Runtime Events.</p> : <ul className="diagnostic-list">{events.map((record) => <li key={record.id}><span className={`badge ${record.level === "critical" || record.level === "error" ? "warning" : "neutral"}`}>{record.level}</span><span>{record.classification}: {record.safeMessage}</span></li>)}</ul>}
+      <header className="settings-section-header">
+        <div className="settings-copy"><p className="eyebrow">DIAGNOSTICS</p><h3>Recent warnings</h3><p>Only warning, error, and critical runtime events are shown here.</p></div>
+      </header>
+      {eventsUnavailable ? <p className="error-text">Recent runtime warnings are temporarily unavailable.</p> : events === undefined ? <p>Loading runtime warnings…</p> : events.length === 0 ? <p className="settings-empty-state">No recent runtime warnings.</p> : <ul className="diagnostic-list">{events.map((record) => <li key={record.id}><span className={`badge ${record.level === "critical" || record.level === "error" ? "warning" : "neutral"}`}>{record.level}</span><span><strong>{record.safeMessage}</strong><code>{record.classification}</code></span></li>)}</ul>}
     </div>
   </section>;
 }

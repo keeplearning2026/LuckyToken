@@ -824,6 +824,18 @@ export async function executeSemanticResponses(
     options.request.signal.throwIfAborted();
     const message = semanticResult.message;
 
+    const responseProjectionLocation = {
+      phase: "lane_response_processing",
+      lane: "semantic_conversion",
+      direction: "pi_to_client",
+      step: "validate_assistant_message",
+      subject: "message",
+    } as const;
+    enterSemanticJourneyStep(
+      options.journey,
+      "p5.validate_assistant_message",
+      responseProjectionLocation,
+    );
     const renderState = buildRenderState(
       invocation,
       semanticResult,
@@ -839,12 +851,90 @@ export async function executeSemanticResponses(
       Math.floor(options.now() / 1000),
       typeof previousResponseId === "string" ? previousResponseId : undefined,
     );
+    completeSemanticJourneyStep(
+      options.journey,
+      "p5.validate_assistant_message",
+      responseProjectionLocation,
+      "success",
+    );
+
+    const responseStateLocation = {
+      phase: "lane_response_processing",
+      lane: "semantic_conversion",
+      direction: "pi_to_client",
+      step: "update_client_response_state",
+      subject: "metadata",
+    } as const;
+    enterSemanticJourneyStep(
+      options.journey,
+      "p5.update_client_response_state",
+      responseStateLocation,
+    );
     await rememberAfterSuccess(options, rendered);
+    completeSemanticJourneyStep(
+      options.journey,
+      "p5.update_client_response_state",
+      responseStateLocation,
+      "success",
+    );
+
+    const responseEncodingLocation = {
+      phase: "client_response_preparation",
+      lane: "semantic_conversion",
+      direction: "pi_to_client",
+      step: invocation.client.renderState.stream
+        ? "encode_atomic_sse"
+        : "encode_client_json",
+      subject: "envelope",
+    } as const;
+    enterSemanticJourneyStep(
+      options.journey,
+      "p6.encode_client_response",
+      responseEncodingLocation,
+    );
     const prepared = invocation.client.renderState.stream
       ? renderResponsesSse(rendered)
       : renderResponsesJson(rendered);
     options.request.signal.throwIfAborted();
-    return toResponse(prepared);
+    const response = toResponse(prepared);
+    completeSemanticJourneyStep(
+      options.journey,
+      "p6.encode_client_response",
+      responseEncodingLocation,
+      "success",
+    );
+    observeSemanticJourney(options.journey, {
+      kind: "client_response_prepared",
+      status: response.status,
+      ...(response.headers.get("content-type") === null
+        ? {}
+        : { mediaType: response.headers.get("content-type")! }),
+      location: responseEncodingLocation,
+    });
+
+    const outcomeLocation = {
+      phase: "outcome_commit",
+      lane: "semantic_conversion",
+      step: "commit_request_outcome",
+    } as const;
+    enterSemanticJourneyStep(
+      options.journey,
+      "p7.commit_request_outcome",
+      outcomeLocation,
+    );
+    observeSemanticJourney(options.journey, {
+      kind: "work_outcome_committed",
+      outcome: "success",
+      terminalAuthority: "pi_execution",
+      location: outcomeLocation,
+    });
+    completeSemanticJourneyStep(
+      options.journey,
+      "p7.commit_request_outcome",
+      outcomeLocation,
+      "success",
+    );
+    return response;
   } catch (error) {
     if (options.request.signal.aborted || error instanceof ExecutionAbortedError) {
       throw new ExecutionAbortedError(options.request.signal.reason);

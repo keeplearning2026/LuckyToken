@@ -246,7 +246,7 @@ describe("LuckyToken CLI ownership lifecycle", () => {
     const secondResult = await captureChild(second).result;
 
     expect(secondResult.code).toBe(0);
-    expect(secondResult.stdout).toContain("LuckyToken is already running");
+    expect(secondResult.stdout).toContain("Token is already running");
     expect(secondResult.stdout).toContain("No second Data Plane was started");
     // The attached launch never starts its own gateway or prints routes.
     expect(secondResult.stdout).not.toContain("POST http");

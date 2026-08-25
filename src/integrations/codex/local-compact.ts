@@ -117,6 +117,7 @@ export function createCodexDirectCompactLane(
     ): Promise<Response> {
       observeLocalCompact(input.journey, {
         kind: "model_resolved",
+        requestedModel: input.selector,
         providerId: "codex-local",
         modelId: input.selector,
         location: {

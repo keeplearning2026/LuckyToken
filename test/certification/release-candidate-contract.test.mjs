@@ -7,21 +7,21 @@ import test from "node:test";
 import { discoverWindowsCandidate } from "../../scripts/release-candidate.mjs";
 
 async function writeCandidate(root) {
-  const packageRoot = join(root, "LuckyToken-win32-x64");
+  const packageRoot = join(root, "Token-win32-x64");
   const makeRoot = join(root, "make", "squirrel.windows", "x64");
   await Promise.all([
     mkdir(join(packageRoot, "resources", "backend"), { recursive: true }),
     mkdir(makeRoot, { recursive: true }),
   ]);
   await Promise.all([
-    writeFile(join(packageRoot, "LuckyToken.exe"), "exe", "utf8"),
+    writeFile(join(packageRoot, "Token.exe"), "exe", "utf8"),
     writeFile(
       join(packageRoot, "resources", "backend", "build-id.txt"),
       `${"a".repeat(64)}\n`,
       "utf8",
     ),
-    writeFile(join(makeRoot, "LuckyToken-Setup.exe"), "setup", "utf8"),
-    writeFile(join(makeRoot, "LuckyToken-0.1.0-full.nupkg"), "nupkg", "utf8"),
+    writeFile(join(makeRoot, "Token-Setup.exe"), "setup", "utf8"),
+    writeFile(join(makeRoot, "Token-0.1.0-full.nupkg"), "nupkg", "utf8"),
     writeFile(join(makeRoot, "RELEASES"), "release metadata", "utf8"),
   ]);
   return { packageRoot, makeRoot };
@@ -34,15 +34,15 @@ test("release discovery binds one packaged EXE to one Squirrel installer", async
     assert.deepEqual(await discoverWindowsCandidate(root, "0.1.0"), {
       outputRoot: root,
       packageRoot,
-      packagedExecutable: join(packageRoot, "LuckyToken.exe"),
+      packagedExecutable: join(packageRoot, "Token.exe"),
       backendBuildIdPath: join(
         packageRoot,
         "resources",
         "backend",
         "build-id.txt",
       ),
-      installer: join(makeRoot, "LuckyToken-Setup.exe"),
-      nupkg: join(makeRoot, "LuckyToken-0.1.0-full.nupkg"),
+      installer: join(makeRoot, "Token-Setup.exe"),
+      nupkg: join(makeRoot, "Token-0.1.0-full.nupkg"),
       releases: join(makeRoot, "RELEASES"),
     });
   } finally {

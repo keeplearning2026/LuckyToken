@@ -105,6 +105,7 @@ function appendJourney(
   if (fixture.providerId !== undefined && fixture.modelId !== undefined) {
     observer.observe({
       kind: "model_resolved",
+      requestedModel: `${fixture.providerId}/${fixture.modelId}`,
       providerId: fixture.providerId,
       modelId: fixture.modelId,
       location: {

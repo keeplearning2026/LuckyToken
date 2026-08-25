@@ -37,7 +37,7 @@ npm run build
 ## Windows release
 
 Windows has one release authority: a per-user Squirrel.Windows
-`LuckyToken-Setup.exe`. The portable ZIP is not a Windows release artifact.
+`Token-Setup.exe`. The portable ZIP is not a Windows release artifact.
 
 Build and fully certify an unsigned local candidate:
 
@@ -168,8 +168,8 @@ npm start -- login commandcode-goat --config .luckytoken/config.json
 Each key is saved under its own Provider ID in `.luckytoken/pi/auth.json`. No
 `models.json` configuration is required. Both Providers expose the canonical
 model `deepseek/deepseek-v4-flash`; their default external names are
-`commandcode-private/deepseek-deepseek-v4-flash` and
-`commandcode-goat/deepseek-deepseek-v4-flash`.
+`commandcode-private/deepseek-v4-flash` and
+`commandcode-goat/deepseek-v4-flash`.
 
 Start the local Backend:
 

@@ -1,4 +1,4 @@
-export const luckyTokenLoginItemName = "LuckyToken";
+export const luckyTokenLoginItemName = "Token";
 
 export interface DesktopLoginItem {
   readonly name: string;
@@ -37,7 +37,7 @@ function sameExecutable(left: string, right: string): boolean {
 }
 
 function isLuckyTokenExecutable(path: string): boolean {
-  return normalizedPath(path).endsWith("/luckytoken.exe");
+  return normalizedPath(path).endsWith("/token.exe");
 }
 
 function isRepositoryBuildPath(path: string): boolean {
@@ -67,7 +67,7 @@ function removeLoginItem(
 /**
  * Repository `.electron-out` builds are disposable and must never survive a
  * Windows sign-in. Remove only stale repository-build entries; an installed
- * LuckyToken login item is left untouched.
+ * Token login item is left untouched.
  */
 export function cleanupRepositoryBuildLoginItems(
   platform: DesktopLoginItemPlatform,
@@ -80,7 +80,7 @@ export function cleanupRepositoryBuildLoginItems(
 }
 
 /**
- * Installed product startup migrates any older per-user LuckyToken login item
+ * Installed product startup reconciles the per-user Token login item
  * to the currently running executable. Presence is preserved independently
  * from Windows Startup Approval (`enabled`) so user intent is not widened.
  */

@@ -141,6 +141,44 @@ describe("local Anthropic HTTP server", () => {
     expect(receivedRequest?.url).toBe(`${server.origin}/v1/responses`);
   });
 
+  it("reports the server-owned active request count without affecting serving", async () => {
+    let markStarted: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const mayFinish = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const counts: number[] = [];
+    const runtime: LuckyTokenRuntime = {
+      async handle() {
+        markStarted?.();
+        await mayFinish;
+        return new Response(null, { status: 204 });
+      },
+      routes: [],
+    };
+    server = await startLuckyTokenHttpServer({
+      runtime,
+      port: 0,
+      onActiveRequestCountChanged: (count) => {
+        counts.push(count);
+        throw new Error("active-count observer failure");
+      },
+    });
+
+    const pending = fetch(`${server.origin}/v1/responses`, { method: "POST" });
+    await started;
+    await Promise.resolve();
+    expect(counts.at(-1)).toBe(1);
+
+    release?.();
+    await expect(pending).resolves.toMatchObject({ status: 204 });
+    await Promise.resolve();
+    expect(counts.at(-1)).toBe(0);
+  });
+
   it("applies the HTTP-only signal to WebSocket upgrades on every path", async () => {
     let runtimeCalls = 0;
     const runtime: LuckyTokenRuntime = {

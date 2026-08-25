@@ -27,10 +27,10 @@ async function requireFile(path, label) {
 
 export async function discoverWindowsCandidate(outputRoot, version) {
   const resolvedOutputRoot = resolve(outputRoot);
-  const packageRoot = join(resolvedOutputRoot, "LuckyToken-win32-x64");
+  const packageRoot = join(resolvedOutputRoot, "Token-win32-x64");
   const packagedExecutable = await requireFile(
-    join(packageRoot, "LuckyToken.exe"),
-    "packaged LuckyToken executable",
+    join(packageRoot, "Token.exe"),
+    "packaged Token executable",
   );
   const backendBuildIdPath = await requireFile(
     join(packageRoot, "resources", "backend", "build-id.txt"),
@@ -210,7 +210,7 @@ function parseArguments(arguments_) {
 
 async function main() {
   if (process.platform !== "win32") {
-    throw new Error("LuckyToken Windows release candidates must be built on Windows");
+    throw new Error("Token Windows release candidates must be built on Windows");
   }
   const options = parseArguments(process.argv.slice(2));
   const rootManifest = JSON.parse(

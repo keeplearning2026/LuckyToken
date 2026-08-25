@@ -586,6 +586,13 @@ export function createOpenAIResponsesCompactHandler(
           return errorResponse(503, "The requested model is not currently available");
         }
         const model = resolution.model;
+        observeCompactJourney(journey, {
+          kind: "model_resolved",
+          requestedModel: selector,
+          providerId: model.provider,
+          modelId: model.id,
+          location: resolutionLocation,
+        });
         completeCompactStep(
           journey,
           "p2.resolve_public_model",

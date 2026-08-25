@@ -16,8 +16,8 @@ module.exports = {
   outDir: `.electron-out/${process.pid}-${Date.now()}`,
   packagerConfig: {
     asar: true,
-    name: "LuckyToken",
-    executableName: "LuckyToken",
+    name: "Token",
+    executableName: "Token",
     icon: iconBase,
     extraResource: [
       "backend",
@@ -31,11 +31,11 @@ module.exports = {
       name: "@electron-forge/maker-squirrel",
       platforms: ["win32"],
       config: {
-        name: "LuckyToken",
+        name: "Token",
         authors: "keeplearning2026",
         description: "Local AI model gateway and desktop management application.",
-        exe: "LuckyToken.exe",
-        setupExe: "LuckyToken-Setup.exe",
+        exe: "Token.exe",
+        setupExe: "Token-Setup.exe",
         setupIcon: `${iconBase}.ico`,
         noMsi: true,
         ...(certificateFile === undefined

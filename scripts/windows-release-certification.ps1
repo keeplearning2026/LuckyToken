@@ -7,8 +7,8 @@ param(
 $ErrorActionPreference = "Stop"
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
-$installRoot = Join-Path $env:LOCALAPPDATA "LuckyToken"
-$installedExe = Join-Path $installRoot "app-$Version\LuckyToken.exe"
+$installRoot = Join-Path $env:LOCALAPPDATA "Token"
+$installedExe = Join-Path $installRoot "app-$Version\Token.exe"
 $updateExe = Join-Path $installRoot "Update.exe"
 $userState = Join-Path $env:USERPROFILE ".luckytoken"
 $descriptorPath = Join-Path $userState "control-plane.json"

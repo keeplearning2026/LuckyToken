@@ -36,6 +36,7 @@ type FixtureOutcome =
 
 interface FutureModelResolvedObservation {
   readonly kind: "model_resolved";
+  readonly requestedModel: string;
   readonly providerId: string;
   readonly modelId: string;
   readonly location: RequestJourneyLocation;
@@ -101,6 +102,7 @@ interface FixtureJourney {
   readonly journeyOutcome: "success" | "failed" | "aborted";
   readonly usage?: NormalizedTerminalUsage;
   readonly executionDurationMs?: number;
+  readonly operation?: "model_generation" | "unsupported_transport";
 }
 
 function completeUsage(
@@ -176,6 +178,8 @@ function requireOptions(result: AnalyticsQueryResult): AnalyticsOptionsResult {
  *  D 13:00 openai/gpt-r semantic aborted, Partial, execution 45s.
  *  E 14:00 unresolved OpenAI request, unknown-alias, no execution/usage.
  *  F 15:00 is exactly the exclusive upper bound and must not participate.
+ *  G 14:30 is an expected unsupported transport probe and is not product
+ *    analytics work.
  *
  * Therefore totals are 5 requests: success=2, failed=1, aborted=1, other=1;
  * Complete usage sums are input=9, cacheRead=3, cacheWrite=2, output=5,
@@ -207,7 +211,7 @@ describe("Request Journey Worker analytics projection", () => {
         kind: "step_completed",
         stepInstanceId: `${fixture.requestId}:resolve_route`,
         completion: "success",
-        operation: "model_generation",
+        operation: fixture.operation ?? "model_generation",
         protocol: fixture.protocol,
         location: { phase: "protocol_ingress", step: "resolve_route" },
       });
@@ -226,6 +230,7 @@ describe("Request Journey Worker analytics projection", () => {
       if (fixture.providerId !== undefined && fixture.modelId !== undefined) {
         next.observe({
           kind: "model_resolved",
+          requestedModel: `${fixture.providerId}/${fixture.modelId}`,
           providerId: fixture.providerId,
           modelId: fixture.modelId,
           location: {
@@ -436,6 +441,15 @@ describe("Request Journey Worker analytics projection", () => {
         journeyOutcome: "success",
         usage: completeUsage(900, 900, 900, 900, 900, "boundary"),
         executionDurationMs: 1,
+      });
+      appendJourney({
+        requestId: "82000000-0000-4000-8000-000000000007",
+        acceptedAt: at(14, 30),
+        protocol: "openai-responses",
+        operation: "unsupported_transport",
+        workOutcome: "failed",
+        requestOutcome: "failed",
+        journeyOutcome: "failed",
       });
 
       const analytics = authority as unknown as FutureAnalyticsAuthority;

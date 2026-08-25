@@ -419,7 +419,8 @@ function copyObservation(
     }
     if (
       copied.kind === "model_resolved" &&
-      (!isBoundedFact(copied.providerId, 256) ||
+      (!isBoundedFact(copied.requestedModel, 1_024) ||
+        !isBoundedFact(copied.providerId, 256) ||
         !isBoundedFact(copied.modelId, 256))
     ) {
       return undefined;

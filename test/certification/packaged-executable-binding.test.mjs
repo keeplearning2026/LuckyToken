@@ -9,13 +9,13 @@ import { resolvePackagedExecutable } from "../../packages/desktop-shell/test/sup
 test("distribution certification uses the explicitly selected packaged executable", async () => {
   const root = await mkdtemp(join(tmpdir(), "luckytoken-executable-binding-"));
   const outputRoot = join(root, ".electron-out");
-  const selected = join(root, "candidate", "LuckyToken.exe");
-  const newerUnselected = join(outputRoot, "newer", "LuckyToken-win32-x64", "LuckyToken.exe");
+  const selected = join(root, "candidate", "Token.exe");
+  const newerUnselected = join(outputRoot, "newer", "Token-win32-x64", "Token.exe");
 
   try {
     await Promise.all([
       mkdir(join(root, "candidate"), { recursive: true }),
-      mkdir(join(outputRoot, "newer", "LuckyToken-win32-x64"), { recursive: true }),
+      mkdir(join(outputRoot, "newer", "Token-win32-x64"), { recursive: true }),
     ]);
     await Promise.all([
       writeFile(selected, "selected", "utf8"),
@@ -38,9 +38,9 @@ test("an invalid explicit packaged executable fails closed", async () => {
   try {
     await assert.rejects(
       resolvePackagedExecutable(root, {
-        LUCKYTOKEN_PACKAGED_EXECUTABLE: join(root, "missing", "LuckyToken.exe"),
+        LUCKYTOKEN_PACKAGED_EXECUTABLE: join(root, "missing", "Token.exe"),
       }),
-      /selected packaged LuckyToken executable does not exist/u,
+      /selected packaged Token executable does not exist/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -432,6 +432,9 @@ export function decodeApplicationStatus(
   if (
     !isRecord(value) ||
     (value.provider !== "configured" && value.provider !== "unconfigured") ||
+    (value.activeRequests !== undefined &&
+      (!Number.isSafeInteger(value.activeRequests) ||
+        (value.activeRequests as number) < 0)) ||
     (value.modelDataPlane !== "stopped" &&
       value.modelDataPlane !== "starting" &&
       value.modelDataPlane !== "running" &&
@@ -475,6 +478,9 @@ export function decodeApplicationStatus(
   return {
     modelDataPlane: value.modelDataPlane,
     provider: value.provider,
+    ...(value.activeRequests === undefined
+      ? {}
+      : { activeRequests: value.activeRequests as number }),
     ...(dataPlane === undefined ? {} : { dataPlane }),
     ...(settings === undefined ? {} : { settings }),
     ...(models === undefined ? {} : { models }),

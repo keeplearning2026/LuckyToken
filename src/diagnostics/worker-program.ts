@@ -338,6 +338,14 @@ function diagnosticsWorkerMain(): void {
     readonly operation: string;
     readonly protocol: string | null;
     readonly lane: string | null;
+    readonly requestedModel: string | null;
+    readonly providerId: string | null;
+    readonly realModelId: string | null;
+    readonly clientSessionId: string | null;
+    readonly effectiveSessionId: string | null;
+    readonly profileId: string | null;
+    readonly profileDisplayName: string | null;
+    readonly httpStatus: number | null;
     readonly outcome: string;
     readonly completeness: string;
     readonly createdAt: number;
@@ -403,6 +411,24 @@ function diagnosticsWorkerMain(): void {
       operation: row.operation,
       ...(row.protocol === null ? {} : { protocol: row.protocol }),
       ...(row.lane === null ? {} : { lane: row.lane }),
+      ...(row.requestedModel === null
+        ? {}
+        : { requestedModel: row.requestedModel }),
+      ...(row.providerId === null ? {} : { providerId: row.providerId }),
+      ...(row.realModelId === null ? {} : { realModelId: row.realModelId }),
+      ...(row.clientSessionId === null
+        ? {}
+        : { clientSessionId: row.clientSessionId }),
+      ...(row.effectiveSessionId === null
+        ? {}
+        : { effectiveSessionId: row.effectiveSessionId }),
+      ...(row.profileId === null ? {} : { profileId: row.profileId }),
+      ...(row.profileDisplayName === null
+        ? {}
+        : { profileDisplayName: row.profileDisplayName }),
+      ...(row.httpStatus === null
+        ? {}
+        : { httpStatus: Number(row.httpStatus) }),
       outcome: row.outcome,
       completeness: row.completeness,
       createdAt: Number(row.createdAt),
@@ -419,6 +445,11 @@ function diagnosticsWorkerMain(): void {
     SELECT r.id AS id, r.runtime_id AS runtimeId,
            j.request_id AS requestId, j.operation AS operation,
            j.protocol AS protocol, j.lane AS lane, j.outcome AS outcome,
+           j.provider_id AS providerId, j.real_model_id AS realModelId,
+           j.client_session_id AS clientSessionId,
+           j.effective_session_id AS effectiveSessionId,
+           j.profile_id AS profileId,
+           j.profile_display_name AS profileDisplayName,
            r.completeness AS completeness, r.created_at AS createdAt,
            r.closed_at AS closedAt, j.admission_json AS admissionJson,
            j.primary_failure_id AS primaryFailureId,
@@ -428,6 +459,18 @@ function diagnosticsWorkerMain(): void {
            j.usage_input AS usageInput,
            j.usage_cache_read AS usageCacheRead,
            j.usage_output AS usageOutput,
+           (SELECT json_extract(e.payload_json, '$.requestedModel')
+              FROM request_journey_events e
+             WHERE e.request_id = j.request_id
+               AND e.kind = 'model_resolved'
+             ORDER BY e.sequence DESC
+             LIMIT 1) AS requestedModel,
+           (SELECT json_extract(e.payload_json, '$.status')
+              FROM request_journey_events e
+             WHERE e.request_id = j.request_id
+               AND e.kind = 'client_response_prepared'
+             ORDER BY e.sequence DESC
+             LIMIT 1) AS httpStatus,
            (SELECT json_extract(e.payload_json, '$.usage.reason')
               FROM request_journey_events e
              WHERE e.request_id = j.request_id
@@ -1363,6 +1406,7 @@ function diagnosticsWorkerMain(): void {
             if (
               eventWasInserted &&
               kind === "model_resolved" &&
+              isSafeFact(payload.requestedModel) &&
               isSafeFact(payload.providerId, 256) &&
               isSafeFact(payload.modelId, 256)
             ) {

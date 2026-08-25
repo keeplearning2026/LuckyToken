@@ -109,6 +109,8 @@ export interface LaneCommittedObservation extends LocatedObservation {
 
 export interface ModelResolvedObservation extends LocatedObservation {
   readonly kind: "model_resolved";
+  /** Client-visible model selector captured at request time. */
+  readonly requestedModel: string;
   readonly providerId: string;
   readonly modelId: string;
 }

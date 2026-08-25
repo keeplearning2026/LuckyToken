@@ -16,7 +16,7 @@ import {
 
 import { createControlPlaneDiscovery } from "../control-plane-discovery.js";
 
-const PROFILE_HELP = `LuckyToken control profiles
+const PROFILE_HELP = `Token control profiles
 
 Usage:
   luckytoken control profiles query --descriptor <path>

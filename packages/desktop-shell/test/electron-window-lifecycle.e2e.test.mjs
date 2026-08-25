@@ -242,6 +242,11 @@ test(
           LOCALAPPDATA: localAppData,
         },
       });
+      assert.equal(
+        await application.evaluate(({ Menu }) => Menu.getApplicationMenu()),
+        null,
+        "Token must not expose Electron's default application menu",
+      );
 
       const endpoint = await waitForEndpoint(descriptorPath);
       client = await connect(endpoint);
@@ -266,7 +271,7 @@ test(
       second.setDefaultTimeout(10_000);
       await second.getByRole("button", { name: "Settings" }).click();
       await second.getByRole("tab", { name: "Advanced" }).click();
-      await second.getByRole("heading", { name: "Recent Runtime Events" }).waitFor();
+      await second.getByRole("heading", { name: "Recent warnings" }).waitFor();
       assert.equal(application.windows().length, 1);
 
       await second.close();
@@ -276,7 +281,7 @@ test(
       third.setDefaultTimeout(10_000);
       await third.getByRole("button", { name: "Settings" }).click();
       await third.getByRole("tab", { name: "Advanced" }).click();
-      await third.getByRole("heading", { name: "Recent Runtime Events" }).waitFor();
+      await third.getByRole("heading", { name: "Recent warnings" }).waitFor();
       assert.equal(application.windows().length, 1, "reopen must create exactly one fresh renderer");
       await third.close();
       await waitForNoWindows(application);
@@ -411,9 +416,9 @@ test(
   async () => {
     const repositoryExecutable = await resolvePackagedExecutable(desktopRoot);
     const root = await mkdtemp(join(tmpdir(), "luckytoken-electron-instance-domain-"));
-    const installedDirectory = join(root, "installed", "LuckyToken-win32-x64");
+    const installedDirectory = join(root, "installed", "Token-win32-x64");
     await cp(dirname(repositoryExecutable), installedDirectory, { recursive: true });
-    const legacyExecutable = join(installedDirectory, "LuckyToken.exe");
+    const legacyExecutable = join(installedDirectory, "Token.exe");
     const legacyBuildId = "0".repeat(64);
     await writeFile(
       join(installedDirectory, "resources", "backend", "build-id.txt"),
@@ -518,7 +523,7 @@ test(
       const page = await openWindow(current);
       page.setDefaultTimeout(10_000);
       await page.getByRole("button", { name: "Overview", exact: true }).waitFor();
-      await page.getByText("Running", { exact: true }).waitFor();
+      await page.getByLabel("Token is running").waitFor();
       await page.close();
       await waitForNoWindows(current);
 
@@ -570,8 +575,8 @@ test(
       cp(dirname(sourceExecutable), primaryDirectory, { recursive: true }),
       cp(dirname(sourceExecutable), replacementDirectory, { recursive: true }),
     ]);
-    const primaryExecutable = join(primaryDirectory, "LuckyToken.exe");
-    const replacementExecutable = join(replacementDirectory, "LuckyToken.exe");
+    const primaryExecutable = join(primaryDirectory, "Token.exe");
+    const replacementExecutable = join(replacementDirectory, "Token.exe");
     const home = join(root, "home");
     const port = await freePort();
     const descriptorPath = await writeConfig(home, port);

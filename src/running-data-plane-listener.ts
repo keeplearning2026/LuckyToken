@@ -29,6 +29,7 @@ export async function startRunningDataPlaneListener(options: {
   readonly dataPlane: FinalizableDataPlane;
   readonly shutdownController: AbortController;
   readonly diagnostics?: RequestJourneyObservationAuthority;
+  readonly onActiveRequestCountChanged?: (count: number) => void;
 }): Promise<RunningDataPlaneListener> {
   let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>>;
   try {
@@ -42,6 +43,12 @@ export async function startRunningDataPlaneListener(options: {
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
+      ...(options.onActiveRequestCountChanged === undefined
+        ? {}
+        : {
+            onActiveRequestCountChanged:
+              options.onActiveRequestCountChanged,
+          }),
     });
   } catch (error) {
     options.shutdownController.abort(

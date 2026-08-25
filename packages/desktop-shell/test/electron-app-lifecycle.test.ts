@@ -22,7 +22,7 @@ function activation(
 describe("Electron desktop lifecycle seam", () => {
   it("isolates disposable .electron-out builds from the installed product instance domain", () => {
     const isolated = desktopInstanceUserDataPath({
-      executablePath: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\LuckyToken.exe",
+      executablePath: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
       appDataPath: "app-data-root",
       buildId: "abcdef0123456789abcdef0123456789abcdef",
     });
@@ -31,7 +31,7 @@ describe("Electron desktop lifecycle seam", () => {
     );
     expect(
       desktopInstanceUserDataPath({
-        executablePath: "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+        executablePath: "C:\\Program Files\\Token\\Token.exe",
         appDataPath: "C:\\Users\\tester\\AppData\\Roaming",
         buildId: "abcdef",
       }),
