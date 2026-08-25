@@ -230,10 +230,10 @@ describe("Direct Mode terminal usage analytics producer", () => {
         headers: {
           "content-length": String(Buffer.byteLength(UPSTREAM_RESPONSE_BODY)),
           "content-type": "application/json",
-          "x-token-request-id": REQUEST_ID,
         },
         body: UPSTREAM_RESPONSE_BODY,
       });
+      expect(enabled.response.headers).not.toHaveProperty("x-token-request-id");
       expect(enabled.analytics?.totals).toMatchObject({
         total: 1,
         success: 1,

@@ -54,6 +54,7 @@ describe("Request Journey Codex Direct Mode web search", () => {
         }),
       );
       expect(response.status).toBe(200);
+      expect(response.headers.has("x-token-request-id")).toBe(false);
       const summary = await published;
 
       const detail = await diagnostics.getRequestJourney({

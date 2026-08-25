@@ -120,6 +120,12 @@ Images uses `commit_direct_images_lane`; Realtime HTTP and WebSocket use `commit
 
 The Direct Mode lane does not depend on Public Model alias resolution, Provider Profiles, Pi AI IR, or Pi Provider execution.
 
+Direct Mode is an opaque passthrough: the upstream response body, status, and
+headers are preserved for the caller unchanged, and Token-owned response
+headers (such as `x-token-request-id`) are never added to a preserved Direct
+Mode response. Only Token-synthesized error responses on these routes carry
+the Token request correlation id.
+
 ## 5. Provider Native Preservation steps
 
 | Order | Phase | Lane Step | Input | Output/artifact | Failure source examples |

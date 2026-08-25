@@ -64,6 +64,8 @@ describe("Request Journey Codex Direct Mode media", () => {
         }),
       );
       expect([images.status, realtime.status]).toEqual([200, 200]);
+      expect(images.headers.has("x-token-request-id")).toBe(false);
+      expect(realtime.headers.has("x-token-request-id")).toBe(false);
       await published;
 
       const details = await Promise.all(

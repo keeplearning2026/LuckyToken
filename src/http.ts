@@ -438,7 +438,13 @@ export async function handleHttpRequest(
       suppliedContext === undefined
         ? protocol.requestIdFor?.(routedRequest) ?? requestId
         : requestId;
-    const delivered = attachRequestId(response, responseRequestId);
+    // DirectMode handlers preserve the upstream response as an opaque
+    // passthrough. The transport edge must not add Token-owned response
+    // headers to that wire; only non-passthrough responses carry the
+    // request correlation id.
+    const delivered = preservesDirectStatusText(response)
+      ? response
+      : attachRequestId(response, responseRequestId);
     if (ownsJourney) {
       observeInProcessHandoff(context, "finished");
       closeRequestJourney(context, {
