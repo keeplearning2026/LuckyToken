@@ -96,7 +96,7 @@ export function buildServeAutoStartCommand(
 }
 
 export interface WindowsAutoStartRegistrarOptions {
-  /** Registry value name, e.g. "LuckyToken". */
+  /** Registry value name, e.g. "Token". */
   readonly name: string;
   /** Full command line registered at sign-in. */
   readonly command: string;

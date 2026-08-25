@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: luckytoken-windows-release
+  group: token-windows-release
   cancel-in-progress: false
 
 jobs:
@@ -15,8 +15,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     env:
-      LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE: ${{ runner.temp }}\luckytoken.pfx
-      LUCKYTOKEN_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      TOKEN_WINDOWS_CERTIFICATE_FILE: ${{ runner.temp }}\Token.pfx
+      TOKEN_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - name: Check out exact source
         uses: actions/checkout@v7
@@ -43,7 +43,7 @@ jobs:
             throw "WINDOWS_CERTIFICATE_PFX_BASE64 is required"
           }
           [IO.File]::WriteAllBytes(
-            $env:LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE,
+            $env:TOKEN_WINDOWS_CERTIFICATE_FILE,
             [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64)
           )
 
@@ -53,7 +53,7 @@ jobs:
       - name: Upload the certified Squirrel release set
         uses: actions/upload-artifact@v7
         with:
-          name: luckytoken-windows-release
+          name: token-windows-release
           path: artifacts/releases/**
           if-no-files-found: error
           compression-level: 0
@@ -61,4 +61,4 @@ jobs:
       - name: Remove signing certificate
         if: always()
         shell: pwsh
-        run: Remove-Item -LiteralPath $env:LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE -Force -ErrorAction SilentlyContinue
+        run: Remove-Item -LiteralPath $env:TOKEN_WINDOWS_CERTIFICATE_FILE -Force -ErrorAction SilentlyContinue

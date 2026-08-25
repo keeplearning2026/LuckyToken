@@ -4,7 +4,7 @@ import {
   decodeAnalyticsResult,
   decodeAnalyticsSummary,
   normalizeAnalyticsQuery,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 const HOUR = 3_600_000;
 const FROM = 1_700_000_000_000;

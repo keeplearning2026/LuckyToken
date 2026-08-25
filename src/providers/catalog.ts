@@ -27,7 +27,7 @@ import {
 } from "./request-composition.js";
 
 /**
- * LuckyToken base provider catalog.
+ * Token base provider catalog.
  *
  * This imports Pi's own builtin implementations and applies the valid
  * models.json configuration over them with the same composition the
@@ -131,7 +131,7 @@ function createOverlaidProvider(
   };
 }
 
-export interface LuckyTokenProviderDependencies {
+export interface TokenProviderDependencies {
   /** Optional parsed models.json for user-registered custom providers. */
   readonly modelsJson?: ModelsJsonConfig;
   /** Ticket 10 per-request config value resolution (deterministic in tests). */
@@ -145,7 +145,7 @@ export interface LuckyTokenProviderDependencies {
 }
 
 /**
- * Apply the LuckyToken provider composition to a mutable collection
+ * Apply the Token provider composition to a mutable collection
  * (pinned `ModelRuntime.rebuildProviders`): Pi built-ins as the lower
  * layer, valid models.json Providers composed above them with per-Provider
  * isolation, and previously registered user Providers that are no longer
@@ -158,9 +158,9 @@ export interface LuckyTokenProviderDependencies {
  * catalog can never diverge. Returns every models.json provider id
  * (whether its composition succeeded or was isolated per pinned behavior).
  */
-export function applyLuckyTokenProviderComposition(
+export function applyTokenProviderComposition(
   models: MutableModels,
-  dependencies: LuckyTokenProviderDependencies & {
+  dependencies: TokenProviderDependencies & {
     /** User provider ids registered by the previous application. */
     readonly previousUserProviderIds: ReadonlySet<string>;
   },
@@ -179,7 +179,7 @@ export function applyLuckyTokenProviderComposition(
     }
     if (bundledProviderIds.has(providerId)) {
       throw new Error(
-        `models.json Provider "${providerId}" is a LuckyToken bundled product Provider and cannot be overridden by models.json. Remove it from the configuration.`,
+        `models.json Provider "${providerId}" is a Token bundled product Provider and cannot be overridden by models.json. Remove it from the configuration.`,
       );
     }
   }
@@ -194,7 +194,7 @@ export function applyLuckyTokenProviderComposition(
       models.deleteProvider(providerId);
     }
   }
-  // Pi built-in providers are part of the LuckyToken provider collection:
+  // Pi built-in providers are part of the Token provider collection:
   // every Pi provider (openai, anthropic, deepseek, ...) is registered so it
   // can be logged in and served through the same Anthropic endpoint.
   const builtins = dependencies.builtins ?? builtinProviders();
@@ -249,11 +249,11 @@ export function applyLuckyTokenProviderComposition(
  * provider id (whether its composition succeeded or was isolated per
  * pinned behavior).
  */
-export function registerLuckyTokenProviders(
+export function registerTokenProviders(
   models: MutableModels,
-  dependencies: LuckyTokenProviderDependencies,
+  dependencies: TokenProviderDependencies,
 ): readonly string[] {
-  return applyLuckyTokenProviderComposition(models, {
+  return applyTokenProviderComposition(models, {
     ...dependencies,
     previousUserProviderIds: Object.freeze(new Set<string>()),
   });

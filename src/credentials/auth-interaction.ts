@@ -6,7 +6,7 @@ import type {
 import type {
   AuthInteractionChannel,
   AuthInteractionEvent,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 /** Adapts the write-only Control Plane interaction channel to Pi. */
 export function createPiAuthInteraction(

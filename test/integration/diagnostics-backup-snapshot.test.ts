@@ -53,10 +53,10 @@ describe("unified Diagnostics backup snapshot", () => {
 
   it("creates one consistent point-in-time SQLite snapshot through the live Diagnostics Worker", async () => {
     const liveRoot = await mkdtemp(
-      join(tmpdir(), "luckytoken-diagnostics-backup-live-"),
+      join(tmpdir(), "Token-diagnostics-backup-live-"),
     );
     const restoredRoot = await mkdtemp(
-      join(tmpdir(), "luckytoken-diagnostics-backup-restored-"),
+      join(tmpdir(), "Token-diagnostics-backup-restored-"),
     );
     roots.push(liveRoot, restoredRoot);
 

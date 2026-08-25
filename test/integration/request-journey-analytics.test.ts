@@ -3,8 +3,8 @@ import type {
   AnalyticsQuery,
   AnalyticsQueryResult,
   AnalyticsResult,
-} from "@luckytoken/application-control-plane/control-plane";
-import type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
+} from "@token/application-control-plane/control-plane";
+import type { TerminalUsageFact } from "@token/provider-contract/usage";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -160,7 +160,7 @@ function requireOptions(result: AnalyticsQueryResult): AnalyticsOptionsResult {
  */
 describe("Request Journey Worker analytics projection", () => {
   it("aggregates typed Journey facts without the legacy Request Ledger store", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-journey-analytics-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-journey-analytics-"));
     let authority: DiagnosticsAuthority | undefined;
     let clock = 100_000;
 

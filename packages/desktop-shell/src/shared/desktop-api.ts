@@ -38,7 +38,7 @@ import type {
   SettingsCommand,
   SettingsCommandResult,
   StatusSnapshot,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 export type {
   AgentIntegrationId,
@@ -54,7 +54,7 @@ export type {
   RuntimeEventRecord,
   RuntimeCommand,
   StatusSnapshot,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 export function formatTimestamp(epochMs: number): string {
   const date = new Date(epochMs);
   const pad = (value: number): string => String(value).padStart(2, "0");
@@ -138,7 +138,7 @@ export interface DesktopPlatformApi {
   getDesktopVersion(): Promise<string>;
 }
 
-export interface LuckyTokenDesktopApi {
+export interface TokenDesktopApi {
   readonly contractVersion: 1;
   readonly control: DesktopControlPlaneApi;
   readonly platform: DesktopPlatformApi;

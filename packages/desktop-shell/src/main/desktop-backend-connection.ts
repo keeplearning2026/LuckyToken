@@ -1,7 +1,7 @@
 import type {
   ControlPlaneClient,
   ControlPlaneEndpoint,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type { BackendLauncher, SpawnedBackend } from "./backend-launcher.js";
 import type { ControlPlaneSession } from "./control-plane-session.js";
@@ -39,7 +39,7 @@ async function waitForStaleBackendExit(
       client.disconnected.then(() => undefined),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
-          () => reject(new Error("Stale LuckyToken desktop Backend did not exit")),
+          () => reject(new Error("Stale Token desktop Backend did not exit")),
           timeoutMs,
         );
       }),
@@ -103,7 +103,7 @@ export function createDesktopBackendConnection(
         acknowledged: true,
       });
       if (result.outcome !== "drained" && result.outcome !== "timed_out") {
-        throw new Error("Stale LuckyToken desktop Backend could not be replaced");
+        throw new Error("Stale Token desktop Backend could not be replaced");
       }
       await waitForStaleBackendExit(client, staleBackendExitTimeoutMs);
       return "retry";
@@ -159,7 +159,7 @@ export function createDesktopBackendConnection(
     let attempts = 0;
     let recoveryDifficultyReported = false;
     let lastFailure: unknown = new Error(
-      "LuckyToken Backend did not become management-ready",
+      "Token Backend did not become management-ready",
     );
     try {
       while (!disposed && recoveryEnabled) {
@@ -185,7 +185,7 @@ export function createDesktopBackendConnection(
             attempts = 0;
             return;
           }
-          lastFailure = new Error("LuckyToken Control Plane connection failed");
+          lastFailure = new Error("Token Control Plane connection failed");
         }
 
         if (spawned === undefined) {
@@ -218,7 +218,7 @@ export function createDesktopBackendConnection(
             if (outcome === "connected") return;
           }
           lastFailure = new Error(
-            `LuckyToken Backend exited before becoming management-ready (code=${String(wake.exit.code)}, signal=${String(wake.exit.signal)})`,
+            `Token Backend exited before becoming management-ready (code=${String(wake.exit.code)}, signal=${String(wake.exit.signal)})`,
           );
           // A dead candidate cannot justify an immediate second launch. Give
           // discovery another complete recovery interval first.
@@ -252,7 +252,7 @@ export function createDesktopBackendConnection(
 
   return Object.freeze({
     async start(): Promise<void> {
-      if (disposed) throw new Error("LuckyToken desktop Backend connection is disposed");
+      if (disposed) throw new Error("Token desktop Backend connection is disposed");
       if (started) return;
       started = true;
       unsubscribeState ??= dependencies.session.subscribeState((state) => {

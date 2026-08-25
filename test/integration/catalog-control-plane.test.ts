@@ -12,7 +12,7 @@ import {
   type CatalogStatusProjection,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createModels, createProvider } from "@earendil-works/pi-ai";
 
@@ -49,7 +49,7 @@ async function createCatalogPlane(options?: {
   /** Skip binding the controller: the runtime is not started. */
   readonly bind?: false;
 }): Promise<CatalogPlaneFixture> {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-catalog-plane-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-catalog-plane-"));
   const files = new Map<string, string>();
   const fileSystem = {
     readFile: async (path: string) => {
@@ -158,12 +158,12 @@ async function createCatalogPlane(options?: {
   });
   const hostRef: { current: RunningControlPlane | undefined } = { current: undefined };
   const endpoint: ControlPlaneEndpoint = {
-    address: `\\\\.\\pipe\\luckytoken-catalog-plane-${process.pid}-${++nextPipe}`,
+    address: `\\\\.\\pipe\\Token-catalog-plane-${process.pid}-${++nextPipe}`,
     capability: "catalog-plane-capability-012345678901234567",
   };
   const host = await startControlPlane({
     endpoint,
-    application: { id: "luckytoken", version: "test" },
+    application: { id: "Token", version: "test" },
     initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
     // The exact catalog command contract runServe wires (cli.ts): a
     // background refresh before the controller is bound is unavailable.

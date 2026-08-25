@@ -5,11 +5,11 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
-import { createConfiguredLuckyTokenDataPlane as createProductionDataPlane } from "../../src/composition.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
+import { createConfiguredTokenDataPlane as createProductionDataPlane } from "../../src/composition.js";
 import type { RequestJourneyObservationAuthority } from "../../src/diagnostics/contract.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   createSeededCredentialRecordStore,
 } from "../support/configured-data-plane.js";
 import { commandCodeProviderImportModule } from "../support/commandcode-provider-package.js";
@@ -48,16 +48,16 @@ describe("configured serving composition", () => {
     configPath: string;
     piDirectory: string;
   }> {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-composition-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-composition-"));
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -73,7 +73,7 @@ describe("configured serving composition", () => {
 
   it("keeps the production Data Plane interface to runtime, certification, and close", async () => {
     const { configPath } = await writeConfiguration();
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     const models = {
       getProviders: () => [],
       getModels: () => [],
@@ -110,7 +110,7 @@ describe("configured serving composition", () => {
 
   it("always installs fixed Direct Mode Search, Images, and Realtime routes", async () => {
     const { configPath } = await writeConfiguration();
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     const models = {
       getProviders: () => [],
       getModels: () => [],
@@ -146,11 +146,11 @@ describe("configured serving composition", () => {
     );
     expect(composition.webSocketUpgrade?.matches(
       {} as never,
-      new URL("http://luckytoken.test/v1/realtime?model=gpt-realtime"),
+      new URL("http://Token.test/v1/realtime?model=gpt-realtime"),
     )).toBe(true);
     expect(composition.webSocketUpgrade?.matches(
       {} as never,
-      new URL("http://luckytoken.test/v1/responses"),
+      new URL("http://Token.test/v1/responses"),
     )).toBe(false);
   });
 
@@ -183,8 +183,8 @@ describe("configured serving composition", () => {
       providerId: "commandcode-private",
       credential: { type: "api_key", key: "provider-secret" },
     }]);
-    const config = await loadLuckyTokenCliConfig(configPath);
-    const composition = await createConfiguredLuckyTokenDataPlane({
+    const config = await loadTokenCliConfig(configPath);
+    const composition = await createConfiguredTokenDataPlane({
       config,
       credentialRecordStore,
       fetch,
@@ -233,7 +233,7 @@ describe("configured serving composition", () => {
     expect(composition.runtime).not.toHaveProperty("provider");
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -271,8 +271,8 @@ describe("configured serving composition", () => {
       providerId: "commandcode-private",
       credential: { type: "api_key", key: "provider-secret" },
     }]);
-    const composition = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(configPath),
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch,
       importModule: commandCodeProviderImportModule(),
@@ -283,7 +283,7 @@ describe("configured serving composition", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -310,8 +310,8 @@ describe("configured serving composition", () => {
       credential: { type: "api_key", key: "provider-secret" },
     }]);
     let upstream: Request | undefined;
-    const composition = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(configPath),
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch: async (input, init) => {
         upstream = new Request(input, init);
@@ -325,7 +325,7 @@ describe("configured serving composition", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -348,7 +348,7 @@ describe("configured serving composition", () => {
 
   it("rejects an uninstalled Client Protocol only at the composition root", async () => {
     const { configPath } = await writeConfiguration();
-    const loaded = await loadLuckyTokenCliConfig(configPath);
+    const loaded = await loadTokenCliConfig(configPath);
     const config = {
       ...loaded,
       clientProtocols: Object.freeze({
@@ -358,7 +358,7 @@ describe("configured serving composition", () => {
     };
 
     await expect(
-      createConfiguredLuckyTokenDataPlane({
+      createConfiguredTokenDataPlane({
         config,
         fetch: async () => commandCodeText("unused"),
       }),
@@ -370,7 +370,7 @@ describe("configured serving composition", () => {
   it("loads the canonical models.json from the config data directory by default", async () => {
     const { configPath, piDirectory } = await writeConfiguration();
     // The canonical default is `models.json` next to the config file
-    // (the desktop layout's `~/.luckytoken/models.json`), not the Pi
+    // (the desktop layout's `~/.Token/models.json`), not the Pi
     // credential directory and never Pi Agent's own data directory.
     await writeFile(
       join(dirname(configPath), "models.json"),
@@ -385,11 +385,11 @@ describe("configured serving composition", () => {
       }),
       "utf8",
     );
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     expect(config.pi.modelsJson).toBe(join(dirname(configPath), "models.json"));
     expect(config.pi.modelsJson).not.toBe(join(piDirectory, "models.json"));
 
-    const composition = await createConfiguredLuckyTokenDataPlane({
+    const composition = await createConfiguredTokenDataPlane({
       config,
       fetch: async () => commandCodeText("unused"),
     });
@@ -404,10 +404,10 @@ describe("configured serving composition", () => {
       '{ "providers": { "broken": { "baseUrl": 42 } } }',
       "utf8",
     );
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     const invalid: unknown[] = [];
 
-    const composition = await createConfiguredLuckyTokenDataPlane({
+    const composition = await createConfiguredTokenDataPlane({
       config,
       fetch: async () => commandCodeText("unused"),
       onInvalidModelsJson: (error) => invalid.push(error),
@@ -419,24 +419,24 @@ describe("configured serving composition", () => {
     expect(composition.userConfiguredProviderIds).toEqual([]);
     expect(invalid).toHaveLength(1);
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/models"),
+      new Request("http://Token.test/v1/models"),
     );
     expect(response.status).toBe(200);
   });
 
   it("registers the optional OpenAI Responses protocol with its own state file", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-composition-responses-"),
+      join(tmpdir(), "Token-composition-responses-"),
     );
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -454,8 +454,8 @@ describe("configured serving composition", () => {
       providerId: "commandcode-private",
       credential: { type: "api_key", key: "provider-secret" },
     }]);
-    const composition = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(configPath),
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch: async () => commandCodeText("responses served"),
       importModule: commandCodeProviderImportModule(),
@@ -466,7 +466,7 @@ describe("configured serving composition", () => {
     compositions.push(composition);
 
     const anthropic = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -481,7 +481,7 @@ describe("configured serving composition", () => {
     );
     expect(anthropic.status).toBe(200);
     const responses = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -497,7 +497,7 @@ describe("configured serving composition", () => {
     expect(responsesJson.output[0].content[0].text).toBe("responses served");
     // Model discovery is unauthenticated and cross-protocol.
     const modelsResponse = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/models", {
+      new Request("http://Token.test/v1/models", {
         method: "GET",
       }),
     );
@@ -518,8 +518,8 @@ describe("configured serving composition", () => {
     ) as { readonly states: ReadonlyArray<readonly [string, unknown]> };
     expect(persisted.states.map(([id]) => id)).toContain(responsesJson.id);
 
-    const restarted = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(configPath),
+    const restarted = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch: async () => commandCodeText("continued after restart"),
       importModule: commandCodeProviderImportModule(),
@@ -528,7 +528,7 @@ describe("configured serving composition", () => {
     });
     compositions.push(restarted);
     const continuation = await restarted.runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

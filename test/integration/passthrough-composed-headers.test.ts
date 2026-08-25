@@ -8,16 +8,16 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   type TestConfiguredDataPlane,
 } from "../support/configured-data-plane.js";
 import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 
 /**
  * Ticket 10 native-passthrough wire seam: anthropic-messages and
- * openai-responses models are served through the LuckyToken native
+ * openai-responses models are served through the Token native
  * passthrough transports, so the composed Provider-facing request facts
  * (built-in static model headers, configured provider/model headers,
  * authHeader Authorization) must reach the upstream request exactly as the
@@ -53,12 +53,12 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     readonly clientToken: string;
     readonly responsesToken: string;
     readonly runtime: Awaited<
-      ReturnType<typeof createConfiguredLuckyTokenDataPlane>
+      ReturnType<typeof createConfiguredTokenDataPlane>
     >["runtime"];
   }> {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-passthrough-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-passthrough-"));
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const modelsJsonPath = join(piDirectory, "models.json");
@@ -67,7 +67,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -79,8 +79,8 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
       }),
       "utf8",
     );
-    const composition = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(configPath),
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
       fetch,
       credentialSeedStore: new InMemoryCredentialStore(),
       configValueAdapters: {
@@ -100,7 +100,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
   }
 
   function anthropicRequest(clientToken: string, model: string): Request {
-    return new Request("http://luckytoken.test/v1/messages", {
+    return new Request("http://Token.test/v1/messages", {
       method: "POST",
       headers: {
         authorization: `Bearer ${clientToken}`,
@@ -253,7 +253,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     );
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: `Bearer ${responsesToken}`,
@@ -303,7 +303,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     );
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: `Bearer ${responsesToken}`,
@@ -347,7 +347,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     );
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: `Bearer ${responsesToken}`,
@@ -402,7 +402,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     );
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: `Bearer ${responsesToken}`,
@@ -568,7 +568,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
       { env },
     );
     const request = (): Request =>
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: `Bearer ${responsesToken}`,
@@ -626,7 +626,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     );
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: `Bearer ${responsesToken}`,

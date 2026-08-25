@@ -7,13 +7,13 @@ import {
   startControlPlane,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 let nextId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextId += 1;
   return {
-    address: `\\\\.\\pipe\\luckytoken-t24-backup-${process.pid}-${nextId}`,
+    address: `\\\\.\\pipe\\Token-t24-backup-${process.pid}-${nextId}`,
     capability: `ticket-24-backup-capability-${String(nextId).padStart(20, "0")}`,
   };
 }
@@ -30,7 +30,7 @@ describe("Ticket 24 backup command through the Control Plane", () => {
     const seen: string[] = [];
     const host = await startControlPlane({
       endpoint: target,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: transport,
       access: nodePipeFallbackAccess,
@@ -46,7 +46,7 @@ describe("Ticket 24 backup command through the Control Plane", () => {
               outcome: "ok",
               destinationPath: "C:\\exports\\backup.json",
               manifest: {
-                format: "luckytoken-backup",
+                format: "token-backup",
                 formatVersion: 1,
                 createdAt: 1,
                 sensitive: true,
@@ -90,7 +90,7 @@ describe("Ticket 24 backup command through the Control Plane", () => {
     const target = endpoint();
     const host = await startControlPlane({
       endpoint: target,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: transport,
       access: nodePipeFallbackAccess,
@@ -98,12 +98,12 @@ describe("Ticket 24 backup command through the Control Plane", () => {
         mode: "incompatible_configuration",
         issues: [
           {
-            path: "C:\\Users\\person\\.luckytoken\\state\\ledger.sqlite3",
-            contract: "luckytoken-request-ledger",
+            path: "C:\\Users\\person\\.Token\\state\\ledger.sqlite3",
+            contract: "Token-request-ledger",
             foundVersion: 1,
             expectedVersion: 2,
             validationError:
-              "luckytoken-request-ledger version is incompatible with this LuckyToken build.",
+              "Token-request-ledger version is incompatible with this Token build.",
           },
         ],
       }),
@@ -117,12 +117,12 @@ describe("Ticket 24 backup command through the Control Plane", () => {
     const snapshot = await client.getStatus();
     expect(snapshot.modelDataPlane).toBe("stopped");
     expect(snapshot.recovery?.issues[0]).toEqual({
-      path: "C:\\Users\\person\\.luckytoken\\state\\ledger.sqlite3",
-      contract: "luckytoken-request-ledger",
+      path: "C:\\Users\\person\\.Token\\state\\ledger.sqlite3",
+      contract: "Token-request-ledger",
       foundVersion: 1,
       expectedVersion: 2,
       validationError:
-        "luckytoken-request-ledger version is incompatible with this LuckyToken build.",
+        "Token-request-ledger version is incompatible with this Token build.",
     });
     await client.close();
   });

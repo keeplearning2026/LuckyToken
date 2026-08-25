@@ -19,12 +19,12 @@ import {
   controlPlaneVersion,
   createNodePipeTransport,
   parseControlPlaneDescriptor,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { resolvePackagedExecutable } from "./support/packaged-executable.mjs";
 
 /**
  * Provider Activation Spec §23.7 — packaged Electron activation journey
- * (Ticket 14). A fresh packaged LuckyToken completes the real activation
+ * (Ticket 14). A fresh packaged Token completes the real activation
  * flow end to end: discover Providers, authenticate while the Gateway is
  * stopped, rename a model from the Provider-scoped Models card, start
  * serving, make a deterministic request through that model name, and
@@ -134,7 +134,7 @@ async function startLocalAnthropicUpstream() {
 }
 
 async function createFixture(home, upstreamOrigin, dataPlanePort) {
-  const stateRoot = join(home, ".luckytoken");
+  const stateRoot = join(home, ".Token");
   await mkdir(join(stateRoot, "pi"), { recursive: true });
   await mkdir(join(stateRoot, "client-auth"), { recursive: true });
 
@@ -161,7 +161,7 @@ async function createFixture(home, upstreamOrigin, dataPlanePort) {
     join(stateRoot, "config.json"),
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: dataPlanePort },
         clientProtocols: {
           "anthropic-messages": {
@@ -292,7 +292,7 @@ async function sendAnthropicRequest(origin, model) {
   const body = await response.text();
   assert.equal(response.status, 200, body);
   assert.match(body, /activation journey ok/u);
-  return response.headers.get("x-luckytoken-request-id");
+  return response.headers.get("x-token-request-id");
 }
 
 test(
@@ -301,7 +301,7 @@ test(
   async () => {
     const executablePath = await resolvePackagedExecutable(desktopRoot);
     const upstream = await startLocalAnthropicUpstream();
-    const home = await mkdtemp(join(tmpdir(), "luckytoken-activation-journey-"));
+    const home = await mkdtemp(join(tmpdir(), "Token-activation-journey-"));
     const dataPlanePort = await freePort();
     const fixture = await createFixture(home, upstream.origin, dataPlanePort);
     const appData = join(home, "AppData", "Roaming");
@@ -312,7 +312,7 @@ test(
     ]);
     const environment = {
       ...process.env,
-      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+      TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
       USERPROFILE: home,
       HOME: home,
       CODEX_HOME: join(home, ".codex"),
@@ -342,7 +342,7 @@ test(
         .locator("article.provider-card")
         .filter({ has: page.getByRole("heading", { name: "CommandCode Private", exact: true }) });
       await commandCodeCard.waitFor();
-      assert.doesNotMatch(await commandCodeCard.textContent(), /LuckyToken/u);
+      assert.doesNotMatch(await commandCodeCard.textContent(), /Token/u);
       const anthropicCard = page
         .locator("article.provider-card")
         .filter({ has: page.getByRole("heading", { name: "Anthropic", exact: true }) });

@@ -10,13 +10,13 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
-  type ConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
+  type ConfiguredTokenDataPlane,
 } from "../support/configured-data-plane.js";
-import { startLuckyTokenHttpServer } from "../../src/server.js";
+import { startTokenHttpServer } from "../../src/server.js";
 import {
   createCapturingCommandCodeFetch,
   runOnlineConformance,
@@ -398,11 +398,11 @@ export async function runCommandCodeOnlineSuite(
   const apiKey = (await readFile("CommandcodeAPIKey.txt", "utf8")).trim();
   if (apiKey.length === 0) throw new Error("CommandCode API key file is empty");
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-online-"));
-  let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
-  let composition: ConfiguredLuckyTokenDataPlane | undefined;
+  const directory = await mkdtemp(join(tmpdir(), "token-online-"));
+  let server: Awaited<ReturnType<typeof startTokenHttpServer>> | undefined;
+  let composition: ConfiguredTokenDataPlane | undefined;
   try {
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const localSdkCredential = "unused-local-sdk-key";
@@ -410,7 +410,7 @@ export async function runCommandCodeOnlineSuite(
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -429,14 +429,14 @@ export async function runCommandCodeOnlineSuite(
       "commandcode-private",
       async () => ({ type: "api_key", key: apiKey }),
     );
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     const dispatchObserver = createDispatchObserver(globalThis.fetch);
-    composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredTokenDataPlane({
       config,
       credentialSeedStore: credentials,
       fetch: dispatchObserver.fetch,
     });
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,
@@ -465,12 +465,12 @@ export async function runCommandCodeOnlineSuite(
     composition = undefined;
 
     const capture = createCapturingCommandCodeFetch(globalThis.fetch);
-    composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredTokenDataPlane({
       config,
       credentialSeedStore: credentials,
       fetch: capture.fetch,
     });
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,

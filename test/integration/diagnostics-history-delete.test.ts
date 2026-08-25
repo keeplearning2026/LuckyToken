@@ -93,7 +93,7 @@ describe("unified Diagnostics history deletion", () => {
 
   it("deletes Journey children and Runtime records in one half-open range while reporting record counts", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-diagnostics-history-delete-"),
+      join(tmpdir(), "Token-diagnostics-history-delete-"),
     );
     roots.push(root);
     let diagnosticsTime = 10_000;
@@ -197,7 +197,7 @@ describe("unified Diagnostics history deletion", () => {
 
   it("does not count or delete an active Journey before its close seal commits", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-diagnostics-history-active-"),
+      join(tmpdir(), "Token-diagnostics-history-active-"),
     );
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
@@ -244,7 +244,7 @@ describe("unified Diagnostics history deletion", () => {
       failureId,
       role: "primary",
       classification: "active_journey_probe",
-      origin: "luckytoken",
+      origin: "Token",
       originPrecision: "exact",
       safeMessage: "The active Journey remained writable",
       location: FAILURE_LOCATION,

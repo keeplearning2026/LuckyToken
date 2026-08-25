@@ -28,7 +28,7 @@ test("binds the serving manifest to the immutable conformance record", async () 
   )?.[1];
 
   assert.equal(boundRevision, actualRevision);
-  assert.equal(record.schemaVersion, "luckytoken-serving-conformance-v2");
+  assert.equal(record.schemaVersion, "token-serving-conformance-v2");
   assert.equal(record.certificationBasis, "offline-and-online");
   assert.equal(record.result, "CERTIFIED");
   assert.deepEqual(record.commands, [
@@ -114,7 +114,7 @@ test("certifies five named profiles and records complete online evidence", async
     await readFile(new URL(record.onlineEvidence.summaryArtifact, repositoryRoot), "utf8"),
   );
   assert.equal(summary.result, "ONLINE_PASSED");
-  assert.equal(summary.schemaVersion, "luckytoken-provider-distribution-online-evidence-v2");
+  assert.equal(summary.schemaVersion, "token-provider-distribution-online-evidence-v2");
   assert.equal(summary.runtime?.version, "0.84.2");
   assert.equal(summary.totals?.passed, 254);
   assert.equal(summary.totals?.attempted, 254);
@@ -159,7 +159,7 @@ test("binds the installed Pi runtime and every governing specification revision"
       readFile(certificationSourceUrl, "utf8"),
       readFile(new URL("../../package.json", import.meta.url), "utf8"),
       readFile(new URL("../../package-lock.json", import.meta.url), "utf8"),
-      readFile(new URL("../../doc/Spec/LuckyTokenCoreSpec.md", import.meta.url), "utf8"),
+      readFile(new URL("../../doc/Spec/TokenCoreSpec.md", import.meta.url), "utf8"),
       readFile(
         new URL(
           "../../doc/Protocols/Protocol Conversion Architecture and Policy.md",
@@ -204,8 +204,8 @@ test("binds the installed Pi runtime and every governing specification revision"
   for (const [document, documentMarker, manifestMarker] of [
     [
       core,
-      "# LuckyToken Core Architecture Specification v6.0",
-      "LuckyToken Core Architecture Specification v6.0",
+      "# Token Core Architecture Specification v6.0",
+      "Token Core Architecture Specification v6.0",
     ],
     [
       policy,

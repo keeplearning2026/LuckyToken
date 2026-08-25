@@ -3,7 +3,7 @@
 Version: **1.0 frozen design**
 
 Reference date: **2026-08-13**
-Owner: LuckyToken OpenAI Responses Client Protocol adapter
+Owner: Token OpenAI Responses Client Protocol adapter
 
 This document defines the Client wire, local state, rendering, Direct Mode / Provider Native preservation seams, Semantic Conversion boundary, and ownership rules for `POST /v1/responses`. Field-by-field Pi conversion is defined in `OpenAI Responses-Pi AI IR Conversion Method.md`; protocol-neutral Runtime boundaries and failure logging are defined in `Protocol Conversion Architecture and Policy.md`. No Anthropic conversion policy, state, helper, or test belongs to this adapter.
 
@@ -18,7 +18,7 @@ Responses request + raw model selector
 → direct Responses transport
 ```
 
-The current production direct lane is Codex Direct Mode. Selection happens before Public Model/Pi Model resolution and before local `previous_response_id` expansion. The original Responses bytes, query, and end-to-end headers remain authoritative. LuckyToken does not read `auth.json`, validate caller credentials, or derive replacement forward auth; the fixed upstream owns authentication.
+The current production direct lane is Codex Direct Mode. Selection happens before Public Model/Pi Model resolution and before local `previous_response_id` expansion. The original Responses bytes, query, and end-to-end headers remain authoritative. Token does not read `auth.json`, validate caller credentials, or derive replacement forward auth; the fixed upstream owns authentication.
 
 ### 1.2 Provider Native Preservation
 
@@ -30,7 +30,7 @@ Responses request
 → provider-native Responses transport
 ```
 
-This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, Provider auth/header construction, endpoint construction, content encoding, and response alias projection. For ordinary `POST /v1/responses`, LuckyToken constructs the raw request body itself and otherwise mirrors the pinned Pi AI HTTP transport contract:
+This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, Provider auth/header construction, endpoint construction, content encoding, and response alias projection. For ordinary `POST /v1/responses`, Token constructs the raw request body itself and otherwise mirrors the pinned Pi AI HTTP transport contract:
 
 - OpenAI-compatible Responses uses Pi model/auth facts and Pi session-affinity formats (`openai`, `openai-nosession`, or `openrouter`).
 - Azure Responses uses Pi's normalized endpoint, deployment identity, API version, and `api-key` authentication without session headers.
@@ -62,7 +62,7 @@ POST /v1/responses
 Content-Type: application/json
 ```
 
-LuckyToken does not maintain a Responses-specific global/project client token. Request identity is normalized independently from credential authority and produces only `effectiveSessionId` / optional `clientSessionId` facts.
+Token does not maintain a Responses-specific global/project client token. Request identity is normalized independently from credential authority and produces only `effectiveSessionId` / optional `clientSessionId` facts.
 
 Credential handling depends on the selected lane:
 
@@ -86,11 +86,11 @@ The active target is the selected OpenAI Responses create profile. It includes, 
 - background, store, stream, stream_options;
 - include, context_management, truncation, service_tier.
 
-LuckyToken validates known required types and nullability before conversion. `null` means absence/default where the source contract defines it; it must not become an internal 500.
+Token validates known required types and nullability before conversion. `null` means absence/default where the source contract defines it; it must not become an internal 500.
 
 The complete exact/degrade/drop/error matrix is normative in the conversion document. Important wire decisions:
 
-- LuckyToken conversion requires a resolvable model selector.
+- Token conversion requires a resolvable model selector.
 - `max_output_tokens`, when present, is positive.
 - `conversation` and `previous_response_id` cannot coexist.
 - `background:true` is unsupported in Core conversion v1; an eligible native preservation lane may support it.
@@ -109,7 +109,7 @@ The adapter recognizes the selected SDK/profile's complete item union, including
 - file search, web search, image generation, code interpreter;
 - MCP list/approval/call families;
 - tool search;
-- current documented LuckyToken/Codex extension families.
+- current documented Token/Codex extension families.
 
 Recognition does not imply exact Pi mapping. Each known family is classified by semantic content and execution ownership:
 
@@ -163,8 +163,8 @@ Core conversion refuses any handle whose model-visible meaning cannot be recover
 | reusable prompt | error |
 | external item_reference | error |
 | foreign encrypted-only compaction | error |
-| LuckyToken-owned provable item | resolve→convert |
-| LuckyToken-owned verified opaque envelope | decode→convert |
+| Token-owned provable item | resolve→convert |
+| Token-owned verified opaque envelope | decode→convert |
 | input_image file_id/remote URL | trusted image resolver→Pi bytes, otherwise error |
 | generic non-image input_file | drop/record; no Pi FileContent |
 
@@ -277,7 +277,7 @@ Status:
 - incomplete: legal incomplete_details non-null, error null;
 - failed: error non-null and distinct from incomplete.
 
-The converted path always generates a LuckyToken-owned high-entropy response
+The converted path always generates a Token-owned high-entropy response
 ID; Pi/Provider response identity is not exposed as Client continuation
 identity. Native preservation preserves upstream IDs unchanged. `model` always
 echoes the Client selector and does not expose a concrete Provider response

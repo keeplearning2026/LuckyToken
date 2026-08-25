@@ -3,7 +3,7 @@
  * `test/online/run-codex-cli.ts` (sanitized into
  * `test/fixtures/codex-cli-requests/`). Every sample is a genuine
  * `POST /v1/responses` body the official Codex CLI produced, so this suite
- * proves LuckyToken accepts the exact wire shapes the real client sends —
+ * proves Token accepts the exact wire shapes the real client sends —
  * offline, with a mocked upstream fetch.
  */
 import type { FetchFunction } from "@earendil-works/pi-ai";
@@ -167,7 +167,7 @@ function loadFixtures(): FixtureSample[] {
 }
 
 function responsesRequest(body: Record<string, unknown>, token: string): Request {
-  return new Request("http://luckytoken.test/v1/responses", {
+  return new Request("http://Token.test/v1/responses", {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
@@ -375,7 +375,7 @@ describe("Codex CLI request sample replay", () => {
 });
 
 /**
- * Parse the atomic SSE sequence LuckyToken emits for `stream: true` into the
+ * Parse the atomic SSE sequence Token emits for `stream: true` into the
  * terminal response object (response.completed frame).
  */
 function parseSseResponse(text: string): Record<string, unknown> {

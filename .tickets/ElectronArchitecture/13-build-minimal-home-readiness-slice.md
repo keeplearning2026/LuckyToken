@@ -1,8 +1,8 @@
 # 13 — Build minimal Home readiness slice
 
-**What to build:** Give users one Home surface that opens from the tray, reads fresh Backend state, and tells them whether LuckyToken is ready and what action to take next.
+**What to build:** Give users one Home surface that opens from the tray, reads fresh Backend state, and tells them whether Token is ready and what action to take next.
 
-**Blocked by:** 09 — Run LuckyToken as a tray-only Electron product; 12 — Expose the typed preload desktop contract.
+**Blocked by:** 09 — Run Token as a tray-only Electron product; 12 — Expose the typed preload desktop contract.
 
 **Status:** completed
 

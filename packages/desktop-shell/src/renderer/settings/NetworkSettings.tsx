@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 
-import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
+import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 
-type SettingsResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeSettings"]>>;
+type SettingsResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeSettings"]>>;
 type Setting = SettingsResult["settings"][string];
 
-export function NetworkSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
+export function NetworkSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [setting, setSetting] = useState<Setting>();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);

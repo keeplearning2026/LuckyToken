@@ -117,7 +117,7 @@ export function beginRequestJourney(
 
 function attachRequestId(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
-  headers.set("x-luckytoken-request-id", requestId);
+  headers.set("x-token-request-id", requestId);
   const preserveStatusText = preservesDirectStatusText(response);
   return copyDirectResponseMetadata(response, new Response(response.body, {
     status: response.status,
@@ -470,7 +470,7 @@ export async function handleHttpRequest(
         classification: aborted
           ? "request_lifecycle_aborted"
           : "protocol_handler_failed",
-        origin: aborted && request.signal.aborted ? "client" : "luckytoken",
+        origin: aborted && request.signal.aborted ? "client" : "Token",
         originPrecision: "boundary",
         location: protocolHandlerLocation,
       });
@@ -488,7 +488,7 @@ export async function handleHttpRequest(
     }
     const fallback = new Response(null, {
       status: 500,
-      headers: { "x-luckytoken-request-id": handlerRequestId },
+      headers: { "x-token-request-id": handlerRequestId },
     });
     const presentationLocation = {
       phase: "client_response_preparation",

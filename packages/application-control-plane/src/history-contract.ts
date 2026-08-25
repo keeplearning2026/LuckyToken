@@ -44,7 +44,7 @@ export interface HistoryExportManifestSummary {
   readonly exportedAt: number;
   readonly sensitive: true;
   readonly snapshot: {
-    readonly contract: "luckytoken-diagnostics-sqlite";
+    readonly contract: "token-diagnostics-sqlite";
     readonly schemaVersion: 2;
     readonly bytes: number;
   };

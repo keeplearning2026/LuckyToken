@@ -1,8 +1,8 @@
 import type {
   AnalyticsOptionsResult,
   AnalyticsResult,
-} from "@luckytoken/application-control-plane/control-plane";
-import type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
+} from "@token/application-control-plane/control-plane";
+import type { TerminalUsageFact } from "@token/provider-contract/usage";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,7 +176,7 @@ function options(result: Awaited<ReturnType<DiagnosticsManagementAuthority["getA
 
 describe("Request Journey analytics bounded pagination", () => {
   it("aggregates and sorts incrementally across Worker pages without retaining all Journey rows", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-analytics-pages-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-analytics-pages-"));
     let authority: DiagnosticsManagementAuthority | undefined;
     try {
       authority = await createDiagnosticsAuthority({

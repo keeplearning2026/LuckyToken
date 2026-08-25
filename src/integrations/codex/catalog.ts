@@ -137,6 +137,7 @@ function codexEntry(
     effort: string;
     description: string;
   }>[],
+  defaultReasoningLevel?: string,
 ): CodexCatalogEntry {
   const contextWindow = safeContextWindow(model);
   return Object.freeze({
@@ -144,6 +145,9 @@ function codexEntry(
     display_name: selectorTool.displayName(slug),
     description: `Token model: ${slug}`,
     supported_reasoning_levels: reasoningLevels,
+    ...(defaultReasoningLevel === undefined
+      ? {}
+      : { default_reasoning_level: defaultReasoningLevel }),
     shell_type: "shell_command",
     visibility: "list",
     supported_in_api: true,
@@ -166,7 +170,7 @@ function codexEntry(
 }
 
 /**
- * Project the current LuckyToken model surface into a Codex-facing catalog.
+ * Project the current Token model surface into a Codex-facing catalog.
  * Native Codex models keep bare ids; Pi targets appear only through explicit,
  * currently-callable aliases. Alias syntax remains globally opaque — Codex's
  * one-slash metadata limitation is enforced only at this projection boundary.
@@ -238,6 +242,10 @@ export function buildCodexCatalog(
         `Alias "${entry.alias}" exposes no reasoning controls because its Pi capabilities and the installed Codex vocabulary do not overlap.`,
       );
     }
+    const defaultReasoningLevel =
+      reasoningLevels.length > 0
+        ? reasoningLevels[reasoningLevels.length - 1]?.effort
+        : undefined;
     entries.push(
       codexEntry(
         entry.alias,
@@ -245,6 +253,7 @@ export function buildCodexCatalog(
         nextRoutedPriority,
         baseInstructions,
         reasoningLevels,
+        defaultReasoningLevel,
       ),
     );
     injectedModelCount += 1;

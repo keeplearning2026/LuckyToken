@@ -193,7 +193,7 @@ function createNackHarness(): {
 
 describe("Request Journey Worker append NACK resilience", () => {
   it("releases a rejected append so its close seal and authority shutdown are not poisoned", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-worker-nack-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-worker-nack-"));
     const harness = createNackHarness();
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),

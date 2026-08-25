@@ -24,10 +24,10 @@ describe("Claude CLI continuity capability probe", () => {
 
     expect(projected.headers.has("content-length")).toBe(false);
     expect(body).toContain('"type":"thinking","thinking":"","signature":""');
-    expect(body).toContain('"luckytoken_continuity"');
+    expect(body).toContain('"token_continuity"');
     expect(body).toContain('"target":"text"');
     expect(body).toContain('"value":"CLAUDE_CONTINUITY_MARKER"');
-    expect(body.match(/luckytoken_continuity/gu)).toHaveLength(1);
+    expect(body.match(/token_continuity/gu)).toHaveLength(1);
   });
 
   it("fails diagnostically when the response has no attachable text block", async () => {

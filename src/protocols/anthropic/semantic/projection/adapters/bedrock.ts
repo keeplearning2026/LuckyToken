@@ -269,7 +269,7 @@ function projectAnthropicToBedrock(
         ? {
             kind: "degraded",
             warning:
-              "Bedrock Claude used its reasoning default after LuckyToken removed known enabling controls",
+              "Bedrock Claude used its reasoning default after Token removed known enabling controls",
           }
         : { kind: "pi-native" });
     } else {
@@ -323,7 +323,7 @@ function projectAnthropicToBedrock(
         ? {
             kind: "degraded",
             warning:
-              "Bedrock non-Claude used its reasoning default after LuckyToken removed known enabling controls",
+              "Bedrock non-Claude used its reasoning default after Token removed known enabling controls",
           }
         : { kind: "pi-native" });
     }

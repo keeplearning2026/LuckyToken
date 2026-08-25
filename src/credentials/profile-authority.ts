@@ -576,7 +576,7 @@ export function createProviderCredentialProfiles(options: {
       }
 
       if (binding.kind === "ambient") {
-        throw new Error("Ambient Provider authentication is not LuckyToken-managed");
+        throw new Error("Ambient Provider authentication is not Token-managed");
       }
       if (binding.kind === "managed") {
         const key = healthKey(providerId, binding.credentialId);

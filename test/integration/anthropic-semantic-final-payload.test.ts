@@ -953,7 +953,7 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
                 type: "server_tool_use",
                 id: "srv-1",
                 name: "web_search",
-                input: { query: "LuckyToken" },
+                input: { query: "Token" },
               },
             ],
           },

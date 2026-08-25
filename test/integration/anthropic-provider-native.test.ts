@@ -25,7 +25,7 @@ function modelsWithAuth(auth: unknown): Pick<Models, "getAuth"> {
 }
 
 function request(signal?: AbortSignal): Request {
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer client-secret",

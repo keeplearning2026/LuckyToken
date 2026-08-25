@@ -1,7 +1,7 @@
 import type {
   CatalogSnapshotProjection,
   CredentialProfilesProjectionV1,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type { PublicModelRuntimeFacts } from "./authority.js";
 

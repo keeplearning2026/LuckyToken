@@ -9,17 +9,17 @@ import {
   type ApplicationOwnership,
   type RunningControlPlane,
   type StatusEvent,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import {
   createDataPlaneRuntimeSupervisor,
   type RunningDataPlaneListener,
 } from "../../src/runtime-supervisor.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
+  startTokenHttpServer,
   type DrainClock,
-  type RunningLuckyTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import {
   createUnsupportedAutoStartRegistrar,
@@ -110,7 +110,7 @@ function createFakeRegistrar(): {
 
 describe("Control Plane ownership and application lifecycle seam", () => {
   const hosts: RunningControlPlane[] = [];
-  const httpServers: RunningLuckyTokenHttpServer[] = [];
+  const httpServers: RunningTokenHttpServer[] = [];
   let nextPipe = 0;
   let nextRequest = 0;
 
@@ -156,10 +156,10 @@ describe("Control Plane ownership and application lifecycle seam", () => {
             >,
           }),
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-ownership-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\Token-ownership-${process.pid}-${++nextPipe}`,
         capability: "ownership-test-capability-012345678901234567",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       ownership,
       pipeServerFactory: transport,
@@ -227,7 +227,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
               outcome: "conflict",
               conflict: {
                 code: "desktop_owner_lease_mismatch",
-                message: "The desktop ownership lease belongs to a newer LuckyToken shell.",
+                message: "The desktop ownership lease belongs to a newer Token shell.",
               },
             };
       },
@@ -311,7 +311,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "POST",
@@ -324,13 +324,13 @@ describe("Control Plane ownership and application lifecycle seam", () => {
         },
       ],
     });
-    let activeServer: RunningLuckyTokenHttpServer | undefined;
+    let activeServer: RunningTokenHttpServer | undefined;
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
       readProvider: () => "unconfigured",
       startListener: async () => {
-        activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
+        activeServer = await startTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);
         return {
           close: () => activeServer?.close() ?? Promise.resolve(),
@@ -393,7 +393,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
     const started = new Promise<void>((resolve) => {
       handlerStarted = resolve;
     });
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "POST",
@@ -410,13 +410,13 @@ describe("Control Plane ownership and application lifecycle seam", () => {
         },
       ],
     });
-    let activeServer: RunningLuckyTokenHttpServer | undefined;
+    let activeServer: RunningTokenHttpServer | undefined;
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
       readProvider: () => "unconfigured",
       startListener: async () => {
-        activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
+        activeServer = await startTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);
         return {
           close: () => activeServer?.close() ?? Promise.resolve(),
@@ -568,7 +568,7 @@ describe("Control Plane ownership and application lifecycle seam", () => {
   });
 
   it("detaching an attached viewer never stops the headless-owned gateway", async () => {
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "POST",
@@ -577,13 +577,13 @@ describe("Control Plane ownership and application lifecycle seam", () => {
         },
       ],
     });
-    let activeServer: RunningLuckyTokenHttpServer | undefined;
+    let activeServer: RunningTokenHttpServer | undefined;
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
       readProvider: () => "unconfigured",
       startListener: async () => {
-        activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
+        activeServer = await startTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);
         return activeServer as unknown as RunningDataPlaneListener;
       },

@@ -6,10 +6,10 @@ import type {
   ModelsStore,
 } from "@earendil-works/pi-ai";
 
-import type { LuckyTokenCliConfig } from "../../src/cli-config.js";
+import type { TokenCliConfig } from "../../src/cli-config.js";
 import {
-  createConfiguredLuckyTokenDataPlane as createProductionDataPlane,
-  type ConfiguredLuckyTokenDataPlane as ProductionDataPlane,
+  createConfiguredTokenDataPlane as createProductionDataPlane,
+  type ConfiguredTokenDataPlane as ProductionDataPlane,
 } from "../../src/composition.js";
 import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
 import type {
@@ -40,7 +40,7 @@ import {
 import type { SettingsRegistry } from "../../src/settings/catalog.js";
 
 export interface TestConfiguredDataPlaneOptions {
-  readonly config: LuckyTokenCliConfig;
+  readonly config: TokenCliConfig;
   readonly credentialRecordStore?: ProviderCredentialRecordStore;
   /** Test fixture source converted into one current Profile per Provider. */
   readonly credentialSeedStore?: CredentialStore;
@@ -69,7 +69,7 @@ export interface TestConfiguredDataPlane extends ProductionDataPlane {
   readonly catalog: ProviderRuntime["catalog"];
 }
 
-export type ConfiguredLuckyTokenDataPlane = TestConfiguredDataPlane;
+export type ConfiguredTokenDataPlane = TestConfiguredDataPlane;
 
 export interface TestConfiguredPiModelsOptions {
   readonly piDirectory: string;
@@ -121,10 +121,10 @@ export async function createConfiguredPiModels(
       ? {}
       : {
           importModule: (specifier: string) =>
-            specifier === "@luckytoken/provider-commandcode-private"
-              ? import("@luckytoken/provider-commandcode-private")
-              : specifier === "@luckytoken/provider-commandcode-goat"
-                ? import("@luckytoken/provider-commandcode-goat")
+            specifier === "@token/provider-commandcode-private"
+              ? import("@token/provider-commandcode-private")
+              : specifier === "@token/provider-commandcode-goat"
+                ? import("@token/provider-commandcode-goat")
               : options.importModule!(specifier),
         }),
     ...(options.createUuid === undefined
@@ -177,7 +177,7 @@ export async function createConfiguredPiModels(
 }
 
 async function configuredProviderIds(
-  config: LuckyTokenCliConfig,
+  config: TokenCliConfig,
   runtime: ProviderRuntime,
 ): Promise<{
   readonly userConfiguredProviderIds: readonly string[];
@@ -262,7 +262,7 @@ const NOOP_DIAGNOSTICS: RequestJourneyObservationAuthority = Object.freeze({
  * production removed, while the Data Plane itself receives only narrow facts.
  * Generic serving tests use a no-I/O Diagnostics observer unless they inject
  * a real unified authority explicitly. */
-export async function createConfiguredLuckyTokenDataPlane(
+export async function createConfiguredTokenDataPlane(
   options: TestConfiguredDataPlaneOptions,
 ): Promise<TestConfiguredDataPlane> {
   const now = options.now ?? Date.now;
@@ -295,10 +295,10 @@ export async function createConfiguredLuckyTokenDataPlane(
         ? {}
         : {
             importModule: (specifier: string) =>
-              specifier === "@luckytoken/provider-commandcode-private"
-                ? import("@luckytoken/provider-commandcode-private")
-                : specifier === "@luckytoken/provider-commandcode-goat"
-                  ? import("@luckytoken/provider-commandcode-goat")
+              specifier === "@token/provider-commandcode-private"
+                ? import("@token/provider-commandcode-private")
+                : specifier === "@token/provider-commandcode-goat"
+                  ? import("@token/provider-commandcode-goat")
                 : options.importModule!(specifier),
           }),
       ...(options.onInvalidModelsJson === undefined

@@ -17,9 +17,9 @@ directory without rebuilding or recompressing it.
   unsigned candidates are allowed for development, machine installation is
   skipped to avoid touching the developer's user state, and the manifest is
   not promotable. A disposable blank Windows user may opt into the same machine
-  check with `LUCKYTOKEN_RELEASE_MACHINE_CERTIFY=1`.
+  check with `TOKEN_RELEASE_MACHINE_CERTIFY=1`.
 - `npm run release:windows` is the official gate. It requires a clean Git
-  worktree and the two `LUCKYTOKEN_WINDOWS_CERTIFICATE_*` environment
+  worktree and the two `TOKEN_WINDOWS_CERTIFICATE_*` environment
   variables. It never accepts a reused build directory.
 - `.github/workflows/windows-release.yml` runs that same official command on
   `windows-2022` after `npm ci`. Configure the repository secrets

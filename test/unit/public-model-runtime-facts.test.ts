@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type {
   CatalogSnapshotProjection,
   CredentialProfilesProjectionV1,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { publicModelRuntimeFacts } from "../../src/public-models/runtime-facts.js";
 

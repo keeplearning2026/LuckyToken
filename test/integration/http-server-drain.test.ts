@@ -2,11 +2,11 @@ import { connect as connectSocket } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
+  startTokenHttpServer,
   type DrainClock,
-  type RunningLuckyTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 /** Deterministic clock: sleep resolves only when the test advances it, so
@@ -44,7 +44,7 @@ function createFakeClock(): {
 }
 
 describe("Data Plane HTTP drain lifecycle", () => {
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -59,7 +59,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "POST",
@@ -72,7 +72,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
         },
       ],
     });
-    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    const server = await startTokenHttpServer({ runtime, port: 0 });
     servers.push(server);
     const { clock } = createFakeClock();
 
@@ -93,7 +93,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
   });
 
   it("does not change the HTTP reason phrase for an existing Responses route", async () => {
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [{
         method: "POST",
         pathname: "/v1/responses",
@@ -103,7 +103,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
         }),
       }],
     });
-    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    const server = await startTokenHttpServer({ runtime, port: 0 });
     servers.push(server);
 
     const response = await fetch(`${server.origin}/v1/responses`, {
@@ -124,7 +124,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
       releaseFirst = resolve;
     });
     const handledPaths: string[] = [];
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "GET",
@@ -146,7 +146,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
         },
       ],
     });
-    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    const server = await startTokenHttpServer({ runtime, port: 0 });
     servers.push(server);
     const socket = connectSocket(server.port, server.host);
     socket.on("error", () => undefined);
@@ -180,7 +180,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
       releaseUnwind = resolve;
     });
     let handlerSettled = false;
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "POST",
@@ -199,7 +199,7 @@ describe("Data Plane HTTP drain lifecycle", () => {
         },
       ],
     });
-    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    const server = await startTokenHttpServer({ runtime, port: 0 });
     servers.push(server);
     const fakeClock = createFakeClock();
 
@@ -227,8 +227,8 @@ describe("Data Plane HTTP drain lifecycle", () => {
   });
 
   it("drains immediately with no active requests and stays idempotent", async () => {
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [] });
-    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    const runtime = createTokenRuntime({ clientProtocols: [] });
+    const server = await startTokenHttpServer({ runtime, port: 0 });
     servers.push(server);
 
     const first = server.drain(1_000, { clock: createFakeClock().clock });

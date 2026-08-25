@@ -9,12 +9,12 @@ import {
   connectControlPlane,
   controlPlaneVersion,
   createNodePipeTransport,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import {
-  startLuckyTokenApplication as startProductionLuckyTokenApplication,
-  type RunningLuckyTokenApplication,
-  type StartLuckyTokenApplicationOptions,
+  startTokenApplication as startProductionTokenApplication,
+  type RunningTokenApplication,
+  type StartTokenApplicationOptions,
 } from "../../src/application.js";
 import {
   createInstanceAuthority,
@@ -23,7 +23,7 @@ import {
 import { createControlPlaneDiscovery } from "../../src/control-plane-discovery.js";
 
 const roots: string[] = [];
-const applications: RunningLuckyTokenApplication[] = [];
+const applications: RunningTokenApplication[] = [];
 
 async function readControlPlaneDescriptor(path: string) {
   const endpoint = await createControlPlaneDiscovery({ path }).read();
@@ -31,10 +31,10 @@ async function readControlPlaneDescriptor(path: string) {
   return endpoint;
 }
 
-function startLuckyTokenApplication(
-  options: Omit<StartLuckyTokenApplicationOptions, "instanceAuthority">,
+function startTokenApplication(
+  options: Omit<StartTokenApplicationOptions, "instanceAuthority">,
 ) {
-  return startProductionLuckyTokenApplication({
+  return startProductionTokenApplication({
     ...options,
     codexCatalogValidator: {
       validate: async () => undefined,
@@ -71,7 +71,7 @@ async function freePort(): Promise<number> {
 }
 
 async function fixture(): Promise<{ configPath: string; descriptorPath: string; port: number }> {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-application-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-application-"));
   const port = await freePort();
   roots.push(root);
   const configPath = join(root, "config.json");
@@ -80,7 +80,7 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string; 
     configPath,
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port },
         clientProtocols: {
           "anthropic-messages": {
@@ -129,14 +129,14 @@ describe("Backend Application public lifecycle seam", () => {
     const { configPath, descriptorPath } = await fixture();
     const authPath = join(dirname(configPath), "client-auth", "anthropic-messages.json");
     const legacy = JSON.stringify({
-      schemaVersion: "luckytoken-client-auth-v1",
+      schemaVersion: "Token-client-auth-v1",
       global: "legacy-v1-token-canary",
       projects: {},
     });
     await mkdir(dirname(authPath), { recursive: true });
     await writeFile(authPath, legacy, "utf8");
 
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -164,7 +164,7 @@ describe("Backend Application public lifecycle seam", () => {
   it("starts normal serving, exposes the Control Plane, and closes idempotently", async () => {
     const { configPath, descriptorPath, port } = await fixture();
 
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -205,7 +205,7 @@ describe("Backend Application public lifecycle seam", () => {
       | { readonly discoveryAbsent: boolean; readonly dataPlanePortAvailable: boolean }
       | undefined;
 
-    const started = await startProductionLuckyTokenApplication({
+    const started = await startProductionTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -252,7 +252,7 @@ describe("Backend Application public lifecycle seam", () => {
 
   it("does not let a desktop lease take ownership of a CLI-owned Backend", async () => {
     const { configPath, descriptorPath } = await fixture();
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -288,7 +288,7 @@ describe("Backend Application public lifecycle seam", () => {
     const { configPath, descriptorPath } = await fixture();
     await writeFile(configPath, "{ invalid json", "utf8");
 
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -320,7 +320,7 @@ describe("Backend Application public lifecycle seam", () => {
     });
     let attempts = 0;
 
-    const started = await startProductionLuckyTokenApplication({
+    const started = await startProductionTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -341,7 +341,7 @@ describe("Backend Application public lifecycle seam", () => {
 
   it("attaches a second start attempt to the active application", async () => {
     const { configPath, descriptorPath } = await fixture();
-    const first = await startLuckyTokenApplication({
+    const first = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -350,7 +350,7 @@ describe("Backend Application public lifecycle seam", () => {
     if (first.kind !== "running") return;
     applications.push(first.application);
 
-    const second = await startLuckyTokenApplication({
+    const second = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "desktop",
@@ -383,10 +383,10 @@ describe("Backend Application public lifecycle seam", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     const previousCodexCliPath = process.env.CODEX_CLI_PATH;
     process.env.CODEX_HOME = codexHome;
-    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+    process.env.CODEX_CLI_PATH = "Token-test-missing-codex";
 
     try {
-      const first = await startLuckyTokenApplication({
+      const first = await startTokenApplication({
         configPath,
         descriptorOverride: descriptorPath,
         ownerKind: "cli",
@@ -447,7 +447,7 @@ describe("Backend Application public lifecycle seam", () => {
       expect(firstRestore).toContain('model_catalog_json = "C:/restore/catalog.json"');
       expect(firstRestore).toContain('model = "before-model"');
 
-      const second = await startLuckyTokenApplication({
+      const second = await startTokenApplication({
         configPath,
         descriptorOverride: descriptorPath,
         ownerKind: "cli",
@@ -489,10 +489,10 @@ describe("Backend Application public lifecycle seam", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     const previousCodexCliPath = process.env.CODEX_CLI_PATH;
     process.env.CODEX_HOME = codexHome;
-    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+    process.env.CODEX_CLI_PATH = "Token-test-missing-codex";
 
     try {
-      const started = await startLuckyTokenApplication({
+      const started = await startTokenApplication({
         configPath,
         descriptorOverride: descriptorPath,
         ownerKind: "cli",
@@ -561,10 +561,10 @@ describe("Backend Application public lifecycle seam", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     const previousCodexCliPath = process.env.CODEX_CLI_PATH;
     process.env.CODEX_HOME = codexHome;
-    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+    process.env.CODEX_CLI_PATH = "Token-test-missing-codex";
 
     try {
-      const started = await startLuckyTokenApplication({
+      const started = await startTokenApplication({
         configPath,
         descriptorOverride: descriptorPath,
         ownerKind: "cli",
@@ -616,7 +616,7 @@ describe("Backend Application public lifecycle seam", () => {
 
   it("delivers an ownership-aware quit result before the application exits", async () => {
     const { configPath, descriptorPath } = await fixture();
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -663,7 +663,7 @@ describe("Backend Application public lifecycle seam", () => {
     await writeFile(
       join(stateDirectory, "integration-state.json"),
       `${JSON.stringify({
-        schemaVersion: "luckytoken-codex-integration-v3",
+        schemaVersion: "Token-codex-integration-v3",
         desiredEnabled: true,
         managed: false,
       })}\n`,
@@ -678,10 +678,10 @@ describe("Backend Application public lifecycle seam", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     const previousCodexCliPath = process.env.CODEX_CLI_PATH;
     process.env.CODEX_HOME = codexHome;
-    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+    process.env.CODEX_CLI_PATH = "Token-test-missing-codex";
 
     try {
-      const started = await startLuckyTokenApplication({
+      const started = await startTokenApplication({
         configPath,
         descriptorOverride: descriptorPath,
         ownerKind: "cli",
@@ -706,7 +706,7 @@ describe("Backend Application public lifecycle seam", () => {
         originalCodexConfig,
       );
       await expect(
-        readFile(join(codexHome, "luckytoken-model-catalog.json"), "utf8"),
+        readFile(join(codexHome, "token-model-catalog.json"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -731,7 +731,7 @@ describe("Backend Application public lifecycle seam", () => {
       [
         'model_provider = "openai"',
         `openai_base_url = "http://127.0.0.1:${port}/v1"`,
-        `model_catalog_json = "${join(codexHome, "luckytoken-model-catalog.json").replaceAll("\\", "\\\\")}"`,
+        `model_catalog_json = "${join(codexHome, "token-model-catalog.json").replaceAll("\\", "\\\\")}"`,
         'model = "keep-me"',
         "",
       ].join("\n"),
@@ -745,7 +745,7 @@ describe("Backend Application public lifecycle seam", () => {
     await writeFile(
       join(stateDirectory, "integration-state.json"),
       `${JSON.stringify({
-        schemaVersion: "luckytoken-codex-integration-v3",
+        schemaVersion: "Token-codex-integration-v3",
         desiredEnabled: true,
         managed: true,
         appliedGeneration: 0,
@@ -761,10 +761,10 @@ describe("Backend Application public lifecycle seam", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     const previousCodexCliPath = process.env.CODEX_CLI_PATH;
     process.env.CODEX_HOME = codexHome;
-    process.env.CODEX_CLI_PATH = "luckytoken-test-missing-codex";
+    process.env.CODEX_CLI_PATH = "Token-test-missing-codex";
 
     try {
-      const started = await startLuckyTokenApplication({
+      const started = await startTokenApplication({
         configPath,
         descriptorOverride: descriptorPath,
         ownerKind: "cli",

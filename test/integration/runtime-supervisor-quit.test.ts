@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ApplicationStatus } from "@luckytoken/application-control-plane/control-plane";
+import type { ApplicationStatus } from "@token/application-control-plane/control-plane";
 
 import {
   createDataPlaneRuntimeSupervisor,

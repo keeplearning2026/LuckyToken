@@ -21,7 +21,7 @@ import {
   controlPlaneVersion,
   createNodePipeTransport,
   parseControlPlaneDescriptor,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { resolvePackagedExecutable } from "./support/packaged-executable.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -127,7 +127,7 @@ async function startLocalAnthropicUpstream() {
 }
 
 async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
-  const stateRoot = join(home, ".luckytoken");
+  const stateRoot = join(home, ".Token");
   const codexHome = join(home, ".codex");
   await Promise.all([
     mkdir(join(stateRoot, "pi"), { recursive: true }),
@@ -177,7 +177,7 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
     join(stateRoot, "config.json"),
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: dataPlanePort },
         clientProtocols: {
           "anthropic-messages": {
@@ -220,7 +220,7 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
     "utf8",
   );
 
-  await writeFile(join(codexHome, "config.toml"), "# LuckyToken product certification\n", "utf8");
+  await writeFile(join(codexHome, "config.toml"), "# Token product certification\n", "utf8");
   await writeFile(
     join(codexHome, "auth.json"),
     `${JSON.stringify({
@@ -456,8 +456,8 @@ async function sendResponsesRequest(origin, message) {
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
   assert.match(JSON.stringify(body), /product journey ok/u);
-  const requestId = response.headers.get("x-luckytoken-request-id");
-  assert.ok(requestId, "successful request must expose the LuckyToken request id");
+  const requestId = response.headers.get("x-token-request-id");
+  assert.ok(requestId, "successful request must expose the Token request id");
   return requestId;
 }
 
@@ -467,7 +467,7 @@ test(
   async () => {
     const executablePath = await resolvePackagedExecutable(desktopRoot);
     const upstream = await startLocalAnthropicUpstream();
-    const home = await mkdtemp(join(tmpdir(), "luckytoken-product-golden-"));
+    const home = await mkdtemp(join(tmpdir(), "Token-product-golden-"));
     const dataPlanePort = await freePort();
     const fixture = await createProductFixture(home, upstream.origin, dataPlanePort);
     const appData = join(home, "AppData", "Roaming");
@@ -478,7 +478,7 @@ test(
     ]);
     const environment = {
       ...process.env,
-      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+      TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
       USERPROFILE: home,
       HOME: home,
       APPDATA: appData,
@@ -649,7 +649,7 @@ test(
       );
 
       const evidence = {
-        schemaVersion: "luckytoken-electron-resource-evidence-v1",
+        schemaVersion: "Token-electron-resource-evidence-v1",
         onlineProviderVerification: {
           performed: false,
           reason: "deterministic local Anthropic-compatible upstream",
@@ -682,7 +682,7 @@ test(
         serializedEvidence,
         "utf8",
       );
-      process.stdout.write(`LuckyToken product resource evidence: ${JSON.stringify(evidence.states)}\n`);
+      process.stdout.write(`Token product resource evidence: ${JSON.stringify(evidence.states)}\n`);
 
       const quit = await client.executeApplicationCommand({
         command: "quit",

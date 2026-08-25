@@ -7,21 +7,21 @@ import {
   startControlPlane,
   type RunningControlPlane,
   type StatusEvent,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import {
   createDataPlaneRuntimeSupervisor,
   type RunningDataPlaneListener,
 } from "../../src/runtime-supervisor.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 describe("Runtime Supervisor through the Control Plane seam", () => {
   const hosts: RunningControlPlane[] = [];
-  const httpServers: RunningLuckyTokenHttpServer[] = [];
+  const httpServers: RunningTokenHttpServer[] = [];
   let nextPipe = 0;
   let nextRequest = 0;
 
@@ -47,10 +47,10 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\Token-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       pipeServerFactory: transport,
@@ -122,10 +122,10 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\Token-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       pipeServerFactory: transport,
@@ -179,10 +179,10 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\Token-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       pipeServerFactory: transport,
@@ -224,10 +224,10 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\Token-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       pipeServerFactory: transport,
@@ -279,10 +279,10 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\Token-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       pipeServerFactory: transport,
@@ -314,7 +314,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
       outcome: "conflict",
       conflict: {
         code: "application_restart_required",
-        message: "Restart LuckyToken before starting the model gateway again.",
+        message: "Restart Token before starting the model gateway again.",
       },
     });
     expect(starts).toBe(1);
@@ -322,7 +322,7 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
   });
 
   it("makes real HTTP routes reachable only while running and leaves Control Plane queries alive", async () => {
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "POST",
@@ -336,13 +336,13 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
         },
       ],
     });
-    let activeServer: RunningLuckyTokenHttpServer | undefined;
+    let activeServer: RunningTokenHttpServer | undefined;
     const supervisor = createDataPlaneRuntimeSupervisor({
       host: "127.0.0.1",
       port: 0,
       readProvider: () => "unconfigured",
       startListener: async () => {
-        activeServer = await startLuckyTokenHttpServer({ runtime, port: 0 });
+        activeServer = await startTokenHttpServer({ runtime, port: 0 });
         httpServers.push(activeServer);
         return activeServer;
       },
@@ -350,10 +350,10 @@ describe("Runtime Supervisor through the Control Plane seam", () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-runtime-${process.pid}-${++nextPipe}`,
+        address: `\\\\.\\pipe\\Token-runtime-${process.pid}-${++nextPipe}`,
         capability: "runtime-test-capability-012345678901234567890",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       pipeServerFactory: transport,

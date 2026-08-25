@@ -20,7 +20,7 @@ const nativeModels: CodexNativeModelSource = Object.freeze({
 
 describe("Request Journey Codex Direct Mode web search", () => {
   it("publishes web_search as a successful Direct Mode journey", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-search-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-search-journey-"));
     const diagnostics = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
     });
@@ -47,7 +47,7 @@ describe("Request Journey Codex Direct Mode web search", () => {
 
     try {
       const response = await composition.runtime.handle(
-        new Request("http://luckytoken.test/v1/alpha/search", {
+        new Request("http://Token.test/v1/alpha/search", {
           method: "POST",
           headers: { authorization: "Bearer codex-token" },
           body: Uint8Array.from([0x7b, 0x7d]),

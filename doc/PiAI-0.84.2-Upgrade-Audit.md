@@ -1,7 +1,7 @@
 # Pi AI 0.84.2 Upgrade Audit
 
 **Date:** 2026-08-20
-**LuckyToken baseline:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
+**Token baseline:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
 **Vendored Pi baseline:** `pi-agent@914cf1472e715297caa30db4b9535d534a9eb718` (`v0.84.2`)
 **Upgrade under review:** `@earendil-works/pi-ai` `0.84.1` → `0.84.2`
 
@@ -11,9 +11,9 @@ This is not only a package-version bump, but it also does not require every adja
 
 The required synchronization falls into four groups:
 
-1. **Dependency and compatibility identity:** bump the root Pi package, LuckyToken provider peer dependencies, lockfile, certification pins, and the LuckyToken Pi compatibility baseline.
-2. **Pi model-config schema:** add Pi 0.84.2's new `OpenAIResponsesCompat.supportsAdditionalTools` field to LuckyToken's extracted `models.json` schema and bump the schema/baseline identity to 0.84.2.
-3. **OpenAI Responses ↔ Pi IR semantics:** update LuckyToken to use the new real `ToolCall.namespace` Pi IR slot for tool-call history/output. The existing namespace-tool declaration flattening is still needed because Pi `Tool` itself still has no namespace slot.
+1. **Dependency and compatibility identity:** bump the root Pi package, Token provider peer dependencies, lockfile, certification pins, and the Token Pi compatibility baseline.
+2. **Pi model-config schema:** add Pi 0.84.2's new `OpenAIResponsesCompat.supportsAdditionalTools` field to Token's extracted `models.json` schema and bump the schema/baseline identity to 0.84.2.
+3. **OpenAI Responses ↔ Pi IR semantics:** update Token to use the new real `ToolCall.namespace` Pi IR slot for tool-call history/output. The existing namespace-tool declaration flattening is still needed because Pi `Tool` itself still has no namespace slot.
 4. **Specifications and evidence:** update active protocol specifications and re-anchor the Pi adapter evidence used by usage declarations. Several current documents explicitly assert that installed Pi has no `ToolCall.namespace`; that becomes false under 0.84.2.
 
 The following do **not** require a matching architectural rewrite:
@@ -25,7 +25,7 @@ The following do **not** require a matching architectural rewrite:
 
 ## 2. Primary-source basis
 
-### Pre-upgrade LuckyToken baseline
+### Pre-upgrade Token baseline
 
 `package.json` and `node_modules/@earendil-works/pi-ai/package.json` show:
 
@@ -66,7 +66,7 @@ Sources:
 
 ## 3. Public Pi contract delta
 
-The public `types.ts` diff from `v0.84.1` to `v0.84.2` adds three relevant optional fields and does not remove a LuckyToken-used required field:
+The public `types.ts` diff from `v0.84.1` to `v0.84.2` adds three relevant optional fields and does not remove a Token-used required field:
 
 ### `ToolCall.namespace?: string`
 
@@ -101,7 +101,7 @@ Source:
 
 ## 4. Impact matrix
 
-| Area | 0.84.2 change | Current LuckyToken state | Verdict | Required action |
+| Area | 0.84.2 change | Current Token state | Verdict | Required action |
 |---|---|---|---|---|
 | Root Pi dependency | Pi package version | Root still pins 0.84.1 | **Must update** | `package.json` + lockfile → 0.84.2 |
 | Provider package peers | Pi type/provider contract version | both provider packages peer-pin exact 0.84.1 | **Must update** | bump both peer dependencies to 0.84.2 |
@@ -110,22 +110,22 @@ Source:
 | Responses request → Pi IR | `ToolCall.namespace` now exists | call items do not read `rawItem.namespace` | **Must update** | preserve call namespace in Pi `ToolCall` |
 | Pi IR → Responses | Pi provider may now emit `ToolCall.namespace` | renderer only reconstructs namespace from request-local flatten map | **Must update** | render real Pi namespace and validate conflicts with reverse-map metadata |
 | Namespace tool declarations | Pi `Tool` still has no namespace | declaration children are flattened to `<namespace>.<child>` | **Keep, with revised rationale** | retain flattening for tool catalog; do not mistake ToolCall support for Tool support |
-| `additional_tools` client input | Pi provider supports new deferred mode | LuckyToken already parses `additional_tools`, but Core v1 rejects tool-search/deferred discovery | **No forced feature expansion** | keep current Core policy unless separately choosing deferred-tool support |
+| `additional_tools` client input | Pi provider supports new deferred mode | Token already parses `additional_tools`, but Core v1 rejects tool-search/deferred discovery | **No forced feature expansion** | keep current Core policy unless separately choosing deferred-tool support |
 | CommandCode request conversion | namespace becomes a real Pi field | already throws when a ToolCall has namespace | **Behavior already correct** | simplify cast/test and update spec; preserve explicit failure |
 | CommandCode response → Pi IR | optional new fields | CommandCode wire has no namespace/endTurn evidence | **No semantic change** | omit optional fields rather than invent them |
 | Anthropic request → Pi IR | no relevant Pi request contract removal | current conversion unaffected | **No required semantic change** | regression test after package bump |
 | Pi IR → Anthropic | namespace/endTurn may be present | renderer already allows both and does not leak them | **Mostly prepared** | decide whether namespace omission should remain silent or become warning/failure; no SDK bump |
-| Provider Native Responses | Pi's internal Responses provider improved | LuckyToken forwards raw request/response with lane-owned auth/endpoint rules | **No semantic code change** | keep raw preservation; run native-lane regression tests |
+| Provider Native Responses | Pi's internal Responses provider improved | Token forwards raw request/response with lane-owned auth/endpoint rules | **No semantic code change** | keep raw preservation; run native-lane regression tests |
 | Anthropic SDK | unchanged at 0.91.1 | root already 0.91.1 | **No update** | keep 0.91.1 |
-| OpenAI SDK | Pi internal dep 6.26 → 6.40 | LuckyToken does not import `openai` directly | **Transitive only** | let Pi own 6.40.0; do not add a LuckyToken direct dep |
-| Pi telemetry | 0.84.1 → 0.84.2 | no LuckyToken direct import | **Transitive only** | lockfile will resolve 0.84.2 |
-| Mistral SDK | removed from Pi | no LuckyToken direct import | **Dependency removal only** | allow lockfile to remove it when no other package needs it |
-| Usage evidence | several Pi adapter files changed/reflowed; Mistral rewritten | LuckyToken pins 0.84.1 commit/line evidence | **Must re-audit evidence** | re-check semantics and update source anchors, not blind text replacement |
+| OpenAI SDK | Pi internal dep 6.26 → 6.40 | Token does not import `openai` directly | **Transitive only** | let Pi own 6.40.0; do not add a Token direct dep |
+| Pi telemetry | 0.84.1 → 0.84.2 | no Token direct import | **Transitive only** | lockfile will resolve 0.84.2 |
+| Mistral SDK | removed from Pi | no Token direct import | **Dependency removal only** | allow lockfile to remove it when no other package needs it |
+| Usage evidence | several Pi adapter files changed/reflowed; Mistral rewritten | Token pins 0.84.1 commit/line evidence | **Must re-audit evidence** | re-check semantics and update source anchors, not blind text replacement |
 | Active protocol docs | installed-Pi assumptions change | several docs still assert 0.84.1/no namespace | **Must update** | revise Pi IR, Responses, CommandCode, architecture/audit docs |
 
 ## 5. OpenAI Responses ↔ Pi IR: the most important semantic change
 
-### 5.1 Current LuckyToken design
+### 5.1 Current Token design
 
 `src/protocols/openai-responses/request.ts` currently flattens namespace tool definitions into names such as:
 
@@ -147,7 +147,7 @@ ToolCall.namespace
 
 and can replay that namespace when the target Responses model can safely accept it.
 
-LuckyToken's request converter currently constructs call history as:
+Token's request converter currently constructs call history as:
 
 ```ts
 {
@@ -160,7 +160,7 @@ LuckyToken's request converter currently constructs call history as:
 
 and never reads `rawItem.namespace`.
 
-LuckyToken's response renderer currently derives namespace only from `namespaceReverse[name]`. Therefore a Pi 0.84.2 provider response such as:
+Token's response renderer currently derives namespace only from `namespaceReverse[name]`. Therefore a Pi 0.84.2 provider response such as:
 
 ```ts
 {
@@ -193,14 +193,14 @@ This preserves old flattened declaration support while adopting the new real Pi 
 
 Pi 0.84.2 adds `supportsAdditionalTools` because its OpenAI/OpenAI-Codex provider can place dynamically loaded deferred tools in a message-anchored `additional_tools` item.
 
-LuckyToken already recognizes `additional_tools` input items and merges their tool declarations while converting a concrete client request. That is separate from enabling Pi's deferred tool-discovery lifecycle.
+Token already recognizes `additional_tools` input items and merges their tool declarations while converting a concrete client request. That is separate from enabling Pi's deferred tool-discovery lifecycle.
 
-Current LuckyToken Core v1 intentionally rejects:
+Current Token Core v1 intentionally rejects:
 
 - `tool_search_call` / `tool_search_output` lifecycle conversion;
 - `defer_loading=true` that requires deferred discovery.
 
-The Pi package upgrade alone does not require changing that product contract. What **is** required is allowing `supportsAdditionalTools` through LuckyToken's Pi-compatible `models.json` schema so a valid Pi 0.84.2 model configuration is not rejected or stripped.
+The Pi package upgrade alone does not require changing that product contract. What **is** required is allowing `supportsAdditionalTools` through Token's Pi-compatible `models.json` schema so a valid Pi 0.84.2 model configuration is not rejected or stripped.
 
 ## 7. Strict tool schemas: provider behavior changed, but do not duplicate it in client adapters
 
@@ -212,7 +212,7 @@ Pi 0.84.2 adds a strict-schema transformation for provider constrained sampling:
 - unsupported strict schema constructs are rejected when strict behavior is required;
 - null values for optional non-nullable tool arguments are normalized to omission before validation.
 
-This is Pi Provider execution behavior. LuckyToken's external protocol adapters should continue to convert source semantics into Pi `Tool` / `constrainedSampling`; they should not independently clone Pi's provider-specific strict-schema rewrite.
+This is Pi Provider execution behavior. Token's external protocol adapters should continue to convert source semantics into Pi `Tool` / `constrainedSampling`; they should not independently clone Pi's provider-specific strict-schema rewrite.
 
 CommandCode Private already owns its own documented degradation policy for constrained sampling, so this Pi built-in-provider change does not justify changing CommandCode wire semantics.
 
@@ -244,9 +244,9 @@ No `endTurn` field should be invented on CommandCode output. CommandCode → Pi 
 
 ## 9. Anthropic conversion
 
-Pi 0.84.2 still depends on `@anthropic-ai/sdk@0.91.1`, exactly matching LuckyToken's current direct dev dependency.
+Pi 0.84.2 still depends on `@anthropic-ai/sdk@0.91.1`, exactly matching Token's current direct dev dependency.
 
-LuckyToken's Anthropic response renderer is already future-prepared:
+Token's Anthropic response renderer is already future-prepared:
 
 - `AssistantMessage.endTurn` is accepted in its message allowlist and not emitted to Anthropic wire;
 - `ToolCall.namespace` is accepted in its content allowlist and is currently omitted from Anthropic `tool_use`.
@@ -270,11 +270,11 @@ That lane already preserves new wire fields such as namespace, `additional_tools
 
 Pi 0.84.2 does not justify importing Pi's `openai` package or `openai-responses` semantic builders into this lane. Doing so would weaken the three-lane isolation contract.
 
-The OpenAI Codex provider's 0.84.2 User-Agent refactor still produces the same `pi (<platform> <release>; <arch>)` shape that LuckyToken's native sender already emits.
+The OpenAI Codex provider's 0.84.2 User-Agent refactor still produces the same `pi (<platform> <release>; <arch>)` shape that Token's native sender already emits.
 
 ## 11. Models.json compatibility baseline
 
-LuckyToken explicitly extracts Pi Coding Agent's `model-config.ts` schema into:
+Token explicitly extracts Pi Coding Agent's `model-config.ts` schema into:
 
 ```text
 src/providers/models-json-schema.ts
@@ -282,7 +282,7 @@ src/providers/models-json-schema.ts
 
 The file itself says it must stay in sync with upstream.
 
-Between Pi 0.84.1 and 0.84.2, of LuckyToken's pinned compatibility-source quartet:
+Between Pi 0.84.1 and 0.84.2, of Token's pinned compatibility-source quartet:
 
 - `model-config.ts` **changed** — adds `supportsAdditionalTools`;
 - `provider-composer.ts` did not change;
@@ -371,7 +371,7 @@ Finding C-15 currently disproves the statement that installed Pi has ToolCall na
 
 Other active version references to re-check include:
 
-- `doc/LuckyTokenArchitecture.md`
+- `doc/TokenArchitecture.md`
 - `doc/HANDOFF.md`
 
 ## 14. Recommended implementation sequence
@@ -406,10 +406,10 @@ Other active version references to re-check include:
 
 ## 15. Expected package graph after upgrade
 
-LuckyToken should conceptually own only the dependency it actually uses:
+Token should conceptually own only the dependency it actually uses:
 
 ```text
-LuckyToken
+Token
 └── @earendil-works/pi-ai 0.84.2
     ├── @anthropic-ai/sdk 0.91.1
     ├── openai 6.40.0
@@ -419,7 +419,7 @@ LuckyToken
     └── ...
 ```
 
-Do not add `openai` as a direct LuckyToken dependency merely to mirror Pi's internal implementation. `src/`, `packages/`, and `test/` currently have no direct `openai` imports.
+Do not add `openai` as a direct Token dependency merely to mirror Pi's internal implementation. `src/`, `packages/`, and `test/` currently have no direct `openai` imports.
 
 ## 16. Final classification
 
@@ -441,7 +441,7 @@ Do not add `openai` as a direct LuckyToken dependency merely to mirror Pi's inte
 - CommandCode response conversion;
 - built-in Pi provider behavior affected by strict schema, retry, DeepSeek, Google, Bedrock, Mistral fixes.
 
-### No independent LuckyToken package bump required
+### No independent Token package bump required
 
 - `@anthropic-ai/sdk` (already 0.91.1 and unchanged upstream);
 - `openai` (Pi-owned transitive dependency moves to 6.40.0);
@@ -450,14 +450,14 @@ Do not add `openai` as a direct LuckyToken dependency merely to mirror Pi's inte
 
 ## 17. Implementation outcome (2026-08-20)
 
-The upgrade was implemented without changing LuckyToken's three-lane architecture. Provider Native Responses remains a raw-wire preservation lane; no OpenAI SDK or Pi semantic conversion was introduced into it.
+The upgrade was implemented without changing Token's three-lane architecture. Provider Native Responses remains a raw-wire preservation lane; no OpenAI SDK or Pi semantic conversion was introduced into it.
 
 ### Dependency result
 
-- `@earendil-works/pi-ai` is pinned to `0.84.2` at the root and in both LuckyToken Provider peer contracts.
+- `@earendil-works/pi-ai` is pinned to `0.84.2` at the root and in both Token Provider peer contracts.
 - Pi-owned transitive dependencies resolve to `@earendil-works/pi-telemetry@0.84.2` and `openai@6.40.0`.
 - `@anthropic-ai/sdk` remains `0.91.1`.
-- `@mistralai/mistralai` is no longer present in LuckyToken's resolved dependency tree.
+- `@mistralai/mistralai` is no longer present in Token's resolved dependency tree.
 
 ### Namespace result
 

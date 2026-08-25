@@ -27,7 +27,7 @@ describe("CommandCode HTTP failure passthrough", () => {
     });
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer fixture-client-key",

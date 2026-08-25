@@ -49,10 +49,10 @@ async function fixture(options: {
     readonly modelCatalogJson: string | null;
   };
 } = {}) {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-codex-integration-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-codex-integration-"));
   roots.push(root);
   const codexHome = join(root, "codex");
-  const stateDirectory = join(root, "luckytoken", "integrations", "codex");
+  const stateDirectory = join(root, "Token", "integrations", "codex");
   await mkdir(codexHome, { recursive: true });
   const config = options.config ?? "model = \"gpt-5.6-sol\"\n[features]\nfoo = true\n";
   await writeFile(join(codexHome, "config.toml"), config, "utf8");
@@ -112,7 +112,7 @@ function injectionSnapshot(): AgentInjectionSnapshot {
 
 describe("Codex integration authority", () => {
   it("migrates v2 Enable intent while discarding its obsolete preimage", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-codex-invalid-state-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-codex-invalid-state-"));
     roots.push(root);
     const codexHome = join(root, "codex");
     const stateDirectory = join(root, "state");
@@ -123,7 +123,7 @@ describe("Codex integration authority", () => {
     await writeFile(
       join(stateDirectory, "integration-state.json"),
       `${JSON.stringify({
-        schemaVersion: "luckytoken-codex-integration-v2",
+        schemaVersion: "Token-codex-integration-v2",
         desiredEnabled: true,
         preimage: {
           modelProvider: 42,
@@ -172,7 +172,7 @@ describe("Codex integration authority", () => {
     await writeFile(
       join(fx.stateDirectory, "integration-state.json"),
       `${JSON.stringify({
-        schemaVersion: "luckytoken-codex-integration-v2",
+        schemaVersion: "Token-codex-integration-v2",
         desiredEnabled: false,
         preimage: {
           modelProvider: "obsolete-provider",
@@ -246,7 +246,7 @@ describe("Codex integration authority", () => {
     });
   });
 
-  it("treats restore as successful when Codex has no LuckyToken injection", async () => {
+  it("treats restore as successful when Codex has no Token injection", async () => {
     const fx = await fixture();
     await rm(join(fx.codexHome, "config.toml"), { force: true });
 
@@ -290,7 +290,7 @@ describe("Codex integration authority", () => {
     });
   });
 
-  it("enable converges the three root keys to LuckyToken and publishes the same native snapshot", async () => {
+  it("enable converges the three root keys to Token and publishes the same native snapshot", async () => {
     const original = [
       'model_provider = "ccswitch"',
       'openai_base_url = "https://old.example/v1"',
@@ -367,7 +367,7 @@ describe("Codex integration authority", () => {
     });
   });
 
-  it("disable leaves the unreferenced LuckyToken catalog for the next full rewrite", async () => {
+  it("disable leaves the unreferenced Token catalog for the next full rewrite", async () => {
     const fx = await fixture();
     const enabled = await fx.authority.reconcile("enable");
     const published = await readFile(enabled.catalogPath, "utf8");
@@ -486,7 +486,7 @@ describe("Codex integration authority", () => {
     await rm(join(fx.codexHome, "config.toml"), { force: true });
 
     await expect(fx.authority.reconcile("shutdown")).rejects.toThrow(
-      "Codex integration could not be restored before LuckyToken shutdown",
+      "Codex integration could not be restored before Token shutdown",
     );
     expect(fx.authority.nativeModels.has("gpt-native")).toBe(true);
   });
@@ -506,7 +506,7 @@ describe("Codex integration authority", () => {
     expect(fx.authority.nativeModels.has("gpt-native")).toBe(true);
   });
 
-  it("changes made while LuckyToken is closed do not replace the configured restore target", async () => {
+  it("changes made while Token is closed do not replace the configured restore target", async () => {
     const fx = await fixture({ config: 'openai_base_url = "https://before.example/v1"\n' });
     await fx.authority.reconcile("enable");
     await fx.authority.reconcile("shutdown");
@@ -524,8 +524,8 @@ describe("Codex integration authority", () => {
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe("");
   });
 
-  it("sync republishes native identity into the LuckyToken catalog under CODEX_HOME", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-codex-integration-sync-"));
+  it("sync republishes native identity into the Token catalog under CODEX_HOME", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-codex-integration-sync-"));
     roots.push(root);
     const codexHome = join(root, "codex");
     const stateDirectory = join(root, "state");
@@ -558,7 +558,7 @@ describe("Codex integration authority", () => {
     entries = [{ slug: "gpt-b" }];
     await authority.reconcile("sync");
     const catalog = await readFile(
-      join(codexHome, "luckytoken-model-catalog.json"),
+      join(codexHome, "token-model-catalog.json"),
       "utf8",
     );
 
@@ -577,7 +577,7 @@ describe("Codex integration authority", () => {
     expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(
       configBeforeFailure,
     );
-    expect(await readFile(join(codexHome, "luckytoken-model-catalog.json"), "utf8")).toBe(
+    expect(await readFile(join(codexHome, "token-model-catalog.json"), "utf8")).toBe(
       catalog,
     );
   });
@@ -610,7 +610,7 @@ describe("Codex integration authority", () => {
     const configPath = join(fx.codexHome, "config.toml");
     const catalogPath = join(
       fx.codexHome,
-      "luckytoken-model-catalog.json",
+      "token-model-catalog.json",
     );
     const originalConfig = await readFile(configPath, "utf8");
     const originalCatalog = '{"models":[{"slug":"previous"}]}\n';
@@ -622,7 +622,7 @@ describe("Codex integration authority", () => {
       desiredEnabled: false,
       observedState: "unavailable",
       message:
-        "The LuckyToken model catalog failed installed Codex validation. No Codex files were changed. parser rejected candidate",
+        "The Token model catalog failed installed Codex validation. No Codex files were changed. parser rejected candidate",
     });
     expect(await readFile(configPath, "utf8")).toBe(originalConfig);
     expect(await readFile(catalogPath, "utf8")).toBe(originalCatalog);

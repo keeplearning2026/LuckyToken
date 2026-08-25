@@ -19,7 +19,7 @@ describe("desktop first-run configuration template", () => {
   });
 
   it("creates a valid owned config with both default client protocols when absent", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-first-run-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-first-run-"));
     directories.push(directory);
     const configPath = join(directory, "config.json");
 
@@ -32,7 +32,7 @@ describe("desktop first-run configuration template", () => {
       readonly pi?: { readonly directory?: unknown };
       readonly limits?: { readonly maxRequestBytes?: unknown };
     };
-    expect(parsed.schemaVersion).toBe("luckytoken-config-v2");
+    expect(parsed.schemaVersion).toBe("token-config-v2");
     expect(parsed.server).toEqual({ port: 3000 });
     expect(parsed.clientProtocols).toHaveProperty("anthropic-messages");
     expect(parsed.clientProtocols).toHaveProperty("openai-responses");
@@ -48,7 +48,7 @@ describe("desktop first-run configuration template", () => {
   });
 
   it("is idempotent: an existing config is never overwritten", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-first-run-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-first-run-"));
     directories.push(directory);
     const configPath = join(directory, "config.json");
 
@@ -59,10 +59,10 @@ describe("desktop first-run configuration template", () => {
   });
 
   it("does not touch a deliberately incompatible existing config", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-first-run-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-first-run-"));
     directories.push(directory);
     const configPath = join(directory, "config.json");
-    const incompatible = "not-a-luckytoken-config";
+    const incompatible = "not-a-token-config";
     await import("node:fs/promises").then(({ writeFile }) =>
       writeFile(configPath, incompatible, "utf8"),
     );

@@ -14,7 +14,7 @@ import type {
   CodexNativeCatalogSource,
 } from "./native-catalog-source.js";
 
-const STATE_SCHEMA = "luckytoken-codex-integration-v4" as const;
+const STATE_SCHEMA = "Token-codex-integration-v4" as const;
 
 const ROOT_KEYS = [
   "model_provider",
@@ -41,7 +41,7 @@ export type CodexIntegrationAction =
 export interface CodexCatalogBuildResult {
   readonly content: string;
   readonly modelCount: number;
-  /** LuckyToken aliases actually projected, excluding preserved native models. */
+  /** Token aliases actually projected, excluding preserved native models. */
   readonly injectedModelCount: number;
   readonly warnings: readonly string[];
 }
@@ -384,12 +384,12 @@ async function readState(path: string): Promise<IntegrationState> {
   }
   if (!isRecord(parsed)) return invalidState();
   if (
-    parsed.schemaVersion === "luckytoken-codex-integration-v1" ||
-    parsed.schemaVersion === "luckytoken-codex-integration-v2"
+    parsed.schemaVersion === "Token-codex-integration-v1" ||
+    parsed.schemaVersion === "Token-codex-integration-v2"
   ) {
     if (typeof parsed.desiredEnabled !== "boolean") return invalidState();
     const managed =
-      parsed.schemaVersion === "luckytoken-codex-integration-v2"
+      parsed.schemaVersion === "Token-codex-integration-v2"
         ? parsed.preimage !== undefined
         : parsed.originalConfigBase64 !== undefined ||
           parsed.injectedConfigSha256 !== undefined ||
@@ -402,7 +402,7 @@ async function readState(path: string): Promise<IntegrationState> {
       managed,
     });
   }
-  if (parsed.schemaVersion === "luckytoken-codex-integration-v3") {
+  if (parsed.schemaVersion === "Token-codex-integration-v3") {
     if (
       typeof parsed.desiredEnabled !== "boolean" ||
       typeof parsed.managed !== "boolean"
@@ -485,7 +485,7 @@ export function createCodexIntegrationAuthority(
 ): CodexIntegrationAuthority {
   const configPath = join(options.codexHome, "config.toml");
   const statePath = join(options.stateDirectory, "integration-state.json");
-  const catalogPath = join(options.codexHome, "luckytoken-model-catalog.json");
+  const catalogPath = join(options.codexHome, "token-model-catalog.json");
   let currentNativeIds: ReadonlySet<string> = new Set<string>();
   let operationQueue = Promise.resolve();
 
@@ -574,7 +574,7 @@ export function createCodexIntegrationAuthority(
     if (endpoint === undefined) {
       return project(state, {
         observedState: "unavailable",
-        message: "LuckyToken Data Plane endpoint is unavailable.",
+        message: "Token Data Plane endpoint is unavailable.",
       });
     }
 
@@ -636,7 +636,7 @@ export function createCodexIntegrationAuthority(
         observedState: "unavailable",
         warnings,
         message:
-          `The LuckyToken model catalog failed installed Codex validation. No Codex files were changed.${detail}`,
+          `The Token model catalog failed installed Codex validation. No Codex files were changed.${detail}`,
       });
     }
     const committedBeforeApply: IntegrationState = {
@@ -670,7 +670,7 @@ export function createCodexIntegrationAuthority(
     if (verifiedError !== undefined || !sameRoot(verifiedInspection.values, desired)) {
       return project(state, {
         observedState: "conflict",
-        message: verifiedError ?? "Codex config.toml did not converge to the LuckyToken routing target.",
+        message: verifiedError ?? "Codex config.toml did not converge to the Token routing target.",
       });
     }
 
@@ -766,7 +766,7 @@ export function createCodexIntegrationAuthority(
         const restored = await restore(state);
         if (restorationRequired && restored.observedState !== "native") {
           throw new Error(
-            "Codex integration could not be restored before LuckyToken shutdown",
+            "Codex integration could not be restored before Token shutdown",
           );
         }
         return restored;

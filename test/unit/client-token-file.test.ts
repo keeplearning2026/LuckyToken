@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 
 describe("removed Client Token file configuration", () => {
   const roots: string[] = [];
@@ -12,13 +12,13 @@ describe("removed Client Token file configuration", () => {
   });
 
   it("rejects authFile instead of loading or migrating a token store", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-no-client-token-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-no-client-token-"));
     roots.push(root);
     const path = join(root, "config.json");
     await writeFile(
       path,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         clientProtocols: {
           "anthropic-messages": { authFile: "client-auth.json" },
         },
@@ -27,6 +27,6 @@ describe("removed Client Token file configuration", () => {
       "utf8",
     );
 
-    await expect(loadLuckyTokenCliConfig(path)).rejects.toThrow(/authFile/u);
+    await expect(loadTokenCliConfig(path)).rejects.toThrow(/authFile/u);
   });
 });

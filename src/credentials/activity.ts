@@ -1,4 +1,4 @@
-import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
+import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
 /** Secret-free credential lifecycle facts owned by the credential boundary. */
 export interface CredentialActivityCapture {

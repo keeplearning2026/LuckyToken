@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import type { LuckyTokenCliConfig } from "../cli-config.js";
+import type { TokenCliConfig } from "../cli-config.js";
 import { stripJsonComments } from "../providers/models-json-schema.js";
 import { PI_COMPATIBILITY_BASELINE } from "../providers/pi-baseline.js";
 import {
@@ -13,23 +13,23 @@ import {
 
 export interface ConfiguredBackupAuthorityOptions {
   readonly configPath: string;
-  readonly config: LuckyTokenCliConfig;
+  readonly config: TokenCliConfig;
   readonly applicationVersion: string;
   readonly snapshots: readonly BackupSnapshotSource[];
 }
 
-/** The complete explicit LuckyToken-owned file allowlist. Paths come only
- * from the already validated LuckyToken config; no external application's
+/** The complete explicit Token-owned file allowlist. Paths come only
+ * from the already validated Token config; no external application's
  * default data directory is discovered. */
 export function configuredBackupFiles(
   configPath: string,
-  config: LuckyTokenCliConfig,
+  config: TokenCliConfig,
 ): readonly BackupFileSource[] {
   return Object.freeze([
     {
       id: "configuration",
       path: resolve(configPath),
-      contract: "luckytoken-config",
+      contract: "token-config",
       version: config.schemaVersion,
       category: "configuration",
     },
@@ -45,7 +45,7 @@ export function configuredBackupFiles(
     {
       id: "public-models",
       path: join(dirname(config.pi.modelsJson), "public-models.json"),
-      contract: "luckytoken-public-models",
+      contract: "Token-public-models",
       version: 1,
       category: "configuration",
       optional: true,
@@ -54,7 +54,7 @@ export function configuredBackupFiles(
     {
       id: "settings",
       path: join(dirname(configPath), "settings.json"),
-      contract: "luckytoken-settings",
+      contract: "Token-settings",
       version: 1,
       category: "configuration",
       optional: true,
@@ -63,12 +63,12 @@ export function configuredBackupFiles(
 }
 
 export function configuredCredentialProfileBackupSnapshot(
-  config: LuckyTokenCliConfig,
+  config: TokenCliConfig,
 ): BackupSnapshotSource {
   const directory = join(config.pi.directory, "credential-profiles");
   return Object.freeze({
     id: "provider-credential-profiles",
-    contract: "luckytoken-provider-credential-profiles",
+    contract: "Token-provider-credential-profiles",
     version: 1,
     category: "credentials" as const,
     sourcePath: directory,
@@ -90,7 +90,7 @@ export function configuredCredentialProfileBackupSnapshot(
       }
       signal.throwIfAborted();
       return Buffer.from(JSON.stringify({
-        schemaVersion: "luckytoken-provider-credential-profiles-backup-v1",
+        schemaVersion: "Token-provider-credential-profiles-backup-v1",
         providers,
       }), "utf8");
     },
@@ -115,7 +115,7 @@ export function createConfiguredBackupAuthority(
  * owns its consistent SQLite snapshot and the Application injects that source
  * into normal backups; this module never discovers or copies legacy stores. */
 export function recoveryBackupSnapshots(
-  config: LuckyTokenCliConfig,
+  config: TokenCliConfig,
 ): readonly BackupSnapshotSource[] {
   void config;
   return Object.freeze([]);

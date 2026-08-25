@@ -1,5 +1,5 @@
 export interface CoreServingCertificationManifest {
-  readonly schemaVersion: "luckytoken-core-serving-certification-v1";
+  readonly schemaVersion: "Token-core-serving-certification-v1";
   readonly result: "CERTIFIED";
   readonly clientProtocolIds: readonly string[];
   readonly providerIds: readonly string[];
@@ -31,7 +31,7 @@ export function certifyCoreServingComposition(
     throw new Error("Core certification requestTimeoutMs must be positive");
   }
   return Object.freeze({
-    schemaVersion: "luckytoken-core-serving-certification-v1",
+    schemaVersion: "Token-core-serving-certification-v1",
     result: "CERTIFIED",
     clientProtocolIds: Object.freeze([...facts.clientProtocolIds]),
     providerIds: Object.freeze([...facts.providerIds]),

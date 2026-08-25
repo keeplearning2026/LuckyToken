@@ -8,8 +8,8 @@ import type {
   RequestJourneyObservationInput,
 } from "../../src/diagnostics/contract.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import {
   createOpenAIResponsesServingTestComposition,
@@ -22,7 +22,7 @@ const noNativeModels: CodexNativeModelSource = Object.freeze({
 
 describe("Codex Direct Mode images", () => {
   const compositions: OpenAIResponsesServingTestComposition[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -53,7 +53,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: {
           authorization: "Bearer caller-owned-token",
@@ -86,7 +86,7 @@ describe("Codex Direct Mode images", () => {
   });
 
   it("preserves an edits multipart envelope and caller end-to-end headers", async () => {
-    const boundary = "luckytoken-image-edit-boundary";
+    const boundary = "Token-image-edit-boundary";
     const multipartBytes = new TextEncoder().encode(
       [
         `--${boundary}`,
@@ -113,7 +113,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/edits?quality=high%20fidelity", {
+      new Request("http://Token.test/v1/images/edits?quality=high%20fidelity", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -196,7 +196,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([1]),
@@ -231,14 +231,14 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
 
     const unauthorized = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: { authorization: "Bearer wrong-token" },
         body: Uint8Array.from([1]),
       }),
     );
     const oversized = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/edits", {
+      new Request("http://Token.test/v1/images/edits", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([1, 2, 3, 4, 5]),
@@ -276,7 +276,7 @@ describe("Codex Direct Mode images", () => {
     });
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body,
@@ -318,7 +318,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
     const request = () =>
       composition.runtime.handle(
-        new Request("http://luckytoken.test/v1/images/generations", {
+        new Request("http://Token.test/v1/images/generations", {
           method: "POST",
           headers: { authorization: "Bearer codex-token" },
           body: Uint8Array.from([1]),
@@ -374,7 +374,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([1]),
@@ -427,7 +427,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([1]),
@@ -462,7 +462,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
     const controller = new AbortController();
     const response = composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([1]),
@@ -510,7 +510,7 @@ describe("Codex Direct Mode images", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/images/generations", {
+      new Request("http://Token.test/v1/images/generations", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: requestBytes,
@@ -548,7 +548,7 @@ describe("Codex Direct Mode images", () => {
       codexNativeModels: noNativeModels,
     });
     compositions.push(composition);
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime: composition.runtime,
       port: 0,
     });

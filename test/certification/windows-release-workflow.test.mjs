@@ -14,8 +14,8 @@ test("GitHub Windows release delegates to the one official release entry", async
   assert.match(workflow, /npm ci --ignore-scripts/u);
   assert.match(workflow, /npm rebuild electron/u);
   assert.match(workflow, /npm run release:windows/u);
-  assert.match(workflow, /LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE/u);
-  assert.match(workflow, /LUCKYTOKEN_WINDOWS_CERTIFICATE_PASSWORD/u);
+  assert.match(workflow, /TOKEN_WINDOWS_CERTIFICATE_FILE/u);
+  assert.match(workflow, /TOKEN_WINDOWS_CERTIFICATE_PASSWORD/u);
   assert.match(workflow, /artifacts\/releases/u);
   assert.equal(workflow.includes("electron-forge make"), false);
 });

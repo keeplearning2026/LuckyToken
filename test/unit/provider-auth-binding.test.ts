@@ -316,7 +316,7 @@ describe("ProviderAuthBindingAuthority", () => {
   });
 
   it("allows removal during OAuth network refresh and discards the late publication", async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), "luckytoken-refresh-remove-"));
+    const codexHome = await mkdtemp(join(tmpdir(), "Token-refresh-remove-"));
     const generatedIds = [
       "credential-oauth",
       "credential-generation-oauth",

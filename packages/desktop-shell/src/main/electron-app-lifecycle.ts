@@ -47,7 +47,7 @@ export interface ProductQuitDependencies {
  * Explicit product Quit is ownership-aware Backend shutdown followed by
  * Electron exit. Closing the management window is a different operation.
  */
-export async function quitLuckyTokenProduct(
+export async function quitTokenProduct(
   dependencies: ProductQuitDependencies,
 ): Promise<boolean> {
   const ownerKind = dependencies.backendOwnerKind();
@@ -90,8 +90,8 @@ export interface DesktopInstanceIsolationOptions {
 /**
  * Repository-packaged `.electron-out` builds are disposable test artifacts,
  * not installed product revisions. They must never contend with an older
- * installed/test build for Electron's profile/single-instance domain. LuckyToken
- * product state remains in `~/.luckytoken`; this path isolates only Chromium /
+ * installed/test build for Electron's profile/single-instance domain. Token
+ * product state remains in `~/.Token`; this path isolates only Chromium /
  * Electron shell state and the instance lock.
  */
 export function desktopInstanceUserDataPath(
@@ -101,14 +101,14 @@ export function desktopInstanceUserDataPath(
   if (!executable.includes("/.electron-out/")) return undefined;
   return join(
     options.appDataPath,
-    "@luckytoken",
+    "@token",
     "desktop-shell-builds",
     options.buildId.slice(0, 32),
   );
 }
 
 export interface DesktopInstanceActivation {
-  readonly contract: "luckytoken-desktop-instance-v1";
+  readonly contract: "token-desktop-instance-v1";
   readonly buildId: string;
   readonly attempt: "initial" | "handoff_retry";
 }
@@ -121,7 +121,7 @@ function decodeDesktopInstanceActivation(
   }
   const record = value as Record<string, unknown>;
   if (
-    record.contract !== "luckytoken-desktop-instance-v1" ||
+    record.contract !== "token-desktop-instance-v1" ||
     typeof record.buildId !== "string" ||
     record.buildId.length === 0 ||
     (record.attempt !== "initial" && record.attempt !== "handoff_retry")
@@ -129,7 +129,7 @@ function decodeDesktopInstanceActivation(
     return undefined;
   }
   return Object.freeze({
-    contract: "luckytoken-desktop-instance-v1",
+    contract: "token-desktop-instance-v1",
     buildId: record.buildId,
     attempt: record.attempt,
   });
@@ -162,7 +162,7 @@ export async function startElectronDesktopLifecycle(
     attempt: DesktopInstanceActivation["attempt"],
   ): DesktopInstanceActivation =>
     Object.freeze({
-      contract: "luckytoken-desktop-instance-v1" as const,
+      contract: "token-desktop-instance-v1" as const,
       buildId: dependencies.buildId,
       attempt,
     });

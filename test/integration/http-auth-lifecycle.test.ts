@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { HttpRequestAbortedError } from "../../src/http.js";
 import {
-  createCommandCodeTestRuntime as createLuckyTokenRuntime,
-  type CommandCodeServingTestOptions as LuckyTokenRuntimeOptions,
+  createCommandCodeTestRuntime as createTokenRuntime,
+  type CommandCodeServingTestOptions as TokenRuntimeOptions,
 } from "../support/commandcode-serving.js";
 
 const fallbackSession = "00000000-0000-4000-8000-000000000020";
@@ -47,13 +47,13 @@ function validRequest(
     }),
   };
   if (signal !== undefined) init.signal = signal;
-  return new Request("http://luckytoken.test/v1/messages", init);
+  return new Request("http://Token.test/v1/messages", init);
 }
 
 function runtimeOptions(
   fetch: FetchFunction,
-  overrides?: Partial<LuckyTokenRuntimeOptions>,
-): LuckyTokenRuntimeOptions {
+  overrides?: Partial<TokenRuntimeOptions>,
+): TokenRuntimeOptions {
   return {
     clientApiKey: "fixture-client-key",
     commandCodeApiKey: "fixture-commandcode-key",
@@ -74,12 +74,12 @@ describe("HTTP and session lifecycle", () => {
       fetchCalls += 1;
       return commandCodeSuccess();
     };
-    const runtime = createLuckyTokenRuntime(
+    const runtime = createTokenRuntime(
       runtimeOptions(fixtureFetch, { maxRequestBytes: 32 }),
     );
 
     const invalidBody = await runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer wrong",
@@ -92,12 +92,12 @@ describe("HTTP and session lifecycle", () => {
     expect(invalidBody.status).toBe(400);
 
     const wrongRoute = await runtime.handle(
-      new Request("http://luckytoken.test/not-messages", { method: "POST" }),
+      new Request("http://Token.test/not-messages", { method: "POST" }),
     );
     expect(wrongRoute.status).toBe(404);
 
     const wrongContentType = await runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer fixture-client-key",
@@ -120,7 +120,7 @@ describe("HTTP and session lifecycle", () => {
       return commandCodeSuccess();
     };
     const createSessionId = vi.fn(() => fallbackSession);
-    const runtime = createLuckyTokenRuntime(
+    const runtime = createTokenRuntime(
       runtimeOptions(fixtureFetch, { createSessionId }),
     );
 
@@ -153,7 +153,7 @@ describe("HTTP and session lifecycle", () => {
       });
     };
     const createMessageId = vi.fn(() => "msg_must_not_be_created");
-    const runtime = createLuckyTokenRuntime(
+    const runtime = createTokenRuntime(
       runtimeOptions(fixtureFetch, { createMessageId }),
     );
     const disconnect = new AbortController();
@@ -182,7 +182,7 @@ describe("HTTP and session lifecycle", () => {
         }
         signal?.addEventListener("abort", rejectAborted, { once: true });
       });
-    const timedRuntime = createLuckyTokenRuntime(
+    const timedRuntime = createTokenRuntime(
       runtimeOptions(neverFetch, { requestTimeoutMs: 5 }),
     );
     await expect(timedRuntime.handle(validRequest())).rejects.toBeInstanceOf(
@@ -190,7 +190,7 @@ describe("HTTP and session lifecycle", () => {
     );
 
     const shutdown = new AbortController();
-    const shutdownRuntime = createLuckyTokenRuntime(
+    const shutdownRuntime = createTokenRuntime(
       runtimeOptions(neverFetch, { shutdownSignal: shutdown.signal }),
     );
     const handling = shutdownRuntime.handle(validRequest());

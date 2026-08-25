@@ -76,7 +76,7 @@ function spawnChild(mode, databasePath, argument) {
 }
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-instance-sqlite-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-instance-sqlite-"));
   return join(directory, "instance.sqlite");
 }
 

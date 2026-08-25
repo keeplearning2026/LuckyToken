@@ -1,4 +1,4 @@
-import { providerPackage } from "@luckytoken/provider-commandcode-private";
+import { providerPackage } from "@token/provider-commandcode-private";
 import { describe, expect, it } from "vitest";
 
 describe("CommandCode Provider Package", () => {
@@ -6,7 +6,7 @@ describe("CommandCode Provider Package", () => {
     const provider = providerPackage.createProvider({
       configuration: {},
       configurationPath:
-        'providerPackages["@luckytoken/provider-commandcode-private"]',
+        'providerPackages["@token/provider-commandcode-private"]',
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,

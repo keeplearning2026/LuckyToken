@@ -1,6 +1,6 @@
 # 20 — Release-certify first successful request and tray-only operation
 
-**What to build:** Make the Electron product release-blocking journey prove that a fresh user can connect a Provider, configure a supported client, complete a first successful request, and keep using LuckyToken after the UI is closed into tray-only mode.
+**What to build:** Make the Electron product release-blocking journey prove that a fresh user can connect a Provider, configure a supported client, complete a first successful request, and keep using Token after the UI is closed into tray-only mode.
 
 **Blocked by:** 19 — Cut over completely from Tauri/Rust to Electron.
 

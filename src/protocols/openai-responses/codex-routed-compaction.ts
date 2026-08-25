@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ResponsesResponseObject } from "./response.js";
 
-export const LUCKYTOKEN_COMPACTION_PREFIX = "luckytoken1:";
+export const TOKEN_COMPACTION_PREFIX = "Token1:";
 
 export class CodexRoutedCompactionSummaryError extends Error {
   readonly kind = "CodexRoutedCompactionSummaryError" as const;
@@ -30,25 +30,25 @@ export function isCodexRoutedCompactionRequest(body: unknown): boolean {
   return isRecord(last) && last.type === "compaction_trigger";
 }
 
-export function hasLuckyTokenCompactionEnvelope(body: unknown): boolean {
+export function hasTokenCompactionEnvelope(body: unknown): boolean {
   if (!isRecord(body) || !Array.isArray(body.input)) return false;
   return body.input.some((item) =>
     isRecord(item) &&
     item.type === "compaction" &&
     typeof item.encrypted_content === "string" &&
-    item.encrypted_content.startsWith(LUCKYTOKEN_COMPACTION_PREFIX),
+    item.encrypted_content.startsWith(TOKEN_COMPACTION_PREFIX),
   );
 }
 
 function decodeSummary(encryptedContent: string): string | undefined {
-  if (!encryptedContent.startsWith(LUCKYTOKEN_COMPACTION_PREFIX)) return undefined;
-  const payload = encryptedContent.slice(LUCKYTOKEN_COMPACTION_PREFIX.length);
+  if (!encryptedContent.startsWith(TOKEN_COMPACTION_PREFIX)) return undefined;
+  const payload = encryptedContent.slice(TOKEN_COMPACTION_PREFIX.length);
   if (payload.length === 0) return undefined;
   const decoded = Buffer.from(payload, "base64").toString("utf8").trim();
   return decoded.length === 0 ? undefined : decoded;
 }
 
-export function expandLuckyTokenCompactionEnvelopes(body: unknown): unknown {
+export function expandTokenCompactionEnvelopes(body: unknown): unknown {
   if (!isRecord(body) || !Array.isArray(body.input)) return body;
   return {
     ...body,
@@ -110,7 +110,7 @@ function summaryText(message: AssistantMessage): string {
 }
 
 function encodeSummary(summary: string): string {
-  return `${LUCKYTOKEN_COMPACTION_PREFIX}${Buffer.from(summary, "utf8").toString("base64")}`;
+  return `${TOKEN_COMPACTION_PREFIX}${Buffer.from(summary, "utf8").toString("base64")}`;
 }
 
 export function projectRoutedCompactionResponse(

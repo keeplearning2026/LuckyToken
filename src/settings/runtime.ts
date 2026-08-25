@@ -1,4 +1,4 @@
-import type { LuckyTokenRuntime } from "../runtime.js";
+import type { TokenRuntime } from "../runtime.js";
 import type { ClientProtocolRequestContext } from "../http.js";
 export interface RegisteredProtocolRoute {
   readonly id: string;
@@ -7,7 +7,7 @@ export interface RegisteredProtocolRoute {
 }
 
 export interface ProtocolAwareRuntimeOptions {
-  readonly runtime: LuckyTokenRuntime;
+  readonly runtime: TokenRuntime;
   readonly isProtocolEnabled: (protocolId: string) => boolean;
   readonly protocolRoutes: readonly RegisteredProtocolRoute[];
 }
@@ -20,7 +20,7 @@ export interface ProtocolAwareRuntimeOptions {
  */
 export function createProtocolAwareRuntime(
   options: ProtocolAwareRuntimeOptions,
-): LuckyTokenRuntime {
+): TokenRuntime {
   const protocolRoutes = Object.freeze([...options.protocolRoutes]);
   return Object.freeze({
     ...options.runtime,

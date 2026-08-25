@@ -32,7 +32,7 @@ function responsesModel(
 }
 
 function request(body: string, headers: Record<string, string> = {}): Request {
-  return new Request("http://luckytoken.test/v1/responses", {
+  return new Request("http://Token.test/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body,

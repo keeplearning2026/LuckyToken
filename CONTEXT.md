@@ -1,6 +1,6 @@
-# LuckyToken
+# Token
 
-LuckyToken serves Data Plane requests through three independent execution lanes. This glossary defines the shared language for following one request and investigating its outcome without merging the lanes' execution ownership.
+Token serves Data Plane requests through three independent execution lanes. This glossary defines the shared language for following one request and investigating its outcome without merging the lanes' execution ownership.
 
 ## Request Journey
 
@@ -21,7 +21,7 @@ The safe correlation and session facts associated with a Request Journey. It is 
 _Avoid_: Authentication, credential identity
 
 **Response Handoff**:
-The point at which LuckyToken hands a prepared response to its HTTP transport. It does not claim that the client received or consumed the response.
+The point at which Token hands a prepared response to its HTTP transport. It does not claim that the client received or consumed the response.
 _Avoid_: Client delivery, client consumption
 
 ## Data Plane Lanes

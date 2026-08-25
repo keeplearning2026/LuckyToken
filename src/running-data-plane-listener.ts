@@ -1,13 +1,13 @@
-import type { LuckyTokenRuntime } from "./runtime.js";
+import type { TokenRuntime } from "./runtime.js";
 import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 import {
-  startLuckyTokenHttpServer,
+  startTokenHttpServer,
   type DrainOutcome,
 } from "./server.js";
 import type { WebSocketUpgradeHandler } from "./websocket-upgrade.js";
 
 export interface FinalizableDataPlane {
-  readonly runtime: LuckyTokenRuntime;
+  readonly runtime: TokenRuntime;
   readonly webSocketUpgrade?: WebSocketUpgradeHandler;
   close(): Promise<void>;
 }
@@ -31,9 +31,9 @@ export async function startRunningDataPlaneListener(options: {
   readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly onActiveRequestCountChanged?: (count: number) => void;
 }): Promise<RunningDataPlaneListener> {
-  let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>>;
+  let server: Awaited<ReturnType<typeof startTokenHttpServer>>;
   try {
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime: options.dataPlane.runtime,
       host: options.host,
       port: options.port,
@@ -52,14 +52,14 @@ export async function startRunningDataPlaneListener(options: {
     });
   } catch (error) {
     options.shutdownController.abort(
-      new Error("LuckyToken model gateway startup failed"),
+      new Error("Token model gateway startup failed"),
     );
     try {
       await options.dataPlane.close();
     } catch (closeError) {
       throw new AggregateError(
         [error, closeError],
-        "LuckyToken model gateway startup failed and its Data Plane could not be finalized",
+        "Token model gateway startup failed and its Data Plane could not be finalized",
       );
     }
     throw error;
@@ -74,7 +74,7 @@ export async function startRunningDataPlaneListener(options: {
       if (drainPromise !== undefined) return drainPromise.then(() => undefined);
       closePromise = (async () => {
         options.shutdownController.abort(
-          new Error("LuckyToken model gateway is stopping"),
+          new Error("Token model gateway is stopping"),
         );
         await server.close();
         await options.dataPlane.close();
@@ -87,7 +87,7 @@ export async function startRunningDataPlaneListener(options: {
       drainPromise = (async () => {
         const outcome = await server.drain(timeoutMs);
         options.shutdownController.abort(
-          new Error("LuckyToken model gateway has stopped"),
+          new Error("Token model gateway has stopped"),
         );
         await options.dataPlane.close();
         return outcome;

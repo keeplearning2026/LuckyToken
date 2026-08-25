@@ -4,12 +4,12 @@ import { request as nodeHttpRequest } from "node:http";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { LuckyTokenRuntime } from "../../src/runtime.js";
+import type { TokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
-import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
+import { createCommandCodeTestRuntime as createTokenRuntime } from "../support/commandcode-serving.js";
 
 function commandCodeText(text: string): Response {
   return new Response(
@@ -57,7 +57,7 @@ async function exchangeRawHttp(
 }
 
 describe("local Anthropic HTTP server", () => {
-  let server: RunningLuckyTokenHttpServer | undefined;
+  let server: RunningTokenHttpServer | undefined;
 
   afterEach(async () => {
     await server?.close();
@@ -66,14 +66,14 @@ describe("local Anthropic HTTP server", () => {
 
   it("signals clients to retry WebSocket upgrades over HTTP", async () => {
     let runtimeCalls = 0;
-    const runtime: LuckyTokenRuntime = {
+    const runtime: TokenRuntime = {
       handle: async () => {
         runtimeCalls += 1;
         return new Response(null, { status: 204 });
       },
       routes: [],
     };
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     const rawResponse = await exchangeRawHttp(
       server.host,
@@ -109,7 +109,7 @@ describe("local Anthropic HTTP server", () => {
     expect(JSON.parse(body.toString("utf8"))).toEqual({
       error: {
         message:
-          "LuckyToken supports HTTP transport only. Retry over HTTP instead of WebSocket.",
+          "Token supports HTTP transport only. Retry over HTTP instead of WebSocket.",
         type: "upgrade_required",
         code: "websocket_transport_not_supported",
         param: null,
@@ -120,14 +120,14 @@ describe("local Anthropic HTTP server", () => {
 
   it("keeps ordinary Responses HTTP requests on the runtime path", async () => {
     let receivedRequest: Request | undefined;
-    const runtime: LuckyTokenRuntime = {
+    const runtime: TokenRuntime = {
       handle: async (request) => {
         receivedRequest = request;
         return Response.json({ transport: "http" }, { status: 202 });
       },
       routes: [],
     };
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     const response = await fetch(`${server.origin}/v1/responses`, {
       method: "POST",
@@ -151,7 +151,7 @@ describe("local Anthropic HTTP server", () => {
       release = resolve;
     });
     const counts: number[] = [];
-    const runtime: LuckyTokenRuntime = {
+    const runtime: TokenRuntime = {
       async handle() {
         markStarted?.();
         await mayFinish;
@@ -159,7 +159,7 @@ describe("local Anthropic HTTP server", () => {
       },
       routes: [],
     };
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime,
       port: 0,
       onActiveRequestCountChanged: (count) => {
@@ -181,14 +181,14 @@ describe("local Anthropic HTTP server", () => {
 
   it("applies the HTTP-only signal to WebSocket upgrades on every path", async () => {
     let runtimeCalls = 0;
-    const runtime: LuckyTokenRuntime = {
+    const runtime: TokenRuntime = {
       handle: async () => {
         runtimeCalls += 1;
         return new Response(null, { status: 204 });
       },
       routes: [],
     };
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     const rawResponse = await exchangeRawHttp(
       server.host,
@@ -214,7 +214,7 @@ describe("local Anthropic HTTP server", () => {
     expect(JSON.parse(body.toString("utf8"))).toEqual({
       error: {
         message:
-          "LuckyToken supports HTTP transport only. Retry over HTTP instead of WebSocket.",
+          "Token supports HTTP transport only. Retry over HTTP instead of WebSocket.",
         type: "upgrade_required",
         code: "websocket_transport_not_supported",
         param: null,
@@ -225,14 +225,14 @@ describe("local Anthropic HTTP server", () => {
 
   it("does not apply the WebSocket signal to other Upgrade protocols", async () => {
     let runtimeCalls = 0;
-    const runtime: LuckyTokenRuntime = {
+    const runtime: TokenRuntime = {
       handle: async () => {
         runtimeCalls += 1;
         return new Response(null, { status: 204 });
       },
       routes: [],
     };
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     const rawResponse = await exchangeRawHttp(
       server.host,
@@ -254,20 +254,20 @@ describe("local Anthropic HTTP server", () => {
   it("uses the bound origin and transfers status, headers, and bytes mechanically", async () => {
     let receivedUrl: string | undefined;
     const responseBytes = Uint8Array.from([0, 1, 127, 128, 255]);
-    const runtime: LuckyTokenRuntime = {
+    const runtime: TokenRuntime = {
       handle: async (request) => {
         receivedUrl = request.url;
         return new Response(responseBytes, {
           status: 207,
           headers: {
             "content-type": "application/octet-stream",
-            "x-luckytoken-boundary": "mechanical",
+            "x-token-boundary": "mechanical",
           },
         });
       },
       routes: [],
     };
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     const received = await new Promise<{
       status: number | undefined;
@@ -288,7 +288,7 @@ describe("local Anthropic HTTP server", () => {
           response.once("end", () => {
             resolve({
               status: response.statusCode,
-              boundary: response.headers["x-luckytoken-boundary"],
+              boundary: response.headers["x-token-boundary"],
               body: Buffer.concat(chunks),
             });
           });
@@ -306,7 +306,7 @@ describe("local Anthropic HTTP server", () => {
 
   it("serves one Anthropic message through a real loopback TCP connection", async () => {
     const upstream: FetchFunction = async () => commandCodeText("over TCP");
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "local-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
@@ -314,7 +314,7 @@ describe("local Anthropic HTTP server", () => {
       modelId: "model",
       createMessageId: () => "msg_tcp",
     });
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime,
       host: "127.0.0.1",
       port: 0,
@@ -345,7 +345,7 @@ describe("local Anthropic HTTP server", () => {
   });
 
   it("is consumable through the official Anthropic SDK over TCP", async () => {
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "sdk-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
@@ -353,7 +353,7 @@ describe("local Anthropic HTTP server", () => {
       modelId: "model",
       createMessageId: () => "msg_sdk_tcp",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
     const client = new Anthropic({
       apiKey: "sdk-client-key",
       baseURL: server.origin,
@@ -375,7 +375,7 @@ describe("local Anthropic HTTP server", () => {
   });
 
   it("delivers Atomic SSE through the official Anthropic SDK over TCP", async () => {
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "sse-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
@@ -383,7 +383,7 @@ describe("local Anthropic HTTP server", () => {
       modelId: "model",
       createMessageId: () => "msg_sse_tcp",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
     const client = new Anthropic({
       apiKey: "sse-client-key",
       baseURL: server.origin,
@@ -428,14 +428,14 @@ describe("local Anthropic HTTP server", () => {
         signal.addEventListener("abort", onAbort, { once: true });
       });
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "abort-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
       fetch: upstream,
       modelId: "model",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
     const controller = new AbortController();
     const disconnected = fetch(`${server.origin}/v1/messages`, {
       method: "POST",
@@ -499,14 +499,14 @@ describe("local Anthropic HTTP server", () => {
         signal.addEventListener("abort", onAbort, { once: true });
       });
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "tcp-abort-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
       fetch: upstream,
       modelId: "model",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     // Send a real HTTP request over a raw TCP socket, then destroy the socket
     // while the upstream is still pending — the exact shape of a Ctrl+C.
@@ -563,14 +563,14 @@ describe("local Anthropic HTTP server", () => {
       calls += 1;
       return commandCodeText("recovered-after-midbody-drop");
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "tcp-midbody-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
       fetch: upstream,
       modelId: "model",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     // Start sending a large body but never finish it; the client then drops
     // the connection (Ctrl+C mid-upload).
@@ -631,7 +631,7 @@ describe("local Anthropic HTTP server", () => {
       else releaseFirst?.();
       return commandCodeText(call === 1 ? "first response" : "second response");
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "concurrent-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
@@ -642,7 +642,7 @@ describe("local Anthropic HTTP server", () => {
         return () => `msg_concurrent_${++id}`;
       })(),
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
     const send = async (sessionId: string, content: string): Promise<Record<string, unknown>> => {
       const response = await fetch(`${server?.origin}/v1/messages`, {
         method: "POST",
@@ -698,14 +698,14 @@ describe("local Anthropic HTTP server", () => {
       await secondMayFinish;
       return commandCodeText("healthy-concurrent-response");
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "disconnect-concurrent-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
       fetch: upstream,
       modelId: "model",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
 
     // Request 1 over a raw TCP socket, held open upstream.
     const requestBody = JSON.stringify({
@@ -779,14 +779,14 @@ describe("local Anthropic HTTP server", () => {
         signal.addEventListener("abort", onAbort, { once: true });
       });
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "shutdown-client-key",
       commandCodeApiKey: "provider-key",
       commandCodeBaseUrl: "https://commandcode.fixture.test",
       fetch: upstream,
       modelId: "model",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
     const origin = server.origin;
     const pending = fetch(`${origin}/v1/messages`, {
       method: "POST",

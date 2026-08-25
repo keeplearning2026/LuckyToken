@@ -1,14 +1,14 @@
-# `@luckytoken/commandcode-model-catalog`
+# `@token/commandcode-model-catalog`
 
 This private workspace package owns the stable CommandCode model capability
-facts shared by LuckyToken's CommandCode Pi Providers: model identity, display
+facts shared by Token's CommandCode Pi Providers: model identity, display
 name, context window, input modalities, reasoning support/efforts, and output
 limits. The current catalog contains 58 callable models from the
 `command-code@1.32.1` source table after removing retired free entries.
 
 It deliberately does not contain pricing. Pi requires every `Model` to carry a
 `cost` object, so the catalog projection supplies zero rates to mean that
-LuckyToken does not track price for these models. The zeros are not a claim
+Token does not track price for these models. The zeros are not a claim
 that the upstream service is free.
 
 The package owns no Provider identity, authentication, transport, wire

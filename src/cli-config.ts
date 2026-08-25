@@ -11,7 +11,7 @@ import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/
 import { parseProviderNativeResponsesConfiguration } from "./provider-native-responses/configuration.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "./data-plane-limits.js";
 import {
-  LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+  TOKEN_CONFIG_SCHEMA_VERSION,
   OwnedFileCompatibilityError,
 } from "./owned-storage/compatibility.js";
 
@@ -21,8 +21,8 @@ export interface ClientProtocolCliConfiguration {
   readonly providerNativeConfiguration?: unknown;
 }
 
-export interface LuckyTokenCliConfig {
-  readonly schemaVersion: typeof LUCKYTOKEN_CONFIG_SCHEMA_VERSION;
+export interface TokenCliConfig {
+  readonly schemaVersion: typeof TOKEN_CONFIG_SCHEMA_VERSION;
   readonly configPath: string;
   readonly server: { readonly port: number };
   readonly clientProtocols: Readonly<
@@ -34,8 +34,8 @@ export interface LuckyTokenCliConfig {
   readonly pi: {
     readonly directory: string;
     /** Canonical models.json path; defaults to `models.json` next to the
-     *  config file (LuckyToken's own user data directory — the desktop
-     *  layout's `~/.luckytoken/models.json`). The Pi Agent default data
+     *  config file (Token's own user data directory — the desktop
+     *  layout's `~/.Token/models.json`). The Pi Agent default data
      *  directory is never read or written implicitly. */
     readonly modelsJson: string;
   };
@@ -92,33 +92,33 @@ function fromConfigDirectory(value: string, directory: string): string {
   return isAbsolute(value) ? resolve(value) : resolve(directory, value);
 }
 
-export async function loadLuckyTokenCliConfig(
+export async function loadTokenCliConfig(
   inputPath: string,
-): Promise<LuckyTokenCliConfig> {
+): Promise<TokenCliConfig> {
   const configPath = resolve(inputPath);
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(configPath, "utf8"));
   } catch (error) {
     throw new Error(
-      `Failed to load LuckyToken config at ${configPath}: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to load Token config at ${configPath}: ${error instanceof Error ? error.message : String(error)}`,
       error instanceof Error ? { cause: error } : undefined,
     );
   }
-  const root = requireRecord(parsed, "LuckyToken config root");
-  if (root.schemaVersion !== LUCKYTOKEN_CONFIG_SCHEMA_VERSION) {
+  const root = requireRecord(parsed, "Token config root");
+  if (root.schemaVersion !== TOKEN_CONFIG_SCHEMA_VERSION) {
     throw new OwnedFileCompatibilityError(
       Object.freeze({
         path: configPath,
-        contract: "luckytoken-config",
+        contract: "token-config",
         foundVersion:
           typeof root.schemaVersion === "string" ||
           typeof root.schemaVersion === "number"
             ? root.schemaVersion
             : "missing",
-        expectedVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+        expectedVersion: TOKEN_CONFIG_SCHEMA_VERSION,
         validationError:
-          "LuckyToken config schemaVersion is incompatible with this application build.",
+          "Token config schemaVersion is incompatible with this application build.",
       }),
     );
   }
@@ -130,7 +130,7 @@ export async function loadLuckyTokenCliConfig(
   assertKeys(
     root,
     ["schemaVersion", "server", "clientProtocols", "providerPackages", "diagnostics", "pi", "limits"],
-    "LuckyToken config root",
+    "Token config root",
   );
   const server = root.server === undefined ? {} : requireRecord(root.server, "server");
   const clientProtocols = requireRecord(root.clientProtocols, "clientProtocols");
@@ -226,8 +226,8 @@ export async function loadLuckyTokenCliConfig(
     });
   }
   Object.freeze(resolvedClientProtocols);
-  const result: LuckyTokenCliConfig = {
-    schemaVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+  const result: TokenCliConfig = {
+    schemaVersion: TOKEN_CONFIG_SCHEMA_VERSION,
     configPath,
     server: Object.freeze({ port }),
     clientProtocols: resolvedClientProtocols,

@@ -80,7 +80,7 @@ describe("Provider response reasoning continuity round trip", () => {
     expect(response.output[0]).toMatchObject({
       type: "reasoning",
       summary: [{ type: "summary_text", text: "visible summary" }],
-      luckytoken_continuity: {
+      token_continuity: {
         version: 1,
         source,
         attachments: [
@@ -115,7 +115,7 @@ describe("Provider response reasoning continuity round trip", () => {
 
     expect(response.output[0]).toMatchObject({
       type: "message",
-      luckytoken_continuity: {
+      token_continuity: {
         source,
         attachments: [
           {
@@ -129,7 +129,7 @@ describe("Provider response reasoning continuity round trip", () => {
     });
     expect(response.output[1]).toMatchObject({
       type: "function_call",
-      luckytoken_continuity: {
+      token_continuity: {
         source,
         attachments: [
           {
@@ -176,7 +176,7 @@ describe("Provider response reasoning continuity round trip", () => {
       summary: [{ type: "summary_text", text: "visible summary" }],
       content: [{ type: "reasoning_text", text: "provider reasoning detail" }],
       encrypted_content: "encrypted-reasoning",
-      luckytoken_continuity: {
+      token_continuity: {
         version: 1,
         source,
         attachments: [],

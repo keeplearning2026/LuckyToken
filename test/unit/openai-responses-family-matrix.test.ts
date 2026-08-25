@@ -1939,7 +1939,7 @@ describe("16: every known Responses tool-definition family", () => {
   });
 
   it("requires explicit profile entries for extension families", () => {
-    // A LuckyToken/Codex extension discriminator not in the installed SDK
+    // A Token/Codex extension discriminator not in the installed SDK
     // must not become supported merely by unknownInputItem=ignore. With the
     // default unknownInputItem=error it is a review failure.
     expect(() =>

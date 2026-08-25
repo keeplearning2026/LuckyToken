@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 
-import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
+import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 
-type DeleteResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeHistoryDelete"]>>;
-type BackupResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeBackup"]>>;
+type DeleteResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeHistoryDelete"]>>;
+type BackupResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeBackup"]>>;
 
-export function DataSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
+export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [counts, setCounts] = useState<{ readonly requestJourneys: number; readonly runtimeEvents: number }>();
   const [historyUnavailable, setHistoryUnavailable] = useState(false);
   const [deleteGate, setDeleteGate] = useState<DeleteResult>();

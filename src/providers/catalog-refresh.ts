@@ -15,7 +15,7 @@ import type {
   CatalogRefreshReportProjection,
   CatalogRefreshTrigger,
   CatalogSnapshotProjection,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type { ModelsJsonAuthority } from "../models-config/authority.js";
 import type { RequestJourneyObservationAuthority } from "../diagnostics/contract.js";
@@ -33,7 +33,7 @@ import type {
  * `pi-agent/packages/ai/src/models.ts`):
  *
  * - restore-before-network: every refresh phase restores the cached dynamic
- *   catalog from the validated LuckyToken-owned cache first; the startup
+ *   catalog from the validated Token-owned cache first; the startup
  *   bind restores the cache and only then schedules the background network
  *   refresh;
  * - startup-only models.json: Provider composition is fixed for the Backend

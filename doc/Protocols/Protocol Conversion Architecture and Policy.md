@@ -1,13 +1,13 @@
 # Protocol Conversion Architecture and Policy
 
 Status: **Frozen design**  
-Scope: LuckyToken Client Protocol adapters, three independent Data Plane lanes, Pi semantic-conversion boundary, Provider adapters, native preservation, configuration, notices, failures, and failure logs.
+Scope: Token Client Protocol adapters, three independent Data Plane lanes, Pi semantic-conversion boundary, Provider adapters, native preservation, configuration, notices, failures, and failure logs.
 
 This document is normative. The protocol-specific conversion documents refine it but MUST NOT contradict it.
 
 ## 1. Exactly three independent execution lanes
 
-LuckyToken has exactly three peer Data Plane execution contracts. They may share only minimum request-edge/lifecycle facts such as request identity, cancellation, timing, and observation; they do not share credential authority, native executor/transport, or semantic-conversion state.
+Token has exactly three peer Data Plane execution contracts. They may share only minimum request-edge/lifecycle facts such as request identity, cancellation, timing, and observation; they do not share credential authority, native executor/transport, or semantic-conversion state.
 
 ### 1.1 Direct Mode
 
@@ -25,7 +25,7 @@ Requirements:
 
 1. Eligibility comes from an explicit local model/capability contract, never fuzzy name similarity or payload resemblance.
 2. Raw compatible Client wire remains authoritative for model-visible fields; unrelated fields are not reconstructed through a semantic DTO.
-3. Caller credentials remain opaque Client Wire facts forwarded only to the fixed Direct Mode upstream; LuckyToken does not validate them or reuse them as Pi/Provider credentials.
+3. Caller credentials remain opaque Client Wire facts forwarded only to the fixed Direct Mode upstream; Token does not validate them or reuse them as Pi/Provider credentials.
 4. End-to-end headers, including caller credentials and cookies, are preserved. Host, length, hop-by-hop/connection-declared fields and WebSocket handshake transport headers are rebuilt; stale response representation headers are removed when Fetch exposes decoded bytes.
 5. Failure after this lane begins does not fall through to Provider Native or Semantic Conversion.
 
@@ -206,7 +206,7 @@ There is no global `error | ignore | xrepair` switch.
 }
 ```
 
-`providerPackages` is only for explicit external/user Provider Packages. Bundled product Providers such as `@luckytoken/provider-commandcode-private` are product composition and MUST NOT be repeated there.
+`providerPackages` is only for explicit external/user Provider Packages. Bundled product Providers such as `@token/provider-commandcode-private` are product composition and MUST NOT be repeated there.
 
 Rules:
 
@@ -261,7 +261,7 @@ Observer side channels, including invocation-local wrappers whose latest result
 is read by a Client handler, are forbidden. Conversion handlers do not inject a
 custom `fetch` into Pi options in order to observe Provider traffic.
 
-Provider failures cross the runtime only through Pi public contracts and LuckyToken control-plane errors:
+Provider failures cross the runtime only through Pi public contracts and Token control-plane errors:
 
 - `AssistantMessage.errorMessage` is a log-private human fallback and has no
   authority for Client rendering;

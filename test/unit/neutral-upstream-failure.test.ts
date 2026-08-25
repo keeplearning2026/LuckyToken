@@ -14,7 +14,7 @@ import {
   createUpstreamFailureFact,
   findUpstreamFailureFact,
   type UpstreamFailureKind,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 
 const usage: Usage = {
   input: 0,
@@ -126,6 +126,6 @@ describe("protocol-neutral upstream failure contract", () => {
     const forged = { ...diagnostic, details: { failure: { ...fact } } };
     expect(findUpstreamFailureFact([forged])).toBeUndefined();
     expect(context.messages).toEqual([{ role: "user", content: "safe", timestamp: 1 }]);
-    expect(JSON.stringify(context)).not.toContain("luckytoken_upstream_failure");
+    expect(JSON.stringify(context)).not.toContain("token_upstream_failure");
   });
 });

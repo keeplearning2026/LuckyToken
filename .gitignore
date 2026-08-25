@@ -6,7 +6,7 @@ packages/desktop-shell/.electron-out/
 packages/desktop-shell/out/
 CommandcodeAPIKey.txt
 OpenCodeAPIkey.txt
-.luckytoken/
+.Token/
 **/auth.json
 .online-artifacts/
 /artifacts/

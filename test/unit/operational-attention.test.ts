@@ -4,8 +4,8 @@ import type {
   ApplicationStatus,
   CredentialProfilesProjectionV1,
   ProviderCredentialProfilesProjectionV1,
-} from "@luckytoken/application-control-plane/control-plane";
-import { decodeAttentionProjection } from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
+import { decodeAttentionProjection } from "@token/application-control-plane/control-plane";
 import { createOperationalAttentionAuthority } from "../../src/operational-attention/index.js";
 
 const running: ApplicationStatus = Object.freeze({

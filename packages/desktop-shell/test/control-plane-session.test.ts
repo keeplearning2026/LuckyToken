@@ -4,7 +4,7 @@ import type {
   ControlPlaneEndpoint,
   StatusEvent,
   StatusSnapshot,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createControlPlaneSession } from "../src/main/control-plane-session.js";
 
@@ -38,7 +38,7 @@ function fakeClient(initial: StatusSnapshot) {
     hello: vi.fn(async () => ({
       type: "compatible" as const,
       contractVersion: 2,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
     })),
     getStatus: vi.fn(async () => initial),
     subscribe: vi.fn(async (listener: (event: StatusEvent) => void) => {
@@ -73,7 +73,7 @@ describe("Main ControlPlaneSession", () => {
     });
     expect(session.trayHealth()).toBe("stopped");
     expect(session.client()).toBe(first.client);
-    expect(session.application()).toEqual({ id: "luckytoken", version: "test" });
+    expect(session.application()).toEqual({ id: "Token", version: "test" });
 
     first.emit(status(2, "running"));
     expect(session.state()).toMatchObject({
@@ -100,7 +100,7 @@ describe("Main ControlPlaneSession", () => {
     await session.connect(endpoint);
     first.lose();
     await vi.waitFor(() => expect(session.state().kind).toBe("unavailable"));
-    expect(() => session.application()).toThrow("LuckyToken Control Plane is unavailable");
+    expect(() => session.application()).toThrow("Token Control Plane is unavailable");
 
     const reconnect = session.reconnect(endpoint);
     expect(session.state().kind).toBe("reconnecting");

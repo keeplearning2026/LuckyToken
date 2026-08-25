@@ -15,12 +15,12 @@ export {
   type RequestJourneyObserver,
 } from "./diagnostics/index.js";
 export {
-  createLuckyTokenRuntime,
-  type LuckyTokenRuntime,
-  type LuckyTokenRuntimeOptions,
+  createTokenRuntime,
+  type TokenRuntime,
+  type TokenRuntimeOptions,
 } from "./runtime.js";
 export {
-  startLuckyTokenHttpServer,
-  type LuckyTokenHttpServerOptions,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type TokenHttpServerOptions,
+  type RunningTokenHttpServer,
 } from "./server.js";

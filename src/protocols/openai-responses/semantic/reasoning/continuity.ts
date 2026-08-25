@@ -1,7 +1,7 @@
-import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 import type { ResponsesReasoningSource } from "./contract.js";
 
-export const RESPONSES_CONTINUITY_FIELD = "luckytoken_continuity";
+export const RESPONSES_CONTINUITY_FIELD = "token_continuity";
 
 export type ResponsesItemLocation =
   | { readonly type: "reasoning" }
@@ -31,7 +31,7 @@ export type WireContinuityAttachment =
       readonly value: string;
     };
 
-export interface LuckyTokenContinuityEnvelopeV1 {
+export interface TokenContinuityEnvelopeV1 {
   readonly version: 1;
   readonly source: ResponsesReasoningSource;
   readonly attachments: readonly (
@@ -273,10 +273,10 @@ export function decodeResponsesContinuity(
 export function encodeResponsesContinuity(input: {
   readonly source: ResponsesReasoningSource;
   readonly attachments: readonly WireContinuityAttachment[];
-}): LuckyTokenContinuityEnvelopeV1 | undefined {
+}): TokenContinuityEnvelopeV1 | undefined {
   if (!isResponsesReasoningSource(input.source)) return undefined;
   const attachments: Array<
-    LuckyTokenContinuityEnvelopeV1["attachments"][number]
+    TokenContinuityEnvelopeV1["attachments"][number]
   > = [];
   for (const attachment of input.attachments) {
     if (

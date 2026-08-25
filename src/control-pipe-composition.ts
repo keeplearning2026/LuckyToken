@@ -4,7 +4,7 @@ import {
   type PipeAccessRequirement,
   type PipeConnector,
   type PipeServerFactory,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 export interface ProductionControlPipe {
   readonly pipeServerFactory: PipeServerFactory;

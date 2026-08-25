@@ -18,7 +18,7 @@ import {
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 
 
 function model(provider: string, id: string): Model<Api> {
@@ -98,7 +98,7 @@ function provider(
 }
 
 function request(modelId: string): Request {
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer client-key",
@@ -130,7 +130,7 @@ describe("Pi Models provider boundary", () => {
       now: () => 1_786_400_000_000,
       maxRequestBytes: 1_048_576,
     });
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [anthropic] });
+    const runtime = createTokenRuntime({ clientProtocols: [anthropic] });
 
     expect(Object.keys(runtime).sort()).toEqual(["handle", "routes"]);
 
@@ -197,7 +197,7 @@ describe("Pi Models provider boundary", () => {
       now: () => 1_786_400_000_000,
       maxRequestBytes: 1_048_576,
     });
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [anthropic] });
+    const runtime = createTokenRuntime({ clientProtocols: [anthropic] });
 
     expect(models.getProvider(commandCodePrivateProviderId)).toBe(commandCodeProvider);
     expect(models.getModel(commandCodePrivateProviderId, commandCodeModel.id)).toMatchObject({

@@ -11,7 +11,7 @@ import type {
   Usage,
 } from "@earendil-works/pi-ai";
 
-import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 import { InvalidRequest, UnsupportedFeature } from "./failures.js";
 import {
   convertAnthropicTools,
@@ -89,8 +89,8 @@ export interface ValidatedAnthropicSourceRequest {
   unclaimedTopLevelKeys: readonly string[];
 }
 
-export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
-export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "luckytoken-client";
+export const SYNTHETIC_CLIENT_HISTORY_API = "Token-client-history";
+export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "Token-client";
 
 export const PREFILL_DEGRADED_NOTICE_CODE =
   "anthropic_assistant_prefill_degraded_to_history";
@@ -901,7 +901,7 @@ export function validateAnthropicSourceRequest(
  *
  * This deliberately performs no semantic validation beyond a JSON object
  * shape and a non-empty `model` string: passthrough must forward the raw
- * body verbatim, so upstream-accepted fields that LuckyToken conversion
+ * body verbatim, so upstream-accepted fields that Token conversion
  * would reject must not block the passthrough branch.
  */
 export function extractAnthropicModelSelector(value: unknown): string {
@@ -1108,7 +1108,7 @@ function decodeBlockContinuity(
 } {
   if (block.type === "thinking") {
     return decodeAnthropicContinuity({
-      value: block.luckytoken_continuity,
+      value: block.token_continuity,
       owner: {
         target: "thinking",
         representation: "thinking",
@@ -1120,7 +1120,7 @@ function decodeBlockContinuity(
   }
   if (block.type === "redacted_thinking") {
     return decodeAnthropicContinuity({
-      value: block.luckytoken_continuity,
+      value: block.token_continuity,
       owner: {
         target: "thinking",
         representation: "redacted",
@@ -1131,14 +1131,14 @@ function decodeBlockContinuity(
   }
   if (block.type === "text") {
     return decodeAnthropicContinuity({
-      value: block.luckytoken_continuity,
+      value: block.token_continuity,
       owner: { target: "text" },
       jsonPath,
     });
   }
   if (block.type === "tool_use" && typeof block.id === "string") {
     return decodeAnthropicContinuity({
-      value: block.luckytoken_continuity,
+      value: block.token_continuity,
       owner: { target: "toolCall", callId: block.id },
       jsonPath,
     });
@@ -1199,7 +1199,7 @@ function withoutContinuity(
   value: Record<string, unknown>,
 ): Readonly<Record<string, unknown>> {
   const copied = structuredClone(value);
-  delete copied.luckytoken_continuity;
+  delete copied.token_continuity;
   return Object.freeze(copied);
 }
 
@@ -1216,7 +1216,7 @@ function contentPiRepresentation(
 ): "partial" | "none" | undefined {
   switch (block.type) {
     case "text":
-      return hasOnlyKeys(block, ["type", "text", "luckytoken_continuity"])
+      return hasOnlyKeys(block, ["type", "text", "token_continuity"])
         ? undefined
         : "partial";
     case "thinking":
@@ -1224,12 +1224,12 @@ function contentPiRepresentation(
         "type",
         "thinking",
         "signature",
-        "luckytoken_continuity",
+        "token_continuity",
       ])
         ? undefined
         : "partial";
     case "redacted_thinking":
-      return hasOnlyKeys(block, ["type", "data", "luckytoken_continuity"])
+      return hasOnlyKeys(block, ["type", "data", "token_continuity"])
         ? undefined
         : "partial";
     case "image": {
@@ -1252,7 +1252,7 @@ function contentPiRepresentation(
         "name",
         "input",
         ...(directCaller ? ["caller"] : []),
-        "luckytoken_continuity",
+        "token_continuity",
       ])
         ? undefined
         : "partial";
@@ -1520,7 +1520,7 @@ export function convertValidatedAnthropicRequestWithPolicy(
           }
           const decoded = decodeBlockContinuity(
             candidate,
-            `$.messages[${messageIndex}].content[${sourceContentIndex}].luckytoken_continuity`,
+            `$.messages[${messageIndex}].content[${sourceContentIndex}].token_continuity`,
           );
           notices.push(...decoded.notices);
           if (decoded.source !== undefined) {

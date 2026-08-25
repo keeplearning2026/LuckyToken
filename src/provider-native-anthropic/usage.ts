@@ -1,7 +1,7 @@
 import {
   decodeTerminalUsageFact,
   type TerminalUsageFact,
-} from "@luckytoken/provider-contract/usage";
+} from "@token/provider-contract/usage";
 import {
   parseSseFrames,
   sseFramePayload,

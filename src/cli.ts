@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { startLuckyTokenApplication } from "./application.js";
+import { startTokenApplication } from "./application.js";
 import { createControlPlaneDiscovery } from "./control-plane-discovery.js";
 import { runProfileCli } from "./credentials/profile-cli.js";
 import {
@@ -19,7 +19,7 @@ import {
   type PublicModelsCommand,
   type RuntimeCommand,
   type SettingsCommand,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 async function readControlPlaneDescriptor(path: string) {
   const endpoint = await createControlPlaneDiscovery({ path }).read();
@@ -32,18 +32,18 @@ async function readControlPlaneDescriptor(path: string) {
 const HELP = `Token
 
 Usage:
-  luckytoken --config <path>
-  luckytoken control status --descriptor <path>
-  luckytoken control <start|stop|restart> --descriptor <path>
-  luckytoken control auto-start <status|enable|disable> --descriptor <path>
-  luckytoken control settings <query|set> [<key> <value>] --descriptor <path>
-  luckytoken control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
-  luckytoken control profiles <query|add|reconnect|rename|activate|enable|disable|priority|remove|recheck|settings> ... --descriptor <path>
-  luckytoken control catalog <query|refresh-background|refresh-manual> --descriptor <path>
-  luckytoken control public-models <query|set-port|set-provider|set-model|rename|restore> ... --descriptor <path>
-  luckytoken control history <query|export|export-confirm|delete|delete-confirm> ... --descriptor <path>
-  luckytoken control backup <ordinary|full|confirm> ... --descriptor <path>
-  luckytoken --help
+  Token --config <path>
+  Token control status --descriptor <path>
+  Token control <start|stop|restart> --descriptor <path>
+  Token control auto-start <status|enable|disable> --descriptor <path>
+  Token control settings <query|set> [<key> <value>] --descriptor <path>
+  Token control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
+  Token control profiles <query|add|reconnect|rename|activate|enable|disable|priority|remove|recheck|settings> ... --descriptor <path>
+  Token control catalog <query|refresh-background|refresh-manual> --descriptor <path>
+  Token control public-models <query|set-port|set-provider|set-model|rename|restore> ... --descriptor <path>
+  Token control history <query|export|export-confirm|delete|delete-confirm> ... --descriptor <path>
+  Token control backup <ordinary|full|confirm> ... --descriptor <path>
+  Token --help
 
 Commands:
   serve    Start the local Client Protocol service (default)
@@ -179,10 +179,10 @@ function parseArguments(
 }
 
 function backendBuildIdFromEnvironment(): string | undefined {
-  const value = process.env.LUCKYTOKEN_BACKEND_BUILD_ID;
+  const value = process.env.TOKEN_BACKEND_BUILD_ID;
   if (value === undefined) return undefined;
   if (!/^[a-f0-9]{64}$/u.test(value)) {
-    throw new Error("LUCKYTOKEN_BACKEND_BUILD_ID is invalid");
+    throw new Error("TOKEN_BACKEND_BUILD_ID is invalid");
   }
   return value;
 }
@@ -194,7 +194,7 @@ async function runServe(
   createFirstRunConfig = false,
   buildId?: string,
 ): Promise<void> {
-  const started = await startLuckyTokenApplication({
+  const started = await startTokenApplication({
     configPath,
     ownerKind,
     ...(desktopExe === undefined ? {} : { desktopExe }),
@@ -818,7 +818,7 @@ async function runControlBackupCommand(args: readonly string[]): Promise<void> {
   }
 }
 
-export async function runLuckyTokenCli(
+export async function runTokenCli(
   args: readonly string[],
 ): Promise<void> {
   if (args[0] === "control") {
@@ -881,7 +881,7 @@ if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  void runLuckyTokenCli(process.argv.slice(2)).catch((error: unknown) => {
+  void runTokenCli(process.argv.slice(2)).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Token: ${message}\n`);
     process.exitCode = 1;

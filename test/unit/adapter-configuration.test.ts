@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import {
   bindCommandCodeConfiguration,
   parseCommandCodeConfiguration,
@@ -239,7 +239,7 @@ describe("adapter-owned configuration", () => {
         parseCommandCodeConfiguration({
           conversion: { response: { pauseTurn: "continue" } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.response.pauseTurn",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.response.pauseTurn",
     ],
   ])("rejects Anthropic shapes/keys and representative invalid enums %#", (parse, path) => {
     expect(parse).toThrow(path);
@@ -288,80 +288,80 @@ describe("adapter-owned configuration", () => {
   });
 
   it.each<InvalidCase>([
-    [() => parseCommandCodeConfiguration(null), "providerPackages[\"@luckytoken/provider-commandcode-private\"]"],
+    [() => parseCommandCodeConfiguration(null), "providerPackages[\"@token/provider-commandcode-private\"]"],
     [
       () => parseCommandCodeConfiguration({ extra: true }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].extra",
     ],
     [
       () => parseCommandCodeConfiguration({ conversion: [] }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion",
     ],
     [
       () => parseCommandCodeConfiguration({ conversion: { extra: true } }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.extra",
     ],
     [
       () =>
         parseCommandCodeConfiguration({ conversion: { request: "bad" } }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.request",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.request",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           conversion: { request: { extra: true } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.request.extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.request.extra",
     ],
     [
       () => parseCommandCodeConfiguration({ conversion: { response: null } }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.response",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.response",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           conversion: { response: { extra: true } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.response.extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.response.extra",
     ],
     [
       () => parseCommandCodeConfiguration({ request: [] }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request",
+      "providerPackages[\"@token/provider-commandcode-private\"].request",
     ],
     [
       () => parseCommandCodeConfiguration({ request: { extra: true } }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.extra",
     ],
     [
       () => parseCommandCodeConfiguration({ request: { transport: false } }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { extra: true } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.extra",
     ],
     [
       () => parseCommandCodeConfiguration({ response: "bad" }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response",
+      "providerPackages[\"@token/provider-commandcode-private\"].response",
     ],
     [
       () => parseCommandCodeConfiguration({ response: { extra: true } }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.extra",
     ],
     [
       () =>
         parseCommandCodeConfiguration({ response: { errorCapture: [] } }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { extra: true } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.extra",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.extra",
     ],
   ])("rejects CommandCode shapes and unknown keys at their precise paths %#", (parse, path) => {
     expect(parse).toThrow(path);
@@ -452,21 +452,21 @@ describe("adapter-owned configuration", () => {
             request: { syntheticMissingToolResultOutputType: "error" },
           },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.request.syntheticMissingToolResultOutputType",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.request.syntheticMissingToolResultOutputType",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           conversion: { response: { pauseTurn: "continue" } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.response.pauseTurn",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.response.pauseTurn",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           conversion: { response: { unknownEvent: "drop" } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].conversion.response.unknownEvent",
+      "providerPackages[\"@token/provider-commandcode-private\"].conversion.response.unknownEvent",
     ],
   ])("rejects every invalid enum at its precise path %#", (parse, path) => {
     expect(parse).toThrow(path);
@@ -531,49 +531,49 @@ describe("adapter-owned configuration", () => {
         parseCommandCodeConfiguration({
           request: { transport: { timeoutMs: 0 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.timeoutMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.timeoutMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { timeoutMs: MAX_TIMER_DELAY_MS + 1 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.timeoutMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.timeoutMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { maxRetries: -1 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.maxRetries",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.maxRetries",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { maxRetries: 101 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.maxRetries",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.maxRetries",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { maxRetryDelayMs: -1 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.maxRetryDelayMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.maxRetryDelayMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { maxRetryDelayMs: MAX_TIMER_DELAY_MS + 1 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.maxRetryDelayMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.maxRetryDelayMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { bodyReadTimeoutMs: 0 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.bodyReadTimeoutMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.bodyReadTimeoutMs",
     ],
     [
       () =>
@@ -582,35 +582,35 @@ describe("adapter-owned configuration", () => {
             errorCapture: { bodyReadTimeoutMs: MAX_TIMER_DELAY_MS + 1 },
           },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.bodyReadTimeoutMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.bodyReadTimeoutMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { maxBodyBytes: 0 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxBodyBytes",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.maxBodyBytes",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { maxBodyBytes: 16 * 1024 * 1024 + 1 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxBodyBytes",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.maxBodyBytes",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { maxClientMessageChars: 0 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { maxClientMessageChars: 65_537 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
     ],
   ])("rejects every numeric field outside its safe range %#", (parse, path) => {
     expect(parse).toThrow(path);
@@ -622,42 +622,42 @@ describe("adapter-owned configuration", () => {
         parseCommandCodeConfiguration({
           request: { transport: { timeoutMs: 1.5 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.timeoutMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.timeoutMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { maxRetries: "1" } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.maxRetries",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.maxRetries",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           request: { transport: { maxRetryDelayMs: Number.NaN } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].request.transport.maxRetryDelayMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].request.transport.maxRetryDelayMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { bodyReadTimeoutMs: 1.5 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.bodyReadTimeoutMs",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.bodyReadTimeoutMs",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { maxBodyBytes: "65536" } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxBodyBytes",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.maxBodyBytes",
     ],
     [
       () =>
         parseCommandCodeConfiguration({
           response: { errorCapture: { maxClientMessageChars: 1.5 } },
         }),
-      "providerPackages[\"@luckytoken/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
+      "providerPackages[\"@token/provider-commandcode-private\"].response.errorCapture.maxClientMessageChars",
     ],
   ])("rejects unsafe numeric types at their precise paths %#", (parse, path) => {
     expect(parse).toThrow(path);
@@ -693,14 +693,14 @@ describe("adapter-owned configuration", () => {
   });
 
   it("loads non-default owner snapshots and resolves all startup paths", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-adapter-config-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-adapter-config-"));
     try {
-      const configPath = join(root, "config", "luckytoken.json");
+      const configPath = join(root, "config", "Token.json");
       await mkdir(join(root, "config"), { recursive: true });
       await writeFile(
         configPath,
         JSON.stringify({
-          schemaVersion: "luckytoken-config-v2",
+          schemaVersion: "token-config-v2",
           clientProtocols: {
             "anthropic-messages": {
               conversion: {
@@ -729,7 +729,7 @@ describe("adapter-owned configuration", () => {
             },
           },
           providerPackages: {
-            "@luckytoken/provider-commandcode-private": {
+            "@token/provider-commandcode-private": {
               conversion: {
                 request: {
                   syntheticMissingToolResultOutputType: "error-text",
@@ -764,7 +764,7 @@ describe("adapter-owned configuration", () => {
         "utf8",
       );
 
-      const loaded = await loadLuckyTokenCliConfig(configPath);
+      const loaded = await loadTokenCliConfig(configPath);
       const configDirectory = resolve(root, "config");
       expect(loaded.clientProtocols["anthropic-messages"]).not.toHaveProperty("authFile");
       expect(loaded.clientProtocols["openai-responses"]?.stateFile).toBe(
@@ -814,9 +814,9 @@ describe("adapter-owned configuration", () => {
       expect(
         parseCommandCodeConfiguration(
           loaded.providerPackages[
-            "@luckytoken/provider-commandcode-private"
+            "@token/provider-commandcode-private"
           ],
-          'providerPackages["@luckytoken/provider-commandcode-private"]',
+          'providerPackages["@token/provider-commandcode-private"]',
         ),
       ).toEqual({
         conversion: {

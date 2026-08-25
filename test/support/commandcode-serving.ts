@@ -29,8 +29,8 @@ import {
   SYNTHETIC_CLIENT_HISTORY_PROVIDER,
 } from "../../src/protocols/anthropic/request.js";
 import {
-  createLuckyTokenRuntime,
-  type LuckyTokenRuntime,
+  createTokenRuntime,
+  type TokenRuntime,
 } from "../../src/runtime.js";
 import { createExecutionOperation } from "../../src/execution.js";
 
@@ -57,7 +57,7 @@ export interface CommandCodeServingTestOptions {
 }
 
 export interface CommandCodeServingTestComposition {
-  readonly runtime: LuckyTokenRuntime;
+  readonly runtime: TokenRuntime;
   readonly certification: ServingCertificationManifest;
 }
 
@@ -155,7 +155,7 @@ export function createCommandCodeServingTestComposition(
       : { publicModels: options.publicModels }),
     executeOperation: createExecutionOperation(),
   });
-  const runtime = createLuckyTokenRuntime({
+  const runtime = createTokenRuntime({
     clientProtocols: [anthropic],
     ...(options.requestTimeoutMs === undefined
       ? {}
@@ -169,6 +169,6 @@ export function createCommandCodeServingTestComposition(
 
 export function createCommandCodeTestRuntime(
   options: CommandCodeServingTestOptions,
-): LuckyTokenRuntime {
+): TokenRuntime {
   return createCommandCodeServingTestComposition(options).runtime;
 }

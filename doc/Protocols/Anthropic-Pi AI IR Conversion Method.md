@@ -148,7 +148,7 @@ Empty ordinary fragments are not emitted. Adjacent Pi messages of the same role 
 
 ### 5.2 Non-standard message `role="system"`
 
-Although the installed Anthropic SDK places system content at the top level, LuckyToken supports a compatibility extension in `messages[]`:
+Although the installed Anthropic SDK places system content at the top level, Token supports a compatibility extension in `messages[]`:
 
 1. Find message-level `role="system"` entries in source order.
 2. Append only the first one's text to `Context.systemPrompt`, separated from the existing top-level system string by `\n`.
@@ -185,7 +185,7 @@ Historical assistant messages use `stopReason="toolUse"` when they contain a Pi 
 
 ### 5.5 Final assistant prefill
 
-A final Anthropic assistant message has continuation/prefill semantics that Pi cannot guarantee. LuckyToken accepts it as an ordinary historical Pi AssistantMessage to keep the request usable and emits a request-local `assistant_prefill_degraded_to_history` notice. It does not inject instructions promising exact continuation.
+A final Anthropic assistant message has continuation/prefill semantics that Pi cannot guarantee. Token accepts it as an ordinary historical Pi AssistantMessage to keep the request usable and emits a request-local `assistant_prefill_degraded_to_history` notice. It does not inject instructions promising exact continuation.
 
 ## 6. ToolResult lifecycle
 

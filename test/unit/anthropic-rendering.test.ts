@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { createUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import type { AnthropicResponseMessage } from "../../src/protocols/anthropic/response.js";
 import {
   createAnthropicAtomicSseEvents,

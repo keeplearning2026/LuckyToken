@@ -7,7 +7,7 @@ import {
   createLocalIpcAddress,
   startControlPlane,
   type PipeConnection,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createProductionControlPipe } from "../../src/control-pipe-composition.js";
 
@@ -52,7 +52,7 @@ async function fixture() {
   };
   const host = await startControlPlane({
     endpoint,
-    application: { id: "luckytoken", version: "security-test" },
+    application: { id: "Token", version: "security-test" },
     initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
     pipeServerFactory: transport.pipeServerFactory,
     access: transport.access,

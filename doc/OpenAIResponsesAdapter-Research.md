@@ -2,7 +2,7 @@
 
 > 日期：2026-08-12
 > 调研对象：`D:\project\opencodex`（v2.13.0，MIT，@bitkyc08/opencodex）
-> 目的：为 LuckyToken 增加 OpenAI Responses Client Protocol（适配 opencodex 的「增量请求 + 历史拼接」机制），并严格保持 Pi IR 边界。
+> 目的：为 Token 增加 OpenAI Responses Client Protocol（适配 opencodex 的「增量请求 + 历史拼接」机制），并严格保持 Pi IR 边界。
 
 ## 1. 需求背景
 
@@ -10,8 +10,8 @@ OpenAI Responses 客户端（Codex CLI / Codex App / SDK）的请求特点是：
 
 - **不发送完整历史对话**：每次请求只带「增量」（本次新增的 input items）。
 - 用 **`previous_response_id`** 引用之前的响应，表示「继续这个会话」。
-- 服务端（OpenAI）本应保存会话状态；但 LuckyToken 作为桥接层，上游可能是 CommandCode 等**无状态** Provider，不认 `previous_response_id`。
-- 因此 **LuckyToken 必须在 Client Protocol adapter 层保存历史，把增量展开成完整输入**，再转成 Pi IR 交给 Provider。
+- 服务端（OpenAI）本应保存会话状态；但 Token 作为桥接层，上游可能是 CommandCode 等**无状态** Provider，不认 `previous_response_id`。
+- 因此 **Token 必须在 Client Protocol adapter 层保存历史，把增量展开成完整输入**，再转成 Pi IR 交给 Provider。
 
 opencodex 正是这样做的，其核心机制是「本地保存 response → 展开 previous_response_id」。
 
@@ -67,9 +67,9 @@ function inputItems(input: unknown): unknown[] {
 }
 ```
 
-### 2.3 opencodex 的重量级设施（LuckyToken 不需要）
+### 2.3 opencodex 的重量级设施（Token 不需要）
 
-| 设施 | opencodex 用途 | LuckyToken 是否需要 |
+| 设施 | opencodex 用途 | Token 是否需要 |
 |---|---|---|
 | 磁盘 spill store | 大响应降级到磁盘 | 否（内存即可） |
 | 快照持久化（debounce + 原子写） | 进程重启恢复会话 | **待决策** |
@@ -81,7 +81,7 @@ function inputItems(input: unknown): unknown[] {
 ### 2.4 关键语义决策点（opencodex 的选择）
 
 1. **找不到 previous_response_id**：opencodex **fail-open**（退回裸增量），并在日志警告。它不 400，因为 Codex 会自己重发完整历史。
-2. **store:false**：opencodex 默认**不保存**（`request.store === false` 跳过），除非 `force`（WS 通道 force）。LuckyToken 需要决定是否尊重 `store` 字段。
+2. **store:false**：opencodex 默认**不保存**（`request.store === false` 跳过），除非 `force`（WS 通道 force）。Token 需要决定是否尊重 `store` 字段。
 3. **incomplete 响应**：只有 `reason: "max_output_tokens"` 才保存（部分输出可续），content_filter 等不保存。
 4. **保存内容**：`inputItems(request.input) + response.output`（原始 Responses items，不转消息）。
 
@@ -111,7 +111,7 @@ function inputItems(input: unknown): unknown[] {
 ```
 OpenAI Responses Wire（增量 + previous_response_id）
     ↕
-OpenAI Responses Client Protocol adapter（新模块，LuckyToken-owned）
+OpenAI Responses Client Protocol adapter（新模块，Token-owned）
   ├─ 会话状态：保存 response → response_id → items（adapter 自己的能力）
   ├─ 展开 previous_response_id → 完整 input
   └─ 完整 input → Pi Context / Models
@@ -124,7 +124,7 @@ Provider adapter → Upstream Wire
 - 会话状态（内存 Map）属于 adapter 能力内聚：行为 + 数据 + 状态 + 代码 + 测试同属一个模块。
 - Provider 侧完全无感知（它只看到完整历史）。
 
-## 5. LuckyToken 现有参照结构
+## 5. Token 现有参照结构
 
 ### 5.1 ClientProtocolHandler 契约（`src/http.ts:1`）
 
@@ -136,7 +136,7 @@ export interface ClientProtocolHandler {
 }
 ```
 
-运行时按 `method + pathname` 路由（`src/http.ts:104-106`），LuckyToken 现在只有 `POST /v1/messages`（Anthropic）。加 OpenAI Responses 就是加一个 `POST /v1/responses` 的 handler。
+运行时按 `method + pathname` 路由（`src/http.ts:104-106`），Token 现在只有 `POST /v1/messages`（Anthropic）。加 OpenAI Responses 就是加一个 `POST /v1/responses` 的 handler。
 
 ### 5.2 Anthropic handler 的转换流程（`src/protocols/anthropic/handler.ts:181-223`）
 
@@ -173,7 +173,7 @@ CommandCode provider 的 `convertCommandCodeMessages`（`packages/provider-comma
 
 ## 6. 移植方案（最小架构）
 
-### 6.1 新增模块（LuckyToken-owned）
+### 6.1 新增模块（Token-owned）
 
 ```
 src/protocols/openai-responses/
@@ -233,7 +233,7 @@ export function createOpenAIResponsesHandler(options): ClientProtocolHandler {
 
 ### 6.4 组合根接入（`src/composition.ts` + `src/http.ts` 路由）
 
-- `createConfiguredLuckyTokenComposition` 增加 OpenAI Responses handler（若配置启用）。
+- `createConfiguredTokenComposition` 增加 OpenAI Responses handler（若配置启用）。
 - `src/http.ts` 路由已支持多 handler（按 method+pathname），无需改。
 - 认证：**每个 Client Protocol 有独立 Auth**（AGENTS.md 硬约束）——OpenAI Responses 需要自己的 auth 文件/通道，不能复用 Anthropic 的。
 

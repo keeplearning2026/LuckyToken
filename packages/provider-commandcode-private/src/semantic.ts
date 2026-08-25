@@ -18,7 +18,7 @@ import {
   createInvocationAttemptDiagnostic,
   createUpstreamFailureDiagnostic,
   type ConversionNotice,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 import {
   commandCodeNeutralFailure,
   CommandCodeNeutralFailureError,

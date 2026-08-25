@@ -29,7 +29,7 @@ import {
 } from "../../src/providers/catalog-refresh.js";
 import { createModelsJsonAuthority } from "../../src/models-config/authority.js";
 import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
-import { applyLuckyTokenProviderComposition } from "../../src/providers/catalog.js";
+import { applyTokenProviderComposition } from "../../src/providers/catalog.js";
 import { createConfigValueResolver } from "../../src/providers/config-value.js";
 import type {
   RequestJourneyObservationAuthority,
@@ -186,7 +186,7 @@ interface Fixture {
 const fixtures: Fixture[] = [];
 
 async function createFixture(): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-catalog-refresh-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-catalog-refresh-"));
   const modelsJsonPath = join(root, "models.json");
   const cachePath = join(root, "models-catalog-cache.json");
   const files = new Map<string, string>();
@@ -285,7 +285,7 @@ function writeCacheEntry(
   const raw = fixture.files.get(fixture.cachePath);
   const parsed =
     raw === undefined
-      ? { schema: "luckytoken-catalog-cache-v1", providers: {} }
+      ? { schema: "Token-catalog-cache-v1", providers: {} }
       : (JSON.parse(raw) as {
           schema: string;
           providers: Record<string, unknown>;
@@ -317,7 +317,7 @@ function createRuntimeHandle(options: {
   let userProviderIds: ReadonlySet<string> = new Set();
   const apply = (modelsJson: Record<string, unknown> | undefined) => {
     userProviderIds = new Set(
-      applyLuckyTokenProviderComposition(mutable, {
+      applyTokenProviderComposition(mutable, {
         ...(modelsJson === undefined
           ? {}
           : { modelsJson: { providers: modelsJson as never } }),
@@ -714,7 +714,7 @@ describe("catalog refresh controller", () => {
     fixture.files.set(
       fixture.cachePath,
       JSON.stringify({
-        schema: "luckytoken-catalog-cache-v1",
+        schema: "Token-catalog-cache-v1",
         providers: {
           "dynamic-a": { models: [{ id: "broken" }], checkedAt: 1 },
         },

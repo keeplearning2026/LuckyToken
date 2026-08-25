@@ -10,21 +10,21 @@ import {
   type ControlPlaneEndpoint,
   type RunningControlPlane,
   type StatusEvent,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { createSettingsControlPlaneHandler } from "../../../src/settings/control-plane.js";
 import { resolveEffectiveSettings } from "../../../src/settings/data-plane.js";
 
 import { createDataPlaneRuntimeSupervisor } from "../../../src/runtime-supervisor.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../../src/server.js";
 import {
   createSettingsRegistry,
   type SettingsStore,
 } from "../../../src/settings/catalog.js";
 import { createProtocolAwareRuntime } from "../../../src/settings/runtime.js";
-import { createLuckyTokenRuntime } from "../../../src/runtime.js";
+import { createTokenRuntime } from "../../../src/runtime.js";
 import type { ClientProtocolHandler } from "../../../src/http.js";
 
 const anthropic: ClientProtocolHandler = {
@@ -70,7 +70,7 @@ function memoryStore(): SettingsStore {
 
 describe("settings through the Control Plane and real HTTP seams", () => {
   const hosts: RunningControlPlane[] = [];
-  const httpServers: RunningLuckyTokenHttpServer[] = [];
+  const httpServers: RunningTokenHttpServer[] = [];
   const roots: string[] = [];
   let nextPipe = 0;
   let nextRequest = 0;
@@ -95,9 +95,9 @@ describe("settings through the Control Plane and real HTTP seams", () => {
   }> {
     const store = options.settingsStore ?? memoryStore();
     const registry = createSettingsRegistry(store);
-    let activeServer: RunningLuckyTokenHttpServer | undefined;
+    let activeServer: RunningTokenHttpServer | undefined;
     const runtime = createProtocolAwareRuntime({
-      runtime: createLuckyTokenRuntime({
+      runtime: createTokenRuntime({
         clientProtocols: [anthropic, responses],
       }),
       isProtocolEnabled: (protocolId) =>
@@ -116,7 +116,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       resolveAddress: () => resolveEffectiveSettings(registry.query([])),
       startListener: async (address) => {
         options.onStart?.();
-        activeServer = await startLuckyTokenHttpServer({
+        activeServer = await startTokenHttpServer({
           runtime,
           host: address.host,
           port: address.port,
@@ -126,12 +126,12 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       },
     });
     const endpoint: ControlPlaneEndpoint = {
-      address: `\\\\.\\pipe\\luckytoken-settings-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\Token-settings-${process.pid}-${++nextPipe}`,
       capability: "settings-test-capability-012345678901234567890",
     };
     const host = await startControlPlane({
       endpoint,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       settingsCommandHandler: createSettingsControlPlaneHandler(registry),

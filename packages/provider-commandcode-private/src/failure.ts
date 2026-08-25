@@ -3,7 +3,7 @@ import {
   type InvocationAttempt,
   type UpstreamFailureFact,
   type UpstreamFailureFactInput,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 
 const retryHeadersByError = new WeakMap<Error, Readonly<Record<string, string>>>();
 

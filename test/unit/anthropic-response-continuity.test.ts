@@ -79,7 +79,7 @@ describe("Anthropic response continuity rendering", () => {
       type: "thinking",
       thinking: "summary",
       signature: "",
-      luckytoken_continuity: {
+      token_continuity: {
         source: { api: "openai-completions", model: "deepseek-v4-flash" },
         attachments: [{ target: "thinking", value: "thinking-state" }],
       },
@@ -93,7 +93,7 @@ describe("Anthropic response continuity rendering", () => {
       type: "tool_use",
       id: "call-1",
       caller: { type: "direct" },
-      luckytoken_continuity: {
+      token_continuity: {
         attachments: [{ target: "toolCall", callId: "call-1", value: "tool-state" }],
       },
     });
@@ -107,7 +107,7 @@ describe("Anthropic response continuity rendering", () => {
     expect(converted.message.content[0]).toMatchObject({
       type: "thinking",
       signature: "thinking-state",
-      luckytoken_continuity: {
+      token_continuity: {
         attachments: [{ target: "thinking", kind: "native-field-provenance" }],
       },
     });
@@ -128,7 +128,7 @@ describe("Anthropic response continuity rendering", () => {
       expect(converted.message.content[0]).toMatchObject({
         type: "thinking",
         signature: "",
-        luckytoken_continuity: {
+        token_continuity: {
           source: { api },
           attachments: [{ target: "thinking", value: "thinking-state" }],
         },
@@ -144,7 +144,7 @@ describe("Anthropic response continuity rendering", () => {
     expect(converted.message.content[0]).toMatchObject({
       type: "thinking",
       signature: "",
-      luckytoken_continuity: {
+      token_continuity: {
         source: {
           provider: "amazon-bedrock",
           api: "bedrock-converse-stream",

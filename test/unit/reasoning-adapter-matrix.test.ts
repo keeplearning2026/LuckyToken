@@ -47,7 +47,7 @@ function reasoningHistory(input: {
           ...(input.encryptedContent === undefined
             ? {}
             : { encrypted_content: input.encryptedContent }),
-          luckytoken_continuity: {
+          token_continuity: {
             version: 1,
             source: input.source,
             attachments:
@@ -256,7 +256,7 @@ describe("pinned Pi reasoning Adapter matrix", () => {
             id: "msg_prior",
             role: "assistant",
             content: [{ type: "output_text", text: "answer" }],
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source,
               attachments: [
@@ -274,7 +274,7 @@ describe("pinned Pi reasoning Adapter matrix", () => {
             call_id: "call_1",
             name: "lookup",
             arguments: "{}",
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source,
               attachments: [

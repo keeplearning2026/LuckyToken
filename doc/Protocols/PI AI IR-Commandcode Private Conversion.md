@@ -6,7 +6,7 @@ Governing revision marker retained for serving certification. This frozen docume
 
 Status: **Frozen normative design**
 
-Owner: `@luckytoken/provider-commandcode-private` Provider Package.
+Owner: `@token/provider-commandcode-private` Provider Package.
 Boundary: Pi public Provider contracts ↔ CommandCode private wire.
 
 ## 1. Independence and authority
@@ -33,7 +33,7 @@ It does not own Client error envelopes, Client session state, or Client conversi
 
 ## 2. Configuration
 
-CommandCode Private is a bundled LuckyToken product Provider. Production users MUST NOT add `@luckytoken/provider-commandcode-private` to `config.providerPackages`; the product runtime supplies its bundled package configuration internally and rejects that reserved specifier in user configuration.
+CommandCode Private is a bundled Token product Provider. Production users MUST NOT add `@token/provider-commandcode-private` to `config.providerPackages`; the product runtime supplies its bundled package configuration internally and rejects that reserved specifier in user configuration.
 
 The package-owned configuration schema below remains relevant to direct Provider construction, characterization, and the bundled product metadata that selects defaults:
 
@@ -65,7 +65,7 @@ The package-owned configuration schema below remains relevant to direct Provider
 }
 ```
 
-The numbers above illustrate package-owned policy shape, not user-facing LuckyToken deployment configuration. Implementation defaults MUST be derived from the existing Provider/runtime contract, documented, range-validated at startup, snapshotted, and immutable per process.
+The numbers above illustrate package-owned policy shape, not user-facing Token deployment configuration. Implementation defaults MUST be derived from the existing Provider/runtime contract, documented, range-validated at startup, snapshotted, and immutable per process.
 
 Frozen semantic defaults:
 
@@ -447,7 +447,7 @@ For error/aborted:
 
 - emit one Pi error terminal with the neutral diagnostic;
 - do not emit staged partial ToolCalls;
-- caller-aborted result has empty content/zero usage unless the Pi public contract explicitly supports committed partial cancellation, which current LuckyToken does not.
+- caller-aborted result has empty content/zero usage unless the Pi public contract explicitly supports committed partial cancellation, which current Token does not.
 
 Every started physical attempt produces one immutable trusted attempt diagnostic. Failed attempts record neutral classification, stage, optional validated status/retryability, and fixed allowlisted IDs. A final successful attempt is also recorded, so later Client rendering failures do not erase upstream retry history. Execution submits these diagnostics in order to the invocation facts sink; only the Client handler owns the exactly-once journal lifecycle.
 

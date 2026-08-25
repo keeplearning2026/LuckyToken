@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CatalogSnapshotProjection } from "@luckytoken/application-control-plane/control-plane";
+import type { CatalogSnapshotProjection } from "@token/application-control-plane/control-plane";
 
 import { providerReadiness } from "../../src/providers/readiness.js";
 

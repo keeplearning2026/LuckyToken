@@ -15,7 +15,7 @@ import type {
   EffectiveModelProjection,
   EffectiveProviderLayer,
   EffectiveProviderProjection,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { PI_COMPATIBILITY_BASELINE } from "./pi-baseline.js";
 import type {
@@ -540,7 +540,7 @@ export function composeEffectiveCatalog(
   }
 
   return Object.freeze({
-    schemaVersion: "luckytoken-effective-catalog-v1",
+    schemaVersion: "token-effective-catalog-v1",
     baseline: PI_COMPATIBILITY_BASELINE,
     providers: Object.freeze(providerEntries),
     compositionErrors: Object.freeze(compositionErrors),

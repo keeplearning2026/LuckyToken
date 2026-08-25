@@ -13,8 +13,8 @@ import {
 import { parseDiagnosticsConfiguration } from "../../src/diagnostics/configuration.js";
 import type { DiagnosticsAuthority } from "../../src/diagnostics/index.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -65,7 +65,7 @@ function sortedStableHeaders(
 describe("Diagnostics Worker construction fail-open", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -104,7 +104,7 @@ describe("Diagnostics Worker construction fail-open", () => {
       createSessionId: () => SESSION_ID,
       now: () => 1_787_558_400_000,
     });
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime,
       ...(diagnostics === undefined ? {} : { diagnostics }),
       createRequestId: () => REQUEST_ID,
@@ -137,7 +137,7 @@ describe("Diagnostics Worker construction fail-open", () => {
 
   it("preserves real HTTP serving and exposes typed unavailability when Worker construction throws synchronously", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-diagnostics-worker-construction-"),
+      join(tmpdir(), "Token-diagnostics-worker-construction-"),
     );
     roots.push(root);
     let factoryCalls = 0;
@@ -192,7 +192,7 @@ describe("Diagnostics Worker construction fail-open", () => {
     expect(degraded).toEqual(baseline);
     expect(degraded.status).toBe(200);
     expect(degraded.headers).toContainEqual([
-      "x-luckytoken-request-id",
+      "x-token-request-id",
       REQUEST_ID,
     ]);
     expect(JSON.stringify(degraded)).not.toContain(FACTORY_CANARY);

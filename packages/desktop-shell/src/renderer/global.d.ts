@@ -1,10 +1,10 @@
 /// <reference types="vite/client" />
 
-import type { LuckyTokenDesktopApi } from "../shared/desktop-api.js";
+import type { TokenDesktopApi } from "../shared/desktop-api.js";
 
 declare global {
   interface Window {
-    readonly luckytoken: LuckyTokenDesktopApi;
+    readonly Token: TokenDesktopApi;
   }
 }
 

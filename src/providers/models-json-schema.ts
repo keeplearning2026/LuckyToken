@@ -2,7 +2,7 @@
  * Extracted from `pi-agent/packages/coding-agent/src/core/model-config.ts`
  * (upstream @earendil-works/pi-coding-agent, MIT-licensed schema infra).
  *
- * Extracted as the smallest coherent subset so LuckyToken's models.json is
+ * Extracted as the smallest coherent subset so Token's models.json is
  * schema-compatible with the Pi ecosystem. Local modifications:
  * - `normalizePath` replaced with `node:path` `resolve`;
  * - added `loadText` for tests / callers that already hold the content.
@@ -305,7 +305,7 @@ export class ModelConfig {
     return ModelConfig.parse(content);
   }
 
-  /** Parse models.json from an in-memory string (LuckyToken addition). */
+  /** Parse models.json from an in-memory string (Token addition). */
   static parse(content: string): ModelConfig {
     let parsed: unknown;
     try {

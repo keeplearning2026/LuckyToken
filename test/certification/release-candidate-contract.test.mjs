@@ -7,7 +7,7 @@ import test from "node:test";
 import { discoverWindowsCandidate } from "../../scripts/release-candidate.mjs";
 
 async function writeCandidate(root) {
-  const packageRoot = join(root, "Token-win32-x64");
+  const packageRoot = join(root, "token-win32-x64");
   const makeRoot = join(root, "make", "squirrel.windows", "x64");
   await Promise.all([
     mkdir(join(packageRoot, "resources", "backend"), { recursive: true }),
@@ -21,14 +21,14 @@ async function writeCandidate(root) {
       "utf8",
     ),
     writeFile(join(makeRoot, "Token-Setup.exe"), "setup", "utf8"),
-    writeFile(join(makeRoot, "Token-0.1.0-full.nupkg"), "nupkg", "utf8"),
+    writeFile(join(makeRoot, "token-0.1.0-full.nupkg"), "nupkg", "utf8"),
     writeFile(join(makeRoot, "RELEASES"), "release metadata", "utf8"),
   ]);
   return { packageRoot, makeRoot };
 }
 
 test("release discovery binds one packaged EXE to one Squirrel installer", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-release-candidate-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-release-candidate-"));
   try {
     const { packageRoot, makeRoot } = await writeCandidate(root);
     assert.deepEqual(await discoverWindowsCandidate(root, "0.1.0"), {
@@ -42,7 +42,7 @@ test("release discovery binds one packaged EXE to one Squirrel installer", async
         "build-id.txt",
       ),
       installer: join(makeRoot, "Token-Setup.exe"),
-      nupkg: join(makeRoot, "Token-0.1.0-full.nupkg"),
+      nupkg: join(makeRoot, "token-0.1.0-full.nupkg"),
       releases: join(makeRoot, "RELEASES"),
     });
   } finally {
@@ -51,7 +51,7 @@ test("release discovery binds one packaged EXE to one Squirrel installer", async
 });
 
 test("release discovery fails closed when a second installer exists", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-release-candidate-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-release-candidate-"));
   try {
     const { makeRoot } = await writeCandidate(root);
     await writeFile(join(makeRoot, "foreign-Setup.exe"), "foreign", "utf8");

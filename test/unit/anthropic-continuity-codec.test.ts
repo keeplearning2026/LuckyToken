@@ -23,7 +23,7 @@ describe("Anthropic item-local continuity codec", () => {
     const decoded = decodeAnthropicContinuity({
       value: envelope,
       owner: { target: "text" },
-      jsonPath: "$.messages[0].content[0].luckytoken_continuity",
+      jsonPath: "$.messages[0].content[0].token_continuity",
     });
     expect(decoded).toMatchObject({ source, attachments: [{ value: "opaque-text" }] });
     expect(JSON.stringify(decoded.attachments)).not.toContain("visible text");
@@ -44,7 +44,7 @@ describe("Anthropic item-local continuity codec", () => {
         ],
       },
       owner: { target: "toolCall", callId: "call-1" },
-      jsonPath: "$.messages[0].content[0].luckytoken_continuity",
+      jsonPath: "$.messages[0].content[0].token_continuity",
     });
     expect(decoded.attachments).toHaveLength(1);
     expect(decoded.notices).toHaveLength(0);
@@ -68,7 +68,7 @@ describe("Anthropic item-local continuity codec", () => {
         ],
       },
       owner: { target: "text" },
-      jsonPath: "$.messages[0].content[0].luckytoken_continuity",
+      jsonPath: "$.messages[0].content[0].token_continuity",
     });
     expect(decoded.attachments).toEqual([duplicate]);
     expect(decoded.notices).toHaveLength(3);
@@ -76,7 +76,7 @@ describe("Anthropic item-local continuity codec", () => {
     const unknown = decodeAnthropicContinuity({
       value: { version: 2, source, attachments: [] },
       owner: { target: "text" },
-      jsonPath: "$.content[0].luckytoken_continuity",
+      jsonPath: "$.content[0].token_continuity",
     });
     expect(unknown.attachments).toEqual([]);
     expect(unknown.notices).toHaveLength(1);
@@ -92,7 +92,7 @@ describe("Anthropic item-local continuity codec", () => {
       decodeAnthropicContinuity({
         value,
         owner: { target: "thinking", representation: "thinking", hasNativeValue: false },
-        jsonPath: "$.content[0].luckytoken_continuity",
+        jsonPath: "$.content[0].token_continuity",
       }).attachments,
     ).toEqual([]);
   });
@@ -110,13 +110,13 @@ describe("Anthropic item-local continuity codec", () => {
                 type: "server_tool_use",
                 id: "srv-1",
                 name: "web_search",
-                input: { query: "LuckyToken" },
+                input: { query: "Token" },
               },
               {
                 type: "thinking",
                 thinking: "summary",
                 signature: "native-signature",
-                luckytoken_continuity: {
+                token_continuity: {
                   version: 1,
                   source,
                   attachments: [
@@ -157,7 +157,7 @@ describe("Anthropic item-local continuity codec", () => {
                 type: "thinking",
                 thinking: "summary",
                 signature: "native-signature",
-                luckytoken_continuity: {
+                token_continuity: {
                   version: 1,
                   source: {
                     provider: "anthropic",
@@ -172,7 +172,7 @@ describe("Anthropic item-local continuity codec", () => {
               {
                 type: "text",
                 text: "answer",
-                luckytoken_continuity: {
+                token_continuity: {
                   version: 1,
                   source,
                   attachments: [

@@ -16,7 +16,7 @@ import {
   type CommandCodePrivateProviderOptions,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
-import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 const sessionId = "00000000-0000-4000-8000-000000000100";
 const context: Context = {
@@ -56,7 +56,7 @@ function success(text: string, headers?: HeadersInit): Response {
 
 function attemptFacts(message: AssistantMessage): Array<Record<string, unknown>> {
   return (message.diagnostics ?? [])
-    .filter((diagnostic) => diagnostic.type === "luckytoken.invocation_attempt.v1")
+    .filter((diagnostic) => diagnostic.type === "Token.invocation_attempt.v1")
     .map((diagnostic) => diagnostic.details?.attempt as Record<string, unknown>);
 }
 

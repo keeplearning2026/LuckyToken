@@ -17,10 +17,10 @@ import {
 import type { PublicModelSource } from "../../src/public-model-seam.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const MAX_REQUEST_BYTES = 96;
@@ -204,7 +204,7 @@ describe("Request Journey early failure incidents", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
   const subscriptions: DiagnosticsSubscription[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     for (const subscription of subscriptions.splice(0)) {
@@ -222,7 +222,7 @@ describe("Request Journey early failure incidents", () => {
   it.each(cases)(
     "$name records one primary Incident before any lane commit",
     async (testCase) => {
-      const root = await mkdtemp(join(tmpdir(), "luckytoken-early-incident-"));
+      const root = await mkdtemp(join(tmpdir(), "Token-early-incident-"));
       roots.push(root);
       const authority = await createDiagnosticsAuthority({
         configuration: parseDiagnosticsConfiguration(
@@ -244,7 +244,7 @@ describe("Request Journey early failure incidents", () => {
 
       const models = createModels();
       const source = publicModels();
-      const runtime = createLuckyTokenRuntime({
+      const runtime = createTokenRuntime({
         clientProtocols: [
           createAnthropicMessagesHandler({
             models,
@@ -259,7 +259,7 @@ describe("Request Journey early failure incidents", () => {
           }),
         ],
       });
-      const server = await startLuckyTokenHttpServer({
+      const server = await startTokenHttpServer({
         runtime,
         diagnostics: authority,
         createRequestId: () => requestId,
@@ -310,7 +310,7 @@ describe("Request Journey early failure incidents", () => {
   );
 
   it("records server draining as the primary admission Incident without a lane", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-draining-incident-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-draining-incident-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -331,7 +331,7 @@ describe("Request Journey early failure incidents", () => {
     const handlerGate = new Promise<void>((resolve) => {
       releaseHandler = resolve;
     });
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [
         {
           method: "GET",
@@ -353,7 +353,7 @@ describe("Request Journey early failure incidents", () => {
         if (summary.requestId === drainingRequestId) publish(summary);
       }),
     );
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => requestIds[requestIdIndex++]!,
@@ -399,7 +399,7 @@ describe("Request Journey early failure incidents", () => {
           kind: "failure_detected",
           role: "primary",
           classification: "server_draining",
-          origin: "luckytoken",
+          origin: "Token",
           location: {
             phase: "http_admission",
             step: "reject_server_draining",

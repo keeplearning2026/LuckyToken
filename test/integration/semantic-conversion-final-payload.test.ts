@@ -135,7 +135,7 @@ describe("Semantic Conversion final Provider payload tracer", () => {
             type: "reasoning",
             id: "rs_prior",
             summary: [{ type: "summary_text", text: "visible summary" }],
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source: {
                 provider: "provider-test",

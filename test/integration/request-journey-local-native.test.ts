@@ -20,10 +20,10 @@ import {
   createOpenAIResponsesHandler,
 } from "../../src/protocols/openai-responses/handler.js";
 import type { ProviderResponsesLane } from "../../src/provider-native-responses/contract.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "50000000-0000-4000-8000-000000000001";
@@ -47,7 +47,7 @@ const WORK_OUTCOME_LOCATION = {
 describe("Direct Mode Request Journey", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -60,7 +60,7 @@ describe("Direct Mode Request Journey", () => {
   });
 
   it("locates a Codex response-body read failure without entering either other lane", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-local-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-local-journey-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -135,8 +135,8 @@ describe("Direct Mode Request Journey", () => {
       maxRequestBytes: 4_096,
       createSessionId: () => "50000000-0000-4000-8000-000000000002",
     });
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-    const server = await startLuckyTokenHttpServer({
+    const runtime = createTokenRuntime({ clientProtocols: [handler] });
+    const server = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
@@ -169,7 +169,7 @@ describe("Direct Mode Request Journey", () => {
 
     expect(response.status).toBe(502);
     expect(response.headers.get("content-type")).toBe("application/json");
-    expect(response.headers.get("x-luckytoken-request-id")).toBe(REQUEST_ID);
+    expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
     expect(responseBody).toBe(expectedResponseBody);
     expect(outboundRequests).toEqual([
       {

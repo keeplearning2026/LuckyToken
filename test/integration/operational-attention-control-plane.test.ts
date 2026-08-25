@@ -8,13 +8,13 @@ import {
   type AttentionProjection,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 let nextId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextId += 1;
   return {
-    address: `\\\\.\\pipe\\luckytoken-t25-attention-${process.pid}-${nextId}`,
+    address: `\\\\.\\pipe\\Token-t25-attention-${process.pid}-${nextId}`,
     capability: `ticket-25-attention-capability-${String(nextId).padStart(20, "0")}`,
   };
 }
@@ -41,7 +41,7 @@ describe("Ticket 25 attention projection through the Control Plane", () => {
     };
     const host = await startControlPlane({
       endpoint: target,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: transport,
       access: nodePipeFallbackAccess,

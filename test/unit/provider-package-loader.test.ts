@@ -1,5 +1,5 @@
 import { createModels } from "@earendil-works/pi-ai";
-import { providerPackage as commandCodeProviderPackage } from "@luckytoken/provider-commandcode-private";
+import { providerPackage as commandCodeProviderPackage } from "@token/provider-commandcode-private";
 import { describe, expect, it, vi } from "vitest";
 
 import { loadProviderPackages } from "../../src/providers/package-loader.js";

@@ -62,7 +62,7 @@ describe("target-aware reasoning preparation", () => {
             type: "reasoning",
             id: "rs_prior",
             summary: [{ type: "summary_text", text: "visible summary" }],
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source: {
                 provider: "provider-test",
@@ -96,8 +96,8 @@ describe("target-aware reasoning preparation", () => {
     });
 
     expect(converted.invocation.pi.context.messages[0]).toMatchObject({
-      provider: "luckytoken-client",
-      api: "luckytoken-client-history",
+      provider: "Token-client",
+      api: "Token-client-history",
       model: "client-selector",
     });
     expect(converted.invocation.pi.context.messages[0]?.content[0]).toEqual({

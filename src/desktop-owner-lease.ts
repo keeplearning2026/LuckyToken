@@ -1,7 +1,7 @@
 import type {
   ApplicationCommand,
   ApplicationCommandExecution,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 export interface DesktopOwnerLeaseSnapshot {
   readonly leaseId: string;
@@ -32,7 +32,7 @@ function validateLeaseId(leaseId: string): string {
 }
 
 /**
- * Backend-lifetime ownership lease for a desktop-owned LuckyToken process.
+ * Backend-lifetime ownership lease for a desktop-owned Token process.
  * It deliberately tracks a logical desktop shell lease instead of a parent
  * PID: shell handoff may replace one Electron process without restarting the
  * Backend. A new claim supersedes the previous shell; only that lease may
@@ -59,7 +59,7 @@ export function executeDesktopOwnerLeaseCommand(
     outcome: "conflict",
     conflict: {
       code: "desktop_owner_lease_mismatch",
-      message: "The desktop ownership lease belongs to a newer LuckyToken shell.",
+      message: "The desktop ownership lease belongs to a newer Token shell.",
     },
   };
 }

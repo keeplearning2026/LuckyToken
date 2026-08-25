@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import {
   OwnedFileCompatibilityError,
   inspectOwnedCompatibility,
@@ -24,12 +24,12 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
   });
 
   it("rejects a missing or future config schema with an exact typed issue and preserves the source bytes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-t24-config-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-t24-config-"));
     roots.push(root);
     const path = join(root, "config.json");
     const bytes = Buffer.from(
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v999",
+        schemaVersion: "token-config-v999",
         clientProtocols: {},
         pi: { directory: "pi" },
       }),
@@ -38,31 +38,31 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
 
     let thrown: unknown;
     try {
-      await loadLuckyTokenCliConfig(path);
+      await loadTokenCliConfig(path);
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(OwnedFileCompatibilityError);
     expect((thrown as OwnedFileCompatibilityError).issue).toEqual({
       path,
-      contract: "luckytoken-config",
-      foundVersion: "luckytoken-config-v999",
-      expectedVersion: "luckytoken-config-v2",
+      contract: "token-config",
+      foundVersion: "token-config-v999",
+      expectedVersion: "token-config-v2",
       validationError:
-        "LuckyToken config schemaVersion is incompatible with this application build.",
+        "Token config schemaVersion is incompatible with this application build.",
     });
     expect(await readFile(path)).toEqual(bytes);
   });
 
   it("does not read or reinterpret dormant legacy diagnostics and client-auth files", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-t24-preflight-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-t24-preflight-"));
     roots.push(root);
     const configPath = join(root, "config.json");
     const tokenPath = join(root, "anthropic-client-tokens.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         clientProtocols: {
           "anthropic-messages": {},
         },
@@ -72,7 +72,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
     await writeFile(
       tokenPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-client-auth-v1",
+        schemaVersion: "Token-client-auth-v1",
         global: "legacy-token-canary",
         projects: {},
       }),
@@ -84,7 +84,7 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
     const beforeLedger = await readFile(ledgerPath);
     const beforeToken = await readFile(tokenPath);
 
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     const issues = await inspectOwnedCompatibility(config);
     expect(issues).toEqual([]);
     expect(sha256(await readFile(ledgerPath))).toBe(sha256(beforeLedger));
@@ -93,24 +93,24 @@ describe("Ticket 24 owned-file compatibility preflight", () => {
   });
 
   it("does not reinterpret current providerPackages semantic errors as owned-file compatibility issues", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-t24-current-config-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-t24-current-config-"));
     roots.push(root);
     const configPath = join(root, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         clientProtocols: {
           "anthropic-messages": {},
         },
         providerPackages: {
-          "@luckytoken/provider-commandcode-private": {},
+          "@token/provider-commandcode-private": {},
         },
         pi: { directory: "pi" },
       }),
     );
 
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     await expect(inspectOwnedCompatibility(config)).resolves.toEqual([]);
   });
 });

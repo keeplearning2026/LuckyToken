@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 async function fixture(): Promise<{ modelsJsonPath: string }> {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-provider-runtime-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-provider-runtime-"));
   roots.push(root);
   return { modelsJsonPath: join(root, "models.json") };
 }
@@ -48,7 +48,7 @@ async function getBoundModelAuth(runtime: Awaited<ReturnType<typeof createProvid
  */
 describe("Provider Runtime composition", () => {
   it("injects only the Profile Store into the one Backend-lifetime Models collection", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-profile-runtime-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-profile-runtime-"));
     roots.push(root);
     const piDirectory = join(root, "pi");
     const legacyAuthPath = join(piDirectory, "auth.json");
@@ -141,14 +141,14 @@ describe("Provider Runtime composition", () => {
     expect(commandCode).toBeDefined();
     expect(commandCode?.name).toBe("CommandCode Private");
     expect(runtime.providerSource("commandcode-private")).toBe(
-      "luckytoken_bundled",
+      "token_bundled",
     );
     expect(runtime.models.getModels("commandcode-private").length).toBeGreaterThan(0);
     const goat = runtime.models.getProvider("commandcode-goat");
     expect(goat).toBeDefined();
     expect(goat?.name).toBe("CommandCode Goat");
     expect(runtime.providerSource("commandcode-goat")).toBe(
-      "luckytoken_bundled",
+      "token_bundled",
     );
     expect(runtime.models.getModels("commandcode-goat")).toHaveLength(40);
   });
@@ -183,7 +183,7 @@ describe("Provider Runtime composition", () => {
       createUuid: () => "00000000-0000-4000-8000-000000000003",
     });
     expect(runtime.providerSource("commandcode-private")).toBe(
-      "luckytoken_bundled",
+      "token_bundled",
     );
     // The first Pi builtin (e.g. openai or anthropic) is pi_builtin.
     const piId = builtinProviders()[0]?.id;

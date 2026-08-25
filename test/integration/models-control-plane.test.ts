@@ -11,7 +11,7 @@ import {
   startControlPlane,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createModelsControlPlaneHandler } from "../../src/models-config/control-plane.js";
 import {
@@ -55,12 +55,12 @@ describe("models.json through the Control Plane", () => {
       ...(options.fileSystem === undefined ? {} : { fileSystem: options.fileSystem }),
     });
     const endpoint: ControlPlaneEndpoint = {
-      address: `\\\\.\\pipe\\luckytoken-models-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\Token-models-${process.pid}-${++nextPipe}`,
       capability: "models-test-capability-0123456789012345678901",
     };
     const host = await startControlPlane({
       endpoint,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       modelsCommandHandler: createModelsControlPlaneHandler(authority),
       modelsProjection: () => authority.snapshot(),
@@ -99,7 +99,7 @@ describe("models.json through the Control Plane", () => {
     );
 
   it("queries the full state of a valid models.json file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const content = validConfig();
     await writeFile(join(directory, "models.json"), content, "utf8");
@@ -134,7 +134,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("reports an absent models.json as an empty, valid-for-creation state", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
 
     const { client, path } = await startModelsControlPlane({ directory });
@@ -153,7 +153,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("reports invalid JSON with the exact source location and keeps the bytes untouched", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const broken =
       '{\n  "providers": {\n    "ollama": {\n      "baseUrl": "http://localhost:11434/v1",\n      "models": [\n        { "id": "llama3.1:8b" },\n        { "id": "qwen2.5-coder:7b", "reasoning": tru }\n      ]\n    }\n  }\n}';
@@ -189,7 +189,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("reports schema errors with actionable dotted paths without echoing values", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const content = JSON.stringify({
       providers: {
@@ -226,7 +226,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("accepts the pinned Pi syntax extensions: comments and trailing commas", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const content =
       '{\n  // local models (pinned Pi strips comments)\n  "providers": {\n    "ollama": {\n      "baseUrl": "http://localhost:11434/v1",\n      "api": "openai-completions",\n      "models": [\n        { "id": "llama3.1:8b" },\n      ],\n    },\n  },\n}\n';
@@ -246,7 +246,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("reports an unreadable models.json as a load error without echoing content", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const path = join(directory, "models.json");
     await writeFile(path, validConfig(), "utf8");
@@ -274,7 +274,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("validates a raw write before replacing and rejects invalid content without touching the file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const original = validConfig();
     await writeFile(join(directory, "models.json"), original, "utf8");
@@ -312,7 +312,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("applies a valid raw write atomically, publishes the revision, and rejects stale writes with a conflict", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const original = validConfig();
     await writeFile(join(directory, "models.json"), original, "utf8");
@@ -359,7 +359,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("keeps the last valid bytes when the file write itself fails", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const original = validConfig();
     await writeFile(join(directory, "models.json"), original, "utf8");
@@ -403,7 +403,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("keeps raw and structured editors coherent on one authoritative revision", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     // A raw file that carries provider and model extension data that the
     // pinned schema does not declare: the structured editor must preserve it.
@@ -504,7 +504,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("keeps query side-effect free and publishes exactly when a write mutates the file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     await writeFile(join(directory, "models.json"), validConfig(), "utf8");
 
@@ -563,7 +563,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("creates an absent models.json from revision 0 with a structured write", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
 
     const { client, path } = await startModelsControlPlane({ directory });
@@ -595,7 +595,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("lets an explicit structured write repair an invalid existing file", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const broken = '{ "providers": { "ollama": { "baseUrl": 42 } } }';
     await writeFile(join(directory, "models.json"), broken, "utf8");
@@ -640,7 +640,7 @@ describe("models.json through the Control Plane", () => {
   });
 
   it("detects external file edits as new revisions and never overwrites them", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-models-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-models-cp-"));
     roots.push(directory);
     const original = validConfig();
     await writeFile(join(directory, "models.json"), original, "utf8");

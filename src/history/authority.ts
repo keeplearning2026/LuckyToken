@@ -8,7 +8,7 @@ import type {
   HistoryExportResult,
   HistoryQueryResult,
   HistoryRange,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import type { DiagnosticsManagementAuthority } from "../diagnostics/index.js";
 import { runHistoryExport } from "./export.js";
 

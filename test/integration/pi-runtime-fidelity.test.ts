@@ -25,8 +25,8 @@ const usage: Usage = {
 
 const historicalToolTurn: AssistantMessage = {
   role: "assistant",
-  api: "luckytoken-client-history",
-  provider: "luckytoken-client",
+  api: "Token-client-history",
+  provider: "Token-client",
   model: "client-selector",
   content: [
     { type: "text", text: " \t" },

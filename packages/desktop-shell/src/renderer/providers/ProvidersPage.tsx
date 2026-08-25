@@ -20,19 +20,19 @@ import {
   X,
 } from "lucide-react";
 
-import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
+import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 
 type ProfilesResult = Awaited<
-  ReturnType<LuckyTokenDesktopApi["control"]["executeCredentialProfiles"]>
+  ReturnType<TokenDesktopApi["control"]["executeCredentialProfiles"]>
 >;
 type ProviderOption = NonNullable<ProfilesResult["options"]>["providers"][number];
 type ProviderProfiles = ProfilesResult["state"]["providers"][number];
 type CredentialProfile = ProviderProfiles["profiles"][number];
 type ProfileAuthResult = Awaited<
-  ReturnType<LuckyTokenDesktopApi["control"]["executeProviderProfileAuth"]>
+  ReturnType<TokenDesktopApi["control"]["executeProviderProfileAuth"]>
 >;
 type AuthListener = NonNullable<
-  Parameters<LuckyTokenDesktopApi["control"]["executeProviderProfileAuth"]>[1]
+  Parameters<TokenDesktopApi["control"]["executeProviderProfileAuth"]>[1]
 >;
 type AuthEvent = Parameters<AuthListener>[0];
 type ExternalAuthEvent = Extract<
@@ -40,7 +40,7 @@ type ExternalAuthEvent = Extract<
   { readonly type: "auth_url" | "device_code" }
 >;
 type InlineAuthEvent = Exclude<AuthEvent, ExternalAuthEvent>;
-type CatalogResult = Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeCatalog"]>>;
+type CatalogResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeCatalog"]>>;
 type AuthType = "oauth" | "api_key";
 
 export interface ProviderModelRow {
@@ -75,14 +75,14 @@ function modelNameFromInternalAlias(
     : undefined;
 }
 
-export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
+export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   const [providers, setProviders] = useState<readonly ProviderOption[]>([]);
   const [profileState, setProfileState] = useState<ProfilesResult["state"]>({
     providers: [],
   });
   const [catalog, setCatalog] = useState<CatalogResult>();
   const [publicModels, setPublicModels] = useState<Awaited<
-    ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
+    ReturnType<TokenDesktopApi["control"]["executePublicModels"]>
   >>();
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(false);
@@ -477,7 +477,7 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
 
   const executeProfileCommand = async (
     command: Parameters<
-      LuckyTokenDesktopApi["control"]["executeCredentialProfiles"]
+      TokenDesktopApi["control"]["executeCredentialProfiles"]
     >[0],
   ): Promise<ProfilesResult> => {
     const result = await api.control.executeCredentialProfiles(command);
@@ -542,9 +542,9 @@ export function ProvidersPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
   const executePublicModelMutation = async (
     commandForRevision: (
       revision: number,
-    ) => Parameters<LuckyTokenDesktopApi["control"]["executePublicModels"]>[0],
+    ) => Parameters<TokenDesktopApi["control"]["executePublicModels"]>[0],
   ): Promise<Awaited<
-    ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
+    ReturnType<TokenDesktopApi["control"]["executePublicModels"]>
   > | undefined> => {
     const revision = publicModels?.state.revision;
     if (revision === undefined) return undefined;

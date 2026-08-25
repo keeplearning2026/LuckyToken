@@ -12,7 +12,7 @@ import {
   controlPlaneVersion,
   createNodePipeTransport,
   parseControlPlaneDescriptor,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { resolvePackagedExecutable } from "./support/packaged-executable.mjs";
 
 const desktopRoot = resolve(import.meta.dirname, "..");
@@ -42,7 +42,7 @@ async function writeIsolatedFirstUseConfig(stateRoot, port) {
   await writeFile(
     join(stateRoot, "config.json"),
     `${JSON.stringify({
-      schemaVersion: "luckytoken-config-v2",
+      schemaVersion: "token-config-v2",
       server: { port },
       clientProtocols: {
         "anthropic-messages": {
@@ -143,10 +143,10 @@ test(
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
     const executablePath = await resolvePackagedExecutable(desktopRoot);
-    const home = await mkdtemp(join(tmpdir(), "luckytoken-first-run-"));
+    const home = await mkdtemp(join(tmpdir(), "Token-first-run-"));
     const appData = join(home, "AppData", "Roaming");
     const localAppData = join(home, "AppData", "Local");
-    const stateRoot = join(home, ".luckytoken");
+    const stateRoot = join(home, ".Token");
     const dataPlanePort = await freePort();
     await Promise.all([
       mkdir(appData, { recursive: true }),
@@ -162,7 +162,7 @@ test(
         executablePath,
         env: {
           ...process.env,
-          LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+          TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
           USERPROFILE: home,
           HOME: home,
           CODEX_HOME: join(home, ".codex"),

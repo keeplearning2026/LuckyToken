@@ -1,15 +1,15 @@
-/** Read-only compatibility preflight for LuckyToken-owned persisted files. */
+/** Read-only compatibility preflight for Token-owned persisted files. */
 import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import type {
   CompatibilityIssue,
   RecoveryProjection,
-} from "@luckytoken/application-control-plane/control-plane";
-import type { LuckyTokenCliConfig } from "../cli-config.js";
+} from "@token/application-control-plane/control-plane";
+import type { TokenCliConfig } from "../cli-config.js";
 
-export const LUCKYTOKEN_CONFIG_SCHEMA_VERSION =
-  "luckytoken-config-v2" as const;
+export const TOKEN_CONFIG_SCHEMA_VERSION =
+  "token-config-v2" as const;
 
 export class OwnedFileCompatibilityError extends Error {
   constructor(readonly issue: CompatibilityIssue) {
@@ -35,9 +35,9 @@ export function configCompatibilityIssue(
   if (error instanceof OwnedFileCompatibilityError) return error.issue;
   return Object.freeze({
     path: resolve(path),
-    contract: "luckytoken-config",
+    contract: "token-config",
     foundVersion: "invalid" as const,
-    expectedVersion: LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+    expectedVersion: TOKEN_CONFIG_SCHEMA_VERSION,
     validationError: safeValidationError(error),
   });
 }
@@ -93,22 +93,22 @@ async function inspectJsonVersion(
         ? found
         : "missing",
     expectedVersion,
-    validationError: `${contract} version is incompatible with this LuckyToken build.`,
+    validationError: `${contract} version is incompatible with this Token build.`,
   });
 }
 
 /** Inspects only explicit paths derived from the already validated
- * LuckyToken config. No file is opened writable and no external default
+ * Token config. No file is opened writable and no external default
  * store (Pi Agent, Codex, Claude Code, CC Switch, OpenCodex) is discovered. */
 export async function inspectOwnedCompatibility(
-  config: LuckyTokenCliConfig,
+  config: TokenCliConfig,
 ): Promise<readonly CompatibilityIssue[]> {
   const checks: Array<Promise<CompatibilityIssue | undefined>> = [
     inspectJsonVersion(
       join(config.pi.directory, "models-catalog-cache.json"),
-      "luckytoken-catalog-cache",
+      "Token-catalog-cache",
       "schema",
-      "luckytoken-catalog-cache-v1",
+      "Token-catalog-cache-v1",
     ),
   ];
   const results = await Promise.all(checks);

@@ -100,7 +100,7 @@ function decodeManifest(value: unknown): BackupManifestSummary | undefined {
   const input = record(value);
   if (
     input === undefined ||
-    input.format !== "luckytoken-backup" ||
+    input.format !== "token-backup" ||
     input.formatVersion !== 1 ||
     !Number.isSafeInteger(input.createdAt) ||
     (input.createdAt as number) < 0 ||
@@ -118,7 +118,7 @@ function decodeManifest(value: unknown): BackupManifestSummary | undefined {
     return undefined;
   }
   return Object.freeze({
-    format: "luckytoken-backup",
+    format: "token-backup",
     formatVersion: 1,
     createdAt: input.createdAt as number,
     sensitive: input.sensitive,

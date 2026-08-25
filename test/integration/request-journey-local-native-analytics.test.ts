@@ -1,5 +1,5 @@
 import type { Models } from "@earendil-works/pi-ai";
-import type { AnalyticsResult } from "@luckytoken/application-control-plane/control-plane";
+import type { AnalyticsResult } from "@token/application-control-plane/control-plane";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,10 +18,10 @@ import {
 import type { ExecutionOperation } from "../../src/execution.js";
 import { createCodexDirectResponsesLane } from "../../src/integrations/codex/local-responses.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "87000000-0000-4000-8000-000000000001";
@@ -95,7 +95,7 @@ function requireSummary(
 describe("Direct Mode terminal usage analytics producer", () => {
   it("projects terminal usage without changing the served or outbound wire", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-local-native-analytics-"),
+      join(tmpdir(), "Token-local-native-analytics-"),
     );
 
     async function run(
@@ -103,7 +103,7 @@ describe("Direct Mode terminal usage analytics producer", () => {
     ): Promise<RunResult> {
       const runRoot = join(root, mode);
       let authority: DiagnosticsManagementAuthority | undefined;
-      let server: RunningLuckyTokenHttpServer | undefined;
+      let server: RunningTokenHttpServer | undefined;
       let unsubscribe: (() => void) | undefined;
       let clock = 1_000;
       const outbound: WireSnapshot[] = [];
@@ -166,8 +166,8 @@ describe("Direct Mode terminal usage analytics producer", () => {
           maxRequestBytes: 4_096,
           createSessionId: () => SESSION_ID,
         });
-        const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-        server = await startLuckyTokenHttpServer({
+        const runtime = createTokenRuntime({ clientProtocols: [handler] });
+        server = await startTokenHttpServer({
           runtime,
           ...(authority === undefined ? {} : { diagnostics: authority }),
           createRequestId: () => REQUEST_ID,
@@ -230,7 +230,7 @@ describe("Direct Mode terminal usage analytics producer", () => {
         headers: {
           "content-length": String(Buffer.byteLength(UPSTREAM_RESPONSE_BODY)),
           "content-type": "application/json",
-          "x-luckytoken-request-id": REQUEST_ID,
+          "x-token-request-id": REQUEST_ID,
         },
         body: UPSTREAM_RESPONSE_BODY,
       });

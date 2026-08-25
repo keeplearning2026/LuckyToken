@@ -5,7 +5,7 @@ import {
   createTerminalUsageFact,
   decodeTerminalUsageFact,
   type TerminalUsageClass,
-} from "@luckytoken/provider-contract/usage";
+} from "@token/provider-contract/usage";
 
 function usage(input: number, output: number, cacheRead: number): Usage {
   return {

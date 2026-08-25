@@ -1,7 +1,7 @@
-import type { EffectiveCatalogBaseline } from "@luckytoken/application-control-plane/control-plane";
+import type { EffectiveCatalogBaseline } from "@token/application-control-plane/control-plane";
 
 /**
- * The exact pinned Pi implementation that LuckyToken's models.json schema
+ * The exact pinned Pi implementation that Token's models.json schema
  * and effective catalog composition are compatible with (Ticket 09).
  *
  * This record is the single compatibility identity: the models.json schema

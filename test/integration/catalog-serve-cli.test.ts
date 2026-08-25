@@ -40,7 +40,7 @@ function startCli(args: readonly string[]): ChildProcessWithoutNullStreams {
   const fixtureHome =
     configDirectory === undefined
       ? undefined
-      : basename(configDirectory) === ".luckytoken"
+      : basename(configDirectory) === ".Token"
         ? dirname(configDirectory)
         : configDirectory;
   return spawn(process.execPath, [tsxCli, "src/cli.ts", ...args], {
@@ -73,7 +73,7 @@ async function reserveFreePort(): Promise<number> {
 }
 
 /**
- * Ticket 11 serve wiring seam: the running LuckyToken instance owns the
+ * Ticket 11 serve wiring seam: the running Token instance owns the
  * validated catalog cache under the configured application directory and
  * serves the versioned catalog commands through the Control Plane. The
  * CLI `control catalog` commands drive the real serve process end to end.
@@ -103,15 +103,15 @@ describe("catalog serve wiring", () => {
     "serves catalog queries and manual refresh through the running instance",
     { timeout: 60_000 },
     async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-catalog-serve-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-catalog-serve-"));
     roots.push(root);
     const stateDirectory = join(root, "state");
     await mkdir(stateDirectory, { recursive: true });
-    const configPath = join(root, "luckytoken.config.json");
+    const configPath = join(root, "Token.config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: await reserveFreePort() },
         clientProtocols: {
           "anthropic-messages": {
@@ -121,7 +121,7 @@ describe("catalog serve wiring", () => {
       }),
       "utf8",
     );
-    const descriptorPath = join(root, ".luckytoken", "control-plane.json");
+    const descriptorPath = join(root, ".Token", "control-plane.json");
     const serve = startCli(["--config", configPath]);
     children.push(serve);
     const serveCapture = captureChild(serve);
@@ -223,15 +223,15 @@ describe("catalog serve wiring", () => {
     expect(statusSnapshot.dataPlane?.configuredPort).toBeGreaterThan(0);
     expect(statusSnapshot.dataPlane?.configuredOrigin).toContain("127.0.0.1");
 
-    // The cache file is a transparent LuckyToken-owned file under the
+    // The cache file is a transparent Token-owned file under the
     // configured application directory. With no dynamic Providers
     // configured nothing is persisted; when a Provider publishes cached
-    // facts the file must carry the LuckyToken schema identity.
+    // facts the file must carry the Token schema identity.
     const cachePath = join(root, "pi", "models-catalog-cache.json");
     const cacheBytes = await readFile(cachePath, "utf8").catch(() => undefined);
     if (cacheBytes !== undefined) {
       const cache = JSON.parse(cacheBytes) as { schema: string };
-      expect(cache.schema).toBe("luckytoken-catalog-cache-v1");
+      expect(cache.schema).toBe("Token-catalog-cache-v1");
     }
 
     expect(serveCapture).toBeDefined();

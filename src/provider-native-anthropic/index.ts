@@ -543,7 +543,7 @@ export function createAnthropicProviderNativeLane(
             role: "primary",
             classification:
               "provider_profile_attempt_limit_exhausted_after_final_429",
-            origin: "luckytoken",
+            origin: "Token",
             originPrecision: "exact",
             location: advanceLocation,
           });
@@ -585,7 +585,7 @@ export function createAnthropicProviderNativeLane(
               failureId: `${input.requestId}:provider_profile_transition_failed`,
               role: "primary",
               classification: "provider_profile_transition_failed",
-              origin: "luckytoken",
+              origin: "Token",
               originPrecision: "exact",
               location: advanceLocation,
             });
@@ -613,7 +613,7 @@ export function createAnthropicProviderNativeLane(
             failureId: `${input.requestId}:${classification}`,
             role: "primary",
             classification,
-            origin: "luckytoken",
+            origin: "Token",
             originPrecision: "exact",
             location: advanceLocation,
           });

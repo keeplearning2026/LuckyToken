@@ -12,7 +12,7 @@ import {
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
-import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 function lifecycleModel(): Model<typeof commandCodePrivateApiId> {
   return {
@@ -187,7 +187,7 @@ it("keeps committed model content successful when terminal usage is inconsistent
   expect(
     result.diagnostics
       ?.filter(
-        (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+        (diagnostic) => diagnostic.type === "Token.conversion_notice.v1",
       )
       .map((diagnostic) => diagnostic.details?.notice),
   ).toContainEqual({
@@ -224,8 +224,8 @@ it("carries Provider-local missing-result notices on the Pi terminal", async () 
     messages: [
       {
         role: "assistant",
-        api: "luckytoken-client-history",
-        provider: "luckytoken-client",
+        api: "Token-client-history",
+        provider: "Token-client",
         model: "client-model",
         content: [{ type: "toolCall", id: "lost", name: "lookup", arguments: {} }],
         usage,
@@ -288,11 +288,11 @@ it("carries Provider-local missing-result notices on the Pi terminal", async () 
   });
   expect(
     result.diagnostics?.filter(
-      (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+      (diagnostic) => diagnostic.type === "Token.conversion_notice.v1",
     ),
   ).toEqual([
     expect.objectContaining({
-      type: "luckytoken.conversion_notice.v1",
+      type: "Token.conversion_notice.v1",
       details: {
         notice: {
           adapter: "commandcode-private",
@@ -369,7 +369,7 @@ it("applies unknown-ignore and pause-stop policies through the Provider seam", a
   expect(
     result.diagnostics
       ?.filter(
-        (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+        (diagnostic) => diagnostic.type === "Token.conversion_notice.v1",
       )
       .map((diagnostic) => diagnostic.details?.notice),
   ).toEqual([

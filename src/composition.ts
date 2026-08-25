@@ -2,7 +2,7 @@ import type { FetchFunction, Models } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
-import type { LuckyTokenCliConfig } from "./cli-config.js";
+import type { TokenCliConfig } from "./cli-config.js";
 import {
   certifyCoreServingComposition,
   type CoreServingCertificationManifest,
@@ -41,14 +41,14 @@ import {
   openaiResponsesProtocolId,
 } from "./protocols/openai-responses/handler.js";
 import { createResponseSessionState } from "./protocols/openai-responses/session-state.js";
-import { createLuckyTokenRuntime, type LuckyTokenRuntime } from "./runtime.js";
+import { createTokenRuntime, type TokenRuntime } from "./runtime.js";
 import { createProtocolAwareRuntime } from "./settings/runtime.js";
 import { createProfileBoundPiExecution } from "./credentials/profile-bound-pi-execution.js";
 import type { WebSocketUpgradeHandler } from "./websocket-upgrade.js";
 
 export type DataPlaneConfiguration = Readonly<
   Pick<
-    LuckyTokenCliConfig,
+    TokenCliConfig,
     "configPath" | "clientProtocols" | "limits"
   >
 >;
@@ -56,7 +56,7 @@ export type DataPlaneConfiguration = Readonly<
 /** Everything serving needs from its Backend owner. Provider construction,
  * persistence stores, settings mutation, and credential representation stay
  * outside this Interface. */
-export interface ConfiguredLuckyTokenDataPlaneOptions {
+export interface ConfiguredTokenDataPlaneOptions {
   readonly configuration: DataPlaneConfiguration;
   readonly models: Models;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
@@ -71,17 +71,17 @@ export interface ConfiguredLuckyTokenDataPlaneOptions {
   readonly shutdownSignal?: AbortSignal;
 }
 
-export interface ConfiguredLuckyTokenDataPlane {
-  readonly runtime: LuckyTokenRuntime;
+export interface ConfiguredTokenDataPlane {
+  readonly runtime: TokenRuntime;
   readonly certification: CoreServingCertificationManifest;
   readonly webSocketUpgrade?: WebSocketUpgradeHandler;
   /** Finalize protocol-owned resources after request execution is quiescent. */
   close(): Promise<void>;
 }
 
-export async function createConfiguredLuckyTokenDataPlane(
-  options: ConfiguredLuckyTokenDataPlaneOptions,
-): Promise<ConfiguredLuckyTokenDataPlane> {
+export async function createConfiguredTokenDataPlane(
+  options: ConfiguredTokenDataPlaneOptions,
+): Promise<ConfiguredTokenDataPlane> {
   const config = options.configuration;
   const uninstalledProtocol = Object.keys(config.clientProtocols).find(
     (protocolId) =>
@@ -239,7 +239,7 @@ export async function createConfiguredLuckyTokenDataPlane(
     maxRequestBytes: config.limits.maxRequestBytes,
     requestTimeoutMs: config.limits.requestTimeoutMs,
   });
-  const baseRuntime = createLuckyTokenRuntime({
+  const baseRuntime = createTokenRuntime({
     clientProtocols: handlers,
     requestTimeoutMs: config.limits.requestTimeoutMs,
     ...(options.diagnostics === undefined

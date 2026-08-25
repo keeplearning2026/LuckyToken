@@ -15,7 +15,7 @@ import type { ExecutionOperation } from "../../src/execution.js";
 import { createCodexDirectCompactLane } from "../../src/integrations/codex/local-compact.js";
 import { createOpenAIResponsesCompactHandler } from "../../src/protocols/openai-responses/compact.js";
 import type { ProviderResponsesLane } from "../../src/provider-native-responses/contract.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 
 const REQUEST_ID = "68000000-0000-4000-8000-000000000001";
 
@@ -50,7 +50,7 @@ function recordingAuthority(): {
 }
 
 function compactRequest(model: string): Request {
-  return new Request("http://luckytoken.test/v1/responses/compact?bare&token=caller-query", {
+  return new Request("http://Token.test/v1/responses/compact?bare&token=caller-query", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -132,7 +132,7 @@ describe("Request Journey successful conversation compaction", () => {
       stateFile: "unused-local-compact-journey.json",
       maxRequestBytes: 8_192,
     });
-    const response = await createLuckyTokenRuntime({
+    const response = await createTokenRuntime({
       clientProtocols: [handler],
       diagnostics: recording.authority,
       createRequestId: () => REQUEST_ID,
@@ -209,7 +209,7 @@ describe("Request Journey successful conversation compaction", () => {
       maxRequestBytes: 8_192,
     });
 
-    const response = await createLuckyTokenRuntime({
+    const response = await createTokenRuntime({
       clientProtocols: [handler],
       diagnostics: recording.authority,
       createRequestId: () => REQUEST_ID,
@@ -270,7 +270,7 @@ describe("Request Journey successful conversation compaction", () => {
       maxRequestBytes: 8_192,
     });
 
-    const response = await createLuckyTokenRuntime({
+    const response = await createTokenRuntime({
       clientProtocols: [handler],
       diagnostics: recording.authority,
       createRequestId: () => REQUEST_ID,

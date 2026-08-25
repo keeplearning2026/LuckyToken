@@ -15,7 +15,7 @@ const CONFIG_FILE_MODE = 0o600;
 
 function firstRunConfig(): unknown {
   return {
-    schemaVersion: "luckytoken-config-v2",
+    schemaVersion: "token-config-v2",
     server: {
       port: 3000,
     },

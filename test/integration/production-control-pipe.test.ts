@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createLocalIpcAddress } from "@luckytoken/application-control-plane/control-plane";
+import { createLocalIpcAddress } from "@token/application-control-plane/control-plane";
 import { createProductionControlPipe } from "../../src/control-pipe-composition.js";
 
 describe("production Control Plane local IPC composition", () => {

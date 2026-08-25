@@ -1,6 +1,6 @@
-import { providerPackage } from "@luckytoken/provider-commandcode-goat";
+import { providerPackage } from "@token/provider-commandcode-goat";
 import type { FetchFunction } from "@earendil-works/pi-ai";
-import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { describe, expect, it } from "vitest";
 
 function openAICompletion(text: string): Response {
@@ -59,7 +59,7 @@ describe("CommandCode Goat Provider Package", () => {
     const provider = providerPackage.createProvider({
       configuration: {},
       configurationPath:
-        'providerPackages["@luckytoken/provider-commandcode-goat"]',
+        'providerPackages["@token/provider-commandcode-goat"]',
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,
@@ -86,7 +86,7 @@ describe("CommandCode Goat Provider Package", () => {
     const provider = providerPackage.createProvider({
       configuration: {},
       configurationPath:
-        'providerPackages["@luckytoken/provider-commandcode-goat"]',
+        'providerPackages["@token/provider-commandcode-goat"]',
       host: {
         fetch,
         now: () => 1,
@@ -145,7 +145,7 @@ describe("CommandCode Goat Provider Package", () => {
     const provider = providerPackage.createProvider({
       configuration: {},
       configurationPath:
-        'providerPackages["@luckytoken/provider-commandcode-goat"]',
+        'providerPackages["@token/provider-commandcode-goat"]',
       host: {
         fetch,
         now: () => 1,
@@ -187,7 +187,7 @@ describe("CommandCode Goat Provider Package", () => {
     const provider = providerPackage.createProvider({
       configuration: {},
       configurationPath:
-        'providerPackages["@luckytoken/provider-commandcode-goat"]',
+        'providerPackages["@token/provider-commandcode-goat"]',
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,
@@ -212,7 +212,7 @@ describe("CommandCode Goat Provider Package", () => {
     const provider = providerPackage.createProvider({
       configuration: {},
       configurationPath:
-        'providerPackages["@luckytoken/provider-commandcode-goat"]',
+        'providerPackages["@token/provider-commandcode-goat"]',
       host: {
         fetch: async () =>
           new Response(

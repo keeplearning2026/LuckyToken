@@ -3,7 +3,7 @@ import type {
   PipeSecurityPolicy,
   PipeServer,
   PipeTransport,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 class MemoryChannel {
   readonly #chunks: Buffer[] = [];

@@ -7,15 +7,15 @@ import test from "node:test";
 import { resolvePackagedExecutable } from "../../packages/desktop-shell/test/support/packaged-executable.mjs";
 
 test("distribution certification uses the explicitly selected packaged executable", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-executable-binding-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-executable-binding-"));
   const outputRoot = join(root, ".electron-out");
   const selected = join(root, "candidate", "Token.exe");
-  const newerUnselected = join(outputRoot, "newer", "Token-win32-x64", "Token.exe");
+  const newerUnselected = join(outputRoot, "newer", "token-win32-x64", "Token.exe");
 
   try {
     await Promise.all([
       mkdir(join(root, "candidate"), { recursive: true }),
-      mkdir(join(outputRoot, "newer", "Token-win32-x64"), { recursive: true }),
+      mkdir(join(outputRoot, "newer", "token-win32-x64"), { recursive: true }),
     ]);
     await Promise.all([
       writeFile(selected, "selected", "utf8"),
@@ -24,7 +24,7 @@ test("distribution certification uses the explicitly selected packaged executabl
 
     assert.equal(
       await resolvePackagedExecutable(root, {
-        LUCKYTOKEN_PACKAGED_EXECUTABLE: selected,
+        TOKEN_PACKAGED_EXECUTABLE: selected,
       }),
       resolve(selected),
     );
@@ -34,11 +34,11 @@ test("distribution certification uses the explicitly selected packaged executabl
 });
 
 test("an invalid explicit packaged executable fails closed", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-executable-binding-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-executable-binding-"));
   try {
     await assert.rejects(
       resolvePackagedExecutable(root, {
-        LUCKYTOKEN_PACKAGED_EXECUTABLE: join(root, "missing", "Token.exe"),
+        TOKEN_PACKAGED_EXECUTABLE: join(root, "missing", "Token.exe"),
       }),
       /selected packaged Token executable does not exist/u,
     );

@@ -7,12 +7,12 @@
  * - the one Pi `Models` collection for login AND request execution;
  * - Pi built-in Provider registration;
  * - `models.json` Provider composition (overlays/custom Providers);
- * - bundled LuckyToken Provider Package loading;
+ * - bundled Token Provider Package loading;
  * - external user Provider Package loading;
  * - the one Provider Profile state owner, its narrow management/binding
  *   views, and the composition-private Pi CredentialStore adapter;
  * - the catalog runtime handle (`models`, `capture`);
- * - Provider source classification (`pi_builtin` / `luckytoken_bundled` /
+ * - Provider source classification (`pi_builtin` / `token_bundled` /
  *   `user`).
  *
  * Does NOT own: the Control Plane host, Data Plane listener lifecycle,
@@ -49,7 +49,7 @@ import {
   bundledProviderPackages,
   bundledProviderSpecifiers,
 } from "./bundled.js";
-import { registerLuckyTokenProviders } from "./catalog.js";
+import { registerTokenProviders } from "./catalog.js";
 import {
   createCatalogSnapshotModels,
   type CatalogProviderOperations,
@@ -70,7 +70,7 @@ import { createRequestCompositionModels } from "./request-composition.js";
 
 export type ProviderSource =
   | "pi_builtin"
-  | "luckytoken_bundled"
+  | "token_bundled"
   | "user";
 
 /** The narrow Provider Runtime seam (Spec §7.3). */
@@ -150,7 +150,7 @@ export function assertUserProviderPackages(
   for (const specifier of Object.keys(userProviderPackages)) {
     if (bundledProviderSpecifiers.has(specifier)) {
       throw new Error(
-        `Provider Package ${specifier} is a LuckyToken bundled product Provider and cannot be configured in providerPackages. Remove it from the configuration.`,
+        `Provider Package ${specifier} is a Token bundled product Provider and cannot be configured in providerPackages. Remove it from the configuration.`,
       );
     }
   }
@@ -212,13 +212,13 @@ export async function createProviderRuntime(
   });
 
   // Step 1+2: Pi built-ins + models.json overlays/custom Providers.
-  const modelsJsonProviderIds = registerLuckyTokenProviders(mutableModels, {
+  const modelsJsonProviderIds = registerTokenProviders(mutableModels, {
     ...(modelsJson === undefined ? {} : { modelsJson }),
     configValues,
   });
 
-  // Step 3: LuckyToken bundled Provider Packages. They load through the
-  // same LuckyToken Provider Package contract as user packages (Spec
+  // Step 3: Token bundled Provider Packages. They load through the
+  // same Token Provider Package contract as user packages (Spec
   // §8.3); a missing/broken bundled Provider is a product integrity
   // failure (Spec §18.1).
   const bundled: Record<string, unknown> = {};
@@ -284,7 +284,7 @@ export async function createProviderRuntime(
   );
 
   const providerSource = (providerId: string): ProviderSource => {
-    if (bundledProviderIds.has(providerId)) return "luckytoken_bundled";
+    if (bundledProviderIds.has(providerId)) return "token_bundled";
     if (piBuiltinIds.has(providerId)) return "pi_builtin";
     if (
       modelsJsonProviderIdSet.has(providerId) ||

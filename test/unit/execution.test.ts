@@ -22,11 +22,11 @@ import {
   createConversionNoticeDiagnostic,
   createInvocationAttemptDiagnostic,
   type ExecutionFactsSink,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 import {
   createUpstreamFailureDiagnostic,
   createUpstreamFailureFact,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 
 const usage: Usage = {
   input: 0,
@@ -320,7 +320,7 @@ describe("Core atomic execution", () => {
       createConversionNoticeDiagnostic(notice, 1),
       createInvocationAttemptDiagnostic(attempt, 1),
       Object.freeze({
-        type: "luckytoken.invocation_attempt.v1",
+        type: "Token.invocation_attempt.v1",
         timestamp: 1,
         details: Object.freeze({ attempt }),
       }),

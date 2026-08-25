@@ -13,7 +13,7 @@ import {
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT_BYTES = 64 * 1_024 * 1_024;
 const VALIDATION_TIMEOUT_MS = 30_000;
-const VALIDATION_PROMPT = "LuckyToken catalog validation";
+const VALIDATION_PROMPT = "Token catalog validation";
 
 export interface CodexCatalogValidator {
   validate(content: string): Promise<void>;
@@ -31,7 +31,7 @@ function candidateSlugs(content: string): readonly string[] {
     !("models" in parsed) ||
     !Array.isArray(parsed.models)
   ) {
-    throw new Error("LuckyToken Codex catalog must contain a models array");
+    throw new Error("Token Codex catalog must contain a models array");
   }
   const slugs = parsed.models.map((entry) => {
     if (
@@ -42,12 +42,12 @@ function candidateSlugs(content: string): readonly string[] {
       typeof entry.slug !== "string" ||
       entry.slug.length === 0
     ) {
-      throw new Error("LuckyToken Codex catalog contains an invalid model slug");
+      throw new Error("Token Codex catalog contains an invalid model slug");
     }
     return entry.slug;
   });
   if (new Set(slugs).size !== slugs.length) {
-    throw new Error("LuckyToken Codex catalog contains duplicate model slugs");
+    throw new Error("Token Codex catalog contains duplicate model slugs");
   }
   return Object.freeze(slugs);
 }
@@ -133,14 +133,14 @@ export function createCodexCatalogValidator(
       const expectedSlugs = candidateSlugs(content);
       const routedSlug = expectedSlugs.find((slug) => slug.includes("/"));
       if (routedSlug === undefined) {
-        throw new Error("LuckyToken Codex catalog contains no routed model");
+        throw new Error("Token Codex catalog contains no routed model");
       }
 
       const probeHome = await mkdtemp(
-        join(tmpdir(), "luckytoken-codex-catalog-validation-"),
+        join(tmpdir(), "Token-codex-catalog-validation-"),
       );
       try {
-        const catalogPath = join(probeHome, "luckytoken-model-catalog.json");
+        const catalogPath = join(probeHome, "token-model-catalog.json");
         await writeFile(catalogPath, content, "utf8");
         await writeFile(
           join(probeHome, "config.toml"),
@@ -203,7 +203,7 @@ export function createCodexCatalogValidator(
           }
         }
         throw new Error(
-          `No installed Codex CLI accepted the LuckyToken model catalog candidate: ${lastFailure}`,
+          `No installed Codex CLI accepted the Token model catalog candidate: ${lastFailure}`,
         );
       } finally {
         await rm(probeHome, { recursive: true, force: true });

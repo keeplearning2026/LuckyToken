@@ -38,7 +38,7 @@ export const REQUEST_COLUMN_DEFINITIONS: readonly RequestColumnDefinition[] = [
 export type RequestColumnWidths = Readonly<Record<RequestColumnId, number>>;
 
 export const REQUEST_COLUMN_WIDTHS_STORAGE_KEY =
-  "luckytoken.overview.request-column-widths.v1";
+  "Token.overview.request-column-widths.v1";
 
 export const DEFAULT_REQUEST_COLUMN_WIDTHS: RequestColumnWidths = Object.fromEntries(
   REQUEST_COLUMN_DEFINITIONS.map((column) => [column.id, column.defaultWidth]),

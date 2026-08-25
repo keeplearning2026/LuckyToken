@@ -139,7 +139,7 @@ function explicitReasoningDisableWarning(model: Model<string>): string {
   const target = model.provider === "commandcode-goat"
     ? "CommandCode GOAT deepseek-v4-flash"
     : "OpenCode Go deepseek-v4-flash";
-  return `${target} does not guarantee reasoning disable; LuckyToken removed known reasoning controls and accepted the target default`;
+  return `${target} does not guarantee reasoning disable; Token removed known reasoning controls and accepted the target default`;
 }
 
 type OpenAIThinkingFormat =
@@ -460,7 +460,7 @@ function projectReasoning(
       degraded(
         outcomes,
         "reasoning.activation",
-        `openai-completions ${format} target used its reasoning default after LuckyToken removed known enabling controls`,
+        `openai-completions ${format} target used its reasoning default after Token removed known enabling controls`,
       );
     } else {
       add(outcomes, "reasoning.activation", { kind: "pi-native" });

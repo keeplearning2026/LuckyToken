@@ -16,8 +16,8 @@ import { readFile } from "node:fs/promises";
 import {
   createCommandCodePrivateProvider,
   providerPackage,
-} from "@luckytoken/provider-commandcode-private";
-import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-commandcode-private";
+import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
 
 /**
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
     providerPackage.createProvider({
       configuration: {},
       configurationPath:
-        'providerPackages["@luckytoken/provider-commandcode-private"]',
+        'providerPackages["@token/provider-commandcode-private"]',
       host: {
         fetch: globalThis.fetch,
         now: Date.now,

@@ -1,6 +1,6 @@
 # 08 — Create Electron Main, preload, and packaging skeleton
 
-**What to build:** Establish a TypeScript-only Electron desktop that can start securely and be packaged, without yet recreating the full LuckyToken product UI.
+**What to build:** Establish a TypeScript-only Electron desktop that can start securely and be packaged, without yet recreating the full Token product UI.
 
 **Blocked by:** 01 — Freeze migration seams and architecture guards.
 

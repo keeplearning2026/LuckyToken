@@ -171,14 +171,14 @@ describe("Anthropic response interpretation parser certification", () => {
     expect(converted.message.content).toEqual([
       expect.objectContaining({
         type: "thinking",
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           source: expect.objectContaining({ api }),
           attachments: [expect.objectContaining({ target: "thinking" })],
         }),
       }),
       expect.objectContaining({
         type: "text",
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({ target: "text" })],
         }),
       }),
@@ -424,7 +424,7 @@ describe("Anthropic response interpretation parser certification", () => {
     expect(converted.message.content).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: "thinking",
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "thinking",
             value: "reasoning_content",
@@ -435,7 +435,7 @@ describe("Anthropic response interpretation parser certification", () => {
         type: "tool_use",
         id: "call-1",
         caller: { type: "direct" },
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "toolCall",
             callId: "call-1",
@@ -636,7 +636,7 @@ describe("Anthropic response interpretation parser certification", () => {
       expect.objectContaining({
         type: "thinking",
         signature: "",
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "thinking",
             value: "pi-thinking-state",
@@ -646,7 +646,7 @@ describe("Anthropic response interpretation parser certification", () => {
       expect.objectContaining({
         type: "text",
         text: "answer",
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "text",
             value: "pi-text-state",
@@ -783,7 +783,7 @@ describe("Anthropic response interpretation parser certification", () => {
       type: "thinking",
       thinking: "plan",
       signature: "anthropic-thinking-state",
-      luckytoken_continuity: {
+      token_continuity: {
         source: {
           provider: "anthropic",
           api: "anthropic-messages",

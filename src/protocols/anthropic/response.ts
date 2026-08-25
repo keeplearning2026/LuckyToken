@@ -1,12 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 import {
   interpretAnthropicAssistantResponse,
   type AnthropicInterpretedResponse,
 } from "./semantic/response.js";
-import type { LuckyTokenAnthropicContinuityEnvelopeV1 } from "./semantic/reasoning/continuity.js";
+import type { TokenAnthropicContinuityEnvelopeV1 } from "./semantic/reasoning/continuity.js";
 import type { AnthropicThinkingDisplayIntent } from "./semantic/reasoning/contract.js";
 
 export class OutboundResponseFidelityFailure extends Error {
@@ -22,20 +22,20 @@ export interface AnthropicTextBlock {
   citations: null;
   text: string;
   type: "text";
-  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
+  token_continuity?: TokenAnthropicContinuityEnvelopeV1;
 }
 
 export interface AnthropicThinkingBlock {
   signature: string;
   thinking: string;
   type: "thinking";
-  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
+  token_continuity?: TokenAnthropicContinuityEnvelopeV1;
 }
 
 export interface AnthropicRedactedThinkingBlock {
   data: string;
   type: "redacted_thinking";
-  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
+  token_continuity?: TokenAnthropicContinuityEnvelopeV1;
 }
 
 export interface AnthropicToolUseBlock {
@@ -44,7 +44,7 @@ export interface AnthropicToolUseBlock {
   input: Record<string, JsonValue>;
   name: string;
   type: "tool_use";
-  luckytoken_continuity?: LuckyTokenAnthropicContinuityEnvelopeV1;
+  token_continuity?: TokenAnthropicContinuityEnvelopeV1;
 }
 
 export type JsonValue =
@@ -471,14 +471,14 @@ function convertContent(
           projected.push({
             data: data as string,
             type: "redacted_thinking",
-            ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+            ...(continuity === undefined ? {} : { token_continuity: continuity }),
           });
         } else {
           projected.push({
             signature: "",
             thinking: hideThinking ? "" : raw.thinking,
             type: "thinking",
-            ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+            ...(continuity === undefined ? {} : { token_continuity: continuity }),
           });
         }
         return;
@@ -499,7 +499,7 @@ function convertContent(
         signature: signature ?? "",
         thinking: hideThinking ? "" : raw.thinking,
         type: "thinking",
-        ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+        ...(continuity === undefined ? {} : { token_continuity: continuity }),
       });
       return;
     }
@@ -518,7 +518,7 @@ function convertContent(
         citations: null,
         text: raw.text,
         type: "text",
-        ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+        ...(continuity === undefined ? {} : { token_continuity: continuity }),
       });
       if (interpreted.unavailable.textCitations) {
         notices.push(
@@ -571,7 +571,7 @@ function convertContent(
         input: copyToolInput(raw.arguments, `Pi content[${index}].arguments`),
         name: raw.name,
         type: "tool_use",
-        ...(continuity === undefined ? {} : { luckytoken_continuity: continuity }),
+        ...(continuity === undefined ? {} : { token_continuity: continuity }),
       });
       return;
     }

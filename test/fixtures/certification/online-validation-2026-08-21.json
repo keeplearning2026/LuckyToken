@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "luckytoken-provider-distribution-online-evidence-v2",
+  "schemaVersion": "token-provider-distribution-online-evidence-v2",
   "executedAt": "2026-08-21",
   "repositoryState": "working-tree",
   "repositoryBaseRevision": "fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575",
@@ -76,9 +76,9 @@
         "failures": 0
       },
       "artifactPaths": [
-        "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-lSZXCi/artifacts",
-        "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-RtwFLx/artifacts",
-        "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-IDxAwD/artifacts"
+        "C:/Users/huich/AppData/Local/Temp/token-codex-cli-lSZXCi/artifacts",
+        "C:/Users/huich/AppData/Local/Temp/token-codex-cli-RtwFLx/artifacts",
+        "C:/Users/huich/AppData/Local/Temp/token-codex-cli-IDxAwD/artifacts"
       ]
     },
     {

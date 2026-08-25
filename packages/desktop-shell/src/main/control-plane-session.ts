@@ -6,7 +6,7 @@ import {
   type ControlPlaneClient,
   type ControlPlaneEndpoint,
   type StatusSnapshot,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { randomUUID } from "node:crypto";
 import type { DesktopBackendState } from "../shared/desktop-api.js";
 
@@ -96,7 +96,7 @@ export function createControlPlaneSession(
     try {
       const hello = await client.hello(controlPlaneVersion);
       if (hello.type !== "compatible") {
-        throw new Error("LuckyToken Control Plane version is incompatible");
+        throw new Error("Token Control Plane version is incompatible");
       }
       currentApplication = hello.application;
       let latest: StatusSnapshot | undefined;
@@ -109,7 +109,7 @@ export function createControlPlaneSession(
       });
       const snapshot = await client.getStatus();
       if (myGeneration !== generation) {
-        throw new Error("LuckyToken Control Plane connection was replaced");
+        throw new Error("Token Control Plane connection was replaced");
       }
       if (latest === undefined || snapshot.sequence >= latest.sequence) latest = snapshot;
       publish({ kind: "ready", status: latest });
@@ -136,13 +136,13 @@ export function createControlPlaneSession(
     reconnect: (endpoint: ControlPlaneEndpoint) => establish(endpoint, true),
     client(): ControlPlaneClient {
       if (currentClient === undefined || currentState.kind !== "ready") {
-        throw new Error("LuckyToken Control Plane is unavailable");
+        throw new Error("Token Control Plane is unavailable");
       }
       return currentClient;
     },
     application(): ApplicationIdentity {
       if (currentApplication === undefined || currentState.kind !== "ready") {
-        throw new Error("LuckyToken Control Plane is unavailable");
+        throw new Error("Token Control Plane is unavailable");
       }
       return currentApplication;
     },

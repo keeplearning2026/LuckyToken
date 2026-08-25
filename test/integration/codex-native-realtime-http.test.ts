@@ -14,7 +14,7 @@ function multipartOffer(): {
   body: Uint8Array<ArrayBuffer>;
   contentType: string;
 } {
-  const boundary = "luckytoken-realtime-boundary";
+  const boundary = "Token-realtime-boundary";
   return {
     body: new TextEncoder().encode(
       [
@@ -68,7 +68,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
     const offer = multipartOffer();
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/realtime/calls?client=desktop%2Fapp&token=query-token", {
+      new Request("http://Token.test/v1/realtime/calls?client=desktop%2Fapp&token=query-token", {
         method: "POST",
         headers: {
           authorization: "Bearer caller-owned-token",
@@ -137,7 +137,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/live", {
+      new Request("http://Token.test/v1/live", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -159,7 +159,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
   });
 
   it("converts an SDP-only multipart offer without inventing a session", async () => {
-    const boundary = "luckytoken-realtime-sdp-only";
+    const boundary = "Token-realtime-sdp-only";
     const body = [
       `--${boundary}`,
       'Content-Disposition: form-data; name="sdp"',
@@ -183,7 +183,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/realtime/calls", {
+      new Request("http://Token.test/v1/realtime/calls", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -218,7 +218,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/live", {
+      new Request("http://Token.test/v1/live", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -259,7 +259,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
     compositions.push(composition);
     const multipart = (parts: string[]) => {
       const boundary = "invalid-realtime-boundary";
-      return new Request("http://luckytoken.test/v1/realtime/calls", {
+      return new Request("http://Token.test/v1/realtime/calls", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -289,14 +289,14 @@ describe("Codex Direct Mode realtime HTTP", () => {
       ]),
     );
     const unauthorized = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/live", {
+      new Request("http://Token.test/v1/live", {
         method: "POST",
         headers: { authorization: "Bearer wrong-token" },
         body: "{}",
       }),
     );
     const oversized = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/live", {
+      new Request("http://Token.test/v1/live", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -345,7 +345,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
     });
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/live", {
+      new Request("http://Token.test/v1/live", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -385,7 +385,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
     compositions.push(composition);
     const request = () =>
       composition.runtime.handle(
-        new Request("http://luckytoken.test/v1/live", {
+        new Request("http://Token.test/v1/live", {
           method: "POST",
           headers: {
             authorization: "Bearer codex-token",

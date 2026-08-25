@@ -7,10 +7,10 @@ import type {
   RequestJourneyObservationInput,
 } from "../../src/diagnostics/index.js";
 import type { ClientProtocolHandler } from "../../src/http.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const P0_REQUEST_ID = "30000000-0000-4000-8000-000000000001";
@@ -54,7 +54,7 @@ function createRecordingAuthority(): {
 }
 
 describe("Request Journey HTTP edge authority", () => {
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -67,14 +67,14 @@ describe("Request Journey HTTP edge authority", () => {
       pathname: "/in-process",
       handle: async () => new Response("in-process-body", { status: 200 }),
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientProtocols: [handler],
       diagnostics: recording.authority,
       createRequestId: () => P0_REQUEST_ID,
     });
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/in-process"),
+      new Request("http://Token.test/in-process"),
     );
 
     expect(await response.text()).toBe("in-process-body");
@@ -128,8 +128,8 @@ describe("Request Journey HTTP edge authority", () => {
       handle: async () => new Response("stable-body", { status: 200 }),
       requestIdFor: () => HANDLER_REQUEST_ID,
     };
-    const server = await startLuckyTokenHttpServer({
-      runtime: createLuckyTokenRuntime({ clientProtocols: [handler] }),
+    const server = await startTokenHttpServer({
+      runtime: createTokenRuntime({ clientProtocols: [handler] }),
       diagnostics: recording.authority,
       createRequestId: () => P0_REQUEST_ID,
       port: 0,
@@ -139,7 +139,7 @@ describe("Request Journey HTTP edge authority", () => {
     const response = await fetch(`${server.origin}/edge-id`, { method: "POST" });
     await expect(response.text()).resolves.toBe("stable-body");
 
-    expect(response.headers.get("x-luckytoken-request-id")).toBe(
+    expect(response.headers.get("x-token-request-id")).toBe(
       P0_REQUEST_ID,
     );
     expect(recording.journeys).toHaveLength(1);
@@ -175,8 +175,8 @@ describe("Request Journey HTTP edge authority", () => {
         throw request.signal.reason;
       },
     };
-    const server = await startLuckyTokenHttpServer({
-      runtime: createLuckyTokenRuntime({
+    const server = await startTokenHttpServer({
+      runtime: createTokenRuntime({
         clientProtocols: [handler],
         requestTimeoutMs: 1,
       }),
@@ -193,7 +193,7 @@ describe("Request Journey HTTP edge authority", () => {
     await aborted;
     const response = await responsePromise;
     expect(response.status).toBe(500);
-    expect(response.headers.get("x-luckytoken-request-id")).toBe(
+    expect(response.headers.get("x-token-request-id")).toBe(
       P0_REQUEST_ID,
     );
     await response.arrayBuffer();

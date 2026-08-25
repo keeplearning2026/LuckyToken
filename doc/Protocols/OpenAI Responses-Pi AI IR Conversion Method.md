@@ -88,7 +88,7 @@ No conversion step may inspect the selected concrete Provider's protocol or capa
 
 | Responses source | Pi/local target | Frozen action |
 |---|---|---|
-| `model` | selector | Required by LuckyToken conversion profile. Preserve opaquely for response echo. |
+| `model` | selector | Required by Token conversion profile. Preserve opaquely for response echo. |
 | `input` | `Context.messages` | Convert using §§5–8. An omitted input becomes an empty message list when top-level instructions alone are accepted by the active profile. |
 | `instructions` | `Context.systemPrompt` | Exact text, always privileged, before input-derived system/developer text. `null` means absent. |
 | `max_output_tokens` | `options.maxTokens` | Positive integer; zero/negative is Client invalid request, never an internal 500. |
@@ -206,7 +206,7 @@ A known content type missing required fields or failing conversion is an error. 
 
 Readable Responses reasoning summary/content becomes Pi ThinkingContent.thinking.
 
-Responses-native continuation state is serialized into a LuckyToken-owned versioned `thinkingSignature` envelope containing provenance sufficient to prove:
+Responses-native continuation state is serialized into a Token-owned versioned `thinkingSignature` envelope containing provenance sufficient to prove:
 
 - the signature was created by the Responses adapter;
 - its schema version;
@@ -260,7 +260,7 @@ This matrix covers the installed OpenAI SDK input-item union. `status` and lifec
 | `custom_tool_call_output` | Structured Pi ToolResult, reversed to custom family using request-local metadata. |
 | `item_reference` | Lucky-owned provable reference→resolve/convert; external/unknown→error. |
 
-LuckyToken/Codex extension discriminators that are not in the installed SDK MUST have an explicit extension-profile entry. They do not become supported merely by setting `unknownInputItem=ignore`.
+Token/Codex extension discriminators that are not in the installed SDK MUST have an explicit extension-profile entry. They do not become supported merely by setting `unknownInputItem=ignore`.
 
 ### 8.1 Function calls
 
@@ -290,7 +290,7 @@ Do not drop grammar when Pi can carry it.
 
 Pi 0.84.2 distinguishes the declaration and call contracts: Pi `Tool` still has no namespace field, while Pi `ToolCall` has optional `namespace`. Namespace tool declarations therefore continue to use the reversible adapter-owned `<namespace>.<child>` flattening scheme with collision detection and request-local reverse metadata.
 
-For historical call items, if a wire `namespace + name` pair matches a flattened declaration owned by this request, the Pi ToolCall uses that flattened name and omits `namespace` so `Context.tools`, ToolCall, and ToolResult share one canonical identity. If no matching flattened declaration exists, the Client Wire → Pi IR conversion preserves the wire namespace in Pi `ToolCall.namespace` rather than erasing a representable Pi 0.84.2 fact, but Core v1 then rejects that surviving namespace before Pi Provider execution. LuckyToken has no certified Provider replay identity for such unmatched namespaced history, and allowing a Provider adapter to omit it could change tool identity.
+For historical call items, if a wire `namespace + name` pair matches a flattened declaration owned by this request, the Pi ToolCall uses that flattened name and omits `namespace` so `Context.tools`, ToolCall, and ToolResult share one canonical identity. If no matching flattened declaration exists, the Client Wire → Pi IR conversion preserves the wire namespace in Pi `ToolCall.namespace` rather than erasing a representable Pi 0.84.2 fact, but Core v1 then rejects that surviving namespace before Pi Provider execution. Token has no certified Provider replay identity for such unmatched namespaced history, and allowing a Provider adapter to omit it could change tool identity.
 
 On Pi → Responses rendering, request-local reverse metadata restores a flattened declaration identity. A direct Pi `ToolCall.namespace` returned by a Pi Provider is emitted when no reverse entry exists. If both are present they must agree on namespace; disagreement is an outbound fidelity failure rather than an arbitrary precedence rule.
 
@@ -362,7 +362,7 @@ Stored entries are not bound to an authentication principal or project scope. Th
 - bounded by TTL and capacity;
 - excluded from unsafe logs except where needed as a redacted/hash correlation fact.
 
-This design deliberately accepts that anyone possessing the ID may use it through an authorized LuckyToken connection.
+This design deliberately accepts that anyone possessing the ID may use it through an authorized Token connection.
 
 ### 9.3 Commit timing
 
@@ -403,8 +403,8 @@ Core v1 conversion rule:
 | reusable `prompt` | error |
 | external `item_reference` | error |
 | compaction with foreign encrypted_content only | error |
-| LuckyToken-owned, provable item_reference | resolve then convert |
-| LuckyToken-owned, verifiable opaque envelope | decode then convert |
+| Token-owned, provable item_reference | resolve then convert |
+| Token-owned, verifiable opaque envelope | decode then convert |
 
 Any capability that resolves a handle is owned by the Responses Client adapter. It receives a narrow authorization context, abort signal, and explicit size/MIME/redirect limits. It must not borrow the selected Provider's credential or leak a Responses handle into Pi/Provider.
 
@@ -414,7 +414,7 @@ Native same-authority passthrough may preserve these fields because it is not co
 
 ### 11.1 Identity and envelope
 
-The converted path always generates one LuckyToken-owned high-entropy Responses
+The converted path always generates one Token-owned high-entropy Responses
 ID and never reuses Pi `responseId`; native passthrough preserves upstream
 identity unchanged. `model` always echoes the client selector; Pi
 `responseModel` is not exposed as the client model.

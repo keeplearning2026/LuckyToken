@@ -232,7 +232,7 @@ function createRestartHarness(): {
 
 describe("Request Journey same-runtime Worker replay", () => {
   it("replays a committed unacknowledged event exactly once without interrupting the active Journey", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-worker-restart-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-worker-restart-"));
     const harness = createRestartHarness();
     let now = 1_787_644_800_000;
     const authority = await createDiagnosticsAuthority({

@@ -1,5 +1,5 @@
 export {
-  LUCKYTOKEN_CONFIG_SCHEMA_VERSION,
+  TOKEN_CONFIG_SCHEMA_VERSION,
   OwnedFileCompatibilityError,
   configCompatibilityIssue,
   inspectOwnedCompatibility,

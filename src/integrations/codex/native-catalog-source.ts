@@ -229,7 +229,7 @@ async function readModelsCache(codexHome: string): Promise<readonly CodexNativeC
 /**
  * Read one Codex-owned native model snapshot. The installed Codex bundled
  * catalog is authoritative when available; the user's models cache is a
- * read-only fallback. LuckyToken never reconstructs native identity from Pi.
+ * read-only fallback. Token never reconstructs native identity from Pi.
  */
 export function createCodexNativeCatalogSource(
   options: CreateCodexNativeCatalogSourceOptions,
@@ -256,7 +256,7 @@ export function createCodexNativeCatalogSource(
           }
         } catch {
           // Try the next discovered runtime. Discovery faults are metadata
-          // availability problems and never disable routed LuckyToken models.
+          // availability problems and never disable routed Token models.
         }
       }
 

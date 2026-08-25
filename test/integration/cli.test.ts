@@ -19,7 +19,7 @@ import {
   nodePipeFallbackAccess,
   startControlPlane,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createDataPlaneRuntimeSupervisor } from "../../src/runtime-supervisor.js";
 import { createSettingsRegistry } from "../../src/settings/catalog.js";
@@ -71,7 +71,7 @@ function startCli(
   const fixtureHome =
     configDirectory === undefined
       ? undefined
-      : basename(configDirectory) === ".luckytoken"
+      : basename(configDirectory) === ".Token"
         ? dirname(configDirectory)
         : configDirectory;
   return spawn(process.execPath, command, {
@@ -87,7 +87,7 @@ function startCli(
           }),
       ...extraEnv,
       ...(bridgeSignal
-        ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
+        ? { TOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
         : {}),
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -107,7 +107,7 @@ async function reserveFreePort(): Promise<number> {
   return port;
 }
 
-describe("LuckyToken CLI", () => {
+describe("Token CLI", () => {
   const directories: string[] = [];
   const children: ChildProcessWithoutNullStreams[] = [];
   const controlPlanes: RunningControlPlane[] = [];
@@ -184,16 +184,16 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("reads the discovery descriptor and prints status without its capability", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-control-cli-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-control-cli-"));
     directories.push(directory);
     const capability = "cli-capability-secret-012345678901234567890123";
     const transport = createNodePipeTransport();
     const controlPlane = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-cli-${process.pid}`,
+        address: `\\\\.\\pipe\\Token-cli-${process.pid}`,
         capability,
       },
-      application: { id: "luckytoken", version: "cli-test" },
+      application: { id: "Token", version: "cli-test" },
       initialStatus: {
         modelDataPlane: "running",
         provider: "configured",
@@ -228,15 +228,15 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("queries permanent history through the active Control Plane", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-history-cli-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-history-cli-"));
     directories.push(directory);
     const capability = "cli-history-capability-secret-0123456789012345";
     const controlPlane = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-cli-history-${process.pid}`,
+        address: `\\\\.\\pipe\\Token-cli-history-${process.pid}`,
         capability,
       },
-      application: { id: "luckytoken", version: "cli-test" },
+      application: { id: "Token", version: "cli-test" },
       initialStatus: { modelDataPlane: "stopped", provider: "configured" },
       historyCommandHandler: async (command) => {
         if (command.command !== "query") {
@@ -276,16 +276,16 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("creates an ordinary backup through the active Control Plane", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-backup-cli-"));
+    const directory = await mkdtemp(join(tmpdir(), "token-backup-cli-"));
     directories.push(directory);
     const capability = "cli-backup-capability-secret-0123456789012345";
     const destinationPath = join(directory, "backup.json");
     const controlPlane = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-cli-backup-${process.pid}`,
+        address: `\\\\.\\pipe\\Token-cli-backup-${process.pid}`,
         capability,
       },
-      application: { id: "luckytoken", version: "cli-test" },
+      application: { id: "Token", version: "cli-test" },
       initialStatus: { modelDataPlane: "stopped", provider: "configured" },
       backupCommandHandler: async (command) => {
         expect(command).toEqual({
@@ -298,15 +298,15 @@ describe("LuckyToken CLI", () => {
           outcome: "ok",
           destinationPath,
           manifest: {
-            format: "luckytoken-backup",
+            format: "token-backup",
             formatVersion: 1,
             createdAt: 1,
             sensitive: false,
             entries: [
               {
                 id: "config",
-                contract: "luckytoken-config",
-                version: "luckytoken-config-v2",
+                contract: "token-config",
+                version: "token-config-v2",
                 sensitive: false,
               },
             ],
@@ -342,7 +342,7 @@ describe("LuckyToken CLI", () => {
 
   it("issues runtime lifecycle commands through the active Control Plane", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-control-command-"),
+      join(tmpdir(), "Token-control-command-"),
     );
     directories.push(directory);
     const transport = createNodePipeTransport();
@@ -354,10 +354,10 @@ describe("LuckyToken CLI", () => {
     });
     const controlPlane = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-cli-command-${process.pid}`,
+        address: `\\\\.\\pipe\\Token-cli-command-${process.pid}`,
         capability: "cli-command-capability-012345678901234567890",
       },
-      application: { id: "luckytoken", version: "cli-test" },
+      application: { id: "Token", version: "cli-test" },
       initialStatus: supervisor.initialStatus,
       runtimeCommandHandler: supervisor.execute,
       pipeServerFactory: transport,
@@ -419,7 +419,7 @@ describe("LuckyToken CLI", () => {
 
   it("queries and sets registered settings through the same Control Plane commands", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-control-settings-"),
+      join(tmpdir(), "Token-control-settings-"),
     );
     directories.push(directory);
     const transport = createNodePipeTransport();
@@ -431,10 +431,10 @@ describe("LuckyToken CLI", () => {
     });
     const controlPlane = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-cli-settings-${process.pid}`,
+        address: `\\\\.\\pipe\\Token-cli-settings-${process.pid}`,
         capability: "cli-settings-capability-0123456789012345678",
       },
-      application: { id: "luckytoken", version: "cli-test" },
+      application: { id: "Token", version: "cli-test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -487,7 +487,7 @@ describe("LuckyToken CLI", () => {
 
   it("queries and writes the models.json catalog through the same Control Plane commands", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-control-models-"),
+      join(tmpdir(), "Token-control-models-"),
     );
     directories.push(directory);
     const modelsJsonPath = join(directory, "models.json");
@@ -513,10 +513,10 @@ describe("LuckyToken CLI", () => {
     const transport = createNodePipeTransport();
     const controlPlane = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\\pipe\\\luckytoken-cli-models-${process.pid}`,
+        address: `\\\\.\\\pipe\\\Token-cli-models-${process.pid}`,
         capability: "cli-models-capability-0123456789012345678",
       },
-      application: { id: "luckytoken", version: "cli-test" },
+      application: { id: "Token", version: "cli-test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "configured",
@@ -640,7 +640,7 @@ describe("LuckyToken CLI", () => {
 
   it("does not echo descriptor contents when discovery is malformed", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-control-invalid-"),
+      join(tmpdir(), "Token-control-invalid-"),
     );
     directories.push(directory);
     const descriptorPath = join(directory, "control-plane.json");
@@ -662,13 +662,13 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("keeps a recovery-only Control Plane open for an incompatible owned config", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-recovery-cli-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-recovery-cli-"));
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     await mkdir(stateDirectory, { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     const original = JSON.stringify({
-      schemaVersion: "luckytoken-config-v99",
+      schemaVersion: "token-config-v99",
       credentialCanary: "recovery-config-secret-canary",
     });
     await writeFile(configPath, original, "utf8");
@@ -706,9 +706,9 @@ describe("LuckyToken CLI", () => {
         issues: [
           {
             path: configPath,
-            contract: "luckytoken-config",
-            foundVersion: "luckytoken-config-v99",
-            expectedVersion: "luckytoken-config-v2",
+            contract: "token-config",
+            foundVersion: "token-config-v99",
+            expectedVersion: "token-config-v2",
           },
         ],
       },
@@ -725,16 +725,16 @@ describe("LuckyToken CLI", () => {
   }, 30_000);
 
   it("keeps ordinary backup available when an obsolete client-auth file is present", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-recovery-backup-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-recovery-backup-"));
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     await mkdir(join(stateDirectory, "pi"), { recursive: true });
     const authPath = join(stateDirectory, "client-auth", "anthropic-messages.json");
     await mkdir(join(stateDirectory, "client-auth"), { recursive: true });
     await writeFile(
       authPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-client-auth-v1",
+        schemaVersion: "Token-client-auth-v1",
         global: "incompatible-token-secret-canary",
         projects: {},
       }),
@@ -744,7 +744,7 @@ describe("LuckyToken CLI", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -787,7 +787,7 @@ describe("LuckyToken CLI", () => {
       manifest: { sensitive: false },
     });
     const artifact = await readFile(destinationPath, "utf8");
-    expect(artifact).toContain("luckytoken-config-v2");
+    expect(artifact).toContain("token-config-v2");
     expect(artifact).not.toContain("incompatible-token-secret-canary");
 
     serve.stdin.end("stop\n");
@@ -804,17 +804,17 @@ describe("LuckyToken CLI", () => {
     "atomically owns discovery and reports $label as $expectedProvider",
     async ({ providerPackages, expectedProvider }) => {
       const directory = await mkdtemp(
-        join(tmpdir(), "luckytoken-control-owned-"),
+        join(tmpdir(), "Token-control-owned-"),
       );
       directories.push(directory);
-      const stateDirectory = join(directory, ".luckytoken");
+      const stateDirectory = join(directory, ".Token");
       const piDirectory = join(stateDirectory, "pi");
       await mkdir(piDirectory, { recursive: true });
       const configPath = join(stateDirectory, "config.json");
       await writeFile(
         configPath,
         JSON.stringify({
-          schemaVersion: "luckytoken-config-v2",
+          schemaVersion: "token-config-v2",
           server: { port: await reserveFreePort() },
           clientProtocols: {
             "anthropic-messages": {},
@@ -913,23 +913,23 @@ describe("LuckyToken CLI", () => {
 
   it("rejects explicit configuration of the bundled CommandCode Provider Package", async () => {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-control-bundled-reject-"),
+      join(tmpdir(), "Token-control-bundled-reject-"),
     );
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: await reserveFreePort() },
         clientProtocols: {
           "anthropic-messages": {},
         },
         providerPackages: {
-          "@luckytoken/provider-commandcode-private": {},
+          "@token/provider-commandcode-private": {},
         },
         pi: { directory: "pi" },
       }),
@@ -977,16 +977,16 @@ describe("LuckyToken CLI", () => {
       throw new Error("Expected a TCP test address");
     }
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-control-failure-"),
+      join(tmpdir(), "Token-control-failure-"),
     );
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     await mkdir(join(stateDirectory, "pi"), { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: address.port },
         clientProtocols: {
           "anthropic-messages": {},
@@ -1066,7 +1066,7 @@ describe("LuckyToken CLI", () => {
 
 });
 
-describe("LuckyToken CLI removed directory-token scopes", () => {
+describe("Token CLI removed directory-token scopes", () => {
   it("does not expose project-token management through the removed client-token command", async () => {
     const child = startCli(["client-token", "create", "anthropic-messages", "--project", "."]);
     const result = await captureChild(child).result;

@@ -11,7 +11,7 @@ import type {
   Usage,
 } from "@earendil-works/pi-ai";
 
-import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 import type { ResponsesConversionResult } from "./semantic/invocation.js";
 import type {
   ResponsesHistoricalReasoning,
@@ -57,7 +57,7 @@ export interface ResponseRequestConversionPolicy {
 }
 
 /**
- * Narrow Responses-owned resolver capability for LuckyToken-provable opaque
+ * Narrow Responses-owned resolver capability for Token-provable opaque
  * references/envelopes. Only the Responses adapter may install one; it never
  * borrows a Provider credential and never leaks a Responses handle into Pi.
  * The resolver receives an explicit authorization context, the caller's abort
@@ -116,8 +116,8 @@ interface ValidatedResponsesRequest {
   toolChoice?: ResponsesToolChoice;
 }
 
-export const SYNTHETIC_CLIENT_HISTORY_API = "luckytoken-client-history";
-export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "luckytoken-client";
+export const SYNTHETIC_CLIENT_HISTORY_API = "Token-client-history";
+export const SYNTHETIC_CLIENT_HISTORY_PROVIDER = "Token-client";
 
 export const FUTURE_EFFORT_NOTICE_CODE = "openai-responses_future_effort";
 export const ULTRA_ALIAS_NOTICE_CODE = "openai-responses_effort_ultra_alias";

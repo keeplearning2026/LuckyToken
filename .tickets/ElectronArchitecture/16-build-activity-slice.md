@@ -1,6 +1,6 @@
 # 16 — Build Activity slice
 
-**What to build:** Combine recent requests and analytics into one user-facing Activity experience that explains what LuckyToken has been doing without exposing storage or transport internals.
+**What to build:** Combine recent requests and analytics into one user-facing Activity experience that explains what Token has been doing without exposing storage or transport internals.
 
 **Blocked by:** 13 — Build minimal Home readiness slice.
 

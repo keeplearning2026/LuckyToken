@@ -12,10 +12,10 @@ import {
   type DiagnosticsWorkerSession,
 } from "../../src/diagnostics/authority.js";
 import { parseDiagnosticsConfiguration } from "../../src/diagnostics/configuration.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const RUNTIME_ID = "http-disconnect-runtime";
@@ -132,14 +132,14 @@ function waitForSocketEvent(socket: Socket, event: "connect" | "close") {
 
 describe("Request Journey early HTTP client disconnect", () => {
   it("records the real P8 handoff failure before sealing the Journey exactly once", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-http-disconnect-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-http-disconnect-"));
     const diagnosticsDirectory = join(root, "diagnostics");
     const harness = createObservationHarness();
     const bodyReadStarted = deferred();
     const releaseBody = deferred();
     let bodyReleased = false;
     let bodyCancelled = false;
-    let server: RunningLuckyTokenHttpServer | undefined;
+    let server: RunningTokenHttpServer | undefined;
     let socket: Socket | undefined;
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -151,7 +151,7 @@ describe("Request Journey early HTTP client disconnect", () => {
     });
 
     try {
-      const runtime = createLuckyTokenRuntime({
+      const runtime = createTokenRuntime({
         clientProtocols: [
           {
             method: "GET",
@@ -176,7 +176,7 @@ describe("Request Journey early HTTP client disconnect", () => {
           },
         ],
       });
-      server = await startLuckyTokenHttpServer({
+      server = await startTokenHttpServer({
         runtime,
         diagnostics: authority,
         createRequestId: () => REQUEST_ID,
@@ -264,7 +264,7 @@ describe("Request Journey early HTTP client disconnect", () => {
   });
 
   it("records a protocol handler exception as the primary runtime fallback Incident", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-http-fallback-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-http-fallback-"));
     const requestId = "70000000-0000-4000-8000-000000000002";
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -273,9 +273,9 @@ describe("Request Journey early HTTP client disconnect", () => {
       ),
       runtimeId: `${RUNTIME_ID}-fallback`,
     });
-    let server: RunningLuckyTokenHttpServer | undefined;
+    let server: RunningTokenHttpServer | undefined;
     try {
-      const runtime = createLuckyTokenRuntime({
+      const runtime = createTokenRuntime({
         clientProtocols: [
           {
             method: "GET",
@@ -286,7 +286,7 @@ describe("Request Journey early HTTP client disconnect", () => {
           },
         ],
       });
-      server = await startLuckyTokenHttpServer({
+      server = await startTokenHttpServer({
         runtime,
         diagnostics: authority,
         createRequestId: () => requestId,
@@ -314,7 +314,7 @@ describe("Request Journey early HTTP client disconnect", () => {
             kind: "failure_detected",
             role: "primary",
             classification: "protocol_handler_failed",
-            origin: "luckytoken",
+            origin: "Token",
             location: {
               phase: "protocol_ingress",
               step: "invoke_protocol_handler",

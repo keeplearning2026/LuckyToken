@@ -1,5 +1,5 @@
 {
-  "name": "luckytoken-online-claude-cli",
+  "name": "token-online-claude-cli",
   "private": true,
   "type": "module",
   "scripts": {

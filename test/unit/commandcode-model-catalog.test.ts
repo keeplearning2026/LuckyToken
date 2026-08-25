@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMMANDCODE_MODEL_FACTS,
   projectCommandCodeModel,
-} from "@luckytoken/commandcode-model-catalog";
+} from "@token/commandcode-model-catalog";
 import {
   COMMANDCODE_MODELS,
   findCommandCodeModel,

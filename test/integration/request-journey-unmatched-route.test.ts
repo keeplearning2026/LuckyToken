@@ -11,10 +11,10 @@ import {
   type DiagnosticsSubscription,
   type RequestJourneySummary,
 } from "../../src/diagnostics/index.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "65000000-0000-4000-8000-000000000001";
@@ -45,7 +45,7 @@ interface ResponseSnapshot {
 async function readResponse(response: Response): Promise<ResponseSnapshot> {
   return Object.freeze({
     status: response.status,
-    requestId: response.headers.get("x-luckytoken-request-id"),
+    requestId: response.headers.get("x-token-request-id"),
     mediaType: response.headers.get("content-type"),
     body: Object.freeze([...new Uint8Array(await response.arrayBuffer())]),
   });
@@ -55,7 +55,7 @@ describe("Request Journey unmatched HTTP routes", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
   const subscriptions: DiagnosticsSubscription[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     for (const subscription of subscriptions.splice(0)) {
@@ -71,20 +71,20 @@ describe("Request Journey unmatched HTTP routes", () => {
   });
 
   it("records one exact no-lane P1 incident while preserving the unmatched 404 wire", async () => {
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [] });
-    const baselineServer = await startLuckyTokenHttpServer({
+    const runtime = createTokenRuntime({ clientProtocols: [] });
+    const baselineServer = await startTokenHttpServer({
       runtime,
       createRequestId: () => REQUEST_ID,
       port: 0,
     });
     servers.push(baselineServer);
     const baseline = await readResponse(
-      await fetch(`${baselineServer.origin}/not-a-luckytoken-route`, {
+      await fetch(`${baselineServer.origin}/not-a-Token-route`, {
         method: "PATCH",
       }),
     );
 
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-unmatched-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-unmatched-journey-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -100,7 +100,7 @@ describe("Request Journey unmatched HTTP routes", () => {
         if (record.requestId === REQUEST_ID) publish(record);
       }),
     );
-    const observedServer = await startLuckyTokenHttpServer({
+    const observedServer = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
@@ -109,7 +109,7 @@ describe("Request Journey unmatched HTTP routes", () => {
     servers.push(observedServer);
 
     const observed = await readResponse(
-      await fetch(`${observedServer.origin}/not-a-luckytoken-route`, {
+      await fetch(`${observedServer.origin}/not-a-Token-route`, {
         method: "PATCH",
       }),
     );
@@ -141,7 +141,7 @@ describe("Request Journey unmatched HTTP routes", () => {
       operationCandidate: "pending",
       transport: "http",
       method: "PATCH",
-      path: "/not-a-luckytoken-route",
+      path: "/not-a-Token-route",
     });
     expect(detail).not.toHaveProperty("lane");
     expect(detail).not.toHaveProperty("protocol");

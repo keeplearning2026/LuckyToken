@@ -2,7 +2,7 @@ import type { Model, Models } from "@earendil-works/pi-ai";
 import {
   createUpstreamFailureFact,
   type InvocationAttempt,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,10 +19,10 @@ import {
   type ExecutionOperation,
 } from "../../src/execution.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "70000000-0000-4000-8000-000000000001";
@@ -104,11 +104,11 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
 
   it("locates a trusted Provider terminal failure without inventing Provider wire evidence", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-semantic-openai-journey-"),
+      join(tmpdir(), "Token-semantic-openai-journey-"),
     );
     const diagnosticsDirectory = join(root, "diagnostics");
     let authority: DiagnosticsAuthority | undefined;
-    let server: RunningLuckyTokenHttpServer | undefined;
+    let server: RunningTokenHttpServer | undefined;
 
     try {
       authority = await createDiagnosticsAuthority({
@@ -203,8 +203,8 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
         createSessionId: () => "70000000-0000-4000-8000-000000000002",
         now: () => 1_787_600_000_000,
       });
-      const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-      server = await startLuckyTokenHttpServer({
+      const runtime = createTokenRuntime({ clientProtocols: [handler] });
+      server = await startTokenHttpServer({
         runtime,
         diagnostics: authority,
         createRequestId: () => REQUEST_ID,
@@ -240,7 +240,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       expect(response.headers.get("request-id")).toBe("provider-attempt-2");
       expect(response.headers.get("retry-after")).toBe("4");
       expect(response.headers.get("authorization")).toBeNull();
-      expect(response.headers.get("x-luckytoken-request-id")).toBe(REQUEST_ID);
+      expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
       expect(responseBody).toBe(expectedResponseBody);
       expect(modelCapabilityTouches).toEqual(["getModels"]);
       expect(semanticExecution).toHaveBeenCalledTimes(1);

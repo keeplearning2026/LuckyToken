@@ -32,7 +32,7 @@ export function resolveBundledBackendLaunch(
   const backendRoot = options.packaged
     ? join(options.resourcesPath, "backend")
     : join(options.developmentRoot ?? process.cwd(), "backend");
-  const userRoot = join(home, ".luckytoken");
+  const userRoot = join(home, ".Token");
   return Object.freeze({
     executable: join(
       backendRoot,
@@ -49,7 +49,7 @@ export function resolveBundledBackendLaunch(
 export async function readBundledBackendBuildId(path: string): Promise<string> {
   const value = (await readFile(path, "utf8")).trim();
   if (!/^[a-f0-9]{64}$/u.test(value)) {
-    throw new Error("LuckyToken bundled Backend build identity is invalid");
+    throw new Error("Token bundled Backend build identity is invalid");
   }
   return value;
 }
@@ -78,7 +78,7 @@ function spawnBundledBackend(
       stdio: "ignore",
       env: {
         ...process.env,
-        LUCKYTOKEN_BACKEND_BUILD_ID: buildId,
+        TOKEN_BACKEND_BUILD_ID: buildId,
       },
     },
   );
@@ -88,7 +88,7 @@ function spawnBundledBackend(
     // on Windows kill() itself throws EINVAL. Consume the pending error so the
     // launcher can fail through its own stable startup contract instead.
     child.once("error", () => undefined);
-    throw new Error("LuckyToken Backend process did not start");
+    throw new Error("Token Backend process did not start");
   }
 
   let released = false;

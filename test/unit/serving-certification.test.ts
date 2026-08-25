@@ -75,14 +75,14 @@ describe("serving composition certification", () => {
     const manifest = certifyServingComposition(facts());
 
     expect(manifest).toMatchObject({
-      schemaVersion: "luckytoken-serving-certification-manifest-v2",
+      schemaVersion: "Token-serving-certification-manifest-v2",
       certificationBasis: "offline-and-online",
       result: "CERTIFIED",
       failures: [],
       identity: {
         core: {
-          specification: "LuckyToken Core Architecture Specification v6.0",
-          servingComposition: "luckytoken-full-route-serving-composition-v3",
+          specification: "Token Core Architecture Specification v6.0",
+          servingComposition: "Token-full-route-serving-composition-v3",
         },
         conversions: {
           architecturePolicy: "Protocol Conversion Architecture and Policy",
@@ -116,7 +116,7 @@ describe("serving composition certification", () => {
           profile: "command-code@1.9.0",
         },
         provider: {
-          construction: "luckytoken-commandcode-private-provider-v1",
+          construction: "Token-commandcode-private-provider-v1",
           providerId: "commandcode-private",
           apiId: "commandcode-private",
         },
@@ -276,7 +276,7 @@ describe("serving composition certification", () => {
     );
   });
 
-  it("certifies the local data plane as having no LuckyToken client auth", () => {
+  it("certifies the local data plane as having no Token client auth", () => {
     const manifest = certifyServingComposition(facts());
     expect(manifest.policies.authEndpoint.clientAuth).toBe(
       "none-local-data-plane-v1",

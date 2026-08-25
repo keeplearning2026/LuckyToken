@@ -5,9 +5,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   type TestConfiguredDataPlane,
 } from "../support/configured-data-plane.js";
 
@@ -66,10 +66,10 @@ describe("models.json custom provider registration", () => {
     "p".repeat(65),
   ])("rejects an unrepresentable custom Provider namespace: %s", async (providerId) => {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-models-json-provider-id-"),
+      join(tmpdir(), "Token-models-json-provider-id-"),
     );
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     await writeFile(
@@ -90,7 +90,7 @@ describe("models.json custom provider registration", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -102,8 +102,8 @@ describe("models.json custom provider registration", () => {
 
     let rejected: unknown;
     try {
-      const composition = await createConfiguredLuckyTokenDataPlane({
-        config: await loadLuckyTokenCliConfig(configPath),
+      const composition = await createConfiguredTokenDataPlane({
+        config: await loadTokenCliConfig(configPath),
         fetch: async () =>
           new Response(JSON.stringify({ object: "list", data: [] }), {
             status: 200,
@@ -132,10 +132,10 @@ describe("models.json custom provider registration", () => {
       return anthropicSseResponse("hello from custom gateway");
     };
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-models-json-"),
+      join(tmpdir(), "Token-models-json-"),
     );
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const modelsJsonPath = join(piDirectory, "models.json");
@@ -159,7 +159,7 @@ describe("models.json custom provider registration", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -169,8 +169,8 @@ describe("models.json custom provider registration", () => {
       "utf8",
     );
 
-    const composition = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(configPath),
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
       fetch,
       createMessageId: () => "msg_models_json",
       createSessionId: () => "00000000-0000-4000-8000-000000000260",
@@ -185,7 +185,7 @@ describe("models.json custom provider registration", () => {
     let response: Response;
     try {
       response = await composition.runtime.handle(
-        new Request("http://luckytoken.test/v1/messages", {
+        new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer client-token",

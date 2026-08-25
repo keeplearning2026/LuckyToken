@@ -94,9 +94,9 @@ function blockFields(
 ): string[] {
   return [
     ...fields,
-    ...(block.luckytoken_continuity === undefined
+    ...(block.token_continuity === undefined
       ? []
-      : ["luckytoken_continuity"]),
+      : ["token_continuity"]),
   ];
 }
 
@@ -339,14 +339,14 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_start",
           index,
           content_block: { citations: null, text: "", type: "text" },
-          ...(block.luckytoken_continuity === undefined
+          ...(block.token_continuity === undefined
             ? {}
             : {
                 content_block: {
                   citations: null,
                   text: "",
                   type: "text" as const,
-                  luckytoken_continuity: block.luckytoken_continuity,
+                  token_continuity: block.token_continuity,
                 },
               }),
         },
@@ -365,14 +365,14 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_start",
           index,
           content_block: { type: "thinking", thinking: "", signature: "" },
-          ...(block.luckytoken_continuity === undefined
+          ...(block.token_continuity === undefined
             ? {}
             : {
                 content_block: {
                   type: "thinking" as const,
                   thinking: "",
                   signature: "",
-                  luckytoken_continuity: block.luckytoken_continuity,
+                  token_continuity: block.token_continuity,
                 },
               }),
         },
@@ -396,13 +396,13 @@ export function createAnthropicAtomicSseEvents(
           type: "content_block_start",
           index,
           content_block: { data: block.data, type: "redacted_thinking" },
-          ...(block.luckytoken_continuity === undefined
+          ...(block.token_continuity === undefined
             ? {}
             : {
                 content_block: {
                   data: block.data,
                   type: "redacted_thinking" as const,
-                  luckytoken_continuity: block.luckytoken_continuity,
+                  token_continuity: block.token_continuity,
                 },
               }),
         },
@@ -424,9 +424,9 @@ export function createAnthropicAtomicSseEvents(
           input: {},
           name: block.name,
           type: "tool_use",
-          ...(block.luckytoken_continuity === undefined
+          ...(block.token_continuity === undefined
             ? {}
-            : { luckytoken_continuity: block.luckytoken_continuity }),
+            : { token_continuity: block.token_continuity }),
         },
       },
       {

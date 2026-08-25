@@ -4,7 +4,7 @@ import {
   encodeAnthropicContinuity,
   type AnthropicContinuityAttachment,
   type AnthropicContinuitySource,
-  type LuckyTokenAnthropicContinuityEnvelopeV1,
+  type TokenAnthropicContinuityEnvelopeV1,
 } from "./reasoning/continuity.js";
 
 export interface AnthropicInterpretedResponse {
@@ -12,7 +12,7 @@ export interface AnthropicInterpretedResponse {
   readonly toolCallerByContentIndex: ReadonlyMap<number, { readonly type: "direct" }>;
   readonly continuityByContentIndex: ReadonlyMap<
     number,
-    LuckyTokenAnthropicContinuityEnvelopeV1
+    TokenAnthropicContinuityEnvelopeV1
   >;
   readonly nativeThinkingIndexes: ReadonlySet<number>;
   readonly stop: {

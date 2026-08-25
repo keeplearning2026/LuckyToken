@@ -5,7 +5,7 @@ export async function resolvePackagedExecutable(
   desktopRoot,
   environment = process.env,
 ) {
-  const selected = environment.LUCKYTOKEN_PACKAGED_EXECUTABLE?.trim();
+  const selected = environment.TOKEN_PACKAGED_EXECUTABLE?.trim();
   if (selected) {
     if (!isAbsolute(selected)) {
       throw new Error("selected packaged Token executable must be an absolute path");
@@ -29,7 +29,7 @@ export async function resolvePackagedExecutable(
     const executable = join(
       outputRoot,
       entry.name,
-      "Token-win32-x64",
+      "token-win32-x64",
       "Token.exe",
     );
     try {

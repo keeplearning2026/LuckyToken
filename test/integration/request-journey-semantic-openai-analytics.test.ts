@@ -7,7 +7,7 @@ import type {
   ModelsSimpleStreamOptions,
   Usage,
 } from "@earendil-works/pi-ai";
-import type { AnalyticsResult } from "@luckytoken/application-control-plane/control-plane";
+import type { AnalyticsResult } from "@token/application-control-plane/control-plane";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,10 +24,10 @@ import {
   type ExecutionOperation,
 } from "../../src/execution.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "89000000-0000-4000-8000-000000000001";
@@ -172,13 +172,13 @@ function requireSummary(
 describe("OpenAI Responses Semantic Conversion terminal usage analytics producer", () => {
   it("publishes normalized Pi terminal usage without changing invocation, render, or work outcome", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-semantic-openai-analytics-"),
+      join(tmpdir(), "Token-semantic-openai-analytics-"),
     );
 
     async function run(mode: "disabled" | "enabled"): Promise<RunResult> {
       const runRoot = join(root, mode);
       let authority: DiagnosticsManagementAuthority | undefined;
-      let server: RunningLuckyTokenHttpServer | undefined;
+      let server: RunningTokenHttpServer | undefined;
       let unsubscribe: (() => void) | undefined;
       let diagnosticsClock = 1_000;
       const piInvocations: PiInvocationSnapshot[] = [];
@@ -254,8 +254,8 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
           createSessionId: () => SESSION_ID,
           now: () => 1_700_000_000_000,
         });
-        const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-        server = await startLuckyTokenHttpServer({
+        const runtime = createTokenRuntime({ clientProtocols: [handler] });
+        server = await startTokenHttpServer({
           runtime,
           ...(authority === undefined ? {} : { diagnostics: authority }),
           createRequestId: () => REQUEST_ID,
@@ -357,7 +357,7 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
       expect(enabled.response.status).toBe(200);
       expect(enabled.response.headers).toMatchObject({
         "content-type": "application/json",
-        "x-luckytoken-request-id": REQUEST_ID,
+        "x-token-request-id": REQUEST_ID,
       });
       const responseBody = JSON.parse(enabled.response.body) as Record<
         string,
@@ -404,7 +404,7 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
 
   it("publishes certified CommandCode Goat usage to the Journey row and Overview analytics", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-commandcode-goat-usage-"),
+      join(tmpdir(), "Token-commandcode-goat-usage-"),
     );
     const goatModel: Model<string> = {
       id: "deepseek/deepseek-v4-flash",
@@ -444,7 +444,7 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
       timestamp: 1_700_000_000_000,
     };
     let authority: DiagnosticsManagementAuthority | undefined;
-    let server: RunningLuckyTokenHttpServer | undefined;
+    let server: RunningTokenHttpServer | undefined;
     let unsubscribe: (() => void) | undefined;
 
     try {
@@ -492,8 +492,8 @@ describe("OpenAI Responses Semantic Conversion terminal usage analytics producer
         createSessionId: () => SESSION_ID,
         now: () => 1_700_000_000_000,
       });
-      server = await startLuckyTokenHttpServer({
-        runtime: createLuckyTokenRuntime({ clientProtocols: [handler] }),
+      server = await startTokenHttpServer({
+        runtime: createTokenRuntime({ clientProtocols: [handler] }),
         diagnostics: authority,
         createRequestId: () => GOAT_REQUEST_ID,
         port: 0,

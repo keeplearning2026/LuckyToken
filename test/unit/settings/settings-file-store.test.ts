@@ -16,7 +16,7 @@ describe("file settings store commit lifecycle", () => {
   });
 
   it("does not publish current state before the atomic rename succeeds", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-settings-store-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-settings-store-"));
     roots.push(root);
     const path = join(root, "settings.json");
     const store = createFileSettingsStore(path);
@@ -28,7 +28,7 @@ describe("file settings store commit lifecycle", () => {
   });
 
   it("shares concurrent reads and permits a retry after read failure", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-settings-load-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-settings-load-"));
     roots.push(root);
     const path = join(root, "settings.json");
     await writeFile(path, "not json", "utf8");

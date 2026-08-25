@@ -5,7 +5,7 @@ import type {
   AnalyticsOptionsResult,
   AnalyticsSummary,
   DesktopControlPlaneApi,
-  LuckyTokenDesktopApi,
+  TokenDesktopApi,
   RequestJourneySummary,
 } from "../../shared/desktop-api.js";
 
@@ -277,7 +277,7 @@ class OverviewCoordinator {
 }
 
 export function useOverviewReadModel(
-  api: LuckyTokenDesktopApi,
+  api: TokenDesktopApi,
   input: OverviewReadModelInput,
 ): OverviewReadModel {
   const [snapshot, setSnapshot] = useState<OverviewReadModelSnapshot>(EMPTY_SNAPSHOT);

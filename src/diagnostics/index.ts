@@ -54,7 +54,7 @@ export type {
   RuntimeEventQueryResult,
   RuntimeEventRecord,
   RuntimeEventSubscriber,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 export type {
   DiagnosticsAuthority,
   DiagnosticsHistoryCounts,

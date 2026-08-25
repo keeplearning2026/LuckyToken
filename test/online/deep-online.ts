@@ -4,10 +4,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
-import { startLuckyTokenHttpServer } from "../../src/server.js";
-import { createConfiguredLuckyTokenDataPlane } from "../support/configured-data-plane.js";
+import { startTokenHttpServer } from "../../src/server.js";
+import { createConfiguredTokenDataPlane } from "../support/configured-data-plane.js";
 
 /**
  * Deep online verification against the real CommandCode API.
@@ -28,19 +28,19 @@ async function main(): Promise<void> {
   const providerApiKey = (
     await readFile("CommandcodeAPIKey.txt", "utf8")
   ).trim();
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-deep-online-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-deep-online-"));
   let composition:
-    Awaited<ReturnType<typeof createConfiguredLuckyTokenDataPlane>> | undefined;
-  let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
+    Awaited<ReturnType<typeof createConfiguredTokenDataPlane>> | undefined;
+  let server: Awaited<ReturnType<typeof startTokenHttpServer>> | undefined;
 
   try {
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     await mkdir(join(stateDirectory, "pi"), { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: { "anthropic-messages": {} },
         pi: { directory: "pi" },
@@ -56,13 +56,13 @@ async function main(): Promise<void> {
       type: "api_key",
       key: providerApiKey,
     }));
-    const config = await loadLuckyTokenCliConfig(configPath);
-    composition = await createConfiguredLuckyTokenDataPlane({
+    const config = await loadTokenCliConfig(configPath);
+    composition = await createConfiguredTokenDataPlane({
       config,
       credentialSeedStore: credentials,
       fetch: globalThis.fetch,
     });
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,

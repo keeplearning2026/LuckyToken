@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StatusSnapshot } from "@luckytoken/application-control-plane/control-plane";
+import type { StatusSnapshot } from "@token/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import type { DesktopBackendState } from "../src/shared/desktop-api.js";

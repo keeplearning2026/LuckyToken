@@ -1,5 +1,5 @@
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
-import type { AnalyticsResult } from "@luckytoken/application-control-plane/control-plane";
+import type { AnalyticsResult } from "@token/application-control-plane/control-plane";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -20,10 +20,10 @@ import {
 import type { ExecutionOperation } from "../../src/execution.js";
 import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "88000000-0000-4000-8000-000000000001";
@@ -159,7 +159,7 @@ async function closeServer(server: Server): Promise<void> {
 describe("Provider Native OpenAI Responses terminal usage analytics producer", () => {
   it("publishes confirmed upstream usage without changing wire, attempts, Profile, or result", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-provider-native-openai-analytics-"),
+      join(tmpdir(), "Token-provider-native-openai-analytics-"),
     );
     let activeRun: ActiveUpstreamRun | undefined;
     const upstreamServer = createServer(async (request, response) => {
@@ -193,7 +193,7 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
       async function run(mode: "disabled" | "enabled"): Promise<RunResult> {
         const runRoot = join(root, mode);
         let authority: DiagnosticsManagementAuthority | undefined;
-        let server: RunningLuckyTokenHttpServer | undefined;
+        let server: RunningTokenHttpServer | undefined;
         let unsubscribe: (() => void) | undefined;
         let clock = 1_000;
         const outbound: WireSnapshot[] = [];
@@ -305,8 +305,8 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
             maxRequestBytes: 4_096,
             createSessionId: () => SESSION_ID,
           });
-          const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-          server = await startLuckyTokenHttpServer({
+          const runtime = createTokenRuntime({ clientProtocols: [handler] });
+          server = await startTokenHttpServer({
             runtime,
             ...(authority === undefined ? {} : { diagnostics: authority }),
             createRequestId: () => REQUEST_ID,
@@ -406,7 +406,7 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
           "content-length": String(Buffer.byteLength(UPSTREAM_RESPONSE_BODY)),
           "content-type": "application/json",
           "request-id": "provider-success-request",
-          "x-luckytoken-request-id": REQUEST_ID,
+          "x-token-request-id": REQUEST_ID,
         },
         body: UPSTREAM_RESPONSE_BODY,
       });

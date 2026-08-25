@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   parseControlPlaneDescriptor as parseEndpointDescriptor,
   type ControlPlaneEndpoint,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 export interface ControlPlaneDiscoveryLocation {
   readonly homeDirectory: string;
@@ -16,7 +16,7 @@ export function resolveControlPlaneDescriptorPath(
   location: ControlPlaneDiscoveryLocation,
 ): string {
   return location.overridePath === undefined
-    ? join(location.homeDirectory, ".luckytoken", "control-plane.json")
+    ? join(location.homeDirectory, ".Token", "control-plane.json")
     : resolve(location.overridePath);
 }
 

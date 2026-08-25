@@ -29,7 +29,7 @@ function commandCodeText(text: string): Response {
 }
 
 function responsesRequest(body: Record<string, unknown>, token: string): Request {
-  return new Request("http://luckytoken.test/v1/responses", {
+  return new Request("http://Token.test/v1/responses", {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
@@ -75,7 +75,7 @@ describe("OpenAI Responses serving", () => {
     return composition;
   }
 
-  it("does not require a LuckyToken client credential", async () => {
+  it("does not require a Token client credential", async () => {
     const fetch: FetchFunction = async () => commandCodeText("anonymous");
     const { runtime } = await start({ fetch });
 
@@ -482,7 +482,7 @@ describe("OpenAI Responses serving", () => {
       fetch: async () => commandCodeText("unused"),
     });
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: "Bearer client-token",
@@ -675,7 +675,7 @@ describe("OpenAI Responses serving", () => {
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-responses-restart-"),
+      join(tmpdir(), "Token-responses-restart-"),
     );
     const stateFile = join(directory, "openai-responses.json");
     const fetch: FetchFunction = async () => commandCodeText("restart-safe");
@@ -727,7 +727,7 @@ describe("OpenAI Responses serving", () => {
     const { runtime } = await start({ fetch });
     const controller = new AbortController();
     const handling = runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: "Bearer client-token",
@@ -1125,7 +1125,7 @@ describe("OpenAI Responses serving", () => {
       fetch: async () => commandCodeText("unused"),
     });
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/models", {
+      new Request("http://Token.test/v1/models", {
         method: "GET",
       }),
     );

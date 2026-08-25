@@ -123,10 +123,10 @@ test("every repository test entrypoint uses the Codex test guard", async () => {
 });
 
 test("the test guard rewrites the copied Codex catalog path into the sandbox", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-codex-guard-catalog-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-codex-guard-catalog-"));
   const originalCodexHome = join(root, "source-codex-home");
   const configPath = join(originalCodexHome, "config.toml");
-  const catalogPath = join(originalCodexHome, "luckytoken-model-catalog.json");
+  const catalogPath = join(originalCodexHome, "token-model-catalog.json");
   const reportPath = join(root, "child-report.json");
   const originalCatalog = '{"models":[{"slug":"user-owned"}]}\n';
   const originalConfig = [
@@ -146,17 +146,17 @@ test("the test guard rewrites the copied Codex catalog path into the sandbox", a
       "const fs = require('node:fs');",
       "const path = require('node:path');",
       "const config = path.join(process.env.CODEX_HOME, 'config.toml');",
-      "const catalog = path.join(process.env.CODEX_HOME, 'luckytoken-model-catalog.json');",
-      "fs.writeFileSync(process.env.LUCKYTOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, config: fs.readFileSync(config, 'utf8'), catalog: fs.readFileSync(catalog, 'utf8') }));",
+      "const catalog = path.join(process.env.CODEX_HOME, 'token-model-catalog.json');",
+      "fs.writeFileSync(process.env.TOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, config: fs.readFileSync(config, 'utf8'), catalog: fs.readFileSync(catalog, 'utf8') }));",
     ].join("");
     const environment = {
       ...process.env,
       CODEX_HOME: originalCodexHome,
-      LUCKYTOKEN_CHILD_REPORT: reportPath,
+      TOKEN_CHILD_REPORT: reportPath,
     };
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
     const result = spawnSync(
       process.execPath,
@@ -172,7 +172,7 @@ test("the test guard rewrites the copied Codex catalog path into the sandbox", a
     const report = JSON.parse(await readFile(reportPath, "utf8"));
     const expectedConfig = originalConfig.replace(
       `model_catalog_json = ${JSON.stringify(catalogPath)}`,
-      `model_catalog_json = ${JSON.stringify(join(report.codexHome, "luckytoken-model-catalog.json"))}`,
+      `model_catalog_json = ${JSON.stringify(join(report.codexHome, "token-model-catalog.json"))}`,
     );
     assert.equal(report.config, expectedConfig);
     assert.equal(report.catalog, originalCatalog);
@@ -185,7 +185,7 @@ test("the test guard rewrites the copied Codex catalog path into the sandbox", a
 });
 
 test("the test guard removes an external catalog path when no catalog was copied", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-codex-guard-no-catalog-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-codex-guard-no-catalog-"));
   const originalCodexHome = join(root, "source-codex-home");
   const configPath = join(originalCodexHome, "config.toml");
   const reportPath = join(root, "child-report.json");
@@ -204,16 +204,16 @@ test("the test guard removes an external catalog path when no catalog was copied
       "const fs = require('node:fs');",
       "const path = require('node:path');",
       "const config = path.join(process.env.CODEX_HOME, 'config.toml');",
-      "fs.writeFileSync(process.env.LUCKYTOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, config: fs.readFileSync(config, 'utf8') }));",
+      "fs.writeFileSync(process.env.TOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, config: fs.readFileSync(config, 'utf8') }));",
     ].join("");
     const environment = {
       ...process.env,
       CODEX_HOME: originalCodexHome,
-      LUCKYTOKEN_CHILD_REPORT: reportPath,
+      TOKEN_CHILD_REPORT: reportPath,
     };
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
     const result = spawnSync(
       process.execPath,
@@ -239,10 +239,10 @@ test("the test guard removes an external catalog path when no catalog was copied
 });
 
 test("direct Vitest rewrites copied Codex paths and removes its sandbox", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-direct-vitest-certification-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-direct-vitest-certification-"));
   const originalCodexHome = join(root, "source-codex-home");
   const configPath = join(originalCodexHome, "config.toml");
-  const catalogPath = join(originalCodexHome, "luckytoken-model-catalog.json");
+  const catalogPath = join(originalCodexHome, "token-model-catalog.json");
   const reportPath = join(root, "child-report.json");
   const originalCatalog = '{"models":[{"slug":"user-owned"}]}\n';
   const originalConfig = [
@@ -258,11 +258,11 @@ test("direct Vitest rewrites copied Codex paths and removes its sandbox", async 
     const environment = {
       ...process.env,
       CODEX_HOME: originalCodexHome,
-      LUCKYTOKEN_CHILD_REPORT: reportPath,
+      TOKEN_CHILD_REPORT: reportPath,
     };
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
     const result = spawnSync(
       process.execPath,
@@ -290,18 +290,18 @@ test("direct Vitest rewrites copied Codex paths and removes its sandbox", async 
 });
 
 test("the test guard rejects an unleased inherited sandbox", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-unleased-codex-home-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-unleased-codex-home-"));
   const reportPath = join(root, "child-report.json");
   const childProgram =
-    "require('node:fs').writeFileSync(process.env.LUCKYTOKEN_CHILD_REPORT, 'executed');";
+    "require('node:fs').writeFileSync(process.env.TOKEN_CHILD_REPORT, 'executed');";
   const environment = {
     ...process.env,
     CODEX_HOME: root,
-    LUCKYTOKEN_CHILD_REPORT: reportPath,
-    LUCKYTOKEN_TEST_CODEX_SANDBOX: "1",
+    TOKEN_CHILD_REPORT: reportPath,
+    TOKEN_TEST_CODEX_SANDBOX: "1",
   };
-  delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-  delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+  delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+  delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
   try {
     const result = spawnSync(
@@ -322,16 +322,16 @@ test("the test guard rejects an unleased inherited sandbox", async () => {
 });
 
 test("direct Vitest rejects an unleased inherited sandbox", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-unleased-vitest-home-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-unleased-vitest-home-"));
   const reportPath = join(root, "child-report.json");
   const environment = {
     ...process.env,
     CODEX_HOME: root,
-    LUCKYTOKEN_CHILD_REPORT: reportPath,
-    LUCKYTOKEN_TEST_CODEX_SANDBOX: "1",
+    TOKEN_CHILD_REPORT: reportPath,
+    TOKEN_TEST_CODEX_SANDBOX: "1",
   };
-  delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-  delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+  delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+  delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
   try {
     const result = spawnSync(
@@ -356,14 +356,14 @@ test("direct Vitest rejects an unleased inherited sandbox", async () => {
 });
 
 test("the test guard rejects a linked Codex home even with a matching lease", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-linked-codex-home-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-linked-codex-home-"));
   const leaseRoot = join(root, "lease-root");
   const realCodexHome = join(root, "real-codex-home");
   const linkedCodexHome = join(leaseRoot, "codex-home");
   const reportPath = join(root, "child-report.json");
   const nonce = "linked-home-nonce";
   const childProgram =
-    "require('node:fs').writeFileSync(process.env.LUCKYTOKEN_CHILD_REPORT, 'executed');";
+    "require('node:fs').writeFileSync(process.env.TOKEN_CHILD_REPORT, 'executed');";
 
   try {
     await mkdir(leaseRoot, { recursive: true });
@@ -374,7 +374,7 @@ test("the test guard rejects a linked Codex home even with a matching lease", as
       process.platform === "win32" ? "junction" : "dir",
     );
     await writeFile(
-      join(leaseRoot, ".luckytoken-test-sandbox-lease"),
+      join(leaseRoot, ".Token-test-sandbox-lease"),
       nonce,
       "utf8",
     );
@@ -386,10 +386,10 @@ test("the test guard rejects a linked Codex home even with a matching lease", as
         env: {
           ...process.env,
           CODEX_HOME: linkedCodexHome,
-          LUCKYTOKEN_CHILD_REPORT: reportPath,
-          LUCKYTOKEN_TEST_CODEX_SANDBOX: "1",
-          LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT: leaseRoot,
-          LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE: nonce,
+          TOKEN_CHILD_REPORT: reportPath,
+          TOKEN_TEST_CODEX_SANDBOX: "1",
+          TOKEN_TEST_CODEX_SANDBOX_ROOT: leaseRoot,
+          TOKEN_TEST_CODEX_SANDBOX_NONCE: nonce,
         },
         encoding: "utf8",
       },
@@ -403,7 +403,7 @@ test("the test guard rejects a linked Codex home even with a matching lease", as
 });
 
 test("direct Vitest rejects a linked Codex home even with a matching lease", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-linked-vitest-home-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-linked-vitest-home-"));
   const leaseRoot = join(root, "lease-root");
   const realCodexHome = join(root, "real-codex-home");
   const linkedCodexHome = join(leaseRoot, "codex-home");
@@ -419,7 +419,7 @@ test("direct Vitest rejects a linked Codex home even with a matching lease", asy
       process.platform === "win32" ? "junction" : "dir",
     );
     await writeFile(
-      join(leaseRoot, ".luckytoken-test-sandbox-lease"),
+      join(leaseRoot, ".Token-test-sandbox-lease"),
       nonce,
       "utf8",
     );
@@ -435,10 +435,10 @@ test("direct Vitest rejects a linked Codex home even with a matching lease", asy
         env: {
           ...process.env,
           CODEX_HOME: linkedCodexHome,
-          LUCKYTOKEN_CHILD_REPORT: reportPath,
-          LUCKYTOKEN_TEST_CODEX_SANDBOX: "1",
-          LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT: leaseRoot,
-          LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE: nonce,
+          TOKEN_CHILD_REPORT: reportPath,
+          TOKEN_TEST_CODEX_SANDBOX: "1",
+          TOKEN_TEST_CODEX_SANDBOX_ROOT: leaseRoot,
+          TOKEN_TEST_CODEX_SANDBOX_NONCE: nonce,
         },
         encoding: "utf8",
       },
@@ -452,7 +452,7 @@ test("direct Vitest rejects a linked Codex home even with a matching lease", asy
 });
 
 test("direct Vitest removes its sandbox when setup fails", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-vitest-setup-failure-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-vitest-setup-failure-"));
   const originalCodexHome = join(root, "source-codex-home");
   const isolatedTemp = join(root, "isolated-temp");
 
@@ -466,9 +466,9 @@ test("direct Vitest removes its sandbox when setup fails", async () => {
       TMP: isolatedTemp,
       TMPDIR: isolatedTemp,
     };
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
     const result = spawnSync(
       process.execPath,
@@ -487,7 +487,7 @@ test("direct Vitest removes its sandbox when setup fails", async () => {
     assert.notEqual(result.status, 0, result.stderr || result.stdout);
     assert.deepEqual(
       (await readdir(isolatedTemp)).filter((entry) =>
-        entry.startsWith("luckytoken-vitest-codex-"),
+        entry.startsWith("Token-vitest-codex-"),
       ),
       [],
     );
@@ -497,7 +497,7 @@ test("direct Vitest removes its sandbox when setup fails", async () => {
 });
 
 test("direct Vitest removes its sandbox when the runner is terminated", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-vitest-cancellation-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-vitest-cancellation-"));
   const originalCodexHome = join(root, "source-codex-home");
   const isolatedTemp = join(root, "isolated-temp");
   const reportPath = join(root, "child-report.json");
@@ -512,12 +512,12 @@ test("direct Vitest removes its sandbox when the runner is terminated", async ()
       TEMP: isolatedTemp,
       TMP: isolatedTemp,
       TMPDIR: isolatedTemp,
-      LUCKYTOKEN_CHILD_REPORT: reportPath,
-      LUCKYTOKEN_TEST_HOLD_OPEN: "1",
+      TOKEN_CHILD_REPORT: reportPath,
+      TOKEN_TEST_HOLD_OPEN: "1",
     };
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
     child = spawn(
       process.execPath,
@@ -551,7 +551,7 @@ test("direct Vitest removes its sandbox when the runner is terminated", async ()
     await waitForMissing(report.codexHome);
     assert.deepEqual(
       (await readdir(isolatedTemp)).filter((entry) =>
-        entry.startsWith("luckytoken-vitest-codex-"),
+        entry.startsWith("Token-vitest-codex-"),
       ),
       [],
     );
@@ -562,7 +562,7 @@ test("direct Vitest removes its sandbox when the runner is terminated", async ()
 });
 
 test("the test guard removes its sandbox when the guard is terminated", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-guard-cancellation-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-guard-cancellation-"));
   const originalCodexHome = join(root, "source-codex-home");
   const isolatedTemp = join(root, "isolated-temp");
   const reportPath = join(root, "child-report.json");
@@ -574,7 +574,7 @@ test("the test guard removes its sandbox when the guard is terminated", async ()
     await mkdir(isolatedTemp, { recursive: true });
     const childProgram = [
       "const fs = require('node:fs');",
-      "fs.writeFileSync(process.env.LUCKYTOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, pid: process.pid }));",
+      "fs.writeFileSync(process.env.TOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, pid: process.pid }));",
       "setInterval(() => {}, 1000);",
     ].join("");
     const environment = {
@@ -583,11 +583,11 @@ test("the test guard removes its sandbox when the guard is terminated", async ()
       TEMP: isolatedTemp,
       TMP: isolatedTemp,
       TMPDIR: isolatedTemp,
-      LUCKYTOKEN_CHILD_REPORT: reportPath,
+      TOKEN_CHILD_REPORT: reportPath,
     };
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT;
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
 
     guard = spawn(
       process.execPath,
@@ -623,7 +623,7 @@ test("the test guard removes its sandbox when the guard is terminated", async ()
     await waitForMissing(report.codexHome);
     assert.deepEqual(
       (await readdir(isolatedTemp)).filter((entry) =>
-        entry.startsWith("luckytoken-test-codex-"),
+        entry.startsWith("Token-test-codex-"),
       ),
       [],
     );
@@ -641,10 +641,10 @@ test("the test guard removes its sandbox when the guard is terminated", async ()
 });
 
 test("the test guard modifies copied inputs and cleans them after failure", async () => {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-codex-guard-certification-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-codex-guard-certification-"));
   const originalCodexHome = join(root, "source-codex-home");
   const configPath = join(originalCodexHome, "config.toml");
-  const catalogPath = join(originalCodexHome, "luckytoken-model-catalog.json");
+  const catalogPath = join(originalCodexHome, "token-model-catalog.json");
   const reportPath = join(root, "child-report.json");
   const originalConfig = Buffer.from('model = "user-owned"\n', "utf8");
 
@@ -658,19 +658,19 @@ test("the test guard modifies copied inputs and cleans them after failure", asyn
       "const fs = require('node:fs');",
       "const path = require('node:path');",
       "const config = path.join(process.env.CODEX_HOME, 'config.toml');",
-      "const catalog = path.join(process.env.CODEX_HOME, 'luckytoken-model-catalog.json');",
+      "const catalog = path.join(process.env.CODEX_HOME, 'token-model-catalog.json');",
       "const initialConfig = fs.readFileSync(config, 'utf8');",
       `fs.writeFileSync(config, ${JSON.stringify(copiedConfig)});`,
       `fs.writeFileSync(catalog, ${JSON.stringify(copiedCatalog)});`,
-      "fs.writeFileSync(process.env.LUCKYTOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, initialConfig }));",
+      "fs.writeFileSync(process.env.TOKEN_CHILD_REPORT, JSON.stringify({ codexHome: process.env.CODEX_HOME, initialConfig }));",
       "process.exitCode = 7;",
     ].join("");
     const environment = {
       ...process.env,
       CODEX_HOME: originalCodexHome,
-      LUCKYTOKEN_CHILD_REPORT: reportPath,
+      TOKEN_CHILD_REPORT: reportPath,
     };
-    delete environment.LUCKYTOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
 
     const result = spawnSync(
       process.execPath,

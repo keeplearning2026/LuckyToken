@@ -10,7 +10,7 @@ import type {
 } from "./contract.js";
 import type { AgentInjectionSnapshot } from "./snapshot.js";
 
-const STATE_SCHEMA = "luckytoken-agent-integrations-v1" as const;
+const STATE_SCHEMA = "Token-agent-integrations-v1" as const;
 
 interface StoredAgentState {
   readonly agentId: AgentIntegrationId;
@@ -198,13 +198,13 @@ export function createAgentIntegrationCoordinator(
       parsed.schemaVersion !== STATE_SCHEMA ||
       !Array.isArray(parsed.agents)
     ) {
-      throw new Error("LuckyToken Agent integration state is invalid.");
+      throw new Error("Token Agent integration state is invalid.");
     }
     const parsedById = new Map<AgentIntegrationId, StoredAgentState>();
     for (const value of parsed.agents) {
       const agent = parseAgent(value);
       if (agent === undefined || parsedById.has(agent.agentId)) {
-        throw new Error("LuckyToken Agent integration state is invalid.");
+        throw new Error("Token Agent integration state is invalid.");
       }
       parsedById.set(agent.agentId, agent);
     }
@@ -501,7 +501,7 @@ export function createAgentIntegrationCoordinator(
     });
     if (commandResult.outcome !== "ok") {
       throw new Error(
-        "Agent integrations could not all be restored before LuckyToken shutdown",
+        "Agent integrations could not all be restored before Token shutdown",
       );
     }
     return commandResult;

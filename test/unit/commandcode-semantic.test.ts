@@ -7,7 +7,7 @@ import {
   captureCommandCodeResponseAuthority,
   convertCommittedCommandCodeResult,
 } from "../../packages/provider-commandcode-private/src/semantic.js";
-import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
   if (typeof value !== "object" || value === null || seen.has(value)) return value;
@@ -279,7 +279,7 @@ describe("committed CommandCode to Pi semantics", () => {
     expect(
       message.diagnostics?.some(
         (diagnostic) =>
-          diagnostic.type === "luckytoken.conversion_notice.v1" &&
+          diagnostic.type === "Token.conversion_notice.v1" &&
           diagnostic.details?.notice &&
           (diagnostic.details.notice as { code?: unknown }).code ===
             "usage_unavailable_degraded",
@@ -483,7 +483,7 @@ describe("committed CommandCode to Pi semantics", () => {
           | { code?: unknown }
           | undefined;
         return (
-          diagnostic.type === "luckytoken.conversion_notice.v1" &&
+          diagnostic.type === "Token.conversion_notice.v1" &&
           notice?.code === "finish_content_mismatch_degraded"
         );
       },
@@ -722,7 +722,7 @@ describe("committed CommandCode to Pi semantics", () => {
     expect(findUpstreamFailureFact(message.diagnostics)).toBeUndefined();
     expect(
       message.diagnostics?.some(
-        (diagnostic) => diagnostic.type === "luckytoken.conversion_notice.v1",
+        (diagnostic) => diagnostic.type === "Token.conversion_notice.v1",
       ),
     ).toBe(true);
     expect(Object.isFrozen(message)).toBe(true);

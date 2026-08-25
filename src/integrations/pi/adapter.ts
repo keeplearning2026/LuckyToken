@@ -22,8 +22,8 @@ import type {
   AgentInjectionSnapshot,
 } from "../agents/snapshot.js";
 
-const PROVIDER_ID = "luckytoken" as const;
-const STATE_SCHEMA = "luckytoken-pi-integration-v1" as const;
+const PROVIDER_ID = "Token" as const;
+const STATE_SCHEMA = "Token-pi-integration-v1" as const;
 const THINKING_LEVELS = [
   "off",
   "minimal",
@@ -173,7 +173,7 @@ function buildProvider(
   return Object.freeze({
     name: "Token",
     baseUrl: snapshot.endpoint.origin,
-    apiKey: "luckytoken-local",
+    apiKey: "Token-local",
     api: "anthropic-messages",
     compat: Object.freeze({
       forceAdaptiveThinking: true,
@@ -210,7 +210,7 @@ async function readState(path: string): Promise<PiIntegrationState | undefined> 
     parsed.schemaVersion !== STATE_SCHEMA ||
     typeof parsed.providerHash !== "string"
   ) {
-    throw new Error("LuckyToken Pi integration state is invalid.");
+    throw new Error("Token Pi integration state is invalid.");
   }
   return Object.freeze({
     schemaVersion: STATE_SCHEMA,
@@ -282,7 +282,7 @@ export function createPiIntegrationAdapter(
           0,
           snapshot.warnings,
           false,
-          'Pi provider "luckytoken" exists but is not the last value injected by LuckyToken.',
+          'Pi provider "Token" exists but is not the last value injected by Token.',
         );
       }
 
@@ -325,7 +325,7 @@ export function createPiIntegrationAdapter(
             0,
             snapshot.warnings,
             false,
-            "Pi models.json changed while LuckyToken was preparing the injection.",
+            "Pi models.json changed while Token was preparing the injection.",
           );
         }
         await atomicWrite(
@@ -339,7 +339,7 @@ export function createPiIntegrationAdapter(
 
       const verified = parseDocument(await readOptional(modelsPath));
       if (hashProvider(verified.providers[PROVIDER_ID]) !== providerHash) {
-        throw new Error("Pi models.json did not retain the injected LuckyToken provider.");
+        throw new Error("Pi models.json did not retain the injected Token provider.");
       }
       return result("managed", models.length, snapshot.warnings, true);
     } finally {
@@ -386,7 +386,7 @@ export function createPiIntegrationAdapter(
           0,
           [],
           false,
-          'Pi provider "luckytoken" no longer matches the last value injected by LuckyToken.',
+          'Pi provider "Token" no longer matches the last value injected by Token.',
         );
       }
 
@@ -407,7 +407,7 @@ export function createPiIntegrationAdapter(
           0,
           [],
           false,
-          "Removing the LuckyToken provider would leave an invalid Pi models.json document.",
+          "Removing the Token provider would leave an invalid Pi models.json document.",
         );
       }
 
@@ -424,7 +424,7 @@ export function createPiIntegrationAdapter(
             0,
             [],
             false,
-            "Pi models.json changed while LuckyToken was preparing the restore.",
+            "Pi models.json changed while Token was preparing the restore.",
           );
         }
         await rename(temporaryPath, modelsPath);
@@ -434,7 +434,7 @@ export function createPiIntegrationAdapter(
       await rm(statePath, { force: true });
       const verified = parseDocument(await readOptional(modelsPath));
       if (verified.providers[PROVIDER_ID] !== undefined) {
-        throw new Error("Pi models.json retained the LuckyToken provider after restore.");
+        throw new Error("Pi models.json retained the Token provider after restore.");
       }
       return result("native", 0, [], true);
     } finally {

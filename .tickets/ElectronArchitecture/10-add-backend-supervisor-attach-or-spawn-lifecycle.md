@@ -1,6 +1,6 @@
 # 10 — Add BackendSupervisor attach-or-spawn lifecycle
 
-**What to build:** Give Electron Main one process-level supervisor that attaches to an already-running LuckyToken Backend or starts the bundled Backend when none exists, without taking ownership of Backend domain state.
+**What to build:** Give Electron Main one process-level supervisor that attaches to an already-running Token Backend or starts the bundled Backend when none exists, without taking ownership of Backend domain state.
 
 **Blocked by:** 03 — Move recovery and ownership shutdown behind Backend Application; 08 — Create Electron Main, preload, and packaging skeleton.
 

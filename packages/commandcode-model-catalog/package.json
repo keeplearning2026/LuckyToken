@@ -1,5 +1,5 @@
 {
-  "name": "@luckytoken/commandcode-model-catalog",
+  "name": "@token/commandcode-model-catalog",
   "version": "0.1.0",
   "private": true,
   "type": "module",

@@ -3,7 +3,7 @@ import type {
   ControlPlaneClient,
   RequestJourneySummary,
   RuntimeEventRecord,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import {
   registerDesktopIpcHandlers,
@@ -141,7 +141,7 @@ describe("typed Electron desktop IPC", () => {
     const { handlers, client, event } = fixture();
     await expect(
       handlers.get(desktopIpcChannels.runtime)?.(event(99), "start"),
-    ).rejects.toThrow("Untrusted LuckyToken desktop IPC sender");
+    ).rejects.toThrow("Untrusted Token desktop IPC sender");
     expect(client.executeRuntimeCommand).not.toHaveBeenCalled();
   });
 

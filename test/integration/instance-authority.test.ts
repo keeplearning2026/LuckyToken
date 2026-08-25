@@ -11,7 +11,7 @@ import {
 } from "../../src/instance-authority.js";
 
 async function fixturePath(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-instance-authority-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-instance-authority-"));
   return join(directory, "instance.sqlite");
 }
 
@@ -19,7 +19,7 @@ describe("InstanceAuthority", () => {
   it("derives one private Backend instance database from application-owned user state", () => {
     expect(
       resolveBackendInstanceDatabasePath({ homeDirectory: "C:\\Users\\Alice" }),
-    ).toBe(join("C:\\Users\\Alice", ".luckytoken", "instance.sqlite"));
+    ).toBe(join("C:\\Users\\Alice", ".Token", "instance.sqlite"));
   });
 
   it("allows exactly one authority for the same Backend instance location", async () => {

@@ -11,7 +11,7 @@ import type {
   AgentIntegrationId,
   AgentInjectionScope,
   DesktopBackendState,
-  LuckyTokenDesktopApi,
+  TokenDesktopApi,
   RuntimeCommand,
   StatusSnapshot,
 } from "../../shared/desktop-api.js";
@@ -22,7 +22,7 @@ import { productPages as pages, type ProductPage } from "./navigation.js";
 import codexMark from "../assets/codex.png";
 
 export interface AppProps {
-  readonly api: LuckyTokenDesktopApi;
+  readonly api: TokenDesktopApi;
 }
 
 function runtimeLabel(status: StatusSnapshot | undefined): string {
@@ -54,10 +54,10 @@ export function App({ api }: AppProps) {
   const [backendState, setBackendState] = useState<DesktopBackendState>();
   const [runtimePending, setRuntimePending] = useState(false);
   const [publicModels, setPublicModels] = useState<Awaited<
-    ReturnType<LuckyTokenDesktopApi["control"]["executePublicModels"]>
+    ReturnType<TokenDesktopApi["control"]["executePublicModels"]>
   >>();
   const [agentIntegrations, setAgentIntegrations] = useState<
-    Awaited<ReturnType<LuckyTokenDesktopApi["control"]["executeAgentIntegrations"]>>["state"]
+    Awaited<ReturnType<TokenDesktopApi["control"]["executeAgentIntegrations"]>>["state"]
   >();
   const [editingPort, setEditingPort] = useState(false);
   const [portDraft, setPortDraft] = useState("");
@@ -138,7 +138,7 @@ export function App({ api }: AppProps) {
 
   const showAgentResult = (
     result: Awaited<
-      ReturnType<LuckyTokenDesktopApi["control"]["executeAgentIntegrations"]>
+      ReturnType<TokenDesktopApi["control"]["executeAgentIntegrations"]>
     >,
   ): void => {
     setAgentIntegrations(result.state);

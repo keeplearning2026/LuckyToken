@@ -11,7 +11,7 @@ import test from "node:test";
 import {
   connectControlPlane,
   createNodePipeTransport,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(import.meta.dirname, "../..");
@@ -59,21 +59,21 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     );
   }
 
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-release-serve-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-release-serve-"));
   const userRoot = join(directory, "home");
   const codexHome = join(userRoot, ".codex");
   await Promise.all([
-    mkdir(join(userRoot, ".luckytoken", "pi"), { recursive: true }),
+    mkdir(join(userRoot, ".Token", "pi"), { recursive: true }),
     mkdir(codexHome, { recursive: true }),
   ]);
-  const configPath = join(userRoot, ".luckytoken", "config.json");
-  const descriptorPath = join(userRoot, ".luckytoken", "control-plane.json");
+  const configPath = join(userRoot, ".Token", "config.json");
+  const descriptorPath = join(userRoot, ".Token", "control-plane.json");
   const port = await freePort();
   await writeFile(
     configPath,
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port },
         clientProtocols: {
           "anthropic-messages": {
@@ -137,7 +137,7 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     assert.ok(endpoint !== undefined, "serve must publish its descriptor");
 
     const installedConfig = JSON.parse(await readFile(configPath, "utf8"));
-    assert.equal(installedConfig.schemaVersion, "luckytoken-config-v2");
+    assert.equal(installedConfig.schemaVersion, "token-config-v2");
     assert.equal(installedConfig.server.port, port);
 
     let client;

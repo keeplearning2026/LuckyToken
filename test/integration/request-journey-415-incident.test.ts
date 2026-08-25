@@ -10,8 +10,8 @@ import {
   type DiagnosticsAuthority,
 } from "../../src/diagnostics/index.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -32,7 +32,7 @@ const WORK_OUTCOME_LOCATION = {
 describe("Request Journey protocol incidents", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -45,7 +45,7 @@ describe("Request Journey protocol incidents", () => {
   });
 
   it("records an exact P1 incident for an unread unsupported-media request", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-journey-415-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-journey-415-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -63,7 +63,7 @@ describe("Request Journey protocol incidents", () => {
       },
       modelId: "claude-fixture",
     });
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
@@ -93,7 +93,7 @@ describe("Request Journey protocol incidents", () => {
     expect(providerCalls).toBe(0);
     expect(response.status).toBe(415);
     expect(response.headers.get("content-type")).toBe("application/json");
-    expect(response.headers.get("x-luckytoken-request-id")).toBe(REQUEST_ID);
+    expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
     expect(responseBody).toBe(JSON.stringify(expectedResponse));
     expect(JSON.parse(responseBody)).toEqual(expectedResponse);
 

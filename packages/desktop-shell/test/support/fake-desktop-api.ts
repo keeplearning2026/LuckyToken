@@ -1,11 +1,11 @@
 import type {
   DesktopControlPlaneApi,
   DesktopPlatformApi,
-  LuckyTokenDesktopApi,
+  TokenDesktopApi,
 } from "../../src/shared/desktop-api.js";
 
 const unavailable = async (): Promise<never> => {
-  throw new Error("Fake LuckyToken Desktop API operation is not configured");
+  throw new Error("Fake Token Desktop API operation is not configured");
 };
 
 type LegacyAliasCommand =
@@ -39,7 +39,7 @@ type FakeControlOverrides = Partial<DesktopControlPlaneApi> & {
 export function createFakeDesktopApi(options: {
   readonly control?: FakeControlOverrides;
   readonly platform?: Partial<DesktopPlatformApi>;
-} = {}): LuckyTokenDesktopApi {
+} = {}): TokenDesktopApi {
   const { executeAliases, ...controlOverrides } = options.control ?? {};
   const legacyPublicModels: DesktopControlPlaneApi["executePublicModels"] = async (command) => {
     if (executeAliases === undefined) return unavailable();

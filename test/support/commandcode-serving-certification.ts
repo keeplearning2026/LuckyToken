@@ -1,10 +1,10 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options.js";
-import type { CommandCodeCompatibilityPolicy } from "@luckytoken/provider-commandcode-private";
+import type { CommandCodeCompatibilityPolicy } from "@token/provider-commandcode-private";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:bdd8f048517150a2493425d8cce01158f9bd613a97b4bfc126cb6d922a0553c0";
+  "sha256:e80cb8dfeb2aae50f6ea57d88178d02fdd86c307ee0aa4847b8c4884fcda85ea";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -68,7 +68,7 @@ export interface ServingCertificationFacts {
 export type ServingCertificationResult = "CERTIFIED" | "FAILED";
 
 export interface ServingCertificationManifest {
-  readonly schemaVersion: "luckytoken-serving-certification-manifest-v2";
+  readonly schemaVersion: "Token-serving-certification-manifest-v2";
   readonly certificationBasis: "offline-and-online";
   readonly result: ServingCertificationResult;
   readonly failures: readonly string[];
@@ -271,14 +271,14 @@ export function certifyServingComposition(
   const result: ServingCertificationResult =
     failures.length === 0 ? "CERTIFIED" : "FAILED";
   const manifest: ServingCertificationManifest = {
-    schemaVersion: "luckytoken-serving-certification-manifest-v2",
+    schemaVersion: "Token-serving-certification-manifest-v2",
     certificationBasis: "offline-and-online",
     result,
     failures,
     identity: {
       core: {
-        specification: "LuckyToken Core Architecture Specification v6.0",
-        servingComposition: "luckytoken-full-route-serving-composition-v3",
+        specification: "Token Core Architecture Specification v6.0",
+        servingComposition: "Token-full-route-serving-composition-v3",
       },
       conversions: {
         architecturePolicy: "Protocol Conversion Architecture and Policy",
@@ -313,7 +313,7 @@ export function certifyServingComposition(
         profile: "command-code@1.9.0",
       },
       provider: {
-        construction: "luckytoken-commandcode-private-provider-v1",
+        construction: "Token-commandcode-private-provider-v1",
         providerId: CERTIFIED_PROVIDER_ID,
         apiId: CERTIFIED_API_ID,
       },
@@ -458,7 +458,7 @@ export function certifyServingComposition(
             passed: 60,
             attempted: 60,
             artifactPath:
-              "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-Uqe3iv/artifacts",
+              "C:/Users/huich/AppData/Local/Temp/Token-codex-cli-Uqe3iv/artifacts",
           },
           {
             profiles: ["anthropic-conversion", "commandcode-provider"],

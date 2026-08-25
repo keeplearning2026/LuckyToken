@@ -7,7 +7,7 @@ import {
   formatTokenCount,
   type AnalyticsFilter,
   type AnalyticsSummary,
-  type LuckyTokenDesktopApi,
+  type TokenDesktopApi,
   type RequestJourneyRecord,
   type RequestJourneySummary,
 } from "../../shared/desktop-api.js";
@@ -395,7 +395,7 @@ function SummaryCards({ summary }: { readonly summary: AnalyticsSummary | undefi
   </section>;
 }
 
-export function OverviewPage({ api, backendAvailable }: { readonly api: LuckyTokenDesktopApi; readonly backendAvailable: boolean }) {
+export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDesktopApi; readonly backendAvailable: boolean }) {
   const [filters, setFilters] = useState<OverviewFilters>(defaultFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [details, setDetails] = useState<Readonly<Record<string, RequestJourneyRecord | "unavailable">>>({});

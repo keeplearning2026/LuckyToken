@@ -5,7 +5,7 @@ import {
   nodePipeFallbackAccess,
   startControlPlane,
   type AuthInteractionChannel,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createCredentialProfilesControlPlaneHandlers } from "../../src/credentials/profile-control-plane.js";
@@ -197,12 +197,12 @@ describe("Credential Profiles Control Plane", () => {
       providerSource: () => "pi_builtin",
     });
     const endpoint = {
-      address: `\\\\.\\pipe\\luckytoken-profile-${process.pid}-${Date.now()}`,
+      address: `\\\\.\\pipe\\Token-profile-${process.pid}-${Date.now()}`,
       capability: "profile-test-capability-0123456789",
     } as const;
     const host = await startControlPlane({
       endpoint,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       credentialProfilesCommandHandler: handlers.credentials,
       providerProfileAuthCommandHandler: handlers.auth,

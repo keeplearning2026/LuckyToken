@@ -8,8 +8,8 @@ import {
   type OpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 function nativeModels(...ids: string[]): CodexNativeModelSource {
@@ -66,7 +66,7 @@ function commandCodeText(text: string): Response {
 }
 
 function request(model: string, token: string, stream = false): Request {
-  return new Request("http://luckytoken.test/v1/responses", {
+  return new Request("http://Token.test/v1/responses", {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
@@ -83,7 +83,7 @@ function request(model: string, token: string, stream = false): Request {
 
 describe("Codex-native Responses routing", () => {
   const compositions: OpenAIResponsesServingTestComposition[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
     await Promise.all(compositions.splice(0).map((composition) => composition.close()));
@@ -145,7 +145,7 @@ describe("Codex-native Responses routing", () => {
       Buffer.from(JSON.stringify({ model: "gpt-native", input: "compressed" })),
     );
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -175,7 +175,7 @@ describe("Codex-native Responses routing", () => {
 
     await runtime.handle(
       new Request(
-        "http://luckytoken.test/v1/responses?bare&item=a%2Fb&item=two&token=query-secret",
+        "http://Token.test/v1/responses?bare&item=a%2Fb&item=two&token=query-secret",
         {
           method: "POST",
           headers: { authorization: "Bearer caller-token", "content-type": "application/json" },
@@ -200,7 +200,7 @@ describe("Codex-native Responses routing", () => {
         headers: upstreamHeaders,
       }),
     });
-    const server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    const server = await startTokenHttpServer({ runtime, port: 0 });
     servers.push(server);
 
     const response = await fetch(`${server.origin}/v1/responses`, {

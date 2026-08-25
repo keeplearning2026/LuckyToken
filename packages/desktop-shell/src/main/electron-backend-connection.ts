@@ -1,7 +1,7 @@
 import {
   parseControlPlaneDescriptor,
   type ControlPlaneEndpoint,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { readFile } from "node:fs/promises";
 
 import {

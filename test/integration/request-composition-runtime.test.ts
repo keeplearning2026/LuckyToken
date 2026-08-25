@@ -36,7 +36,7 @@ describe("request-time auth and header composition in the data plane", () => {
 
   async function writeFixture(modelsJson: Record<string, unknown>): Promise<Fixture> {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-request-composition-"),
+      join(tmpdir(), "Token-request-composition-"),
     );
     directories.push(directory);
     const piDirectory = join(directory, "pi");

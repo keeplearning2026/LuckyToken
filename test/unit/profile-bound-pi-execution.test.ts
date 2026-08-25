@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { createUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 import { ExecutionFailure, type ExecutionOperation } from "../../src/execution.js";
 import { createProfileBoundPiExecution } from "../../src/credentials/profile-bound-pi-execution.js";

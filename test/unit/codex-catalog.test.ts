@@ -33,7 +33,7 @@ function model(input: {
 }
 
 describe("Codex catalog projection", () => {
-  it("preserves Codex native rows and appends callable LuckyToken aliases", () => {
+  it("preserves Codex native rows and appends callable Token aliases", () => {
     const routed = model({
       provider: "anthropic",
       id: "claude-opus",
@@ -194,7 +194,7 @@ describe("Codex catalog projection", () => {
       { effort: "high", description: "Native high" },
       { effort: "max", description: "Native max" },
     ]);
-    expect(parsed.models[1]).not.toHaveProperty("default_reasoning_level");
+    expect(parsed.models[1]?.default_reasoning_level).toBe("max");
   });
 
   it("projects a Pi minimal-only model into the Codex low slot", () => {
@@ -242,6 +242,7 @@ describe("Codex catalog projection", () => {
     expect(parsed.models[1]?.supported_reasoning_levels).toEqual([
       { effort: "low", description: "Light" },
     ]);
+    expect(parsed.models[1]?.default_reasoning_level).toBe("low");
   });
 
   it("maps only non-null Pi levels into the five Codex slots and deduplicates minimal with low", () => {
@@ -290,7 +291,7 @@ describe("Codex catalog projection", () => {
       { effort: "xhigh", description: "Extra high" },
       { effort: "max", description: "Ultra" },
     ]);
-    expect(parsed.models[1]).not.toHaveProperty("default_reasoning_level");
+    expect(parsed.models[1]?.default_reasoning_level).toBe("max");
   });
 
   it("emits the complete parser-required field set for a non-reasoning routed model", () => {

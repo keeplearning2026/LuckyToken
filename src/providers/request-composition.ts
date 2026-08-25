@@ -166,7 +166,7 @@ async function configContextEnv(
 }
 
 /**
- * Pinned `composeApiKeyAuth` (LuckyToken has no extension layer): stored
+ * Pinned `composeApiKeyAuth` (Token has no extension layer): stored
  * credential, then configured models.json key, then inherited built-in
  * auth; provider headers + authHeader compose at resolve time.
  */

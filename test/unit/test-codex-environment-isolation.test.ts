@@ -13,23 +13,23 @@ describe("test Codex environment isolation", () => {
     const relativeToTemp = relative(resolve(tmpdir()), resolved);
     const configPath = join(resolved, "config.toml");
 
-    expect(process.env.LUCKYTOKEN_TEST_CODEX_SANDBOX).toBe("1");
+    expect(process.env.TOKEN_TEST_CODEX_SANDBOX).toBe("1");
     expect(resolved).not.toBe(realDefault);
     expect(relativeToTemp.startsWith("..")).toBe(false);
     if (existsSync(configPath)) {
       const config = readFileSync(configPath, "utf8");
       if (/^\s*model_catalog_json\s*=/mu.test(config)) {
         expect(config).toContain(
-          `model_catalog_json = ${JSON.stringify(join(resolved, "luckytoken-model-catalog.json"))}`,
+          `model_catalog_json = ${JSON.stringify(join(resolved, "token-model-catalog.json"))}`,
         );
       }
     }
 
-    const reportPath = process.env.LUCKYTOKEN_CHILD_REPORT;
+    const reportPath = process.env.TOKEN_CHILD_REPORT;
     if (reportPath !== undefined) {
       writeFileSync(reportPath, JSON.stringify({ codexHome: resolved }));
     }
-    if (process.env.LUCKYTOKEN_TEST_HOLD_OPEN === "1") {
+    if (process.env.TOKEN_TEST_HOLD_OPEN === "1") {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 30_000));
     }
   });

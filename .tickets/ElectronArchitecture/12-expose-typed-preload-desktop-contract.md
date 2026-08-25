@@ -1,6 +1,6 @@
 # 12 — Expose the typed preload desktop contract
 
-**What to build:** Give the renderer a fixed, typed LuckyToken Desktop API that exposes only named product operations and safe platform capabilities through preload.
+**What to build:** Give the renderer a fixed, typed Token Desktop API that exposes only named product operations and safe platform capabilities through preload.
 
 **Blocked by:** 11 — Add Main ControlPlaneSession lifecycle.
 

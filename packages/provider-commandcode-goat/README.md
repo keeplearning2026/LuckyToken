@@ -1,4 +1,4 @@
-# `@luckytoken/provider-commandcode-goat`
+# `@token/provider-commandcode-goat`
 
 This private workspace package provides the bundled `commandcode-goat` Pi
 Provider. It uses Pi's standard `openai-completions` adapter with the fixed

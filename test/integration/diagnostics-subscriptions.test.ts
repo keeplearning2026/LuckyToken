@@ -20,8 +20,8 @@ import type {
   DiagnosticsWorkerSession,
 } from "../../src/diagnostics/authority.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -181,7 +181,7 @@ function createRuntime() {
 describe("Diagnostics durable subscriptions", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -196,7 +196,7 @@ describe("Diagnostics durable subscriptions", () => {
   });
 
   it("projects trustworthy row usage identically through query and durable subscription", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-subscriptions-usage-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-subscriptions-usage-"));
     roots.push(root);
     let clock = 1_787_558_400_000;
     const authority = await createDiagnosticsAuthority({
@@ -381,7 +381,7 @@ describe("Diagnostics durable subscriptions", () => {
   });
 
   it("publishes typed records only after their durable ACK, in records order, and honors unsubscribe", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-subscriptions-ack-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-subscriptions-ack-"));
     roots.push(root);
     const gate = createRealWorkerAckGate();
     const authority = await createDiagnosticsAuthority({
@@ -491,7 +491,7 @@ describe("Diagnostics durable subscriptions", () => {
 
   it("contains throwing and rejected listeners without affecting peers, real HTTP, observations, or close", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-subscriptions-containment-"),
+      join(tmpdir(), "Token-subscriptions-containment-"),
     );
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
@@ -535,7 +535,7 @@ describe("Diagnostics durable subscriptions", () => {
     expect(runtimePage.records).toHaveLength(1);
     expect(runtimeRecords).toEqual(runtimePage.records);
 
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime: createRuntime(),
       diagnostics: authority,
       createRequestId: () => "51000000-0000-4000-8000-000000000006",
@@ -571,7 +571,7 @@ describe("Diagnostics durable subscriptions", () => {
 
   it("allows silent subscriptions when storage is unavailable without fabricating records", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-subscriptions-unavailable-"),
+      join(tmpdir(), "Token-subscriptions-unavailable-"),
     );
     roots.push(root);
     const database = new DatabaseSync(join(root, "diagnostics-v2.sqlite3"));

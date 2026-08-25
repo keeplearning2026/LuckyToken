@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createLocalIpcAddress,
   createNodePipeTransport,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { readFrame, writeFrame } from "../../packages/application-control-plane/src/framing.js";
 
 const roots: string[] = [];
@@ -21,18 +21,18 @@ describe("pure TypeScript local IPC transport", () => {
   it("creates platform-specific addresses without leaking platform semantics into callers", () => {
     expect(
       createLocalIpcAddress({ platform: "win32", randomId: "abc123" }),
-    ).toBe("\\\\.\\pipe\\luckytoken-abc123");
+    ).toBe("\\\\.\\pipe\\Token-abc123");
     expect(
       createLocalIpcAddress({
         platform: "linux",
-        runtimeDirectory: "/tmp/luckytoken-test",
+        runtimeDirectory: "/tmp/Token-test",
         randomId: "abc123",
       }),
-    ).toBe("/tmp/luckytoken-test/luckytoken-abc123.sock");
+    ).toBe("/tmp/Token-test/Token-abc123.sock");
   });
 
   it("carries framed messages and reports peer close over real Node local IPC", async () => {
-    const runtimeDirectory = await mkdtemp(join(tmpdir(), "luckytoken-ipc-"));
+    const runtimeDirectory = await mkdtemp(join(tmpdir(), "Token-ipc-"));
     roots.push(runtimeDirectory);
     const address = createLocalIpcAddress({
       platform: process.platform,

@@ -1,5 +1,5 @@
 {
-  "name": "@luckytoken/provider-contract",
+  "name": "@token/provider-contract",
   "version": "0.1.0",
   "private": true,
   "type": "module",

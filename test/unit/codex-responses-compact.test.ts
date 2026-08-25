@@ -7,7 +7,7 @@ import { createOpenAIResponsesCompactHandler } from "../../src/protocols/openai-
 import { CODEX_COMPACT_PROMPT } from "../../src/protocols/openai-responses/compact-semantic.js";
 
 function compactRequest(model: string, input: unknown[]): Request {
-  return new Request("http://luckytoken.test/v1/responses/compact", {
+  return new Request("http://Token.test/v1/responses/compact", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model, input }),

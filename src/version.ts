@@ -13,9 +13,9 @@ function loadReleaseVersion(): string {
     }
   ).version;
   if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/u.test(version)) {
-    throw new Error(`Invalid LuckyToken release version: ${String(version)}`);
+    throw new Error(`Invalid Token release version: ${String(version)}`);
   }
   return version;
 }
 
-export const LUCKYTOKEN_RELEASE_VERSION: string = loadReleaseVersion();
+export const TOKEN_RELEASE_VERSION: string = loadReleaseVersion();

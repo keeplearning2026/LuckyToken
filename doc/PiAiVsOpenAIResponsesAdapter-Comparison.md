@@ -1,4 +1,4 @@
-# LuckyToken 的 OpenAI Responses 转换 vs Pi AI 官方实现——完备性对照报告
+# Token 的 OpenAI Responses 转换 vs Pi AI 官方实现——完备性对照报告
 
 > **历史对比，非当前规范。** 独立复核已证伪本文若干核心结论，尤其是“27 个样本每个字段都正确处理”、`top_p` 无 Pi 对应、system/developer 已进入 systemPrompt、encrypted reasoning/refusal 无 Pi 对应、namespace 完整、`text.format` 可直接映顶层 constrainedSampling、SSE 完整一致。本文关于 `HttpObserver` 和 HTTP/stream failure 丢失的描述也只代表 Ticket 27 前基线；当前 conversion 只消费 trusted neutral Pi diagnostics。当前权威结论见 [`ProtocolConversion-Completeness-Audit.md`](./ProtocolConversion-Completeness-Audit.md)、[`Protocol Conversion Architecture and Policy.md`](./Protocols/Protocol%20Conversion%20Architecture%20and%20Policy.md) 和 [`OpenAI Responses-Pi AI IR Conversion Method.md`](./Protocols/OpenAI%20Responses-Pi%20AI%20IR%20Conversion%20Method.md)。本文只保留为审计过程材料，不得作为实现合同。
 
@@ -7,8 +7,8 @@
 
 ## 0. 这份报告是干什么的（先读这一段）
 
-LuckyToken 是一台「翻译机」：真实 Codex 客户端（CLI 和桌面应用）用
-**OpenAI Responses 协议**说话，LuckyToken 把它翻译成 **Pi AI IR**（一种
+Token 是一台「翻译机」：真实 Codex 客户端（CLI 和桌面应用）用
+**OpenAI Responses 协议**说话，Token 把它翻译成 **Pi AI IR**（一种
 中间语言），交给后端模型（CommandCode），再把模型的回答翻译回
 Responses 协议。
 
@@ -67,7 +67,7 @@ Pi AI 包定义的一组 TypeScript 类型，是**和具体厂商无关的中间
 - `Usage`：token 用量（输入、输出、缓存读、缓存写、思考、总计）。
 
 > 简单类比：Responses 协议是「英语」，Pi IR 是「中间语言」，
-> CommandCode 的协议是「德语」。LuckyToken 负责英语→中间语言→德语，
+> CommandCode 的协议是「德语」。Token 负责英语→中间语言→德语，
 > Pi 官方包负责中间语言→英语。两边对照，就是检查翻译是否忠实。
 
 ### 1.3 两个实现的方向
@@ -76,7 +76,7 @@ Pi AI 包定义的一组 TypeScript 类型，是**和具体厂商无关的中间
 Pi 官方包（客户端视角）：  Pi IR  ──翻译──▶  Responses 请求  ──发送──▶  OpenAI 服务端
                            Pi IR  ◀─翻译──  Responses 响应流 ◀─接收──  OpenAI 服务端
 
-LuckyToken（服务端视角）：  Responses 请求 ◀─接收──  Codex 客户端
+Token（服务端视角）：  Responses 请求 ◀─接收──  Codex 客户端
                            Pi IR  ◀─翻译──  Responses 请求
                            CommandCode 请求 ──翻译──▶  Pi IR
                            CommandCode 响应 ◀─接收──  Pi IR
@@ -170,7 +170,7 @@ LuckyToken（服务端视角）：  Responses 请求 ◀─接收──  Codex �
 
 ## 3. 逐类对照
 
-> 表格里「Pi 包」= Pi AI 官方实现，「我们」= LuckyToken。
+> 表格里「Pi 包」= Pi AI 官方实现，「我们」= Token。
 > 「影响」列标注了严重度：P1 = 真实客户端会用到、P2 = 边缘/未来。
 
 ### 3.1 请求侧：input 条目类型覆盖
@@ -631,7 +631,7 @@ Pi 的 `strict` 只是软提示。
 - **SSE 原子序列与 opencodex 逐帧一致。** 同一个 Codex 会提交的序列，
   被真实 CLI 在线测试验证过。
 - **会话状态：持久、有界、fail-open。** Pi 的客户端适配器不需要这个
-  （它总是发全量历史）；LuckyToken 自己拥有 `previous_response_id` 展开
+  （它总是发全量历史）；Token 自己拥有 `previous_response_id` 展开
   逻辑，且带防毒机制（D8）、原始 wire 条目单一事实源（D2）。
 - **合成历史身份。** 回放的助手消息打上 `SYNTHETIC_CLIENT_HISTORY_API/
   PROVIDER` 标记，防止被当成「同目标连续性」——CommandCode provider 对
@@ -679,7 +679,7 @@ Pi 的 `strict` 只是软提示。
   `openai-codex-responses.ts`（Codex 请求体）、`transform-messages.ts`、
   `utils/deferred-tools.ts`；类型定义：
   `node_modules/@earendil-works/pi-ai/dist/types.d.ts`。
-- LuckyToken：`src/protocols/openai-responses/request.ts`、`response.ts`、
+- Token：`src/protocols/openai-responses/request.ts`、`response.ts`、
   `sse.ts`、`session-state.ts`、`handler.ts`、`src/protocols/options.ts`、
   `src/execution.ts`、`packages/provider-commandcode-private/src/{provider,semantic,
   assembler}.ts`、`packages/provider-contract/src/diagnostics.ts`。

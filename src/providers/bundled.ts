@@ -1,9 +1,9 @@
 /**
- * LuckyToken bundled Provider Package metadata (Provider Activation
+ * Token bundled Provider Package metadata (Provider Activation
  * Specification v1.0 §8.2).
  *
  * This module owns only immutable product assembly facts: which Provider
- * Packages LuckyToken ships as part of the product, their reserved npm
+ * Packages Token ships as part of the product, their reserved npm
  * specifiers, their reserved Provider IDs, and their fixed configuration.
  * It is NOT a Provider catalog — names, auth labels, models and behavior
  * still come from the Provider returned by the loaded package.
@@ -14,7 +14,7 @@
  * - reserve the package specifier so user configuration cannot claim it;
  * - reserve the Provider ID so user models.json/package configuration
  *   cannot shadow it;
- * - classify the Provider's product source (`luckytoken_bundled`);
+ * - classify the Provider's product source (`token_bundled`);
  * - certify the release assembly resolves and registers it.
  */
 
@@ -31,12 +31,12 @@ export interface BundledProviderPackage {
 export const bundledProviderPackages: readonly BundledProviderPackage[] =
   Object.freeze([
     Object.freeze({
-      specifier: "@luckytoken/provider-commandcode-private",
+      specifier: "@token/provider-commandcode-private",
       providerId: "commandcode-private",
       configuration: Object.freeze({}),
     }),
     Object.freeze({
-      specifier: "@luckytoken/provider-commandcode-goat",
+      specifier: "@token/provider-commandcode-goat",
       providerId: "commandcode-goat",
       configuration: Object.freeze({}),
     }),

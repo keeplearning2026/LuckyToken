@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RequestJourneyRecord, RequestJourneySummary, StatusSnapshot } from "@luckytoken/application-control-plane/control-plane";
+import type { RequestJourneyRecord, RequestJourneySummary, StatusSnapshot } from "@token/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";

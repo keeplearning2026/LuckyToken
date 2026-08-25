@@ -40,7 +40,7 @@ function startCli(
   const fixtureHome =
     configDirectory === undefined
       ? undefined
-      : basename(configDirectory) === ".luckytoken"
+      : basename(configDirectory) === ".Token"
         ? dirname(configDirectory)
         : configDirectory;
   const command = bridgeSignal
@@ -58,7 +58,7 @@ function startCli(
             CODEX_HOME: join(fixtureHome, ".codex"),
           }),
       ...(bridgeSignal
-        ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
+        ? { TOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
         : {}),
       NO_COLOR: "1",
     },
@@ -101,24 +101,24 @@ describe("Public Model serve wiring", () => {
   });
 
   it("serves Public Model queries and port mutation while retiring the raw alias CLI", { timeout: 60_000 }, async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-public-model-serve-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-public-model-serve-"));
     roots.push(root);
     const stateDirectory = join(root, "state");
     await mkdir(stateDirectory, { recursive: true });
     const initialPort = await reserveFreePort();
     const nextPort = await reserveFreePort();
-    const configPath = join(root, "luckytoken.config.json");
+    const configPath = join(root, "Token.config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: initialPort },
         clientProtocols: { "anthropic-messages": {} },
         pi: { directory: "pi" },
       }),
       "utf8",
     );
-    const descriptorPath = join(root, ".luckytoken", "control-plane.json");
+    const descriptorPath = join(root, ".Token", "control-plane.json");
     const serve = startCli(["--config", configPath], true);
     children.push(serve);
     const serving = captureChild(serve);

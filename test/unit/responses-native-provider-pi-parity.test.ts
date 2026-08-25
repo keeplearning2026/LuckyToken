@@ -77,7 +77,7 @@ async function capturePiRequest(
   return captured;
 }
 
-async function captureLuckyTokenRequest(
+async function captureTokenRequest(
   selectedModel: Model<string>,
   selectedAuth: AuthResult,
   rawBody: string,
@@ -128,7 +128,7 @@ describe("Provider Native Responses Pi HTTP parity", () => {
         onPayload: () => projectedBody,
       }),
     );
-    const lucky = await captureLuckyTokenRequest(
+    const lucky = await captureTokenRequest(
       selectedModel,
       auth("provider-key"),
       rawBody,
@@ -171,7 +171,7 @@ describe("Provider Native Responses Pi HTTP parity", () => {
         onPayload: () => projectedBody,
       }),
     );
-    const lucky = await captureLuckyTokenRequest(selectedModel, auth("azure-key"), rawBody);
+    const lucky = await captureTokenRequest(selectedModel, auth("azure-key"), rawBody);
     const stableHeaders = ["accept", "api-key", "content-type", "x-provider-static"] as const;
 
     expect(lucky.url).toBe(pi.url);
@@ -205,7 +205,7 @@ describe("Provider Native Responses Pi HTTP parity", () => {
         onPayload: () => projectedBody,
       }),
     );
-    const lucky = await captureLuckyTokenRequest(selectedModel, auth(token), rawBody);
+    const lucky = await captureTokenRequest(selectedModel, auth(token), rawBody);
     const stableHeaders = [
       "accept",
       "authorization",

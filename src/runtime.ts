@@ -6,7 +6,7 @@ import {
 } from "./http.js";
 import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 
-export interface LuckyTokenRuntime {
+export interface TokenRuntime {
   handle(
     request: Request,
     context?: ClientProtocolRequestContext,
@@ -15,7 +15,7 @@ export interface LuckyTokenRuntime {
   readonly routes: ReadonlyArray<Readonly<{ method: string; pathname: string }>>;
 }
 
-export interface LuckyTokenRuntimeOptions {
+export interface TokenRuntimeOptions {
   readonly clientProtocols: readonly ClientProtocolHandler[];
   readonly requestTimeoutMs?: number;
   readonly shutdownSignal?: AbortSignal;
@@ -44,9 +44,9 @@ function snapshotClientProtocol(
   });
 }
 
-export function createLuckyTokenRuntime(
-  options: LuckyTokenRuntimeOptions,
-): LuckyTokenRuntime {
+export function createTokenRuntime(
+  options: TokenRuntimeOptions,
+): TokenRuntime {
   const clientProtocols = options.clientProtocols.map(snapshotClientProtocol);
   const routeKeys = new Set<string>();
   for (const protocol of clientProtocols) {

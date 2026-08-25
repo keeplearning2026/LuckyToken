@@ -1,6 +1,6 @@
 # 02 — Extract normal Backend Application bootstrap from CLI
 
-**What to build:** Make normal LuckyToken serving start through one Backend Application lifecycle seam so the CLI becomes only a product adapter that parses arguments, starts the application, and reports results.
+**What to build:** Make normal Token serving start through one Backend Application lifecycle seam so the CLI becomes only a product adapter that parses arguments, starts the application, and reports results.
 
 **Blocked by:** 01 — Freeze migration seams and architecture guards.
 

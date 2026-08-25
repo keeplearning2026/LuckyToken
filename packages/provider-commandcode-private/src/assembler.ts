@@ -1,7 +1,7 @@
 import type {
   ConversionNotice,
   InvocationAttempt,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 import { COMMANDCODE_PROVIDER_ID } from "./constants.js";
 import { CommandCodeNeutralFailureError } from "./failure.js";
 import {

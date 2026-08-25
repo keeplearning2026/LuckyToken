@@ -5,7 +5,7 @@
 
 **Reference Repository:** `earendil-works/pi`
 **Reference Commit:** `914cf1472e715297caa30db4b9535d534a9eb718` (`v0.84.2`)
-**Vendored LuckyToken Snapshot:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
+**Vendored Token Snapshot:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
 **Reference Package:** `@earendil-works/pi-ai` `0.84.2`
 **Reference Date:** `2026-08-14`
 
@@ -142,7 +142,7 @@ ImagesFunction
 
 protocol-to-protocol conversion specifications
 
-LuckyToken architecture
+Token architecture
 ```
 
 Therefore:
@@ -158,7 +158,7 @@ Anthropic ↔ Pi Conversion Specification
 
 Pi Chat Protocol
 ≠
-LuckyToken Architecture
+Token Architecture
 ```
 
 ---
@@ -4873,7 +4873,7 @@ earendil-works/pi
 Upstream Commit / Tag:
 914cf1472e715297caa30db4b9535d534a9eb718 / v0.84.2
 
-Vendored LuckyToken Snapshot:
+Vendored Token Snapshot:
 fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575
 
 Package:
@@ -4899,7 +4899,7 @@ version:
 0.84.2
 ```
 
-The pinned upstream commit/tag defines the Pi source meaning of this protocol version; the vendored LuckyToken snapshot identifies the local evidence copy used by this repository.
+The pinned upstream commit/tag defines the Pi source meaning of this protocol version; the vendored Token snapshot identifies the local evidence copy used by this repository.
 
 Future source changes do not retroactively modify this extraction.
 

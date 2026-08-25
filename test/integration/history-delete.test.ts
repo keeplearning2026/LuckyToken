@@ -12,7 +12,7 @@ import {
   type ControlPlaneEndpoint,
   type HistoryRange,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { createHistoryAuthority } from "../../src/history/index.js";
 
 interface UnifiedHistoryFake {
@@ -49,7 +49,7 @@ describe("unified history authority", () => {
   }
 
   async function start(diagnostics: UnifiedHistoryFake) {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-unified-history-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-unified-history-"));
     roots.push(root);
     const authority = createHistoryAuthority({
       diagnostics,
@@ -61,7 +61,7 @@ describe("unified history authority", () => {
     });
     const host = await startControlPlane({
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: createNodePipeTransport(),
       access: nodePipeFallbackAccess,
@@ -192,7 +192,7 @@ describe("unified history authority", () => {
         exportedAt: 1_700_000_000_000,
         sensitive: true,
         snapshot: {
-          contract: "luckytoken-diagnostics-sqlite",
+          contract: "token-diagnostics-sqlite",
           schemaVersion: 2,
           bytes: snapshot.byteLength,
         },

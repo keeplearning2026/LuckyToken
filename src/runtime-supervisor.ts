@@ -6,7 +6,7 @@ import type {
   RuntimeCommandExecution,
   RuntimeCommandHandler,
   RuntimeStatusPublisher,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 export interface RunningDataPlaneListener {
   close(): Promise<void>;
@@ -57,7 +57,7 @@ const failureMessages: Readonly<Record<DataPlaneFailure["code"], string>> = {
   start_failed:
     "The model gateway could not start. Check its configured address and try again.",
   stop_failed:
-    "The model gateway could not stop cleanly. Restart LuckyToken before trying again.",
+    "The model gateway could not stop cleanly. Restart Token before trying again.",
 };
 
 function errorCode(error: unknown): string | undefined {
@@ -129,7 +129,7 @@ export function createDataPlaneRuntimeSupervisor(
         outcome: "conflict",
         conflict: {
           code: "application_restart_required",
-          message: "Restart LuckyToken before starting the model gateway again.",
+          message: "Restart Token before starting the model gateway again.",
         },
       };
     }

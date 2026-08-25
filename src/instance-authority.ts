@@ -22,7 +22,7 @@ export class InstanceAuthorityOwnedError extends Error {
   readonly code = "INSTANCE_AUTHORITY_OWNED";
 
   constructor() {
-    super("LuckyToken Backend instance is already owned");
+    super("Token Backend instance is already owned");
     this.name = "InstanceAuthorityOwnedError";
   }
 }
@@ -39,7 +39,7 @@ function sqliteErrorCode(error: unknown): number | undefined {
 export function resolveBackendInstanceDatabasePath(
   location: InstanceAuthorityLocation,
 ): string {
-  return join(location.homeDirectory, ".luckytoken", "instance.sqlite");
+  return join(location.homeDirectory, ".Token", "instance.sqlite");
 }
 
 export function createInstanceAuthority(

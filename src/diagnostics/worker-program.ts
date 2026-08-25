@@ -66,7 +66,7 @@ function diagnosticsWorkerMain(): void {
       .get() as { readonly value: string } | undefined;
     if (
       existingSchema === undefined ||
-      existingSchema.value !== "luckytoken_diagnostics"
+      existingSchema.value !== "TOKEN_diagnostics"
     ) {
       permanentStartupFailure();
       return;
@@ -126,7 +126,7 @@ function diagnosticsWorkerMain(): void {
     `);
   }
   database.exec(`
-    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_name', 'luckytoken_diagnostics');
+    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_name', 'TOKEN_diagnostics');
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 2);
     CREATE TABLE IF NOT EXISTS records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

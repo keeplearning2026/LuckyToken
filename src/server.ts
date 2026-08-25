@@ -18,12 +18,12 @@ import {
   observeRequestJourney,
   type ClientProtocolRequestContext,
 } from "./http.js";
-import type { LuckyTokenRuntime } from "./runtime.js";
+import type { TokenRuntime } from "./runtime.js";
 import type { WebSocketUpgradeHandler } from "./websocket-upgrade.js";
 import { preservesDirectStatusText } from "./local-native-http-response.js";
 
-export interface LuckyTokenHttpServerOptions {
-  readonly runtime: LuckyTokenRuntime;
+export interface TokenHttpServerOptions {
+  readonly runtime: TokenRuntime;
   readonly host?: string;
   readonly port?: number;
   readonly diagnostics?: RequestJourneyObservationAuthority;
@@ -52,7 +52,7 @@ export interface ServerDrainOptions {
   readonly clock?: DrainClock;
 }
 
-export interface RunningLuckyTokenHttpServer {
+export interface RunningTokenHttpServer {
   readonly host: string;
   readonly port: number;
   readonly origin: string;
@@ -68,7 +68,7 @@ const WEBSOCKET_FALLBACK_BODY = Buffer.from(
   JSON.stringify({
     error: {
       message:
-        "LuckyToken supports HTTP transport only. Retry over HTTP instead of WebSocket.",
+        "Token supports HTTP transport only. Retry over HTTP instead of WebSocket.",
       type: "upgrade_required",
       code: "websocket_transport_not_supported",
       param: null,
@@ -421,9 +421,9 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-export async function startLuckyTokenHttpServer(
-  options: LuckyTokenHttpServerOptions,
-): Promise<RunningLuckyTokenHttpServer> {
+export async function startTokenHttpServer(
+  options: TokenHttpServerOptions,
+): Promise<RunningTokenHttpServer> {
   const host = options.host ?? "127.0.0.1";
   const requestedPort = options.port ?? 3000;
   let origin = "";
@@ -497,7 +497,7 @@ export async function startLuckyTokenHttpServer(
         failureId,
         role: "primary",
         classification: "server_draining",
-        origin: "luckytoken",
+        origin: "Token",
         originPrecision: "exact",
         location: failureLocation,
       });
@@ -521,7 +521,7 @@ export async function startLuckyTokenHttpServer(
       request.resume();
       response.writeHead(503, {
         connection: "close",
-        "x-luckytoken-request-id": context.requestId,
+        "x-token-request-id": context.requestId,
       });
       response.end();
       closeRequestJourney(context, {
@@ -682,7 +682,7 @@ export async function startLuckyTokenHttpServer(
           const fallback = new Response(null, {
             status: 500,
             headers: {
-              "x-luckytoken-request-id": context.requestId,
+              "x-token-request-id": context.requestId,
             },
           });
           observeRequestJourney(context, {
@@ -808,7 +808,7 @@ export async function startLuckyTokenHttpServer(
             failureId,
             role: "primary",
             classification: "websocket_upgrade_handler_failed",
-            origin: "luckytoken",
+            origin: "Token",
             originPrecision: "boundary",
             location,
           });
@@ -847,7 +847,7 @@ export async function startLuckyTokenHttpServer(
   const address = server.address();
   if (address === null || typeof address === "string") {
     await closeServer(server);
-    throw new Error("LuckyToken HTTP server did not expose a TCP address");
+    throw new Error("Token HTTP server did not expose a TCP address");
   }
   const port = address.port;
   origin = `http://${host}:${port}`;
@@ -855,7 +855,7 @@ export async function startLuckyTokenHttpServer(
   let closed = false;
   let closing: Promise<void> | undefined;
   let draining: Promise<DrainOutcome> | undefined;
-  const shutdownReason = new Error("LuckyToken HTTP server is shutting down");
+  const shutdownReason = new Error("Token HTTP server is shutting down");
   const abortActive = (forceWebSockets: boolean): void => {
     for (const active of activeRequests) {
       if (!active.controller.signal.aborted) {

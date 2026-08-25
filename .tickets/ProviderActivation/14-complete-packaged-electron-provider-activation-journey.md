@@ -1,6 +1,6 @@
 # 14 — Complete the packaged Electron Provider activation journey
 
-**What to build:** A fresh packaged LuckyToken product can complete the real activation flow end to end: discover Providers, authenticate while the Gateway is stopped, edit a model alias, start serving, make a successful request through the chosen alias, and observe that request in Activity.
+**What to build:** A fresh packaged Token product can complete the real activation flow end to end: discover Providers, authenticate while the Gateway is stopped, edit a model alias, start serving, make a successful request through the chosen alias, and observe that request in Activity.
 
 **Blocked by:** 06 — Derive product Provider readiness from real model availability; 10 — Complete generic Provider authentication in the product UI; 11 — Expose model alias editing directly on Provider model rows; 12 — Use the effective alias everywhere clients discover and select models; 13 — Certify request isolation across login, catalog refresh, and alias changes.
 

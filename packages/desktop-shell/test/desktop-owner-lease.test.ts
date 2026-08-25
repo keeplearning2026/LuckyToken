@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   ApplicationCommandResult,
   ApplicationOwnership,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createDesktopOwnerLeaseClient } from "../src/main/desktop-owner-lease.js";
 
@@ -100,7 +100,7 @@ describe("desktop owner lease client", () => {
         ...result("desktop_owner", "conflict"),
         conflict: {
           code: "desktop_owner_lease_mismatch" as const,
-          message: "The desktop ownership lease belongs to a newer LuckyToken shell.",
+          message: "The desktop ownership lease belongs to a newer Token shell.",
         },
       });
     const client = createDesktopOwnerLeaseClient({

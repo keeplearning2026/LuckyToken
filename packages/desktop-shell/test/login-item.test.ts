@@ -22,7 +22,7 @@ describe("Windows desktop login-item ownership", () => {
       launchItems: [
         {
           name: "Token-old-test",
-          path: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
+          path: "D:\\project\\Token\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
           args: [],
           scope: "user",
           enabled: true,
@@ -36,7 +36,7 @@ describe("Windows desktop login-item ownership", () => {
         },
         {
           name: "Token-machine",
-          path: "D:\\project\\LuckyToken\\.electron-out\\machine\\Token.exe",
+          path: "D:\\project\\Token\\.electron-out\\machine\\Token.exe",
           args: [],
           scope: "machine",
           enabled: true,
@@ -48,7 +48,7 @@ describe("Windows desktop login-item ownership", () => {
     expect(set).toHaveBeenCalledTimes(1);
     expect(set).toHaveBeenCalledWith({
       openAtLogin: false,
-      path: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
+      path: "D:\\project\\Token\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
       args: [],
       name: "Token-old-test",
     });
@@ -59,14 +59,14 @@ describe("Windows desktop login-item ownership", () => {
       openAtLogin: false,
       launchItems: [
         {
-          name: "legacy-luckytoken",
+          name: "legacy-Token",
           path: "C:\\old\\Token.exe",
           args: ["--legacy"],
           scope: "user",
           enabled: true,
         },
         {
-          name: "test-luckytoken",
+          name: "test-Token",
           path: "D:\\repo\\.electron-out\\42\\Token.exe",
           args: [],
           scope: "user",
@@ -82,13 +82,13 @@ describe("Windows desktop login-item ownership", () => {
       openAtLogin: false,
       path: "C:\\old\\Token.exe",
       args: ["--legacy"],
-      name: "legacy-luckytoken",
+      name: "legacy-Token",
     });
     expect(set).toHaveBeenNthCalledWith(2, {
       openAtLogin: false,
       path: "D:\\repo\\.electron-out\\42\\Token.exe",
       args: [],
-      name: "test-luckytoken",
+      name: "test-Token",
     });
     expect(set).toHaveBeenNthCalledWith(3, {
       openAtLogin: true,

@@ -2,7 +2,7 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { createEmptyServerConfig } from "../../packages/provider-commandcode-private/src/project.js";
-import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
+import { createCommandCodeTestRuntime as createTokenRuntime } from "../support/commandcode-serving.js";
 
 function successResponse(): Response {
   return new Response(
@@ -20,7 +20,7 @@ function successResponse(): Response {
 }
 
 function request(): Request {
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -41,7 +41,7 @@ describe("CommandCode fixed server config integration", () => {
       upstreamRequest = new Request(input, init);
       return successResponse();
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "unused-client-key",
       commandCodeApiKey: "upstream-key",
       commandCodeBaseUrl: "https://fixture.commandcode.test",

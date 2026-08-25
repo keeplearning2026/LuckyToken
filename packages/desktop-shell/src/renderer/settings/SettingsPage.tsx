@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
+import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AdvancedSettings } from "./AdvancedSettings.js";
 import { DataSettings } from "./DataSettings.js";
 import { GeneralSettings } from "./GeneralSettings.js";
@@ -17,7 +17,7 @@ const sections: ReadonlyArray<Readonly<{
   { id: "advanced", label: "Advanced", description: "Codex and diagnostics" },
 ]);
 
-export function SettingsPage({ api }: { readonly api: LuckyTokenDesktopApi }) {
+export function SettingsPage({ api }: { readonly api: TokenDesktopApi }) {
   const [section, setSection] = useState<SettingsSection>("general");
 
   return (

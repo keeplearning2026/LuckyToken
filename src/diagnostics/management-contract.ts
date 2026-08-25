@@ -3,7 +3,7 @@ import type {
   AnalyticsQueryResult,
   HistoryRange,
   UnifiedDiagnosticsManagement,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type { RequestJourneyObservationAuthority } from "./contract.js";
 

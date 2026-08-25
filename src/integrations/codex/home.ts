@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-/** Resolve the Codex-owned home. LuckyToken only observes this location. */
+/** Resolve the Codex-owned home. Token only observes this location. */
 export function resolveCodexHome(
   env: NodeJS.ProcessEnv = process.env,
   home: () => string = homedir,

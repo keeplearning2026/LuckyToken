@@ -12,20 +12,20 @@ import {
   type CredentialProfilesCommand,
   type CredentialProfilesCommandResult,
   type ProviderProfileAuthCommandResult,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createControlPlaneDiscovery } from "../control-plane-discovery.js";
 
 const PROFILE_HELP = `Token control profiles
 
 Usage:
-  luckytoken control profiles query --descriptor <path>
-  luckytoken control profiles add <provider> <api_key|oauth> <name> [--note <text>] [--use-now] --descriptor <path>
-  luckytoken control profiles reconnect <provider> <credentialId> [--use-now] --descriptor <path>
-  luckytoken control profiles rename <provider> <credentialId> <name> [--note <text>] --descriptor <path>
-  luckytoken control profiles <activate|enable|disable|remove|recheck> <provider> <credentialId> --descriptor <path>
-  luckytoken control profiles priority <provider> <credentialId> <number> --descriptor <path>
-  luckytoken control profiles settings <provider> <api-key-on-429:on|off> <oauth-on-429:on|off> --descriptor <path>
+  Token control profiles query --descriptor <path>
+  Token control profiles add <provider> <api_key|oauth> <name> [--note <text>] [--use-now] --descriptor <path>
+  Token control profiles reconnect <provider> <credentialId> [--use-now] --descriptor <path>
+  Token control profiles rename <provider> <credentialId> <name> [--note <text>] --descriptor <path>
+  Token control profiles <activate|enable|disable|remove|recheck> <provider> <credentialId> --descriptor <path>
+  Token control profiles priority <provider> <credentialId> <number> --descriptor <path>
+  Token control profiles settings <provider> <api-key-on-429:on|off> <oauth-on-429:on|off> --descriptor <path>
 
 Every mutation first reads the current Provider revision and then uses the
 versioned Profile command. Import and export are intentionally unavailable.

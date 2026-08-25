@@ -41,7 +41,7 @@ function snapshot(): AgentInjectionSnapshot {
 
 describe("Pi integration adapter", () => {
   it("fingerprints only the provider content produced for the selected scope", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-pi-fingerprint-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-pi-fingerprint-"));
     const adapter = createPiIntegrationAdapter({
       agentDirectory: join(root, "pi-agent"),
       stateDirectory: join(root, "state"),
@@ -77,8 +77,8 @@ describe("Pi integration adapter", () => {
     );
   });
 
-  it("inserts only providers.luckytoken into an existing JSONC document", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-pi-adapter-"));
+  it("inserts only providers.Token into an existing JSONC document", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-pi-adapter-"));
     const agentDirectory = join(root, "pi-agent");
     const stateDirectory = join(root, "state");
     const modelsPath = join(agentDirectory, "models.json");
@@ -111,10 +111,10 @@ describe("Pi integration adapter", () => {
       providers: Record<string, unknown>;
     };
     expect(parsed.providers.other).toEqual({ apiKey: "user-placeholder" });
-    expect(parsed.providers.luckytoken).toEqual({
+    expect(parsed.providers.Token).toEqual({
       name: "Token",
       baseUrl: "http://127.0.0.1:3000",
-      apiKey: "luckytoken-local",
+      apiKey: "Token-local",
       api: "anthropic-messages",
       compat: {
         forceAdaptiveThinking: true,
@@ -158,7 +158,7 @@ describe("Pi integration adapter", () => {
   });
 
   it("restores by deleting the last injected provider and treats absence as success", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-pi-restore-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-pi-restore-"));
     const agentDirectory = join(root, "pi-agent");
     const stateDirectory = join(root, "state");
     const modelsPath = join(agentDirectory, "models.json");
@@ -200,8 +200,8 @@ describe("Pi integration adapter", () => {
     expect(parsed.providers).toEqual({ other: { apiKey: "after" } });
   });
 
-  it("does not delete a luckytoken provider that no longer matches the last injection", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-pi-conflict-"));
+  it("does not delete a Token provider that no longer matches the last injection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-pi-conflict-"));
     const agentDirectory = join(root, "pi-agent");
     const stateDirectory = join(root, "state");
     const modelsPath = join(agentDirectory, "models.json");
@@ -220,14 +220,14 @@ describe("Pi integration adapter", () => {
     expect(await readFile(modelsPath, "utf8")).toBe(changed);
   });
 
-  it("does not claim or delete a pre-existing luckytoken provider", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-pi-preexisting-"));
+  it("does not claim or delete a pre-existing Token provider", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-pi-preexisting-"));
     const agentDirectory = join(root, "pi-agent");
     const stateDirectory = join(root, "state");
     const modelsPath = join(agentDirectory, "models.json");
     const original = `{
   "providers": {
-    "luckytoken": {
+    "Token": {
       "apiKey": "user-owned",
       "models": []
     }
@@ -249,7 +249,7 @@ describe("Pi integration adapter", () => {
   });
 
   it("does not create models.json for an empty scope and removes an older injection", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-pi-empty-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-pi-empty-"));
     const agentDirectory = join(root, "pi-agent");
     const stateDirectory = join(root, "state");
     const modelsPath = join(agentDirectory, "models.json");
@@ -279,6 +279,6 @@ describe("Pi integration adapter", () => {
     const parsed = JSON.parse(stripJsonComments(content)) as {
       providers: Record<string, unknown>;
     };
-    expect(parsed.providers.luckytoken).toBeUndefined();
+    expect(parsed.providers.Token).toBeUndefined();
   });
 });

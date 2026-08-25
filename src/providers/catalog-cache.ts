@@ -11,7 +11,7 @@ import type {
 } from "@earendil-works/pi-ai";
 
 /**
- * Ticket 11 validated dynamic catalog cache (LuckyToken-owned).
+ * Ticket 11 validated dynamic catalog cache (Token-owned).
  *
  * The cache is the pi-ai `ModelsStore` seam for the data plane: providers
  * with dynamic model refresh (`refreshModels`) publish their catalog facts
@@ -35,7 +35,7 @@ import type {
  * only ever (re)written by the runtime after a successful refresh.
  */
 
-export const CATALOG_CACHE_SCHEMA = "luckytoken-catalog-cache-v1" as const;
+export const CATALOG_CACHE_SCHEMA = "Token-catalog-cache-v1" as const;
 
 export interface CatalogCacheFileSystem {
   readFile(path: string): Promise<string>;
@@ -73,7 +73,7 @@ export interface CatalogCacheDroppedEntry {
 }
 
 export interface CatalogCacheStoreOptions {
-  /** LuckyToken-owned cache file under the configured application
+  /** Token-owned cache file under the configured application
    *  directory; never the Pi Agent default data directory. */
   readonly path: string;
   /** Test seam at the file-system boundary; defaults to node fs. */

@@ -1,7 +1,7 @@
 import {
   PROVIDER_PACKAGE_CONTRACT_VERSION,
-  type LuckyTokenProviderPackage,
-} from "@luckytoken/provider-contract/package";
+  type TokenProviderPackage,
+} from "@token/provider-contract/package";
 
 import { parseCommandCodeConfiguration } from "./configuration.js";
 import { COMMANDCODE_MODELS } from "./models.js";
@@ -26,4 +26,4 @@ export const providerPackage = Object.freeze({
       models: COMMANDCODE_MODELS,
     });
   },
-} satisfies LuckyTokenProviderPackage);
+} satisfies TokenProviderPackage);

@@ -19,7 +19,7 @@ import type {
   RuntimeEventRecord,
   RuntimeCommand,
   SettingsCommand,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type { ControlPlaneSession } from "./control-plane-session.js";
 import type { SaveFileOptions } from "../shared/desktop-api.js";
@@ -158,7 +158,7 @@ export function registerDesktopIpcHandlers(options: {
     channels.add(channel);
     registrar.handle(channel, async (event, ...args) => {
       if (!isTrustedSender(event.senderId)) {
-        throw new Error("Untrusted LuckyToken desktop IPC sender");
+        throw new Error("Untrusted Token desktop IPC sender");
       }
       return handler(event, ...args);
     });

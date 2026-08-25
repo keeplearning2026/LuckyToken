@@ -1,7 +1,7 @@
 /**
  * Ticket 24 backup authority.
  *
- * It reads only an explicit allowlist of LuckyToken-owned sources. Ordinary
+ * It reads only an explicit allowlist of Token-owned sources. Ordinary
  * backups serialize recursively redacted JSON configuration; full-sensitive
  * backups preserve the allowlisted source bytes and consistent store-owned
  * SQLite snapshots, but only after a single-use confirmation. Publication is
@@ -17,7 +17,7 @@ import type {
   BackupManifestEntrySummary,
   BackupManifestSummary,
   BackupResult,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { redactDiagnostic } from "../diagnostics/value-redaction.js";
 import {
   ensureDestinationDirectory,
@@ -27,7 +27,7 @@ import { validateCanonicalExportDestination } from "../history/path-safety.js";
 
 const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 const FULL_CONFIRMATION =
-  "This full-sensitive backup includes raw LuckyToken configuration, Provider credentials, Client token secrets, and unified request diagnostic history with captured artifacts. Store it as a secret and confirm to continue.";
+  "This full-sensitive backup includes raw Token configuration, Provider credentials, Client token secrets, and unified request diagnostic history with captured artifacts. Store it as a secret and confirm to continue.";
 
 export interface BackupFileSource {
   readonly id: string;
@@ -46,7 +46,7 @@ export interface BackupSnapshotSource {
   readonly version: string | number;
   readonly category: "history" | "credentials";
   /** Optional explicit owned path used only to prove this snapshot belongs
-   * to the configured LuckyToken root before invoking the store owner. */
+   * to the configured Token root before invoking the store owner. */
   readonly sourcePath?: string;
   readonly optional?: boolean;
   snapshot(signal: AbortSignal): Promise<Uint8Array>;
@@ -87,9 +87,9 @@ const FAILURE_MESSAGES: Readonly<Record<BackupFailure["code"], string>> =
     destination_locked:
       "The backup destination is locked by another process.",
     source_outside_owned_root:
-      "A configured source is outside the LuckyToken-owned data root; it was not read.",
+      "A configured source is outside the Token-owned data root; it was not read.",
     source_unavailable:
-      "A required LuckyToken backup source is unavailable; no artifact was published.",
+      "A required Token backup source is unavailable; no artifact was published.",
     backup_too_large: "The backup exceeds the maximum artifact size.",
     cancelled: "The backup was cancelled; no artifact was published.",
     internal: "The backup could not be completed.",
@@ -177,7 +177,7 @@ export function createBackupAuthority(
     if (!destinationValidation.ok) return failure("invalid_destination");
     const destination = await inspectDestination(destinationPath, overwrite);
     if (destination.kind === "rejected") return failure(destination.code);
-    const tempPath = `${destinationPath}.luckytoken-backup.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    const tempPath = `${destinationPath}.token-backup.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     let published = false;
     try {
@@ -265,7 +265,7 @@ export function createBackupAuthority(
         throw new BackupRejected("internal");
       }
       const manifest: BackupManifestSummary = Object.freeze({
-        format: "luckytoken-backup",
+        format: "token-backup",
         formatVersion: 1,
         createdAt,
         sensitive,

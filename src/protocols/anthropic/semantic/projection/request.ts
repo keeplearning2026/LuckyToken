@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
-import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
+import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
 import type { AnthropicSemanticInvocation } from "../invocation.js";
 import type { AnthropicEffortPlan } from "../reasoning/contract.js";

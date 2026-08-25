@@ -17,14 +17,14 @@ import {
   connectControlPlane,
   controlPlaneVersion,
   createNodePipeTransport,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  startLuckyTokenApplication,
-  type RunningLuckyTokenApplication,
-  type StartLuckyTokenApplicationOptions,
-  type StartLuckyTokenApplicationResult,
+  startTokenApplication,
+  type RunningTokenApplication,
+  type StartTokenApplicationOptions,
+  type StartTokenApplicationResult,
 } from "../../src/application.js";
 import { createControlPlaneDiscovery } from "../../src/control-plane-discovery.js";
 import type {
@@ -60,16 +60,16 @@ type DiagnosticsAuthorityFactory = (
   input: DiagnosticsAuthorityFactoryInput,
 ) => Promise<DiagnosticsManagementAuthority>;
 
-type DiagnosticsApplicationTestSeam = StartLuckyTokenApplicationOptions & {
+type DiagnosticsApplicationTestSeam = StartTokenApplicationOptions & {
   readonly diagnosticsAuthorityFactory: DiagnosticsAuthorityFactory;
 };
 
-const startWithDiagnosticsFactory = startLuckyTokenApplication as (
+const startWithDiagnosticsFactory = startTokenApplication as (
   options: DiagnosticsApplicationTestSeam,
-) => Promise<StartLuckyTokenApplicationResult>;
+) => Promise<StartTokenApplicationResult>;
 
 const roots: string[] = [];
-const applications: RunningLuckyTokenApplication[] = [];
+const applications: RunningTokenApplication[] = [];
 
 afterEach(async () => {
   await Promise.allSettled(
@@ -108,7 +108,7 @@ async function fixture(): Promise<{
   readonly descriptorPath: string;
   readonly port: number;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-diagnostics-app-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-app-"));
   roots.push(root);
   const port = await freePort();
   const configPath = join(root, "config.json");
@@ -117,7 +117,7 @@ async function fixture(): Promise<{
     configPath,
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port },
         clientProtocols: {
           "anthropic-messages": {
@@ -385,7 +385,7 @@ describe("Backend Application DiagnosticsAuthority lifecycle", () => {
     expect(resolve(process.env.CODEX_HOME!)).not.toBe(resolve(root));
     const legacy = await seedLegacyStorage(root);
 
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",

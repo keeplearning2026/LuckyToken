@@ -132,7 +132,7 @@ describe("catalog composition runtime", () => {
     files.set(
       cachePath,
       JSON.stringify({
-        schema: "luckytoken-catalog-cache-v1",
+        schema: "Token-catalog-cache-v1",
         providers: {
           "dynamic-pkg": {
             models: [modelFact("dynamic-pkg", "cached-model", "https://cached.example/v1")],

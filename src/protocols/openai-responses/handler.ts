@@ -40,7 +40,7 @@ import {
   type PreparedHttpResponse,
 } from "./response.js";
 import { mapUpstreamFailureFact } from "./error-rendering.js";
-import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { extractResponsesModelSelector } from "./request.js";
 import {
   createResponseSessionState,
@@ -178,7 +178,7 @@ interface ResponsesEarlyFailure {
   readonly stepInstanceId: string;
   readonly location: RequestJourneyLocation;
   readonly classification: string;
-  readonly origin: "client" | "luckytoken";
+  readonly origin: "client" | "Token";
 }
 
 function observeResponsesEarlyFailure(
@@ -608,7 +608,7 @@ async function handleOpenAIResponses(
         {
           ...activeEarlyStep,
           classification: "model_unavailable",
-          origin: "luckytoken",
+          origin: "Token",
         },
       );
     }
@@ -815,7 +815,7 @@ async function handleOpenAIResponses(
           classification: hasContentEncoding
             ? "request_body_decode_failed"
             : "protocol_ingress_failed",
-          origin: hasContentEncoding ? "client" : "luckytoken",
+          origin: hasContentEncoding ? "client" : "Token",
         },
       );
     }

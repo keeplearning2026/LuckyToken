@@ -2,7 +2,7 @@ import type {
   ModelsCommand,
   ModelsCommandHandler,
   ModelsCommandResult,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type { ModelsJsonAuthority } from "./authority.js";
 

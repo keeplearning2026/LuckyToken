@@ -12,7 +12,7 @@ import {
   controlPlaneVersion,
   createNodePipeTransport,
   parseControlPlaneDescriptor,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { resolvePackagedExecutable } from "./support/packaged-executable.mjs";
 
 const desktopRoot = resolve(import.meta.dirname, "..");
@@ -36,13 +36,13 @@ async function freePort() {
 }
 
 async function writeConfig(home, port) {
-  const root = join(home, ".luckytoken");
+  const root = join(home, ".Token");
   await mkdir(root, { recursive: true });
   await writeFile(
     join(root, "config.json"),
     `${JSON.stringify(
       {
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port },
         clientProtocols: {
           "anthropic-messages": {
@@ -220,7 +220,7 @@ test(
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
     const executablePath = await resolvePackagedExecutable(desktopRoot);
-    const home = await mkdtemp(join(tmpdir(), "luckytoken-electron-e2e-"));
+    const home = await mkdtemp(join(tmpdir(), "Token-electron-e2e-"));
     const port = await freePort();
     const descriptorPath = await writeConfig(home, port);
     const appData = join(home, "AppData", "Roaming");
@@ -234,7 +234,7 @@ test(
         executablePath,
         env: {
           ...process.env,
-          LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+          TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
           USERPROFILE: home,
           HOME: home,
           CODEX_HOME: join(home, ".codex"),
@@ -320,7 +320,7 @@ test(
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
     const executablePath = await resolvePackagedExecutable(desktopRoot);
-    const home = await mkdtemp(join(tmpdir(), "luckytoken-electron-owner-lease-"));
+    const home = await mkdtemp(join(tmpdir(), "Token-electron-owner-lease-"));
     const port = await freePort();
     const descriptorPath = await writeConfig(home, port);
     const appData = join(home, "AppData", "Roaming");
@@ -336,7 +336,7 @@ test(
         executablePath,
         env: {
           ...process.env,
-          LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+          TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
           USERPROFILE: home,
           HOME: home,
           CODEX_HOME: join(home, ".codex"),
@@ -415,8 +415,8 @@ test(
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
     const repositoryExecutable = await resolvePackagedExecutable(desktopRoot);
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-electron-instance-domain-"));
-    const installedDirectory = join(root, "installed", "Token-win32-x64");
+    const root = await mkdtemp(join(tmpdir(), "Token-electron-instance-domain-"));
+    const installedDirectory = join(root, "installed", "token-win32-x64");
     await cp(dirname(repositoryExecutable), installedDirectory, { recursive: true });
     const legacyExecutable = join(installedDirectory, "Token.exe");
     const legacyBuildId = "0".repeat(64);
@@ -441,7 +441,7 @@ test(
     await Promise.all([mkdir(appData, { recursive: true }), mkdir(localAppData, { recursive: true })]);
     const environment = {
       ...process.env,
-      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+      TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
       USERPROFILE: home,
       HOME: home,
       CODEX_HOME: join(home, ".codex"),
@@ -491,7 +491,7 @@ test(
       assert.notEqual(currentUserData, legacyUserData);
       assert.match(
         currentUserData.replaceAll("\\", "/"),
-        /@luckytoken\/desktop-shell-builds\/[a-f0-9]{32}$/u,
+        /@token\/desktop-shell-builds\/[a-f0-9]{32}$/u,
       );
 
       await Promise.race([
@@ -568,7 +568,7 @@ test(
   { skip: process.platform !== "win32", timeout: 90_000 },
   async () => {
     const sourceExecutable = await resolvePackagedExecutable(desktopRoot);
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-electron-handoff-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-electron-handoff-"));
     const primaryDirectory = join(root, "primary");
     const replacementDirectory = join(root, "replacement");
     await Promise.all([
@@ -585,7 +585,7 @@ test(
     await Promise.all([mkdir(appData, { recursive: true }), mkdir(localAppData, { recursive: true })]);
     const environment = {
       ...process.env,
-      LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
+      TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION: "1",
       USERPROFILE: home,
       HOME: home,
       CODEX_HOME: join(home, ".codex"),

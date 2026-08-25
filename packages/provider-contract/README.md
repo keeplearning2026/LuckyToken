@@ -1,15 +1,15 @@
-# `@luckytoken/provider-contract`
+# `@token/provider-contract`
 
-LuckyToken external Provider Packages share this private workspace contract.
+Token external Provider Packages share this private workspace contract.
 The contract is a small construction and loading seam around the existing Pi
 `Provider`; it is not a second Provider registry, model catalog, or semantic
 IR.
 
 The package exports two subpaths:
 
-- `@luckytoken/provider-contract/package` — contract version `1`, host
+- `@token/provider-contract/package` — contract version `1`, host
   capabilities, package creation input, and runtime assertion;
-- `@luckytoken/provider-contract/diagnostics` — the neutral upstream failure,
+- `@token/provider-contract/diagnostics` — the neutral upstream failure,
   conversion notice, invocation-attempt, and execution-fact types and their
   runtime markers.
 
@@ -26,7 +26,7 @@ export const providerPackage = {
   createProvider(input: ProviderPackageCreateInput): Provider {
     // Validate input.configuration and return one standard Pi Provider.
   },
-} satisfies LuckyTokenProviderPackage;
+} satisfies TokenProviderPackage;
 ```
 
 The host supplies only `fetch`, `now`, and `createUuid`. Configuration remains

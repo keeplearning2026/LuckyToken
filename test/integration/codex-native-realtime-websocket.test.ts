@@ -16,13 +16,13 @@ import {
   type CodexRealtimeWebSocketConnect,
 } from "../../src/integrations/codex/local-realtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { startRunningDataPlaneListener } from "../../src/running-data-plane-listener.js";
-import type { LuckyTokenRuntime } from "../../src/runtime.js";
+import type { TokenRuntime } from "../../src/runtime.js";
 
-const emptyRuntime: LuckyTokenRuntime = Object.freeze({
+const emptyRuntime: TokenRuntime = Object.freeze({
   routes: Object.freeze([]),
   handle: async () => new Response(null, { status: 404 }),
 });
@@ -94,7 +94,7 @@ function closed(socket: WebSocket): Promise<{ code: number; reason: string }> {
 }
 
 describe("Codex Direct Mode realtime WebSocket", () => {
-  const localServers: RunningLuckyTokenHttpServer[] = [];
+  const localServers: RunningTokenHttpServer[] = [];
   const upstreamHttpServers: Server[] = [];
   const upstreamWebSocketServers: WebSocketServer[] = [];
   const clients: WebSocket[] = [];
@@ -159,7 +159,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         return socket;
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -232,7 +232,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -293,7 +293,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         throw new Error("must not connect");
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -313,7 +313,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
   });
 
   it("keeps the realtime Journey open until the WebSocket session closes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-realtime-ws-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-realtime-ws-journey-"));
     const diagnostics = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
     });
@@ -337,7 +337,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -391,7 +391,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
   });
 
   it("records abnormal client close as an aborted P5 incident after relay", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-realtime-ws-abort-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-realtime-ws-abort-"));
     const diagnostics = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
     });
@@ -414,7 +414,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -480,7 +480,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         throw new Error("upstream unavailable");
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -524,7 +524,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -567,7 +567,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -602,7 +602,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -642,7 +642,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -659,7 +659,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
   });
 
   it("closes active sessions with 1001 and settles server close", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-realtime-ws-shutdown-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-realtime-ws-shutdown-"));
     const diagnostics = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
     });
@@ -681,7 +681,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,
@@ -742,7 +742,7 @@ describe("Codex Direct Mode realtime WebSocket", () => {
         );
       },
     });
-    const local = await startLuckyTokenHttpServer({
+    const local = await startTokenHttpServer({
       runtime: emptyRuntime,
       port: 0,
       webSocketUpgrade,

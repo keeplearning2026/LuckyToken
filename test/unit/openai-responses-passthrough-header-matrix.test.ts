@@ -74,7 +74,7 @@ describe("Provider Native Responses header boundary", () => {
       bindings: ambientProfileBindings,
       fetch,
     });
-    const request = new Request("http://luckytoken.test/v1/responses", {
+    const request = new Request("http://Token.test/v1/responses", {
       method: "POST",
       headers: {
         authorization: "Bearer client-secret",

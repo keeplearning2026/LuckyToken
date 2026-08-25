@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import {
   bindDiagnosticsConfiguration,
   parseDiagnosticsConfiguration,
@@ -92,13 +92,13 @@ describe("unified diagnostics configuration", () => {
   });
 
   it("parses only diagnostics through the config-v2 root", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-diag-config-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-diag-config-"));
     directories.push(directory);
     const path = join(directory, "config.json");
     await writeFile(
       path,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         clientProtocols: { fixture: {} },
         pi: { directory: "pi" },
         diagnostics: {
@@ -112,7 +112,7 @@ describe("unified diagnostics configuration", () => {
       "utf8",
     );
 
-    const config = await loadLuckyTokenCliConfig(path);
+    const config = await loadTokenCliConfig(path);
     expect(config.diagnostics).toMatchObject({
       directory: resolve(directory, "custom", "diagnostics"),
       successArtifacts: { enabled: true },

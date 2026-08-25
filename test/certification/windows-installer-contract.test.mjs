@@ -37,5 +37,5 @@ test("Windows installation certification follows the Token Squirrel install root
   );
 
   assert.match(script, /Join-Path \$env:LOCALAPPDATA "Token"/);
-  assert.doesNotMatch(script, /Join-Path \$env:LOCALAPPDATA "LuckyToken"/);
+  assert.doesNotMatch(script, /Join-Path \$env:LOCALAPPDATA "luckytoken"/i);
 });

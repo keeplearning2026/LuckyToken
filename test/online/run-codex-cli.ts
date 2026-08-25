@@ -1,9 +1,9 @@
 /**
  * Online Codex CLI suite — drives the REAL Codex CLI as a client against a
- * local LuckyToken `/v1/responses` endpoint.
+ * local Token `/v1/responses` endpoint.
  *
  * Unlike `run-openai-responses.ts` (which constructs HTTP requests directly),
- * this suite spawns `codex -p luckytoken exec --json` so the real client
+ * this suite spawns `codex -p Token exec --json` so the real client
  * exercises the full protocol conversion path: full-history requests (the
  * non-interactive CLI sends complete input each turn), multi-turn `resume`
  * sessions, tool round-trips, reasoning, atomic SSE, restart recovery,
@@ -28,15 +28,15 @@
  * fixtures: run this suite, then copy (re-sanitized) request files into the
  * fixtures directory.
  *
- * The suite SELF-HOSTS a fresh LuckyToken service (current repo code) on a
+ * The suite SELF-HOSTS a fresh Token service (current repo code) on a
  * random port with a clean state file; Codex CLI points at it via
- * `-c model_providers.luckytoken.base_url=<origin>`.
+ * `-c model_providers.Token.base_url=<origin>`.
  *
  * Requires:
  *   - `codex` CLI on PATH (verified at startup)
  *   - `CommandcodeAPIKey.txt` in the repo root (git-ignored), read into
  *     memory only
- *   - `~/.codex/luckytoken-catalog.json` with the target model metadata.
+ *   - `~/.codex/Token-catalog.json` with the target model metadata.
  *
  * The suite copies only that target catalog entry into a temporary
  * `CODEX_HOME` and writes its own provider/profile configuration. User MCPs,
@@ -56,7 +56,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import { buildCodexCatalog } from "../../src/integrations/codex/catalog.js";
@@ -68,11 +68,11 @@ import {
   reconcileOnlinePublicModels,
 } from "./public-model-fixture.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   createConfiguredPiModels,
 } from "../support/configured-data-plane.js";
-import { startLuckyTokenHttpServer } from "../../src/server.js";
-import type { LuckyTokenRuntime } from "../../src/runtime.js";
+import { startTokenHttpServer } from "../../src/server.js";
+import type { TokenRuntime } from "../../src/runtime.js";
 import { loginOnlineProvider } from "./provider-login.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
@@ -85,10 +85,10 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const SUITE_TIMEOUT_MS = 45 * 60_000;
 const CODEX_EXEC_TIMEOUT_MS = 90_000;
 
-const CODEX_PROFILE = "luckytoken";
-const CODEX_PROMPT_ENV_KEY = "LUCKYTOKEN_API_KEY";
+const CODEX_PROFILE = "Token";
+const CODEX_PROMPT_ENV_KEY = "TOKEN_API_KEY";
 const CODEX_HOME_ENV_KEY = "CODEX_HOME";
-const CODEX_INJECTED_CONFIG_ENV_KEY = "LUCKYTOKEN_CODEX_INJECTED_CONFIG";
+const CODEX_INJECTED_CONFIG_ENV_KEY = "TOKEN_CODEX_INJECTED_CONFIG";
 // `codex` on Windows is a .ps1/.cmd shim; spawn the underlying Node entry
 // directly to avoid shell-resolution EPERM/EINVAL.
 const CODEX_JS = join(
@@ -292,7 +292,7 @@ function sanitizedArtifactHeaders(
 
 /**
  * Outbound dispatch logger: wraps the composition's fetch so every request
- * LuckyToken sends to the upstream Provider is recorded (URL, request body,
+ * Token sends to the upstream Provider is recorded (URL, request body,
  * response status, response body) under `artifacts/upstream/`. This is the
  * only way to see what the Provider actually returned when a scenario fails
  * with an upstream error (e.g. "CommandCode text block completed empty").
@@ -363,7 +363,7 @@ function codexProviderOverrides(
   const stringOverride = (key: string, value: string): readonly string[] =>
     Object.freeze(["-c", `${key}=${JSON.stringify(value)}`]);
   return Object.freeze([
-    ...stringOverride(`model_providers.${CODEX_PROFILE}.name`, "LuckyToken"),
+    ...stringOverride(`model_providers.${CODEX_PROFILE}.name`, "Token"),
     ...stringOverride(`model_providers.${CODEX_PROFILE}.base_url`, baseUrl),
     ...stringOverride(`model_providers.${CODEX_PROFILE}.wire_api`, "responses"),
     "-c",
@@ -472,7 +472,7 @@ async function prepareIsolatedCodexHome(
 
   const inheritedCodexHome = process.env[CODEX_HOME_ENV_KEY]?.trim();
   // Prefer the explicitly generated catalog from the self-hosted endpoint;
-  // fall back to the user's ~/.codex/luckytoken-catalog.json when the model
+  // fall back to the user's ~/.codex/Token-catalog.json when the model
   // entry exists there (legacy CommandCode runs).
   const liveEntry = modelsList?.data?.find((entry) => entry.id === model);
   let modelEntry: unknown;
@@ -480,7 +480,7 @@ async function prepareIsolatedCodexHome(
     modelEntry = Object.freeze({
       slug: liveEntry.id,
       display_name: liveEntry.id,
-      description: `LuckyToken alias ${liveEntry.id}`,
+      description: `Token alias ${liveEntry.id}`,
       base_instructions: "You are a helpful assistant.",
       supported_reasoning_levels: Object.freeze([
         Object.freeze({
@@ -506,7 +506,7 @@ async function prepareIsolatedCodexHome(
       inheritedCodexHome !== undefined && inheritedCodexHome.length > 0
         ? inheritedCodexHome
         : join(homedir(), ".codex");
-    const sourceCatalogPath = join(sourceCodexHome, "luckytoken-catalog.json");
+    const sourceCatalogPath = join(sourceCodexHome, "Token-catalog.json");
     const sourceCatalog = JSON.parse(
       await readFile(sourceCatalogPath, "utf8"),
     ) as unknown;
@@ -532,7 +532,7 @@ async function prepareIsolatedCodexHome(
     }
   }
 
-  const catalogPath = join(codexHome, "luckytoken-catalog.json");
+  const catalogPath = join(codexHome, "Token-catalog.json");
   await writeFile(
     catalogPath,
     `${JSON.stringify({ models: [modelEntry] }, null, 2)}\n`,
@@ -543,7 +543,7 @@ async function prepareIsolatedCodexHome(
     join(codexHome, "config.toml"),
     [
       `[model_providers.${CODEX_PROFILE}]`,
-      `name = ${quoted("LuckyToken")}`,
+      `name = ${quoted("Token")}`,
       `base_url = ${quoted(baseUrl)}`,
       `wire_api = ${quoted("responses")}`,
       "requires_openai_auth = true",
@@ -667,9 +667,9 @@ function parseCodexJsonEvents(stdout: string): readonly CodexJsonEvent[] {
 }
 
 /**
- * Run one `codex -p luckytoken exec --json` invocation.
+ * Run one `codex -p Token exec --json` invocation.
  *
- * The token is injected via environment (`LUCKYTOKEN_API_KEY`), matching the
+ * The token is injected via environment (`TOKEN_API_KEY`), matching the
  * `env_key` configured in `~/.codex/config.toml`. `--json` emits JSONL events
  * on stdout; `-o` writes the final agent message to a file.
  */
@@ -1090,7 +1090,7 @@ interface Scenario {
    *  - "multi_turn": run the prompt as a multi-turn session (first turn
    *    `exec`, subsequent turns `exec resume --last`) to exercise
    *    `previous_response_id` chaining across a real Codex conversation.
-   *  - "restart": kill the LuckyToken server, restart it, then run — verifies
+   *  - "restart": kill the Token server, restart it, then run — verifies
    *    durable snapshot recovery across a process restart.
    *  - "cancel": terminate the Codex child mid-run — verifies cancellation
    *    propagation (upstream abort, no state pollution).
@@ -1363,10 +1363,10 @@ function latencySummary(values: readonly number[]): Record<string, number> {
  * can later be replayed as golden fixtures in unit/integration tests.
  */
 function createCapturingRuntime(
-  runtime: LuckyTokenRuntime,
+  runtime: TokenRuntime,
   artifactDir: string,
   currentMarker: () => string | undefined,
-): LuckyTokenRuntime {
+): TokenRuntime {
   let sequence = 0;
   return Object.freeze({
     routes: runtime.routes,
@@ -1486,16 +1486,16 @@ export async function runCodexCliOnlineSuite(
   console.error("[codex-suite] apiKey loaded");
 
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-codex-cli-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-codex-cli-"));
   const artifactDir = join(directory, "artifacts");
   await mkdir(artifactDir, { recursive: true });
   console.error(`[codex-suite] tmpdir=${directory}`);
 
-  // Self-host a fresh LuckyToken service on a random port with a clean state
+  // Self-host a fresh Token service on a random port with a clean state
   // file, using THIS repo's current code. Codex CLI points at it via
-  // `-c model_providers.luckytoken.base_url=<origin>`, so the suite always
+  // `-c model_providers.Token.base_url=<origin>`, so the suite always
   // exercises the code under test (not whatever service is already running).
-  const stateDirectory = join(directory, ".luckytoken");
+  const stateDirectory = join(directory, ".Token");
   const piDirectory = join(stateDirectory, "pi");
   await mkdir(piDirectory, { recursive: true });
   const responsesToken = "unused-local-sdk-key";
@@ -1504,7 +1504,7 @@ export async function runCodexCliOnlineSuite(
   await writeFile(
     configPath,
     JSON.stringify({
-      schemaVersion: "luckytoken-config-v2",
+      schemaVersion: "token-config-v2",
       server: { port: 0 },
       clientProtocols: {
         "anthropic-messages": {},
@@ -1521,7 +1521,7 @@ export async function runCodexCliOnlineSuite(
     }),
     "utf8",
   );
-  const config = await loadLuckyTokenCliConfig(configPath);
+  const config = await loadTokenCliConfig(configPath);
   console.error("[codex-suite] config loaded");
   // Real login first: the composition's served catalog owns the provider
   // registration, so login runs through the served Models and persists into
@@ -1580,7 +1580,7 @@ export async function runCodexCliOnlineSuite(
           modelId: aliasTarget.model,
         });
   const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
-  let composition = await createConfiguredLuckyTokenDataPlane({
+  let composition = await createConfiguredTokenDataPlane({
     config,
     credentialRecordStore,
     fetch: upstreamLogger.fetch,
@@ -1601,7 +1601,7 @@ export async function runCodexCliOnlineSuite(
     artifactDir,
     () => currentMarker,
   );
-  let server = await startLuckyTokenHttpServer({
+  let server = await startTokenHttpServer({
     runtime,
     host: "127.0.0.1",
     port: config.server.port,
@@ -1611,7 +1611,7 @@ export async function runCodexCliOnlineSuite(
   let codexBaseUrl = `${origin}/v1`;
   // Sanity: the self-hosted endpoint must expose the resolved selector.
   // The live model list also seeds the isolated Codex catalog, so the
-  // suite never depends on a legacy ~/.codex/luckytoken-catalog.json.
+  // suite never depends on a legacy ~/.codex/Token-catalog.json.
   const modelsResponse = await fetch(`${codexBaseUrl}/models`, {
     headers: { authorization: `Bearer ${responsesToken}` },
     signal: requestSignal(totalSignal),
@@ -1701,7 +1701,7 @@ export async function runCodexCliOnlineSuite(
             async () => {
               await server.close();
               await composition.close();
-              composition = await createConfiguredLuckyTokenDataPlane({
+              composition = await createConfiguredTokenDataPlane({
                 config,
                 credentialRecordStore,
                 fetch: upstreamLogger.fetch,
@@ -1721,7 +1721,7 @@ export async function runCodexCliOnlineSuite(
                 artifactDir,
                 () => currentMarker,
               );
-              server = await startLuckyTokenHttpServer({
+              server = await startTokenHttpServer({
                 runtime,
                 host: "127.0.0.1",
                 port: config.server.port,
@@ -1959,7 +1959,7 @@ async function runMultiTurnSession(
 }
 
 /**
- * Restart-recovery scenario: run a turn, kill the LuckyToken server, restart
+ * Restart-recovery scenario: run a turn, kill the Token server, restart
  * it on the same state file, then continue the same Codex session via
  * `previous_response_id` (Codex re-sends full history on its own). The
  * durable snapshot must restore expansion across the restart.

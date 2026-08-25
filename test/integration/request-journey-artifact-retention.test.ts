@@ -16,7 +16,7 @@ async function createFixture(options: {
   readonly artifactRetentionAgeMs: number;
   readonly maxArtifactJourneys: number;
 }) {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-artifact-retention-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-artifact-retention-"));
   roots.push(root);
   let now = 1_000;
   const authority = await createDiagnosticsAuthority({

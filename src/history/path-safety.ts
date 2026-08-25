@@ -9,7 +9,7 @@
  * - basename is not a Windows reserved device name (`CON`, `PRN`, `AUX`,
  *   `NUL`, `COM1-9`, `LPT1-9`, case-insensitive, with or without extension)
  *   — such a path would silently map to a device on Windows;
- * - destination is not inside a LuckyToken-owned directory tree (config
+ * - destination is not inside a Token-owned directory tree (config
  *   dir, Pi data dir, store directories) so an export can never clobber
  *   application-owned files;
  * - an existing destination must be a file (a directory is rejected), and
@@ -93,7 +93,7 @@ export function validateExportDestination(
 }
 
 /** Resolves existing ancestors so a junction/symlink outside the user root
- * cannot redirect an export back into LuckyToken-owned storage. */
+ * cannot redirect an export back into Token-owned storage. */
 export async function validateCanonicalExportDestination(
   destinationPath: string,
   ownedRoots: readonly string[],
@@ -147,7 +147,7 @@ export async function inspectDestination(
 
 /** Creates the destination's parent tree (bounded to the destination's own
  *  path; the destination itself was already validated as outside every
- *  LuckyToken-owned root). */
+ *  Token-owned root). */
 export async function ensureDestinationDirectory(
   destinationPath: string,
 ): Promise<void> {

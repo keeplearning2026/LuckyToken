@@ -13,8 +13,8 @@ import {
   type RequestArtifactDescriptor,
 } from "../../src/diagnostics/index.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -104,11 +104,11 @@ function artifact(
 
 describe("Request Journey failure artifact redaction", () => {
   it("persists useful failed request evidence without writing credential canaries to SQLite", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-artifact-redaction-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-artifact-redaction-"));
     const diagnosticsDirectory = join(root, "diagnostics");
     const databasePath = join(diagnosticsDirectory, "diagnostics-v2.sqlite3");
     let authority: DiagnosticsAuthority | undefined;
-    let server: RunningLuckyTokenHttpServer | undefined;
+    let server: RunningTokenHttpServer | undefined;
     let providerCalls = 0;
 
     try {
@@ -135,7 +135,7 @@ describe("Request Journey failure artifact redaction", () => {
         createSessionId: () => "40000000-0000-4000-8000-000000000002",
         now: () => 1_787_472_000_000,
       });
-      server = await startLuckyTokenHttpServer({
+      server = await startTokenHttpServer({
         runtime,
         diagnostics: authority,
         createRequestId: () => REQUEST_ID,
@@ -169,7 +169,7 @@ describe("Request Journey failure artifact redaction", () => {
       };
 
       expect(response.status).toBe(404);
-      expect(response.headers.get("x-luckytoken-request-id")).toBe(REQUEST_ID);
+      expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
       expect(responseJson).toMatchObject({
         type: "error",
         error: {

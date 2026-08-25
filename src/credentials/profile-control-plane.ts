@@ -8,7 +8,7 @@ import type {
   ProviderProfileAuthCommandOutcome,
   ProviderProfileAuthCommandResult,
   ProviderSource,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createPiAuthInteraction } from "./auth-interaction.js";
 import type {

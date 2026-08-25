@@ -1,7 +1,7 @@
 import {
   PROVIDER_PACKAGE_CONTRACT_VERSION,
-  assertLuckyTokenProviderPackage,
-} from "@luckytoken/provider-contract/package";
+  assertTokenProviderPackage,
+} from "@token/provider-contract/package";
 import { describe, expect, it } from "vitest";
 
 describe("Provider Package contract", () => {
@@ -13,6 +13,6 @@ describe("Provider Package contract", () => {
       },
     });
 
-    expect(assertLuckyTokenProviderPackage(providerPackage)).toBe(providerPackage);
+    expect(assertTokenProviderPackage(providerPackage)).toBe(providerPackage);
   });
 });

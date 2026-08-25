@@ -8,9 +8,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   type TestConfiguredDataPlane,
 } from "../support/configured-data-plane.js";
 
@@ -43,10 +43,10 @@ describe("effective composition in the data plane", () => {
     readonly modelsJsonPath: string;
   }> {
     const directory = await mkdtemp(
-      join(tmpdir(), "luckytoken-effective-runtime-"),
+      join(tmpdir(), "token-effective-runtime-"),
     );
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const modelsJsonPath = join(piDirectory, "models.json");
@@ -55,7 +55,7 @@ describe("effective composition in the data plane", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -113,8 +113,8 @@ describe("effective composition in the data plane", () => {
     fetch: FetchFunction,
     options?: { readonly credentials?: InMemoryCredentialStore },
   ) {
-    const composition = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(fixture.configPath),
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(fixture.configPath),
       fetch,
       ...(options?.credentials === undefined
         ? {}
@@ -144,7 +144,7 @@ describe("effective composition in the data plane", () => {
     clientToken: string,
     model: string,
   ): Request {
-    return new Request("http://luckytoken.test/v1/messages", {
+    return new Request("http://Token.test/v1/messages", {
       method: "POST",
       headers: {
         authorization: `Bearer ${clientToken}`,

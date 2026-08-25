@@ -5,12 +5,12 @@ import { decodeModelsFileState } from "../../packages/application-control-plane/
 function stateWithBaseline(version: string, schema: string) {
   return {
     revision: 1,
-    path: "C:\\luckytoken\\models.json",
+    path: "C:\\Token\\models.json",
     present: false,
     valid: true,
     raw: "",
     catalog: {
-      schemaVersion: "luckytoken-effective-catalog-v1",
+      schemaVersion: "token-effective-catalog-v1",
       baseline: {
         package: "@earendil-works/pi-coding-agent",
         version,

@@ -5,7 +5,7 @@ import type {
   ControlPlaneClient,
   ControlPlaneEndpoint,
   StatusSnapshot,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createDesktopBackendConnection } from "../src/main/desktop-backend-connection.js";
 import type { SpawnedBackend } from "../src/main/backend-launcher.js";
@@ -77,7 +77,7 @@ function fakeSession(behaviors: Map<string, EndpointBehavior>) {
     } as unknown as ControlPlaneClient;
     currentClient = client;
     currentApplication = Object.freeze({
-      id: "luckytoken",
+      id: "Token",
       version: "test",
       ...(behavior.buildId === undefined ? {} : { buildId: behavior.buildId }),
     });
@@ -94,13 +94,13 @@ function fakeSession(behaviors: Map<string, EndpointBehavior>) {
     reconnect: connect,
     client() {
       if (currentClient === undefined || currentState.kind !== "ready") {
-        throw new Error("LuckyToken Control Plane is unavailable");
+        throw new Error("Token Control Plane is unavailable");
       }
       return currentClient;
     },
     application() {
       if (currentApplication === undefined || currentState.kind !== "ready") {
-        throw new Error("LuckyToken Control Plane is unavailable");
+        throw new Error("Token Control Plane is unavailable");
       }
       return currentApplication;
     },

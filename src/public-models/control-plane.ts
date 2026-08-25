@@ -3,7 +3,7 @@ import type {
   PublicModelsCommandHandler,
   PublicModelsCommandResult,
   PublicModelsState,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type {
   PublicModelAuthority,

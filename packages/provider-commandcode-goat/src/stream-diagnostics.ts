@@ -9,7 +9,7 @@ import {
   createUpstreamFailureDiagnostic,
   createUpstreamFailureFact,
   findUpstreamFailureFact,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 
 function safeFailureMessage(value: string | undefined): string {
   const message = value
@@ -109,7 +109,7 @@ function annotateFailureStream(
 /**
  * Goat-owned response boundary. Pi remains responsible for OpenAI-compatible
  * request construction and SSE decoding; this boundary preserves its exact
- * adapter error as LuckyToken's protocol-neutral upstream failure fact.
+ * adapter error as Token's protocol-neutral upstream failure fact.
  */
 export function bindUpstreamFailureDiagnostics(
   streams: ProviderStreams,

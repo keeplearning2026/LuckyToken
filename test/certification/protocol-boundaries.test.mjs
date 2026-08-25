@@ -122,8 +122,8 @@ function assertClosedProtocol(imports, ownRoot, siblingRoot, allowedShared) {
     if (!entry.specifier.startsWith(".")) {
       assert.ok(
         entry.specifier === "@earendil-works/pi-ai" ||
-          entry.specifier === "@luckytoken/provider-contract/diagnostics" ||
-          entry.specifier === "@luckytoken/provider-contract/usage" ||
+          entry.specifier === "@token/provider-contract/diagnostics" ||
+          entry.specifier === "@token/provider-contract/usage" ||
           entry.specifier.startsWith("node:"),
         `${slash(path.relative(repositoryRoot, entry.file))} imports non-Pi package ${entry.specifier}`,
       );
@@ -189,9 +189,9 @@ test("CommandCode Providers never import concrete Client Protocols or one anothe
     commandCodePrivateRoot,
     new Set([
       "@earendil-works/pi-ai",
-      "@luckytoken/commandcode-model-catalog",
-      "@luckytoken/provider-contract/package",
-      "@luckytoken/provider-contract/diagnostics",
+      "@token/commandcode-model-catalog",
+      "@token/provider-contract/package",
+      "@token/provider-contract/diagnostics",
       "@sindresorhus/slugify",
     ]),
   );
@@ -200,9 +200,9 @@ test("CommandCode Providers never import concrete Client Protocols or one anothe
     new Set([
       "@earendil-works/pi-ai",
       "@earendil-works/pi-ai/api/openai-completions.lazy",
-      "@luckytoken/commandcode-model-catalog",
-      "@luckytoken/provider-contract/package",
-      "@luckytoken/provider-contract/diagnostics",
+      "@token/commandcode-model-catalog",
+      "@token/provider-contract/package",
+      "@token/provider-contract/diagnostics",
     ]),
   );
 });

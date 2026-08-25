@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { decodeRequestJourneyRecord } from "@luckytoken/application-control-plane/control-plane";
+import { decodeRequestJourneyRecord } from "@token/application-control-plane/control-plane";
 
 import {
   createDiagnosticsAuthority,
@@ -12,8 +12,8 @@ import {
   type DiagnosticsAuthority,
 } from "../../src/diagnostics/index.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -51,7 +51,7 @@ function commandCodeSuccess(): Response {
 describe("unified Request Journey tracer", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -64,7 +64,7 @@ describe("unified Request Journey tracer", () => {
   });
 
   it("persists one successful Anthropic Semantic Conversion journey from P0 through P8", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-request-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-request-journey-"));
     roots.push(root);
     const configuration = parseDiagnosticsConfiguration(
       { directory: root },
@@ -82,7 +82,7 @@ describe("unified Request Journey tracer", () => {
       createSessionId: () => "10000000-0000-4000-8000-000000000001",
       now: () => 1_787_472_000_000,
     });
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
@@ -123,7 +123,7 @@ describe("unified Request Journey tracer", () => {
 
     const page = await authority.queryRequestJourneys({ limit: 10 });
     const summary = page.records[0]!;
-    const responseRequestId = response.headers.get("x-luckytoken-request-id");
+    const responseRequestId = response.headers.get("x-token-request-id");
     expect(responseRequestId).toBe(REQUEST_ID);
     expect(summary.requestId).toBe(REQUEST_ID);
     expect(page.records.map((record) => record.requestId)).toEqual([REQUEST_ID]);

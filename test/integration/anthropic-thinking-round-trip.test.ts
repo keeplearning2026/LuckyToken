@@ -3,8 +3,8 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -50,7 +50,7 @@ function textResponse(text: string): Response {
 }
 
 describe("Anthropic and Pi thinking round trip", () => {
-  let server: RunningLuckyTokenHttpServer | undefined;
+  let server: RunningTokenHttpServer | undefined;
 
   afterEach(async () => {
     await server?.close();
@@ -79,7 +79,7 @@ describe("Anthropic and Pi thinking round trip", () => {
       })(),
       createSessionId: () => "00000000-0000-4000-8000-000000000261",
     });
-    server = await startLuckyTokenHttpServer({ runtime, port: 0 });
+    server = await startTokenHttpServer({ runtime, port: 0 });
     const client = new Anthropic({
       apiKey: "client-key",
       baseURL: server.origin,

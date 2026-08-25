@@ -72,9 +72,9 @@ function contentFields(
 ): ReadonlySet<string> {
   return new Set([
     ...required,
-    ...(block.luckytoken_continuity === undefined
+    ...(block.token_continuity === undefined
       ? []
-      : ["luckytoken_continuity"]),
+      : ["token_continuity"]),
   ]);
 }
 
@@ -82,11 +82,11 @@ function assertContinuityExtension(
   block: Record<string, unknown>,
   label: string,
 ): void {
-  if (block.luckytoken_continuity === undefined) return;
+  if (block.token_continuity === undefined) return;
   assertJsonValue(
-    block.luckytoken_continuity,
+    block.token_continuity,
     new Set(),
-    `${label}.luckytoken_continuity`,
+    `${label}.token_continuity`,
   );
 }
 

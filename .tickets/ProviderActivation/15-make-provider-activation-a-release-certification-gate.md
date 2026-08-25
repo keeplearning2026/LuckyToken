@@ -1,6 +1,6 @@
 # 15 — Make Provider Activation a release certification gate
 
-**What to build:** LuckyToken cannot ship a desktop release that regresses Provider discovery, bundled CommandCode activation, Gateway-independent authentication/catalog management, generated aliases, or the real packaged activation journey.
+**What to build:** Token cannot ship a desktop release that regresses Provider discovery, bundled CommandCode activation, Gateway-independent authentication/catalog management, generated aliases, or the real packaged activation journey.
 
 **Blocked by:** 14 — Complete the packaged Electron Provider activation journey.
 

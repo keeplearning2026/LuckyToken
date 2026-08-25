@@ -38,7 +38,7 @@ function request(
   body: string,
   headers: Record<string, string> = {},
 ): Request {
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer client",
@@ -231,7 +231,7 @@ describe("11: native Anthropic passthrough certification", () => {
     try {
       const responsePromise = handleHttpRequest(
         dependencies(passthroughModels(model), {}, passthroughFetch),
-        new Request("http://luckytoken.test/v1/messages", {
+        new Request("http://Token.test/v1/messages", {
           method: "POST",
           headers: {
             authorization: "Bearer client",

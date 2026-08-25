@@ -12,7 +12,7 @@ import {
   type ControlPlaneEndpoint,
   type PipeConnection,
   type PipeServer,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { FaultableControlPipe } from "../support/faultable-control-pipe.js";
 
 let nextId = 0;
@@ -210,7 +210,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -237,7 +237,7 @@ describe("Application Control Plane public seam", () => {
     const pipeServer = new AcceptDuringCloseServer();
     const server = await startControlPlane({
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -261,7 +261,7 @@ describe("Application Control Plane public seam", () => {
     const pipeServer = new AlwaysFailingAcceptServer();
     const server = await startControlPlane({
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -310,7 +310,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "1.2.3-test", buildId },
+      application: { id: "Token", version: "1.2.3-test", buildId },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -321,7 +321,7 @@ describe("Application Control Plane public seam", () => {
 
     await expect(client.hello(controlPlaneVersion)).resolves.toEqual({
       type: "compatible",
-      application: { id: "luckytoken", version: "1.2.3-test", buildId },
+      application: { id: "Token", version: "1.2.3-test", buildId },
       contractVersion: controlPlaneVersion,
     });
     expect(JSON.stringify(await client.getStatus())).not.toContain(buildId);
@@ -332,7 +332,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "1.2.3-test" },
+      application: { id: "Token", version: "1.2.3-test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -349,7 +349,7 @@ describe("Application Control Plane public seam", () => {
     await expect(client.getStatus()).rejects.toThrow("hello_required");
     await expect(client.hello(controlPlaneVersion)).resolves.toEqual({
       type: "compatible",
-      application: { id: "luckytoken", version: "1.2.3-test" },
+      application: { id: "Token", version: "1.2.3-test" },
       contractVersion: controlPlaneVersion,
     });
     await expect(client.getStatus()).resolves.toEqual({
@@ -381,7 +381,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -433,7 +433,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -482,7 +482,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -512,7 +512,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: target,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -535,7 +535,7 @@ describe("Application Control Plane public seam", () => {
       requestId: "raw-hello",
       result: {
         type: "compatible",
-        application: { id: "luckytoken", version: "test" },
+        application: { id: "Token", version: "test" },
         contractVersion: controlPlaneVersion,
       },
     });
@@ -719,7 +719,7 @@ describe("Application Control Plane public seam", () => {
           address: "",
           capability: "local-only-capability-012345678901234567890",
         },
-        application: { id: "luckytoken", version: "test" },
+        application: { id: "Token", version: "test" },
         initialStatus: {
           modelDataPlane: "stopped",
           provider: "unconfigured",
@@ -730,7 +730,7 @@ describe("Application Control Plane public seam", () => {
     await expect(
       startControlPlane({
         endpoint: endpoint(),
-        application: { id: "luckytoken", version: "test" },
+        application: { id: "Token", version: "test" },
         initialStatus: {
           modelDataPlane: "stopped",
           provider: "unconfigured",
@@ -761,7 +761,7 @@ describe("Application Control Plane public seam", () => {
     const faultablePipe = new FaultableControlPipe();
     const server = await startControlPlane({
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",
@@ -823,7 +823,7 @@ describe("Application Control Plane public seam", () => {
     const server = await startControlPlane({
       ...hostDependencies,
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: {
         modelDataPlane: "stopped",
         provider: "unconfigured",

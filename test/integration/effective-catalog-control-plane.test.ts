@@ -11,7 +11,7 @@ import {
   startControlPlane,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createModelsControlPlaneHandler } from "../../src/models-config/control-plane.js";
 import {
@@ -57,12 +57,12 @@ describe("effective catalog through the Control Plane", () => {
         options.compose ?? ((providers) => composeEffectiveCatalog(providers)),
     });
     const endpoint: ControlPlaneEndpoint = {
-      address: `\\\\.\\pipe\\luckytoken-catalog-${process.pid}-${++nextPipe}`,
+      address: `\\\\.\\pipe\\Token-catalog-${process.pid}-${++nextPipe}`,
       capability: "catalog-test-capability-0123456789012345678901",
     };
     const host = await startControlPlane({
       endpoint,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       modelsCommandHandler: createModelsControlPlaneHandler(authority),
       modelsProjection: () => authority.snapshot(),
@@ -82,7 +82,7 @@ describe("effective catalog through the Control Plane", () => {
   }
 
   it("queries the built-in base layer with no user file and identifies the pinned baseline", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-catalog-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-catalog-cp-"));
     roots.push(directory);
 
     const { client } = await startCatalogControlPlane({ directory });
@@ -112,7 +112,7 @@ describe("effective catalog through the Control Plane", () => {
     });
     expect(created.outcome).toBe("ok");
     const catalog = created.state.catalog;
-    expect(catalog?.schemaVersion).toBe("luckytoken-effective-catalog-v1");
+    expect(catalog?.schemaVersion).toBe("token-effective-catalog-v1");
     expect(catalog?.baseline).toEqual(PI_COMPATIBILITY_BASELINE);
     expect(catalog?.compositionErrors).toEqual([]);
     const openai = catalog?.providers.find(
@@ -140,7 +140,7 @@ describe("effective catalog through the Control Plane", () => {
   });
 
   it("hot-updates the effective catalog after apply and keeps UI and CLI writes equivalent", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-catalog-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-catalog-cp-"));
     roots.push(directory);
 
     const { client } = await startCatalogControlPlane({ directory });
@@ -223,7 +223,7 @@ describe("effective catalog through the Control Plane", () => {
   });
 
   it("isolates invalid files: no catalog, exact error, and no secrets anywhere", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-catalog-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-catalog-cp-"));
     roots.push(directory);
     const content = JSON.stringify({
       providers: {
@@ -293,7 +293,7 @@ describe("effective catalog through the Control Plane", () => {
   });
 
   it("queries the Radius baseline swap: only configured models compose", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-catalog-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-catalog-cp-"));
     roots.push(directory);
 
     const { client } = await startCatalogControlPlane({ directory });
@@ -358,7 +358,7 @@ describe("effective catalog through the Control Plane", () => {
   });
 
   it("keeps the invalid-file error isolation for parse and schema failures", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-catalog-cp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-catalog-cp-"));
     roots.push(directory);
     await writeFile(
       join(directory, "models.json"),

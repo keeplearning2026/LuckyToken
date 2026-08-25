@@ -8,7 +8,7 @@ import {
 } from "../../src/providers/catalog-cache.js";
 
 /**
- * Ticket 11 cache seam: the validated LuckyToken-owned dynamic catalog
+ * Ticket 11 cache seam: the validated Token-owned dynamic catalog
  * cache. The store implements the pi-ai `ModelsStore` contract over a
  * transparent JSON file under the configured application directory; only
  * validated dynamic model facts are ever persisted, restore drops invalid
@@ -85,8 +85,8 @@ describe("catalog cache store", () => {
       schema: string;
       providers: Record<string, unknown>;
     };
-    // Transparent LuckyToken-owned file: schema identity plus the entry.
-    expect(parsed.schema).toBe("luckytoken-catalog-cache-v1");
+    // Transparent Token-owned file: schema identity plus the entry.
+    expect(parsed.schema).toBe("Token-catalog-cache-v1");
     expect(parsed.providers["dynamic-provider"]).toBeDefined();
     const restored = await store.read("dynamic-provider");
     expect(restored?.models[0]?.id).toBe("dynamic-model");
@@ -113,7 +113,7 @@ describe("catalog cache store", () => {
     files.set(
       path,
       JSON.stringify({
-        schema: "luckytoken-catalog-cache-v1",
+        schema: "Token-catalog-cache-v1",
         providers: {
           "good-provider": entry([modelFact({ provider: "good-provider" })]),
           "broken-provider": {
@@ -216,7 +216,7 @@ describe("catalog cache store", () => {
     files.set(
       path,
       JSON.stringify({
-        schema: "luckytoken-catalog-cache-v1",
+        schema: "Token-catalog-cache-v1",
         providers: {
           "dynamic-provider": entry([modelFact({ id: "v2" })]),
         },
@@ -324,7 +324,7 @@ describe("catalog cache store", () => {
     files.set(
       path,
       JSON.stringify({
-        schema: "luckytoken-catalog-cache-v1",
+        schema: "Token-catalog-cache-v1",
         providers: {
           "broken-provider": {
             models: [{ id: "no-facts" }],

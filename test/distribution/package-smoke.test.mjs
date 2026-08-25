@@ -42,7 +42,7 @@ async function pack(
 }
 
 test("installs all distribution tarballs and resolves the Provider from node_modules", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-package-smoke-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-package-smoke-"));
   try {
     const contractTarball = await pack(
       join(repositoryRoot, "packages", "provider-contract"),
@@ -77,12 +77,12 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
             "@earendil-works",
             "pi-ai",
           )}`,
-          "@luckytoken/commandcode-model-catalog": `file:${catalogTarball}`,
-          "@luckytoken/provider-contract": `file:${contractTarball}`,
-          "@luckytoken/provider-commandcode-private": `file:${privateProviderTarball}`,
-          "@luckytoken/provider-commandcode-goat": `file:${goatProviderTarball}`,
-          "@luckytoken/application-control-plane": `file:${controlPlaneTarball}`,
-          luckytoken: `file:${rootTarball}`,
+          "@token/commandcode-model-catalog": `file:${catalogTarball}`,
+          "@token/provider-contract": `file:${contractTarball}`,
+          "@token/provider-commandcode-private": `file:${privateProviderTarball}`,
+          "@token/provider-commandcode-goat": `file:${goatProviderTarball}`,
+          "@token/application-control-plane": `file:${controlPlaneTarball}`,
+          Token: `file:${rootTarball}`,
         },
       }, null, 2)}\n`,
       "utf8",
@@ -98,11 +98,11 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
         "--eval",
         [
           'import assert from "node:assert/strict";',
-          'const contract = await import("@luckytoken/provider-contract/package");',
-          'const catalog = await import("@luckytoken/commandcode-model-catalog");',
-          'const privateProviderModule = await import("@luckytoken/provider-commandcode-private");',
-          'const goatProviderModule = await import("@luckytoken/provider-commandcode-goat");',
-          'const luckytoken = await import("luckytoken");',
+          'const contract = await import("@token/provider-contract/package");',
+          'const catalog = await import("@token/commandcode-model-catalog");',
+          'const privateProviderModule = await import("@token/provider-commandcode-private");',
+          'const goatProviderModule = await import("@token/provider-commandcode-goat");',
+          'const Token = await import("Token");',
           "assert.equal(contract.PROVIDER_PACKAGE_CONTRACT_VERSION, 1);",
           "const input = {",
           "configuration: {},",
@@ -115,7 +115,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
           'assert.equal(goatProvider.id, "commandcode-goat");',
           "assert.deepEqual(privateProvider.getModels().map(({ id }) => id), catalog.COMMANDCODE_MODEL_FACTS.map(({ id }) => id));",
           "assert.deepEqual(goatProvider.getModels().map(({ id }) => id), catalog.COMMANDCODE_MODEL_FACTS.filter(({ minimumPlan }) => minimumPlan === \"go\" || minimumPlan === \"goat\").map(({ id }) => id));",
-          'assert.equal(typeof luckytoken.createLuckyTokenRuntime, "function");',
+          'assert.equal(typeof Token.createTokenRuntime, "function");',
         ].join("\n"),
       ],
       { cwd: directory, maxBuffer: 8 * 1024 * 1024 },
@@ -125,7 +125,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
         join(
           directory,
           "node_modules",
-          "@luckytoken",
+          "@token",
           "provider-commandcode-private",
           "package.json",
         ),
@@ -137,7 +137,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
         join(
           directory,
           "node_modules",
-          "@luckytoken",
+          "@token",
           "provider-commandcode-goat",
           "package.json",
         ),

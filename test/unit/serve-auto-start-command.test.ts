@@ -9,10 +9,10 @@ describe("serve auto-start registration command", () => {
         ownerKind: "cli",
         nodeExecutable: "node.exe",
         cliScript: "C:\\app\\dist\\cli.js",
-        configPath: "C:\\Users\\u\\.luckytoken\\config.json",
+        configPath: "C:\\Users\\u\\.Token\\config.json",
       }),
     ).toBe(
-      "node.exe C:\\app\\dist\\cli.js serve --config C:\\Users\\u\\.luckytoken\\config.json",
+      "node.exe C:\\app\\dist\\cli.js serve --config C:\\Users\\u\\.Token\\config.json",
     );
   });
 
@@ -20,12 +20,12 @@ describe("serve auto-start registration command", () => {
     expect(
       buildServeAutoStartCommand({
         ownerKind: "desktop",
-        desktopExe: "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+        desktopExe: "C:\\Program Files\\Token\\Token.exe",
         nodeExecutable: "node.exe",
         cliScript: "C:\\app\\dist\\cli.js",
-        configPath: "C:\\Users\\u\\.luckytoken\\config.json",
+        configPath: "C:\\Users\\u\\.Token\\config.json",
       }),
-    ).toBe('"C:\\Program Files\\LuckyToken\\LuckyToken.exe"');
+    ).toBe('"C:\\Program Files\\Token\\Token.exe"');
   });
 
   it("falls back to the node command when the desktop exe is unknown", () => {
@@ -34,10 +34,10 @@ describe("serve auto-start registration command", () => {
         ownerKind: "desktop",
         nodeExecutable: "node.exe",
         cliScript: "C:\\app\\dist\\cli.js",
-        configPath: "C:\\Users\\u\\.luckytoken\\config.json",
+        configPath: "C:\\Users\\u\\.Token\\config.json",
       }),
     ).toBe(
-      "node.exe C:\\app\\dist\\cli.js serve --config C:\\Users\\u\\.luckytoken\\config.json --owner desktop",
+      "node.exe C:\\app\\dist\\cli.js serve --config C:\\Users\\u\\.Token\\config.json --owner desktop",
     );
   });
 });

@@ -46,21 +46,21 @@ describe("Electron desktop icons", () => {
       resolveDesktopIconPaths({
         packaged: false,
         resourcesPath: "C:/Electron/resources",
-        appPath: "D:/LuckyToken/packages/desktop-shell",
+        appPath: "D:/Token/packages/desktop-shell",
       }),
     ).toEqual({
-      window: join("D:/LuckyToken/packages/desktop-shell", "assets", "icon.png"),
-      tray: join("D:/LuckyToken/packages/desktop-shell", "assets", "tray-icon.png"),
+      window: join("D:/Token/packages/desktop-shell", "assets", "icon.png"),
+      tray: join("D:/Token/packages/desktop-shell", "assets", "tray-icon.png"),
     });
     expect(
       resolveDesktopIconPaths({
         packaged: true,
-        resourcesPath: "C:/Program Files/LuckyToken/resources",
+        resourcesPath: "C:/Program Files/Token/resources",
         appPath: "ignored",
       }),
     ).toEqual({
-      window: join("C:/Program Files/LuckyToken/resources", "icon.png"),
-      tray: join("C:/Program Files/LuckyToken/resources", "tray-icon.png"),
+      window: join("C:/Program Files/Token/resources", "icon.png"),
+      tray: join("C:/Program Files/Token/resources", "tray-icon.png"),
     });
   });
 

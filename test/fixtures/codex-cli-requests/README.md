@@ -1,7 +1,7 @@
 # Codex CLI Request Samples
 
 Real `/v1/responses` request bodies captured from the official Codex CLI
-(`codex -p luckytoken exec`, version 0.147.0) driving the LuckyToken local
+(`codex -p Token exec`, version 0.147.0) driving the Token local
 bridge. Captured by `test/online/run-codex-cli.ts` (`createCapturingRuntime`),
 then sanitized for repo hygiene.
 
@@ -24,9 +24,9 @@ namespace/tool_search/web_search shapes), `reasoning`, `stream`,
 ## Replay
 
 `test/integration/openai-responses-replay.test.ts` replays every sample
-against an in-process LuckyToken composition (mocked upstream fetch), so the
+against an in-process Token composition (mocked upstream fetch), so the
 unit/integration suite exercises the exact wire shapes the official client
 produces — without needing the Codex CLI or network access.
 
 To re-capture fresher samples: run `npm run test:online-codex`, then copy
-`<tmp>/luckytoken-codex-cli-*/artifacts/requests/*.json` here (re-sanitized).
+`<tmp>/Token-codex-cli-*/artifacts/requests/*.json` here (re-sanitized).

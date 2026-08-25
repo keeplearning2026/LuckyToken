@@ -530,7 +530,7 @@ describe("schema-complete Anthropic JSON response", () => {
     }
     expect(target.content).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           source: {
             api: "openai-completions",
             provider: "opencode-go",

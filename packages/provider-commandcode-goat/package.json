@@ -1,5 +1,5 @@
 {
-  "name": "@luckytoken/provider-commandcode-goat",
+  "name": "@token/provider-commandcode-goat",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.2",
-    "@luckytoken/commandcode-model-catalog": "0.1.0",
-    "@luckytoken/provider-contract": "0.1.0"
+    "@token/commandcode-model-catalog": "0.1.0",
+    "@token/provider-contract": "0.1.0"
   }
 }

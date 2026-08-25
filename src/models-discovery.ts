@@ -47,7 +47,7 @@ function renderProjectionFailure(
     failureId,
     role: "primary",
     classification: "model_list_projection_failed",
-    origin: "luckytoken",
+    origin: "Token",
     originPrecision: "exact",
     location: primaryLocation,
   });

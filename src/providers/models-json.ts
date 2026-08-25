@@ -5,7 +5,7 @@ import {
 } from "./models-json-schema.js";
 
 /**
- * LuckyToken models.json loader.
+ * Token models.json loader.
  *
  * Schema validation is owned by `models-json-schema.ts` (extracted from Pi's
  * coding-agent ModelConfig), so user models.json files are schema-compatible

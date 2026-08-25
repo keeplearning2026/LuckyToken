@@ -120,7 +120,7 @@ function createSaturatedReserveHarness(): {
 
 describe("Request Journey close-seal reserve", () => {
   it("admits one bounded close seal even when terminal observations saturate their shared pool", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-seal-reserve-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-seal-reserve-"));
     const harness = createSaturatedReserveHarness();
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -152,7 +152,7 @@ describe("Request Journey close-seal reserve", () => {
           failureId: `supporting-${index}`,
           role: "supporting",
           classification: "reserve_saturation_probe",
-          origin: "luckytoken",
+          origin: "Token",
           originPrecision: "exact",
           safeMessage: "x".repeat(messageSize),
           location: {
@@ -186,7 +186,7 @@ describe("Request Journey close-seal reserve", () => {
   });
 
   it("sheds success detail and artifact bodies before failure artifact evidence", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-shedding-order-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-shedding-order-"));
     const harness = createSaturatedReserveHarness();
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -258,7 +258,7 @@ describe("Request Journey close-seal reserve", () => {
         failureId: "primary-failure",
         role: "primary",
         classification: "fixture_failure",
-        origin: "luckytoken",
+        origin: "Token",
         originPrecision: "exact",
         safeMessage: "fixture failed",
         location: {

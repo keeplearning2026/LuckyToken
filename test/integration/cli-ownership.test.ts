@@ -15,7 +15,7 @@ import {
   startControlPlane,
   type ControlPlaneClient,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createSettingsRegistry } from "../../src/settings/catalog.js";
 import {
@@ -65,7 +65,7 @@ function startCli(
   const fixtureHome =
     configDirectory === undefined
       ? undefined
-      : basename(configDirectory) === ".luckytoken"
+      : basename(configDirectory) === ".Token"
         ? dirname(configDirectory)
         : configDirectory;
   return spawn(process.execPath, command, {
@@ -80,7 +80,7 @@ function startCli(
             CODEX_HOME: join(fixtureHome, ".codex"),
           }),
       ...(bridgeSignal
-        ? { LUCKYTOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
+        ? { TOKEN_TEST_CLI_ARGS: JSON.stringify(args) }
         : {}),
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -100,7 +100,7 @@ async function reserveFreePort(): Promise<number> {
   return port;
 }
 
-describe("LuckyToken CLI ownership lifecycle", () => {
+describe("Token CLI ownership lifecycle", () => {
   const directories: string[] = [];
   const children: ChildProcessWithoutNullStreams[] = [];
   const controlPlanes: RunningControlPlane[] = [];
@@ -125,15 +125,15 @@ describe("LuckyToken CLI ownership lifecycle", () => {
       readonly port?: number;
     } = {},
   ) {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-owner-cli-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-owner-cli-"));
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     await mkdir(join(stateDirectory, "pi"), { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: {
           port: options.port ?? (await reserveFreePort()),
         },
@@ -420,16 +420,16 @@ ${exit.stderr}`).toContain("timed out");
   }, 30_000);
 
   it("queries and changes Windows login auto-start through the control command", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-auto-start-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-auto-start-"));
     directories.push(directory);
     const registrar = createUnsupportedAutoStartRegistrar();
     const enabled: boolean[] = [];
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-auto-start-${process.pid}`,
+        address: `\\\\.\\pipe\\Token-auto-start-${process.pid}`,
         capability: "auto-start-capability-012345678901234567890123",
       },
-      application: { id: "luckytoken", version: "cli-test" },
+      application: { id: "Token", version: "cli-test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       applicationCommandHandler: async (command) => {
         if (command.command !== "auto_start") return { outcome: "attached" };
@@ -603,9 +603,9 @@ ${exit.stderr}`).toContain("timed out");
   });
 
   it("creates the first-run config when the desktop launcher asks, and never overwrites an existing one", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-first-run-cli-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-first-run-cli-"));
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     await mkdir(join(stateDirectory, "pi"), { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     const descriptorPath = join(stateDirectory, "control-plane.json");
@@ -616,7 +616,7 @@ ${exit.stderr}`).toContain("timed out");
       "--owner",
       "desktop",
       "--desktop-exe",
-      "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+      "C:\\Program Files\\Token\\Token.exe",
       "--create-first-run-config",
     ]);
     children.push(serve);
@@ -642,7 +642,7 @@ ${exit.stderr}`).toContain("timed out");
     const parsed = JSON.parse(await readFile(configPath, "utf8")) as {
       readonly schemaVersion?: unknown;
     };
-    expect(parsed.schemaVersion).toBe("luckytoken-config-v2");
+    expect(parsed.schemaVersion).toBe("token-config-v2");
 
     const result = await client.executeApplicationCommand({
       command: "quit",
@@ -663,7 +663,7 @@ ${exit.stderr}`).toContain("timed out");
       "--owner",
       "desktop",
       "--desktop-exe",
-      "C:\\Program Files\\LuckyToken\\LuckyToken.exe",
+      "C:\\Program Files\\Token\\Token.exe",
       "--create-first-run-config",
     ]);
     children.push(second);

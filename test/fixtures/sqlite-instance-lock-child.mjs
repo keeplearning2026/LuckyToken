@@ -45,13 +45,13 @@ async function waitForLine() {
 
 if (mode === "hold") {
   const database = openDatabase();
-  globalThis.__luckytokenHeldInstanceDatabase = database;
+  globalThis.__TokenHeldInstanceDatabase = database;
   acquire(database);
   writeLine("ACQUIRED");
-  setInterval(() => globalThis.__luckytokenHeldInstanceDatabase, 60_000);
+  setInterval(() => globalThis.__TokenHeldInstanceDatabase, 60_000);
 } else if (mode === "hold-block") {
   const database = openDatabase();
-  globalThis.__luckytokenHeldInstanceDatabase = database;
+  globalThis.__TokenHeldInstanceDatabase = database;
   acquire(database);
   writeLine("ACQUIRED");
   const durationMs = Number(argument ?? "1500");
@@ -60,7 +60,7 @@ if (mode === "hold") {
     // Deliberately block the event loop while the OS/SQLite lock stays held.
   }
   writeLine("UNBLOCKED");
-  setInterval(() => globalThis.__luckytokenHeldInstanceDatabase, 60_000);
+  setInterval(() => globalThis.__TokenHeldInstanceDatabase, 60_000);
 } else if (mode === "try-once") {
   const database = openDatabase();
   try {

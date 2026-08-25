@@ -2,7 +2,7 @@
  * Shared direct-Provider OpenAI Responses semantic-certification harness.
  *
  * It constructs protocol requests itself and drives a real Provider through
- * LuckyToken's local `/v1/responses` endpoint. Provider-specific entrypoints
+ * Token's local `/v1/responses` endpoint. Provider-specific entrypoints
  * select the fixed Provider/model/key tuple. This harness certifies only
  * complete-history semantic conversion and never claims Codex client state or
  * lifecycle behavior.
@@ -23,7 +23,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
@@ -31,11 +31,11 @@ import {
   reconcileOnlinePublicModels,
 } from "./public-model-fixture.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   createConfiguredPiModels,
-  type ConfiguredLuckyTokenDataPlane,
+  type ConfiguredTokenDataPlane,
 } from "../support/configured-data-plane.js";
-import { startLuckyTokenHttpServer } from "../../src/server.js";
+import { startTokenHttpServer } from "../../src/server.js";
 import { loginOnlineProvider } from "./provider-login.js";
 import {
   expectsForcedToolChoiceOmission,
@@ -199,7 +199,7 @@ interface ResponsesOutputItem {
   readonly arguments?: string;
   readonly output?: unknown;
   readonly summary?: Array<{ readonly type: string; readonly text?: string }>;
-  readonly luckytoken_continuity?: unknown;
+  readonly token_continuity?: unknown;
 }
 
 interface ResponsesResult {
@@ -266,10 +266,10 @@ function responsesReasoningReplay(input: {
   }
   const selectors = new Set<string>();
   for (const item of result.output) {
-    if (item.type !== "reasoning" || !isRecord(item.luckytoken_continuity)) {
+    if (item.type !== "reasoning" || !isRecord(item.token_continuity)) {
       continue;
     }
-    const attachments = item.luckytoken_continuity.attachments;
+    const attachments = item.token_continuity.attachments;
     if (!Array.isArray(attachments)) continue;
     for (const attachment of attachments) {
       if (
@@ -615,12 +615,12 @@ export async function runOpenAIResponsesOnlineSuite(
   const apiKey = (await readFile(apiKeyFile, "utf8")).trim();
   if (apiKey.length === 0) throw new Error(`${apiKeyFile} is empty`);
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-online-"));
-  let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
-  let composition: ConfiguredLuckyTokenDataPlane | undefined;
+  const directory = await mkdtemp(join(tmpdir(), "Token-responses-online-"));
+  let server: Awaited<ReturnType<typeof startTokenHttpServer>> | undefined;
+  let composition: ConfiguredTokenDataPlane | undefined;
   let restoreGlobalFetch: (() => void) | undefined;
   try {
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const responsesToken = "unused-local-sdk-key";
@@ -628,7 +628,7 @@ export async function runOpenAIResponsesOnlineSuite(
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -645,7 +645,7 @@ export async function runOpenAIResponsesOnlineSuite(
       }),
       "utf8",
     );
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     // Real login first: the composition's served catalog owns the provider
     // registration, so login runs through the served Models and persists into
     // the same store the composition will use for request-time auth.
@@ -692,7 +692,7 @@ export async function runOpenAIResponsesOnlineSuite(
             providerId: aliasTarget.provider,
             modelId: aliasTarget.model,
           });
-    composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredTokenDataPlane({
       config,
       credentialRecordStore,
       fetch: globalThis.fetch,
@@ -713,7 +713,7 @@ export async function runOpenAIResponsesOnlineSuite(
       throw new Error("online_resolved_provider_model_missing");
     }
     const providerApi = resolvedProviderModel.api;
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,
@@ -780,13 +780,13 @@ export async function runOpenAIResponsesOnlineSuite(
         globalThis.fetch = originalGlobalFetch;
       }
     };
-    composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredTokenDataPlane({
       config,
       credentialRecordStore,
       fetch: capture.fetch,
       ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
     });
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,

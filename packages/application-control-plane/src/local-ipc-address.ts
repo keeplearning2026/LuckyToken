@@ -11,13 +11,13 @@ export function createLocalIpcAddress(options: LocalIpcAddressOptions): string {
     throw new Error("Local IPC random id contains unsupported characters");
   }
   if (options.platform === "win32") {
-    return `\\\\.\\pipe\\luckytoken-${options.randomId}`;
+    return `\\\\.\\pipe\\Token-${options.randomId}`;
   }
   if (options.runtimeDirectory === undefined || options.runtimeDirectory.length === 0) {
     throw new Error("Unix local IPC requires a runtime directory");
   }
   return posix.join(
     options.runtimeDirectory.replaceAll("\\", "/"),
-    `luckytoken-${options.randomId}.sock`,
+    `Token-${options.randomId}.sock`,
   );
 }

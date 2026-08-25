@@ -7,7 +7,7 @@ import {
 } from "../../src/protocols/openai-responses/handler.js";
 
 function request(model = "local-model"): Request {
-  return new Request("http://luckytoken.test/v1/responses", {
+  return new Request("http://Token.test/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model, input: "hello" }),
@@ -87,7 +87,7 @@ describe("OpenAI Responses three-lane routing", () => {
     });
 
     const response = await handler.handle(
-      new Request("http://luckytoken.test/v1/responses", {
+      new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

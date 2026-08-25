@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { RequestJourneyObservationAuthority } from "../../src/diagnostics/index.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -64,7 +64,7 @@ function commandCodeSuccess(): Response {
 }
 
 describe("Request Journey diagnostics non-interference", () => {
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -106,7 +106,7 @@ describe("Request Journey diagnostics non-interference", () => {
         return servingRuntime.handle(...args);
       },
     };
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime,
       ...(diagnostics === undefined ? {} : { diagnostics }),
       createRequestId: () => REQUEST_ID,
@@ -149,7 +149,7 @@ describe("Request Journey diagnostics non-interference", () => {
       { method: "POST", pathname: "/v1/messages" },
     ]);
     expect(baseline.response.headers).toContainEqual([
-      "x-luckytoken-request-id",
+      "x-token-request-id",
       REQUEST_ID,
     ]);
     expect(baseline.outbound).toHaveLength(1);

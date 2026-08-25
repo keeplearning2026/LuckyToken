@@ -10,10 +10,10 @@ $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $installRoot = Join-Path $env:LOCALAPPDATA "Token"
 $installedExe = Join-Path $installRoot "app-$Version\Token.exe"
 $updateExe = Join-Path $installRoot "Update.exe"
-$userState = Join-Path $env:USERPROFILE ".luckytoken"
+$userState = Join-Path $env:USERPROFILE ".Token"
 $descriptorPath = Join-Path $userState "control-plane.json"
 $evidence = [ordered]@{
-  schemaVersion = "luckytoken-windows-installer-certification-v1"
+  schemaVersion = "token-windows-installer-certification-v1"
   installer = $resolvedInstaller
   version = $Version
   startedAt = [DateTimeOffset]::UtcNow.ToString("o")
@@ -61,7 +61,7 @@ if ($RequireSignature) {
 }
 
 $testCodexHome = [IO.Path]::GetFullPath(
-  (Join-Path ([IO.Path]::GetTempPath()) ("luckytoken-windows-cert-codex-{0}" -f [Guid]::NewGuid().ToString("N")))
+  (Join-Path ([IO.Path]::GetTempPath()) ("token-windows-cert-codex-{0}" -f [Guid]::NewGuid().ToString("N")))
 )
 $testTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 if (-not $testCodexHome.StartsWith($testTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -113,9 +113,9 @@ try {
   }
   Add-Check -Name "automatic-first-run-cleanup" -Passed ($automaticFirstRunQuitExit -eq 0) -Detail "exit $automaticFirstRunQuitExit"
 
-  $previousSelectedExecutable = $env:LUCKYTOKEN_PACKAGED_EXECUTABLE
+  $previousSelectedExecutable = $env:TOKEN_PACKAGED_EXECUTABLE
   try {
-    $env:LUCKYTOKEN_PACKAGED_EXECUTABLE = $installedExe
+    $env:TOKEN_PACKAGED_EXECUTABLE = $installedExe
     Push-Location $repositoryRoot
     try {
       & node --test packages/desktop-shell/test/first-run-provider-catalog.e2e.test.mjs
@@ -125,9 +125,9 @@ try {
     }
   } finally {
     if ($null -eq $previousSelectedExecutable) {
-      Remove-Item Env:LUCKYTOKEN_PACKAGED_EXECUTABLE -ErrorAction SilentlyContinue
+      Remove-Item Env:TOKEN_PACKAGED_EXECUTABLE -ErrorAction SilentlyContinue
     } else {
-      $env:LUCKYTOKEN_PACKAGED_EXECUTABLE = $previousSelectedExecutable
+      $env:TOKEN_PACKAGED_EXECUTABLE = $previousSelectedExecutable
     }
   }
   Add-Check -Name "installed-blank-first-run-provider-catalog" -Passed ($firstRunExit -eq 0) -Detail "node --test exit $firstRunExit"

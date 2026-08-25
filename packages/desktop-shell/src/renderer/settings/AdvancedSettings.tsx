@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { LuckyTokenDesktopApi, RuntimeEventRecord } from "../../shared/desktop-api.js";
+import type { TokenDesktopApi, RuntimeEventRecord } from "../../shared/desktop-api.js";
 
 const codexRestoreFields = Object.freeze([
   {
@@ -23,7 +23,7 @@ const codexRestoreFields = Object.freeze([
   },
 ]);
 
-async function queryRecentWarnings(api: LuckyTokenDesktopApi): Promise<readonly RuntimeEventRecord[] | "unavailable"> {
+async function queryRecentWarnings(api: TokenDesktopApi): Promise<readonly RuntimeEventRecord[] | "unavailable"> {
   const records: RuntimeEventRecord[] = [];
   let afterId: number | undefined;
   for (;;) {
@@ -37,7 +37,7 @@ async function queryRecentWarnings(api: LuckyTokenDesktopApi): Promise<readonly 
   return records.filter((record) => record.level !== "info").sort((left, right) => right.id - left.id).slice(0, 25);
 }
 
-export function AdvancedSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
+export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [events, setEvents] = useState<readonly RuntimeEventRecord[]>();
   const [eventsUnavailable, setEventsUnavailable] = useState(false);
   const [storageNotice, setStorageNotice] = useState<string>();

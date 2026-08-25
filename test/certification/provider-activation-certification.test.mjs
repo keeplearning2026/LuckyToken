@@ -58,7 +58,7 @@ test("production serving receives narrow Provider capabilities and cannot create
   );
   for (const forbiddenFactory of [
     "createModels",
-    "registerLuckyTokenProviders",
+    "registerTokenProviders",
     "loadProviderPackages",
     "createLiveCredentialAuthority",
     "createCatalogSnapshotModels",
@@ -81,12 +81,12 @@ test("production serving receives narrow Provider capabilities and cannot create
   );
   assert.match(
     application,
-    /createConfiguredLuckyTokenDataPlane\(\{[\s\S]*?models:\s*providerRuntime\.models/u,
+    /createConfiguredTokenDataPlane\(\{[\s\S]*?models:\s*providerRuntime\.models/u,
     "Backend Application must project Models into the Data Plane",
   );
   assert.match(
     application,
-    /createConfiguredLuckyTokenDataPlane\(\{[\s\S]*?diagnostics:\s*ownedDiagnosticsAuthority/u,
+    /createConfiguredTokenDataPlane\(\{[\s\S]*?diagnostics:\s*ownedDiagnosticsAuthority/u,
     "Backend Application must assemble the one narrow diagnostics authority",
   );
   assert.match(
@@ -258,7 +258,7 @@ test("both CommandCode integrations are bundled product Providers", async () => 
   );
   assert.match(
     bundled,
-    /@luckytoken\/provider-commandcode-private/u,
+    /@token\/provider-commandcode-private/u,
     "bundled metadata must carry the CommandCode package specifier",
   );
   assert.match(
@@ -268,7 +268,7 @@ test("both CommandCode integrations are bundled product Providers", async () => 
   );
   assert.match(
     bundled,
-    /@luckytoken\/provider-commandcode-goat/u,
+    /@token\/provider-commandcode-goat/u,
     "bundled metadata must carry the CommandCode Goat package specifier",
   );
   assert.match(
@@ -288,7 +288,7 @@ test("both CommandCode integrations are bundled product Providers", async () => 
   );
   assert.match(
     runtime,
-    /luckytoken_bundled/u,
+    /token_bundled/u,
     "Provider Runtime must classify bundled Providers by product source",
   );
 });

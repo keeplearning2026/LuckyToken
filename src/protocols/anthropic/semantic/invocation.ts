@@ -2,7 +2,7 @@ import type {
   Context,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 
 import type { AnthropicRequestRenderState } from "../request.js";
 import type { AnthropicReasoningSemantics } from "./reasoning/contract.js";

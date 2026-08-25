@@ -18,7 +18,7 @@ const noNativeModels: CodexNativeModelSource = Object.freeze({
 
 describe("Request Journey Codex Direct Mode media", () => {
   it("publishes Images and Realtime HTTP through their Direct Mode contracts", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-native-media-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-native-media-journey-"));
     const diagnostics = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
     });
@@ -47,14 +47,14 @@ describe("Request Journey Codex Direct Mode media", () => {
 
     try {
       const images = await composition.runtime.handle(
-        new Request("http://luckytoken.test/v1/images/generations", {
+        new Request("http://Token.test/v1/images/generations", {
           method: "POST",
           headers: { authorization: "Bearer codex-token" },
           body: Uint8Array.from([0x00, 0xff]),
         }),
       );
       const realtime = await composition.runtime.handle(
-        new Request("http://luckytoken.test/v1/live", {
+        new Request("http://Token.test/v1/live", {
           method: "POST",
           headers: {
             authorization: "Bearer codex-token",

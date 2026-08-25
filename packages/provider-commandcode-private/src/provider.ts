@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
-import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 import {
   createEmptyServerConfig,
   type ServerConfig,

@@ -3,10 +3,10 @@
 Repository:
 
 ```text
-keeplearning2026/LuckyToken
+keeplearning2026/Token
 ```
 
-LuckyToken serves client protocol wires through three independent data-plane lanes. Within Semantic Conversion, each Client Protocol owns a cohesive vertical module: Client Wire conversion, its protocol-specific invocation and supplement, reasoning/continuity policy, target projection policy, semantic execution lifecycle, response conversion, and certification tests. Client Protocol modules do not share a semantic invocation, supplement, reasoning request model, projector registry, semantic execution Module, projection outcome type, or semantic error type. They may call the same pinned Pi AI dependency through an existing narrow infrastructure capability and may reuse proven mechanism-only leaf utilities, but no LuckyToken Semantic Conversion kernel is shared between Client Protocols. The two native preservation lanes bypass every Semantic Conversion module and remain independent from each other:
+Token serves client protocol wires through three independent data-plane lanes. Within Semantic Conversion, each Client Protocol owns a cohesive vertical module: Client Wire conversion, its protocol-specific invocation and supplement, reasoning/continuity policy, target projection policy, semantic execution lifecycle, response conversion, and certification tests. Client Protocol modules do not share a semantic invocation, supplement, reasoning request model, projector registry, semantic execution Module, projection outcome type, or semantic error type. They may call the same pinned Pi AI dependency through an existing narrow infrastructure capability and may reuse proven mechanism-only leaf utilities, but no Token Semantic Conversion kernel is shared between Client Protocols. The two native preservation lanes bypass every Semantic Conversion module and remain independent from each other:
 
 ```text
 Anthropic / OpenAI Responses / other client protocol wires
@@ -55,11 +55,11 @@ Prefer the simplest design that is correct. Do not add abstractions, layers, wra
 
 Every test that can reach Codex state must use a newly created temporary `CODEX_HOME`. Copy only the required test inputs into that directory, then read and modify only those copies. Never use a real Codex home as a test write target and never rely on restoring real files after a test.
 
-The standard test guard copies only `config.toml` and `luckytoken-model-catalog.json` when they exist. `models_cache.json`, `auth.json`, native catalogs, sessions, logs, caches, and all other Codex state must not be copied from the user profile; tests that need them must create explicit fixtures in the temporary home.
+The standard test guard copies only `config.toml` and `token-model-catalog.json` when they exist. `models_cache.json`, `auth.json`, native catalogs, sessions, logs, caches, and all other Codex state must not be copied from the user profile; tests that need them must create explicit fixtures in the temporary home.
 
 Pass the temporary `CODEX_HOME` explicitly to every spawned Backend, Codex CLI, Electron, or helper process; setting only `HOME` or `USERPROFILE` is insufficient. Remove the temporary directory in `finally` on success, failure, or cancellation.
 
-Use the repository's guarded npm test commands. A direct test command is allowed only when it creates the same isolated temporary home and modifies copies or test-created fixtures only. Expanding LuckyToken's Codex write set requires updating the specification and this test setup before exercising the new behavior.
+Use the repository's guarded npm test commands. A direct test command is allowed only when it creates the same isolated temporary home and modifies copies or test-created fixtures only. Expanding Token's Codex write set requires updating the specification and this test setup before exercising the new behavior.
 
 ## Architecture Principles
 
@@ -84,11 +84,11 @@ Keep model-visible semantics separate from credentials, transport details, loggi
 
 Each Client Protocol Semantic Conversion module owns its complete source-to-target policy. Adding, changing, or deleting one Client Protocol must be local to that protocol's module and composition registration.
 
-For Semantic Conversion locality or module-seam work, read `doc/Spec/LuckyTokenSemanticConversionArchitectureSpec.md`. For OpenAI Responses conversion, additionally read `doc/Spec/LuckyTokenOpenAIResponsesSemanticConversionArchitectureSpec.md`, `doc/Spec/LuckyTokenOpenAISemanticConversionImplementationPlan.md`, and `doc/OpenAIResponsesPiProviderRequestFieldAudit.md`. For Anthropic Messages conversion, additionally read `doc/Spec/LuckyTokenAnthropicSemanticConversionArchitectureSpec.md` and `doc/Spec/LuckyTokenAnthropicSemanticConversionImplementationPlan.md`.
+For Semantic Conversion locality or module-seam work, read `doc/Spec/TokenSemanticConversionArchitectureSpec.md`. For OpenAI Responses conversion, additionally read `doc/Spec/TokenOpenAIResponsesSemanticConversionArchitectureSpec.md`, `doc/Spec/TokenOpenAISemanticConversionImplementationPlan.md`, and `doc/OpenAIResponsesPiProviderRequestFieldAudit.md`. For Anthropic Messages conversion, additionally read `doc/Spec/TokenAnthropicSemanticConversionArchitectureSpec.md` and `doc/Spec/TokenAnthropicSemanticConversionImplementationPlan.md`.
 
 - A Client Protocol owns its request conversion, protocol-specific invocation, supplement, reasoning request and continuity codec, target projector registry, semantic execution lifecycle, response conversion, and tests.
 - Client Protocol modules do not import one another. A common semantic-control union, common supplement, common reasoning request model, common projector registry, common semantic executor, common projection-outcome union, or common semantic error class spanning Client Protocols is not an allowed extension seam.
-- Each Client Protocol's semantic executor owns its Pi options, exclusive `onPayload` lifecycle, projection-operation invocation, conflict/failure enforcement, typed semantic rejection, final outcome collection, and invocation of the existing Pi execution capability. No shared LuckyToken wrapper owns these semantics on behalf of multiple Client Protocols.
+- Each Client Protocol's semantic executor owns its Pi options, exclusive `onPayload` lifecycle, projection-operation invocation, conflict/failure enforcement, typed semantic rejection, final outcome collection, and invocation of the existing Pi execution capability. No shared Token wrapper owns these semantics on behalf of multiple Client Protocols.
 - The existing Pi execution capability is an infrastructure dependency, not a Semantic Conversion Module or extension seam. It contains no Client field mapping or projection policy, and Client Protocol modules do not import one another through it.
 - During decoupling, copy the required spec-conforming implementation into the owning Client Protocol module, then cut only that protocol's imports and composition over to its local copy. Do not modify a shared file while another protocol still uses it. After every production caller has cut over and dependency tests prove zero references, delete the obsolete shared semantic files and directory rather than retaining a dormant compatibility path.
 - Protocol-owned target projectors may deliberately duplicate mappings used by another Client Protocol. Extract a shared leaf utility only after two implementations prove identical mechanics and the utility can remain unaware of both source protocols and their semantic policies.
@@ -102,7 +102,7 @@ For Semantic Conversion locality or module-seam work, read `doc/Spec/LuckyTokenS
 
 Diagnostics are a fail-open observation path. Request serving and application work remain authoritative: diagnostics may observe bounded immutable facts, but they must never influence routing, lane selection, credentials, semantic conversion, transport, retry or Profile decisions, cancellation arbitration, HTTP status, headers, body, or terminal outcome.
 
-For diagnostics, Request Journey, capture, logging, telemetry, or request-history work, read `doc/Spec/LuckyTokenRequestJourneyDiagnosticsSpec.md` before designing or changing code.
+For diagnostics, Request Journey, capture, logging, telemetry, or request-history work, read `doc/Spec/TokenRequestJourneyDiagnosticsSpec.md` before designing or changing code.
 
 - Publish observations only through a narrow no-throw, non-blocking Interface. Request and application control paths must not await diagnostics I/O or accept diagnostics backpressure.
 - Contain observer validation, queue, worker, redaction, and persistence failures inside the diagnostics module. Such failures may reduce record completeness and raise operational health/attention, but they must not replace, delay, or modify the observed work.
@@ -116,7 +116,7 @@ Unless the user explicitly requests compatibility, implement only the current co
 
 ## Desktop Product Architecture
 
-For Electron, desktop, tray, preload, renderer, local management transport, or desktop product-boundary work, read `doc/Spec/LuckyTokenElectronArchitectureSpec.md` before designing or changing code.
+For Electron, desktop, tray, preload, renderer, local management transport, or desktop product-boundary work, read `doc/Spec/TokenElectronArchitectureSpec.md` before designing or changing code.
 
 The fixed dependency direction is `Renderer → typed preload → Electron Main → Application Control Plane → Backend Application → Core`. Core owns model-serving semantics; the Application Control Plane is the only management seam into a running Backend; Electron Main owns desktop lifecycle/OS integration; Renderer owns interaction state, never Backend authority.
 
@@ -158,7 +158,7 @@ OpenAI Responses has exactly two request consumers:
 1. the main Responses consumer, which constructs selector, session/render facts, Pi Context/options, tools, and reasoning semantics; and
 2. `ResponsesProjectionSupplement`, which carries facts that at least one current target Adapter can project or must verify/repair in the final Pi-built Provider payload.
 
-The exact consumer allowlists and overlap are owned by `doc/Spec/LuckyTokenOpenAIResponsesSemanticConversionArchitectureSpec.md`. Adding an OpenAI Responses request field requires adding a positive consumer there and proving its Client Wire → final Provider Wire behavior. A field in neither consumer remains outside Semantic Conversion.
+The exact consumer allowlists and overlap are owned by `doc/Spec/TokenOpenAIResponsesSemanticConversionArchitectureSpec.md`. Adding an OpenAI Responses request field requires adding a positive consumer there and proving its Client Wire → final Provider Wire behavior. A field in neither consumer remains outside Semantic Conversion.
 
 `ResponsesProjectionSupplement` is an immutable candidate carrier, not a patch list or dispatch gate:
 
@@ -167,7 +167,7 @@ The exact consumer allowlists and overlap are owned by `doc/Spec/LuckyTokenOpenA
 - An incorrect Pi mapping is repaired only for a certified target field, value, and compatibility condition; the repair is warned.
 - A positive-only target Adapter consumes only candidates it can prove. The Responses coordinator resolves every remaining candidate as `omitted` with a warning. Candidate unavailability never produces `failed`, throws, or prevents dispatch.
 - A named bounded approximation records `degraded` and never appears as an exact effective-state fact.
-- `max_output_tokens` is preserved or repaired to a certified ceiling no greater than the Client value. A target without a certified ceiling warns, omits the control, and still dispatches; LuckyToken does not truncate model output locally.
+- `max_output_tokens` is preserved or repaired to a certified ceiling no greater than the Client value. A target without a certified ceiling warns, omits the control, and still dispatches; Token does not truncate model output locally.
 - Projector exceptions are limited to incompatible audited payload shapes, duplicate final-field ownership, or invalid final payload construction. Consumed-source and non-degradable failures are enforced before this seam.
 
 ### Intermediate Carrier Principle
@@ -237,7 +237,7 @@ Treat Pi AI as a pinned external dependency. Request-control projection must not
 
 - The protocol-owned semantic executor accepts the resolved Pi Model, that protocol's Pi Context/options and typed semantic facts, plus the existing narrow Pi execution capability through a small request-local Interface owned by the same protocol.
 - It selects its target projector from the resolved `model.api` plus certified Provider/model compatibility facts. It has no dependency on another Client Protocol's registry, mappings, semantic executor, outcome type, or errors.
-- A deterministic compatibility default defined by the pinned Pi Adapter may be a certified fact only when LuckyToken mirrors that exact version-bound resolver and final-wire tests cover the result. LuckyToken-specific Provider-name, URL, model-name, or payload-shape heuristics are not certified defaults. Re-audit the resolver on every Pi upgrade.
+- A deterministic compatibility default defined by the pinned Pi Adapter may be a certified fact only when Token mirrors that exact version-bound resolver and final-wire tests cover the result. Token-specific Provider-name, URL, model-name, or payload-shape heuristics are not certified defaults. Re-audit the resolver on every Pi upgrade.
 - The protocol-owned semantic executor creates and owns `onPayload` after target resolution. The callback invokes that protocol's selected projection operation and never captures raw Client Wire or parser-internal objects.
 - Pi AI calls `onPayload` after constructing its Provider payload and before sending it. The projector validates the exact audited payload shape, returns a copied payload with only proven Provider-native mappings, and fails rather than guessing when the shape is incompatible.
 - Pi AI retains ownership of Provider registration, authentication, base request construction, transport, retry, streaming, response parsing, and Provider Wire → Pi AI IR conversion. Protocol semantic executors must not duplicate those implementations.
@@ -263,7 +263,7 @@ The protocol-owned semantic executor's `onPayload` function is an internal execu
 
 ### Independent Data-Plane Lanes
 
-Protocol-owned Semantic Modules and Pi Provider execution are not used when no semantic conversion takes place. LuckyToken has exactly three valid data-plane lanes, and they are independent architectural contracts rather than variants of one shared execution abstraction:
+Protocol-owned Semantic Modules and Pi Provider execution are not used when no semantic conversion takes place. Token has exactly three valid data-plane lanes, and they are independent architectural contracts rather than variants of one shared execution abstraction:
 
 ```text
 1. Local Native Preservation
@@ -327,7 +327,7 @@ Provider Native Responses and Semantic Conversion/Pi AI IR are absolutely uncoup
 
 Architecture and wire-contract tests must enforce the default model-only body rule, the exact Anthropic OAuth exception, the envelope ownership rules, and the bidirectional dependency prohibition above. A violation is an architecture error and a release blocker, even if the observed Provider response appears correct.
 
-The CommandCode private provider must implement and register through the same Pi Provider contract and invocation path as Pi built-in providers. It is a LuckyToken implementation detail. External protocol adapters and public interfaces may use it only through the standard Pi model/provider path and must not directly instantiate, import, or special-case its private implementation.
+The CommandCode private provider must implement and register through the same Pi Provider contract and invocation path as Pi built-in providers. It is a Token implementation detail. External protocol adapters and public interfaces may use it only through the standard Pi model/provider path and must not directly instantiate, import, or special-case its private implementation.
 
 ## Reference Principle
 
@@ -349,7 +349,7 @@ Relevant external references project i:
 
 When they address the same problem, compare their actual problem, information flow, module boundaries, conversion strategy, provider extension model, advantages, limitations, and applicability.
 
-Reference projects are evidence and design sources, not architectures LuckyToken must copy. Final decisions must follow LuckyToken's actual requirements, correctness, isolation, and minimum total complexity.
+Reference projects are evidence and design sources, not architectures Token must copy. Final decisions must follow Token's actual requirements, correctness, isolation, and minimum total complexity.
 
 ## Implementation Rule
 

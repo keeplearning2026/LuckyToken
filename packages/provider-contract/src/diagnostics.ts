@@ -34,9 +34,9 @@ export interface ExecutionFactsSink {
 }
 
 const CONVERSION_NOTICE_DIAGNOSTIC_TYPE =
-  "luckytoken.conversion_notice.v1";
+  "Token.conversion_notice.v1";
 const INVOCATION_ATTEMPT_DIAGNOSTIC_TYPE =
-  "luckytoken.invocation_attempt.v1";
+  "Token.invocation_attempt.v1";
 const trustedNoticeDiagnostics = new WeakSet<object>();
 const trustedAttemptDiagnostics = new WeakSet<object>();
 

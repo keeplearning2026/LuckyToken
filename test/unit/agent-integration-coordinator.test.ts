@@ -83,7 +83,7 @@ function recordingAdapter(id: AgentIntegrationId) {
 
 describe("Agent integration coordinator", () => {
   it("uses one enable/disable rule for each adapter and persists only successful intent", async () => {
-    const stateDirectory = await mkdtemp(join(tmpdir(), "luckytoken-agents-"));
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agents-"));
     const codex = recordingAdapter("codex");
     const pi = recordingAdapter("pi");
     const coordinator = createAgentIntegrationCoordinator({
@@ -123,7 +123,7 @@ describe("Agent integration coordinator", () => {
   });
 
   it("keeps the previous icon state when inject or restore fails", async () => {
-    const stateDirectory = await mkdtemp(join(tmpdir(), "luckytoken-agent-failure-"));
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-failure-"));
     const codex = recordingAdapter("codex");
     const pi = recordingAdapter("pi");
     const coordinator = createAgentIntegrationCoordinator({
@@ -151,7 +151,7 @@ describe("Agent integration coordinator", () => {
   });
 
   it("persists scope changes without injecting and marks enabled output dirty", async () => {
-    const stateDirectory = await mkdtemp(join(tmpdir(), "luckytoken-agent-scope-"));
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-scope-"));
     const codex = recordingAdapter("codex");
     const pi = recordingAdapter("pi");
     const coordinator = createAgentIntegrationCoordinator({
@@ -186,7 +186,7 @@ describe("Agent integration coordinator", () => {
   });
 
   it("syncs all enabled agents independently without rolling back successes", async () => {
-    const stateDirectory = await mkdtemp(join(tmpdir(), "luckytoken-agent-sync-"));
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-sync-"));
     const codex = recordingAdapter("codex");
     const pi = recordingAdapter("pi");
     const coordinator = createAgentIntegrationCoordinator({
@@ -214,7 +214,7 @@ describe("Agent integration coordinator", () => {
   });
 
   it("applies startup rules and attempts every restore before blocking shutdown", async () => {
-    const stateDirectory = await mkdtemp(join(tmpdir(), "luckytoken-agent-lifecycle-"));
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-lifecycle-"));
     const codex = recordingAdapter("codex");
     const pi = recordingAdapter("pi");
     const coordinator = createAgentIntegrationCoordinator({
@@ -236,7 +236,7 @@ describe("Agent integration coordinator", () => {
     const piRestoresBeforeShutdown = pi.restoreCalls();
 
     await expect(coordinator.shutdown()).rejects.toThrow(
-      "Agent integrations could not all be restored before LuckyToken shutdown",
+      "Agent integrations could not all be restored before Token shutdown",
     );
     expect(codex.restoreCalls()).toBe(codexRestoresBeforeShutdown + 1);
     expect(pi.restoreCalls()).toBe(piRestoresBeforeShutdown + 1);

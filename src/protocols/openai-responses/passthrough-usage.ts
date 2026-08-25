@@ -2,7 +2,7 @@ import {
   decodeTerminalUsageFact,
   type TerminalUsageClass,
   type TerminalUsageFact,
-} from "@luckytoken/provider-contract/usage";
+} from "@token/provider-contract/usage";
 
 import { parseSseFrames, sseFramePayload, type SseFrame } from "../sse-lines.js";
 

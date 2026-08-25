@@ -17,7 +17,7 @@ import { join } from "node:path";
 import {
   createSecureManagementWindowOptions,
   desktopInstanceUserDataPath,
-  quitLuckyTokenProduct,
+  quitTokenProduct,
   startElectronDesktopLifecycle,
 } from "./electron-app-lifecycle.js";
 import { createElectronBackendConnection } from "./electron-backend-connection.js";
@@ -107,7 +107,7 @@ if (isolatedUserDataPath !== undefined) {
 }
 const repositoryBuild = isolatedUserDataPath !== undefined;
 const loginItemMutationEnabled =
-  process.env.LUCKYTOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION !== "1";
+  process.env.TOKEN_DESKTOP_E2E_NO_LOGIN_ITEM_MUTATION !== "1";
 const loginItemPlatform: DesktopLoginItemPlatform = {
   get(options) {
     const settings = app.getLoginItemSettings(
@@ -287,7 +287,7 @@ function updateTray(health: TrayHealth): void {
 
 function requestProductQuit(): void {
   if (productQuitTask !== undefined) return;
-  productQuitTask = quitLuckyTokenProduct({
+  productQuitTask = quitTokenProduct({
     backendOwnerKind: () => {
       const state = controlPlaneSession.state();
       return state.kind === "ready" ? state.status.ownership?.owner.kind : undefined;

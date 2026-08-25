@@ -10,7 +10,7 @@ import {
 } from "../../src/control-plane-discovery.js";
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-discovery-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-discovery-"));
   return {
     path: join(directory, "control-plane.json"),
     discovery: createControlPlaneDiscovery({
@@ -24,11 +24,11 @@ async function fixture() {
 }
 
 const firstEndpoint = Object.freeze({
-  address: "\\\\.\\pipe\\luckytoken-first-owner",
+  address: "\\\\.\\pipe\\Token-first-owner",
   capability: "first-owner-capability-012345678901234567890",
 });
 const secondEndpoint = Object.freeze({
-  address: "\\\\.\\pipe\\luckytoken-second-owner",
+  address: "\\\\.\\pipe\\Token-second-owner",
   capability: "second-owner-capability-01234567890123456789",
 });
 

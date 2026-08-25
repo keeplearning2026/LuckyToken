@@ -23,7 +23,7 @@ import {
   type RuntimeEventRecord,
   type RuntimeEventSubscriber,
   type UnifiedDiagnosticsManagement,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { DiagnosticsUnavailableError } from "../../src/diagnostics/index.js";
 
 interface Deferred<T> {
@@ -46,7 +46,7 @@ let nextEndpointId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextEndpointId += 1;
   return {
-    address: `\\\\.\\pipe\\luckytoken-v4-diagnostics-${process.pid}-${nextEndpointId}`,
+    address: `\\\\.\\pipe\\Token-v4-diagnostics-${process.pid}-${nextEndpointId}`,
     capability: "v4-diagnostics-capability-012345678901234567890123456789",
   };
 }
@@ -227,7 +227,7 @@ describe("Application Control Plane v4 unified diagnostics", () => {
     const target = endpoint();
     const host = await startControlPlane({
       endpoint: target,
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: transport,
       access: nodePipeFallbackAccess,
@@ -328,7 +328,7 @@ describe("Application Control Plane v4 unified diagnostics", () => {
 
     const unavailableHost = await startControlPlane({
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: transport,
       access: nodePipeFallbackAccess,
@@ -400,7 +400,7 @@ describe("Application Control Plane v4 unified diagnostics", () => {
     const fixture = createDiagnosticsFixture();
     const host = await startControlPlane({
       endpoint: endpoint(),
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: transport,
       access: nodePipeFallbackAccess,

@@ -1,7 +1,7 @@
 import {
   PROVIDER_PACKAGE_CONTRACT_VERSION,
-  type LuckyTokenProviderPackage,
-} from "@luckytoken/provider-contract/package";
+  type TokenProviderPackage,
+} from "@token/provider-contract/package";
 
 import type { ImportProviderModule } from "../../src/providers/package-loader.js";
 import { parseCommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
@@ -10,9 +10,9 @@ import { createCommandCodePrivateProvider } from "../../packages/provider-comman
 import { providerPackage as commandCodeGoatProviderPackage } from "../../packages/provider-commandcode-goat/src/index.js";
 
 export const COMMANDCODE_PROVIDER_PACKAGE =
-  "@luckytoken/provider-commandcode-private";
+  "@token/provider-commandcode-private";
 export const COMMANDCODE_GOAT_PROVIDER_PACKAGE =
-  "@luckytoken/provider-commandcode-goat";
+  "@token/provider-commandcode-goat";
 
 export function commandCodeProviderImportModule(): ImportProviderModule {
   const providerPackage = Object.freeze({
@@ -29,7 +29,7 @@ export function commandCodeProviderImportModule(): ImportProviderModule {
         models: COMMANDCODE_MODELS,
       });
     },
-  } satisfies LuckyTokenProviderPackage);
+  } satisfies TokenProviderPackage);
   return async (specifier) => {
     if (specifier === COMMANDCODE_PROVIDER_PACKAGE) {
       return Object.freeze({ providerPackage });

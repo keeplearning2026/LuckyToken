@@ -1,27 +1,27 @@
 {
-  "schemaVersion": "luckytoken-serving-conformance-v2",
+  "schemaVersion": "token-serving-conformance-v2",
   "certificationBasis": "offline-and-online",
   "scope": "all-frozen-conversion-passthrough-and-commandcode-profiles",
   "authorities": [
     {
       "id": "shared-architecture-policy",
       "path": "doc/Protocols/Protocol Conversion Architecture and Policy.md",
-      "sha256": "sha256:4a937cfc286dae684bdd3e2f2cea3629daffd8c008d5171c72440532a30f080d"
+      "sha256": "sha256:43125d9989cfd51bec4262dbad8fa686520eb2eebcc5667b4f28c9a78cb307e5"
     },
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:73ea7e7390769fee1f864181f645c088f0855a84198faf00a5e494a8c8d233f1"
+      "sha256": "sha256:f6483f43e534d347cc4a391818005d0d19c4ca9e8ed56ddd9e372fc553ddf4ff"
     },
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:e042aec96bb37ff65a9e11ced0bcffe3f07fa1db02c04281608323b8a60db878"
+      "sha256": "sha256:b9972c4e71c53de070fdb957b19588301ca4dd887932d34ecf829db5c0b8cd10"
     },
     {
       "id": "pi-commandcode-conversion",
       "path": "doc/Protocols/PI AI IR-Commandcode Private Conversion.md",
-      "sha256": "sha256:5736e3db24256a68c88e8c6c665fbd4b095d131189d14e636c547a42862de710"
+      "sha256": "sha256:e8b1d19d10d6ac92af0cc23e00d72539e8837ab72f2b3c0b26c3387781cb8b8c"
     }
   ],
   "profiles": [
@@ -246,38 +246,52 @@
     },
     "runs": [
       {
-        "profiles": ["commandcode-provider"],
+        "profiles": [
+          "commandcode-provider"
+        ],
         "command": "npx tsx test/online/pi-commandcode-ir-probe.ts",
         "passed": 23,
         "attempted": 23
       },
       {
-        "profiles": ["anthropic-conversion", "commandcode-provider"],
+        "profiles": [
+          "anthropic-conversion",
+          "commandcode-provider"
+        ],
         "command": "npm run test:online",
         "passed": 60,
         "attempted": 60,
         "artifactPath": ".online-artifacts/commandcode-conformance-samples.json"
       },
       {
-        "profiles": ["responses-conversion", "commandcode-provider"],
+        "profiles": [
+          "responses-conversion",
+          "commandcode-provider"
+        ],
         "command": "npm run test:online-responses",
         "passed": 60,
         "attempted": 60
       },
       {
-        "profiles": ["responses-conversion", "commandcode-provider"],
+        "profiles": [
+          "responses-conversion",
+          "commandcode-provider"
+        ],
         "command": "npm run test:online-codex -- 1",
         "invocations": 3,
         "passed": 60,
         "attempted": 60,
         "artifactPaths": [
-          "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-lSZXCi/artifacts",
-          "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-RtwFLx/artifacts",
-          "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-IDxAwD/artifacts"
+          "C:/Users/huich/AppData/Local/Temp/token-codex-cli-lSZXCi/artifacts",
+          "C:/Users/huich/AppData/Local/Temp/token-codex-cli-RtwFLx/artifacts",
+          "C:/Users/huich/AppData/Local/Temp/token-codex-cli-IDxAwD/artifacts"
         ]
       },
       {
-        "profiles": ["anthropic-conversion", "commandcode-provider"],
+        "profiles": [
+          "anthropic-conversion",
+          "commandcode-provider"
+        ],
         "command": "npm run test:online-claude -- 1",
         "invocations": 3,
         "passed": 51,

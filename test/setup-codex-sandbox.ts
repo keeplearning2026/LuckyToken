@@ -14,10 +14,10 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
-const SANDBOX_MARKER = "LUCKYTOKEN_TEST_CODEX_SANDBOX";
-const SANDBOX_ROOT = "LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT";
-const SANDBOX_NONCE = "LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE";
-const SANDBOX_LEASE_FILE = ".luckytoken-test-sandbox-lease";
+const SANDBOX_MARKER = "TOKEN_TEST_CODEX_SANDBOX";
+const SANDBOX_ROOT = "TOKEN_TEST_CODEX_SANDBOX_ROOT";
+const SANDBOX_NONCE = "TOKEN_TEST_CODEX_SANDBOX_NONCE";
+const SANDBOX_LEASE_FILE = ".Token-test-sandbox-lease";
 
 function rewriteModelCatalogPath(
   content: string,
@@ -116,7 +116,7 @@ function assertInheritedSandbox(): void {
 function createDirectVitestSandbox(
   sourceCodexHome: string,
 ): { readonly root: string; readonly codexHome: string; readonly nonce: string } {
-  const root = mkdtempSync(join(tmpdir(), "luckytoken-vitest-codex-"));
+  const root = mkdtempSync(join(tmpdir(), "Token-vitest-codex-"));
   const codexHome = join(root, "codex-home");
   try {
     const nonce = randomUUID();
@@ -125,11 +125,11 @@ function createDirectVitestSandbox(
 
     const sourceCatalogPath = join(
       sourceCodexHome,
-      "luckytoken-model-catalog.json",
+      "token-model-catalog.json",
     );
     const sandboxCatalogPath = join(
       codexHome,
-      "luckytoken-model-catalog.json",
+      "token-model-catalog.json",
     );
     const catalogExists = existsSync(sourceCatalogPath);
     if (catalogExists) copyFileSync(sourceCatalogPath, sandboxCatalogPath);
@@ -163,9 +163,9 @@ function restoreEnvironment(
 
 function startCleanupWatchdog(root: string, nonce: string): void {
   const environment: NodeJS.ProcessEnv = {
-    LUCKYTOKEN_WATCHDOG_PARENT_PID: String(process.pid),
-    LUCKYTOKEN_WATCHDOG_SANDBOX_ROOT: root,
-    LUCKYTOKEN_WATCHDOG_SANDBOX_NONCE: nonce,
+    TOKEN_WATCHDOG_PARENT_PID: String(process.pid),
+    TOKEN_WATCHDOG_SANDBOX_ROOT: root,
+    TOKEN_WATCHDOG_SANDBOX_NONCE: nonce,
   };
   for (const name of ["SystemRoot", "TEMP", "TMP", "TMPDIR"] as const) {
     const value = process.env[name];

@@ -16,7 +16,7 @@ describe("effective catalog composition", () => {
   it("records the pinned Pi baseline and composes the built-in base layer with no user file", () => {
     const catalog = composeEffectiveCatalog({});
 
-    expect(catalog.schemaVersion).toBe("luckytoken-effective-catalog-v1");
+    expect(catalog.schemaVersion).toBe("token-effective-catalog-v1");
     expect(catalog.baseline).toEqual({
       package: "@earendil-works/pi-coding-agent",
       version: "0.84.2",

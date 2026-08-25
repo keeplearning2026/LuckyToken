@@ -15,7 +15,7 @@
  * otherwise connected Provider/model capability.
  */
 
-import type { CatalogSnapshotProjection } from "@luckytoken/application-control-plane/control-plane";
+import type { CatalogSnapshotProjection } from "@token/application-control-plane/control-plane";
 
 export type ProviderReadiness = "configured" | "unconfigured";
 

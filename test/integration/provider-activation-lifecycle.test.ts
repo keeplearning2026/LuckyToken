@@ -10,24 +10,24 @@ import {
   controlPlaneVersion,
   createNodePipeTransport,
   type ControlPlaneClient,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import {
-  startLuckyTokenApplication as startProductionLuckyTokenApplication,
-  type RunningLuckyTokenApplication,
-  type StartLuckyTokenApplicationOptions,
+  startTokenApplication as startProductionTokenApplication,
+  type RunningTokenApplication,
+  type StartTokenApplicationOptions,
 } from "../../src/application.js";
 import { createInstanceAuthority } from "../../src/instance-authority.js";
 import { createControlPlaneDiscovery } from "../../src/control-plane-discovery.js";
 
 const roots: string[] = [];
-const applications: RunningLuckyTokenApplication[] = [];
+const applications: RunningTokenApplication[] = [];
 
-function startLuckyTokenApplication(
-  options: Omit<StartLuckyTokenApplicationOptions, "instanceAuthority">,
+function startTokenApplication(
+  options: Omit<StartTokenApplicationOptions, "instanceAuthority">,
 ) {
-  return startProductionLuckyTokenApplication({
+  return startProductionTokenApplication({
     ...options,
     instanceAuthority: createInstanceAuthority({
       path: join(dirname(options.configPath), "instance.sqlite"),
@@ -60,12 +60,12 @@ async function freePort(): Promise<number> {
 }
 
 async function fixture(options: { readonly port?: number } = {}) {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-activation-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-activation-"));
   roots.push(root);
   const configPath = join(root, "config.json");
   const descriptorPath = join(root, "control-plane.json");
   await writeFile(configPath, `${JSON.stringify({
-    schemaVersion: "luckytoken-config-v2",
+    schemaVersion: "token-config-v2",
     server: { port: options.port ?? (await freePort()) },
     clientProtocols: {
       "anthropic-messages": {
@@ -126,7 +126,7 @@ async function addCommandCodeProfile(client: ControlPlaneClient, key: string) {
 describe("Provider Profiles remain independent of Gateway lifecycle", () => {
   it("queries Profile options and Catalog while the Data Plane is stopped", async () => {
     const { configPath, descriptorPath } = await fixture();
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -140,7 +140,7 @@ describe("Provider Profiles remain independent of Gateway lifecycle", () => {
       const auth = await client.executeProviderProfileAuthCommand({ command: "query" });
       const providers = auth.options?.providers ?? [];
       expect(providers.find((row) => row.providerId === "commandcode-private")?.source)
-        .toBe("luckytoken_bundled");
+        .toBe("token_bundled");
       expect(new Set(
         providers.filter((row) => row.source === "pi_builtin").map((row) => row.providerId),
       )).toEqual(new Set(builtinProviders().map((provider) => provider.id)));
@@ -153,7 +153,7 @@ describe("Provider Profiles remain independent of Gateway lifecycle", () => {
 
   it("persists one Provider record while stopped and reuses it after Gateway restart", async () => {
     const { configPath, descriptorPath, root } = await fixture();
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",
@@ -204,7 +204,7 @@ describe("Provider Profiles remain independent of Gateway lifecycle", () => {
       throw new Error("blocker did not bind");
     }
     const { configPath, descriptorPath } = await fixture({ port: address.port });
-    const started = await startLuckyTokenApplication({
+    const started = await startTokenApplication({
       configPath,
       descriptorOverride: descriptorPath,
       ownerKind: "cli",

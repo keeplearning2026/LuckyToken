@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
-import type { LuckyTokenDesktopApi } from "../../shared/desktop-api.js";
+import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 
-export function GeneralSettings({ api }: { readonly api: LuckyTokenDesktopApi }) {
+export function GeneralSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [enabled, setEnabled] = useState<boolean>();
   const [busy, setBusy] = useState(false);
   const [unavailable, setUnavailable] = useState(false);

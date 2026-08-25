@@ -23,10 +23,10 @@ import {
   createAnthropicMessagesHandler,
 } from "../../src/protocols/anthropic/handler.js";
 import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "50000000-0000-4000-8000-000000000001";
@@ -105,7 +105,7 @@ function streamFrom(events: AssistantMessageEvent[]): AssistantMessageEventStrea
 describe("Request Journey semantic response failures", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -118,7 +118,7 @@ describe("Request Journey semantic response failures", () => {
   });
 
   it("keeps trusted Pi success when Anthropic client conversion fails", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-journey-render-failure-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-journey-render-failure-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -182,8 +182,8 @@ describe("Request Journey semantic response failures", () => {
       routerDefaults: {},
       now: () => 1,
     });
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [anthropic] });
-    const server = await startLuckyTokenHttpServer({
+    const runtime = createTokenRuntime({ clientProtocols: [anthropic] });
+    const server = await startTokenHttpServer({
       runtime,
       diagnostics: latchedAuthority,
       createRequestId: () => REQUEST_ID,
@@ -211,7 +211,7 @@ describe("Request Journey semantic response failures", () => {
     expect(createMessageId).toHaveBeenCalledOnce();
     expect(response.status).toBe(500);
     expect(response.headers.get("content-type")).toBe("application/json");
-    expect(response.headers.get("x-luckytoken-request-id")).toBe(REQUEST_ID);
+    expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
     expect(JSON.parse(responseBody)).toEqual({
       type: "error",
       error: { type: "api_error", message: "Internal server error" },
@@ -261,7 +261,7 @@ describe("Request Journey semantic response failures", () => {
       kind: "failure_detected",
       role: "primary",
       classification: "client_response_conversion_failed",
-      origin: "luckytoken",
+      origin: "Token",
       originPrecision: "exact",
       location: FAILURE_LOCATION,
     });

@@ -25,14 +25,14 @@ import type {
 export const controlPlaneVersion = 4 as const;
 
 export interface ApplicationIdentity {
-  readonly id: "luckytoken";
+  readonly id: "Token";
   readonly version: string;
   /** Exact bundled Backend build identity when launched by a desktop shell.
    * Headless/legacy owners may omit it. */
   readonly buildId?: string;
 }
 
-/** Owner identity of the one active LuckyToken application instance (Ticket
+/** Owner identity of the one active Token application instance (Ticket
  *  05). The Control Plane host runs inside the owner process; every client
  *  connection is therefore an attached non-owner viewer. */
 export interface ApplicationOwnership {
@@ -70,7 +70,7 @@ export interface StatusSnapshot extends ApplicationStatus {
   readonly sequence: number;
   /** Optional registered settings catalog projection (Ticket 06). */
   readonly settings?: Readonly<Record<string, RegisteredSetting>>;
-  /** Ticket 24: present when one or more LuckyToken-owned files cannot be
+  /** Ticket 24: present when one or more Token-owned files cannot be
    * safely interpreted. The local Control Plane remains usable while the
    * unsafe Data Plane stays stopped. */
   readonly recovery?: RecoveryProjection;
@@ -224,7 +224,7 @@ export interface EffectiveCatalogCompositionError {
  * above them with pinned Pi semantics. One projection, no credentials.
  */
 export interface EffectiveCatalogProjection {
-  readonly schemaVersion: "luckytoken-effective-catalog-v1";
+  readonly schemaVersion: "token-effective-catalog-v1";
   readonly baseline: EffectiveCatalogBaseline;
   readonly providers: readonly EffectiveProviderProjection[];
   readonly compositionErrors: readonly EffectiveCatalogCompositionError[];
@@ -234,7 +234,7 @@ export interface EffectiveCatalogProjection {
  * Catalog refresh lifecycle (Ticket 11): the refresh state of one Provider
  * in the authoritative active catalog snapshot. `known` is a static
  * Provider (no dynamic refresh); `cached` means dynamic facts were restored
- * from the validated LuckyToken-owned cache before any network refresh;
+ * from the validated Token-owned cache before any network refresh;
  * `refreshing` is an in-flight refresh; `succeeded`/`failed` are the last
  * network refresh outcome (a failed Provider keeps its cached/built-in
  * facts and carries a value-safe error).
@@ -353,7 +353,7 @@ export type CatalogCommandHandler = (
 ) => Promise<CatalogCommandResult>;
 
 /**
- * LuckyToken's one Public Model runtime projection. The Backend owns this
+ * Token's one Public Model runtime projection. The Backend owns this
  * state; product clients never read or edit public-models.json directly.
  * Provider `on` is the current total-switch state (saved user switch gated by
  * effective login). Model `on` is the saved user model switch and remains
@@ -540,12 +540,12 @@ export interface ModelsCommandResult {
 
 /** Provider product origin (Provider Activation Spec v1.0 §9): where a
  *  Provider identity came from. Pi built-ins are the pinned Pi catalog;
- *  `luckytoken_bundled` is a LuckyToken product-bundled Provider (e.g.
+ *  `token_bundled` is a Token product-bundled Provider (e.g.
  *  CommandCode Private); `user` is a custom models.json Provider or an
  *  external user Provider Package. */
 export type ProviderSource =
   | "pi_builtin"
-  | "luckytoken_bundled"
+  | "token_bundled"
   | "user";
 
 export interface AuthInfoLink {
@@ -659,7 +659,7 @@ export interface ControlPlaneEndpoint {
   readonly capability: string;
 }
 
-export type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
+export type { TerminalUsageFact } from "@token/provider-contract/usage";
 
 import type {
   HistoryCommand,

@@ -1,6 +1,6 @@
 # 06 — Derive product Provider readiness from real model availability
 
-**What to build:** Home, Connect, Tray, and other coarse product status surfaces reflect whether LuckyToken actually has at least one usable model, rather than whether Provider-related configuration merely exists.
+**What to build:** Home, Connect, Tray, and other coarse product status surfaces reflect whether Token actually has at least one usable model, rather than whether Provider-related configuration merely exists.
 
 **Blocked by:** 04 — Keep the authoritative Catalog alive for the Backend lifetime.
 

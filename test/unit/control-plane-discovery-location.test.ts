@@ -10,7 +10,7 @@ describe("native Control Plane descriptor discovery", () => {
       resolveControlPlaneDescriptorPath({
         homeDirectory: "C:\\Users\\Alice",
       }),
-    ).toBe(join("C:\\Users\\Alice", ".luckytoken", "control-plane.json"));
+    ).toBe(join("C:\\Users\\Alice", ".Token", "control-plane.json"));
   });
 
   it("allows an explicit native/CLI override without reading descriptor data", () => {

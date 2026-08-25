@@ -1,7 +1,7 @@
 import type { AssistantMessageDiagnostic } from "@earendil-works/pi-ai";
 
 export const UPSTREAM_FAILURE_DIAGNOSTIC_TYPE =
-  "luckytoken_upstream_failure";
+  "token_upstream_failure";
 
 export const MAX_FAILURE_MESSAGE_LENGTH = 1_024;
 export const MAX_FAILURE_METADATA_LENGTH = 256;

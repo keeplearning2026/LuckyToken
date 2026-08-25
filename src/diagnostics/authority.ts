@@ -17,8 +17,8 @@ import type {
   RuntimeEventQueryResult,
   RuntimeEventRecord,
   RuntimeEventSubscriber,
-} from "@luckytoken/application-control-plane/control-plane";
-import { decodeTerminalUsageFact } from "@luckytoken/provider-contract/usage";
+} from "@token/application-control-plane/control-plane";
+import { decodeTerminalUsageFact } from "@token/provider-contract/usage";
 
 import {
   type ArtifactObservedObservation,

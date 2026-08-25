@@ -101,7 +101,7 @@ test("the model-serving Core seam has no Electron or Control Plane dependency", 
     entries,
     forbidden: ({ specifier, resolved }) =>
       specifier === "electron" ||
-      specifier.startsWith("@luckytoken/application-control-plane") ||
+      specifier.startsWith("@token/application-control-plane") ||
       (resolved !== undefined &&
         display(resolved).startsWith("packages/application-control-plane/")),
   });
@@ -127,11 +127,11 @@ test("the target renderer cannot import Node, Electron, Control Plane, or Core i
       `${display(entry.file)} imports privileged runtime ${entry.specifier}`,
     );
     assert.ok(
-      !entry.specifier.startsWith("@luckytoken/application-control-plane"),
+      !entry.specifier.startsWith("@token/application-control-plane"),
       `${display(entry.file)} must depend on the Desktop API contract, not Control Plane directly`,
     );
     assert.ok(
-      !entry.specifier.startsWith("@luckytoken/core") &&
+      !entry.specifier.startsWith("@token/core") &&
         !entry.specifier.includes("/src/runtime") &&
         !entry.specifier.includes("/src/composition"),
       `${display(entry.file)} imports Core/application internals`,
@@ -149,7 +149,7 @@ test("Electron Main target modules do not deep-import Core implementation", asyn
   );
   for (const entry of await importsUnder([main])) {
     assert.ok(
-      !entry.specifier.startsWith("@luckytoken/core/") &&
+      !entry.specifier.startsWith("@token/core/") &&
         !entry.specifier.includes("../../../src/") &&
         !entry.specifier.includes("../../../../src/"),
       `${display(entry.file)} deep-imports Backend/Core implementation`,
@@ -254,7 +254,7 @@ test("distribution certification is blocked by the Electron product golden journ
   );
   assert.match(
     distributionCommands,
-    /npm test --workspace @luckytoken\/desktop-shell/u,
+    /npm test --workspace @token\/desktop-shell/u,
     "distribution certification must execute desktop lifecycle/unit regression tests",
   );
   assert.match(

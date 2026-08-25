@@ -364,7 +364,7 @@ async function providerCompact(
         `${journey?.requestId ?? "compact"}:provider_native_alias_projection_failed:${finalAttempt}`,
       role: "primary",
       classification: "provider_native_alias_projection_failed",
-      origin: "luckytoken",
+      origin: "Token",
       originPrecision: "exact",
       location: projectionLocation,
     });
@@ -391,7 +391,7 @@ async function providerCompact(
           `${journey?.requestId ?? "compact"}:provider_native_alias_projection_failed:${finalAttempt}`,
         role: "primary",
         classification: "provider_native_alias_projection_failed",
-        origin: "luckytoken",
+        origin: "Token",
         originPrecision: "exact",
         location: projectionLocation,
       });

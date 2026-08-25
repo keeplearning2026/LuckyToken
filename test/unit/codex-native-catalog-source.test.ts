@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function home(): Promise<string> {
-  const codexHome = await mkdtemp(join(tmpdir(), "luckytoken-codex-catalog-source-"));
+  const codexHome = await mkdtemp(join(tmpdir(), "Token-codex-catalog-source-"));
   roots.push(codexHome);
   return codexHome;
 }
@@ -84,7 +84,7 @@ describe("Codex native catalog source", () => {
     ]);
   });
 
-  it("returns an empty native snapshot without disabling routed LuckyToken models when no Codex metadata exists", async () => {
+  it("returns an empty native snapshot without disabling routed Token models when no Codex metadata exists", async () => {
     const codexHome = await home();
     const source = createCodexNativeCatalogSource({
       codexHome,
@@ -130,7 +130,7 @@ describe("Codex native catalog source", () => {
     "discovers the Codex Desktop runtime under LOCALAPPDATA before PATH fallback",
     async () => {
       const codexHome = await home();
-      const localAppData = await mkdtemp(join(tmpdir(), "luckytoken-localappdata-"));
+      const localAppData = await mkdtemp(join(tmpdir(), "Token-localappdata-"));
       roots.push(localAppData);
       const desktopBin = join(localAppData, "OpenAI", "Codex", "bin", "runtime-hash");
       await mkdir(desktopBin, { recursive: true });

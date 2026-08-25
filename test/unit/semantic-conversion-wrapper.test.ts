@@ -122,7 +122,7 @@ const terminal: AssistantMessage = {
   timestamp: 2,
 };
 
-describe("LuckyToken Pi execution wrapper", () => {
+describe("Token Pi execution wrapper", () => {
   it.each([
     ["Codex Responses", codexResponsesModel, { model: "model-test", input: [], stream: true }],
     ["an uncertified API", unknownApiModel, { model: "model-test", request: [] }],

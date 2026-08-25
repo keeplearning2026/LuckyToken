@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   createSeededCredentialRecordStore,
   type TestConfiguredDataPlane,
 } from "../support/configured-data-plane.js";
@@ -38,9 +38,9 @@ describe("credential canary hygiene across public surfaces", () => {
   });
 
   async function serve() {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-cred-canary-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-cred-canary-"));
     directories.push(directory);
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     const piDirectory = join(stateDirectory, "pi");
     await mkdir(piDirectory, { recursive: true });
     const modelsJsonPath = join(piDirectory, "models.json");
@@ -62,7 +62,7 @@ describe("credential canary hygiene across public surfaces", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         server: { port: 0 },
         clientProtocols: {
           "anthropic-messages": {},
@@ -80,8 +80,8 @@ describe("credential canary hygiene across public surfaces", () => {
         env: { PROVIDER_PRIVATE_TOKEN: CANARY_IMPORT_KEY },
       },
     }]);
-    const composition = await createConfiguredLuckyTokenDataPlane({
-      config: await loadLuckyTokenCliConfig(configPath),
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
       fetch: async () => new Response(),
       credentialRecordStore,
       configValueAdapters: {

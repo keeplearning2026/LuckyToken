@@ -26,7 +26,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
     const decoded = decodeResponsesContinuity(
       {
         type: "reasoning",
-        luckytoken_continuity: envelope,
+        token_continuity: envelope,
       },
       { type: "reasoning" },
     );
@@ -70,7 +70,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
     ]);
     expect(
       decodeResponsesContinuity(
-        { type: "reasoning", luckytoken_continuity: envelope },
+        { type: "reasoning", token_continuity: envelope },
         { type: "reasoning" },
       ),
     ).toEqual({ source, attachments: [attachment], notices: [] });
@@ -80,7 +80,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
     const decoded = decodeResponsesContinuity(
       {
         type: "reasoning",
-        luckytoken_continuity: {
+        token_continuity: {
           version: 1,
           source: {
             provider: "provider-test",
@@ -126,7 +126,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
 
     expect(
       decodeResponsesContinuity(
-        { luckytoken_continuity: envelope },
+        { token_continuity: envelope },
         { type: "message", contentPartCount: 2 },
       ),
     ).toEqual({ source, attachments: [attachment], notices: [] });
@@ -152,7 +152,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
 
     expect(
       decodeResponsesContinuity(
-        { luckytoken_continuity: envelope },
+        { token_continuity: envelope },
         { type: "toolCall", callId: "call_1" },
       ),
     ).toEqual({ source, attachments: [attachment], notices: [] });
@@ -169,7 +169,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
     expect(envelope).toEqual({ version: 1, source, attachments: [] });
     expect(
       decodeResponsesContinuity(
-        { type: "reasoning", luckytoken_continuity: envelope },
+        { type: "reasoning", token_continuity: envelope },
         { type: "reasoning" },
       ),
     ).toEqual({ source, attachments: [], notices: [] });
@@ -178,7 +178,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
   it("ignores a misplaced attachment with a bounded conversion notice", () => {
     const decoded = decodeResponsesContinuity(
       {
-        luckytoken_continuity: {
+        token_continuity: {
           version: 1,
           source: {
             provider: "google",
@@ -217,7 +217,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
     };
     const unknownVersion = decodeResponsesContinuity(
       {
-        luckytoken_continuity: {
+        token_continuity: {
           version: 2,
           source,
           attachments: [attachment],
@@ -227,7 +227,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
     );
     const extraKey = decodeResponsesContinuity(
       {
-        luckytoken_continuity: {
+        token_continuity: {
           version: 1,
           source,
           attachments: [attachment],
@@ -250,7 +250,7 @@ describe("OpenAI Responses reasoning continuity codec", () => {
   it("rejects every attachment that competes for the same semantic target", () => {
     const decoded = decodeResponsesContinuity(
       {
-        luckytoken_continuity: {
+        token_continuity: {
           version: 1,
           source: {
             provider: "anthropic",

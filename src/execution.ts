@@ -12,11 +12,11 @@ import {
   submitExecutionFacts,
   type ExecutionFactsSink,
   type UpstreamFailureFact,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 import {
   createTerminalUsageFact,
   type TerminalUsageClass,
-} from "@luckytoken/provider-contract/usage";
+} from "@token/provider-contract/usage";
 
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);
@@ -151,7 +151,7 @@ export async function execute(
       if (event.reason === "deferred") {
         observeTerminal("unsupported", event.message);
         throw new UnsupportedExecutionOutcomeError(
-          "Pi deferred completion is outside LuckyToken Core v1",
+          "Pi deferred completion is outside Token Core v1",
         );
       }
       if (

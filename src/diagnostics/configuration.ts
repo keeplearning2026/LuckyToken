@@ -8,8 +8,8 @@ export interface DiagnosticsConfiguration {
   readonly maxArtifactJourneys: number;
 }
 
-const CONFIGURATION_SCHEMA = "luckytoken.diagnostics.configuration.v1";
-const CONFIGURATION_MARKER = "__luckytokenDiagnosticsConfigurationV1";
+const CONFIGURATION_SCHEMA = "Token.diagnostics.configuration.v1";
+const CONFIGURATION_MARKER = "__TokenDiagnosticsConfigurationV1";
 
 function object(value: unknown, path: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

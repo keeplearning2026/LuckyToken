@@ -2,10 +2,10 @@ import { lstat, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
-const rootValue = process.env.LUCKYTOKEN_WATCHDOG_SANDBOX_ROOT?.trim();
-const nonce = process.env.LUCKYTOKEN_WATCHDOG_SANDBOX_NONCE?.trim();
+const rootValue = process.env.TOKEN_WATCHDOG_SANDBOX_ROOT?.trim();
+const nonce = process.env.TOKEN_WATCHDOG_SANDBOX_NONCE?.trim();
 const parentPid = Number.parseInt(
-  process.env.LUCKYTOKEN_WATCHDOG_PARENT_PID ?? "",
+  process.env.TOKEN_WATCHDOG_PARENT_PID ?? "",
   10,
 );
 
@@ -27,12 +27,12 @@ async function validatedRoot() {
       realpath(resolvedRoot),
       realpath(resolvedCodexHome),
       realpath(tmpdir()),
-      readFile(join(resolvedRoot, ".luckytoken-test-sandbox-lease"), "utf8"),
+      readFile(join(resolvedRoot, ".Token-test-sandbox-lease"), "utf8"),
     ]);
   if (
     rootStat.isSymbolicLink() ||
     codexHomeStat.isSymbolicLink() ||
-    !basename(root).startsWith("luckytoken-") ||
+    !basename(root).startsWith("Token-") ||
     !isStrictDescendant(temporaryDirectory, root) ||
     codexHome !== resolve(join(root, "codex-home")) ||
     lease !== nonce

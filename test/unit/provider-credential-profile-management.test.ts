@@ -102,7 +102,7 @@ describe("CredentialProfileManagement", () => {
   });
 
   it("fails closed before publication on a compromised file lock and surfaces release failure", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-profile-lock-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-profile-lock-"));
     const providerId = "lock-provider";
     const record: PersistedProviderCredentialRecordV1 = {
       schemaVersion: 1,
@@ -284,7 +284,7 @@ describe("CredentialProfileManagement", () => {
   });
 
   it("enumerates and restores sanitized Profiles after the State Owner restarts", async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), "luckytoken-profile-home-"));
+    const codexHome = await mkdtemp(join(tmpdir(), "Token-profile-home-"));
     const ids = [
       "credential-a",
       "credential-generation-a",
@@ -432,7 +432,7 @@ describe("CredentialProfileManagement", () => {
   });
 
   it("isolates a corrupt Provider record while another Provider remains mutable", async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), "luckytoken-profile-isolation-"));
+    const codexHome = await mkdtemp(join(tmpdir(), "Token-profile-isolation-"));
     const providerA = createFixtureProvider({ id: "provider-a" });
     const providerB = createFixtureProvider({ id: "provider-b" });
     const ids = [

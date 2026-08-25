@@ -5,17 +5,17 @@ import {
   createNodePipeTransport,
   nodePipeFallbackAccess,
   startControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 describe("Control Plane client access contract", () => {
   it("does not expose a client-token command surface", async () => {
     const transport = createNodePipeTransport();
     const host = await startControlPlane({
       endpoint: {
-        address: `\\\\.\\pipe\\luckytoken-no-client-token-${process.pid}`,
+        address: `\\\\.\\pipe\\Token-no-client-token-${process.pid}`,
         capability: "no-client-token-capability-0123456789012345",
       },
-      application: { id: "luckytoken", version: "test" },
+      application: { id: "Token", version: "test" },
       initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
       pipeServerFactory: transport,
       access: nodePipeFallbackAccess,

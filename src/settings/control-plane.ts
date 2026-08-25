@@ -3,7 +3,7 @@ import type {
   SettingsCommand,
   SettingsCommandHandler,
   SettingsCommandOutcome,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import type { SettingsRegistry } from "./catalog.js";
 

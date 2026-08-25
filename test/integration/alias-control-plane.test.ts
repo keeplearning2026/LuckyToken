@@ -11,7 +11,7 @@ import {
   startControlPlane,
   type ControlPlaneEndpoint,
   type RunningControlPlane,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { createPublicModelAuthority } from "../../src/public-models/authority.js";
 import { createPublicModelsControlPlaneHandler } from "../../src/public-models/control-plane.js";
@@ -27,7 +27,7 @@ let nextPipe = 0;
 let nextRequest = 0;
 
 async function createFixture(): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), "luckytoken-public-model-plane-"));
+  const root = await mkdtemp(join(tmpdir(), "Token-public-model-plane-"));
   const authority = createPublicModelAuthority({
     path: join(root, "public-models.json"),
     initialEndpoint: { host: "127.0.0.1", port: 3000 },
@@ -39,12 +39,12 @@ async function createFixture(): Promise<Fixture> {
     ],
   });
   const endpoint: ControlPlaneEndpoint = {
-    address: `\\\\.\\pipe\\luckytoken-public-model-plane-${process.pid}-${++nextPipe}`,
+    address: `\\\\.\\pipe\\Token-public-model-plane-${process.pid}-${++nextPipe}`,
     capability: "public-model-plane-capability-01234567890123456",
   };
   const host = await startControlPlane({
     endpoint,
-    application: { id: "luckytoken", version: "test" },
+    application: { id: "Token", version: "test" },
     initialStatus: { modelDataPlane: "stopped", provider: "configured" },
     publicModelsCommandHandler: createPublicModelsControlPlaneHandler(authority),
     pipeServerFactory: createNodePipeTransport(),

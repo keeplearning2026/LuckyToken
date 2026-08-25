@@ -20,8 +20,8 @@ import {
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import {
-  createLuckyTokenRuntime,
-  type LuckyTokenRuntime,
+  createTokenRuntime,
+  type TokenRuntime,
 } from "../../src/runtime.js";
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
 import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
@@ -55,7 +55,7 @@ export interface OpenAIResponsesServingTestOptions {
 }
 
 export interface OpenAIResponsesServingTestComposition {
-  readonly runtime: LuckyTokenRuntime;
+  readonly runtime: TokenRuntime;
   readonly stateFile: string;
   readonly flushState: () => Promise<void>;
   readonly close: () => Promise<void>;
@@ -86,7 +86,7 @@ export async function createOpenAIResponsesServingTestComposition(
 ): Promise<OpenAIResponsesServingTestComposition> {
   const directory =
     options.directory ??
-    (await mkdtemp(join(tmpdir(), "luckytoken-openai-responses-serving-")));
+    (await mkdtemp(join(tmpdir(), "Token-openai-responses-serving-")));
   const stateFile =
     options.stateFile ?? join(directory, "openai-responses.json");
   const now = options.now ?? Date.now;
@@ -154,7 +154,7 @@ export async function createOpenAIResponsesServingTestComposition(
     }),
   ];
   const realtime = createCodexDirectRealtimeModule({ fetch: options.fetch });
-  const runtime = createLuckyTokenRuntime({
+  const runtime = createTokenRuntime({
     clientProtocols: [
       handler,
       modelsHandler,

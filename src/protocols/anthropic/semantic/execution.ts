@@ -1,5 +1,5 @@
 import type { Model, Models } from "@earendil-works/pi-ai";
-import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
+import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
 import type { ExecutionOperation } from "../../../execution.js";
 import {

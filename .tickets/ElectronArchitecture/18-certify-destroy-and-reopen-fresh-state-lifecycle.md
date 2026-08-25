@@ -1,6 +1,6 @@
 # 18 — Certify destroy-and-reopen fresh-state lifecycle
 
-**What to build:** Prove that closing the management UI really releases renderer-owned runtime state while LuckyToken continues serving in tray mode, and that reopening reconstructs the UI from fresh Backend authority.
+**What to build:** Prove that closing the management UI really releases renderer-owned runtime state while Token continues serving in tray mode, and that reopening reconstructs the UI from fresh Backend authority.
 
 **Blocked by:** 11 — Add Main ControlPlaneSession lifecycle; 13 — Build minimal Home readiness slice.
 

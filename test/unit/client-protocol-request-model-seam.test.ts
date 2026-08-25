@@ -140,7 +140,7 @@ describe("Client Protocol request-model seam", () => {
     }
 
     function anthropicRequest(): Request {
-      return new Request("http://luckytoken.test/v1/messages", {
+      return new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer client",
@@ -191,7 +191,7 @@ describe("Client Protocol request-model seam", () => {
       models: Models,
       extra: Partial<OpenAIResponsesHandlerOptions> = {},
     ): HttpBoundaryDependencies {
-      const stateFile = join(tmpdir(), `luckytoken-seam-state-${Math.random()}.json`);
+      const stateFile = join(tmpdir(), `Token-seam-state-${Math.random()}.json`);
       roots.push(stateFile);
       const responses = createOpenAIResponsesHandler({
         models,
@@ -210,7 +210,7 @@ describe("Client Protocol request-model seam", () => {
     }
 
     function responsesRequest(): Request {
-      return new Request("http://luckytoken.test/v1/responses", {
+      return new Request("http://Token.test/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

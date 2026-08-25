@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startRunningDataPlaneListener } from "../../src/running-data-plane-listener.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 
 describe("RunningDataPlaneListener serving transaction", () => {
   const closeListeners: Array<() => Promise<void>> = [];
@@ -27,7 +27,7 @@ describe("RunningDataPlaneListener serving transaction", () => {
       port: 0,
       shutdownController: new AbortController(),
       dataPlane: {
-        runtime: createLuckyTokenRuntime({
+        runtime: createTokenRuntime({
           clientProtocols: [
             {
               method: "POST",
@@ -86,7 +86,7 @@ describe("RunningDataPlaneListener serving transaction", () => {
         port: address.port,
         shutdownController: new AbortController(),
         dataPlane: {
-          runtime: createLuckyTokenRuntime({ clientProtocols: [] }),
+          runtime: createTokenRuntime({ clientProtocols: [] }),
           close: finalize,
         },
       }),

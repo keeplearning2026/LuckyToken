@@ -4,7 +4,7 @@ import type {
   RequestJourneyQueryResult,
   RequestJourneyRecord,
   RuntimeEventQueryResult,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { DiagnosticsUnavailableError } from "./authority.js";
 import type {

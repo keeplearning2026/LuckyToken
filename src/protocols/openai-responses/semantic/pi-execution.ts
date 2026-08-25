@@ -5,7 +5,7 @@ import type {
   Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import type { ExecutionFactsSink } from "@luckytoken/provider-contract/diagnostics";
+import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
 import {
   execute,

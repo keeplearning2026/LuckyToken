@@ -8,7 +8,7 @@ import type {
   ConversionNotice,
   ExecutionFactsSink,
   UpstreamFailureFact,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
 
 import {
@@ -217,7 +217,7 @@ function boundedInvocationSnapshot(
       });
     });
   const snapshot = Object.freeze({
-    schema: "luckytoken.pi_invocation_summary.v1",
+    schema: "Token.pi_invocation_summary.v1",
     selector: boundedText(invocation.selector),
     model: Object.freeze({
       provider: boundedText(model.provider),
@@ -238,7 +238,7 @@ function boundedInvocationSnapshot(
     truncated = true;
     bytes = new TextEncoder().encode(
       JSON.stringify({
-        schema: "luckytoken.pi_invocation_summary.v1",
+        schema: "Token.pi_invocation_summary.v1",
         selector: boundedText(invocation.selector),
         model: {
           provider: boundedText(model.provider),
@@ -531,7 +531,7 @@ function assertProviderRepresentableHistory(
         // Namespace declarations that Pi can execute are flattened by the
         // Responses adapter before this seam. A namespace that survives on a
         // historical ToolCall has no certified Provider replay identity in
-        // LuckyToken Core v1; letting Pi adapters silently omit it could call
+        // Token Core v1; letting Pi adapters silently omit it could call
         // a different tool.
         throw new InvalidRequest(
           "Namespaced tool-call history requires a matching namespace tool declaration",

@@ -3,9 +3,9 @@ import type {
   Provider,
 } from "@earendil-works/pi-ai";
 import {
-  assertLuckyTokenProviderPackage,
+  assertTokenProviderPackage,
   type ProviderHostCapabilities,
-} from "@luckytoken/provider-contract/package";
+} from "@token/provider-contract/package";
 import { isBuiltin } from "node:module";
 
 import { isSafeProviderId } from "./provider-id.js";
@@ -100,7 +100,7 @@ export async function loadProviderPackages(
       if (!isRecord(namespace) || !("providerPackage" in namespace)) {
         throw new TypeError(`${path} module must export providerPackage`);
       }
-      const providerPackage = assertLuckyTokenProviderPackage(
+      const providerPackage = assertTokenProviderPackage(
         namespace.providerPackage,
       );
       const provider = await Promise.resolve(

@@ -4,7 +4,7 @@ import { open, rename, rm } from "node:fs/promises";
 import type {
   HistoryExportFailure,
   HistoryExportManifestSummary,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import {
   ensureDestinationDirectory,
   inspectDestination,
@@ -107,7 +107,7 @@ export async function runHistoryExport(
     exportedAt,
     sensitive: true,
     snapshot: Object.freeze({
-      contract: "luckytoken-diagnostics-sqlite",
+      contract: "token-diagnostics-sqlite",
       schemaVersion: 2,
       bytes: snapshot.byteLength,
     }),
@@ -115,7 +115,7 @@ export async function runHistoryExport(
   const artifact = JSON.stringify({
     manifestVersion: manifest.manifestVersion,
     exportedAt: manifest.exportedAt,
-    application: { id: "luckytoken", version: options.applicationVersion },
+    application: { id: "Token", version: options.applicationVersion },
     sensitive: manifest.sensitive,
     snapshot: {
       ...manifest.snapshot,
@@ -128,7 +128,7 @@ export async function runHistoryExport(
   }
 
   await ensureDestinationDirectory(input.destinationPath);
-  const tempPath = `${input.destinationPath}.luckytoken-export.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  const tempPath = `${input.destinationPath}.Token-export.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
     if (aborted(input.signal)) return failed("cancelled");
     const handle = await open(tempPath, "wx", 0o600);

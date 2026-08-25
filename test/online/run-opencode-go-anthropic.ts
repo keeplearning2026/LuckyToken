@@ -15,7 +15,7 @@ interface AnthropicContentBlock extends Readonly<Record<string, unknown>> {
   readonly thinking?: string;
   readonly id?: string;
   readonly name?: string;
-  readonly luckytoken_continuity?: unknown;
+  readonly token_continuity?: unknown;
 }
 
 interface AnthropicResult {
@@ -72,12 +72,12 @@ function reasoningSummary(result: AnthropicResult): string {
 
 function assertItemExtensionV1(result: AnthropicResult): void {
   const carried = result.content.some((block) => {
-    if (block.type !== "thinking" || !isOnlineRecord(block.luckytoken_continuity)) {
+    if (block.type !== "thinking" || !isOnlineRecord(block.token_continuity)) {
       return false;
     }
-    return block.luckytoken_continuity.version === 1 &&
-      Array.isArray(block.luckytoken_continuity.attachments) &&
-      block.luckytoken_continuity.attachments.length > 0;
+    return block.token_continuity.version === 1 &&
+      Array.isArray(block.token_continuity.attachments) &&
+      block.token_continuity.attachments.length > 0;
   });
   if (!carried) throw new Error("online_opencode_item_extension_v1_missing");
 }

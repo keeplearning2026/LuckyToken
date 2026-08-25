@@ -12,10 +12,10 @@ import {
   type DiagnosticsSubscription,
   type RequestJourneySummary,
 } from "../../src/diagnostics/index.js";
-import type { LuckyTokenRuntime } from "../../src/runtime.js";
+import type { TokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCodexDirectRealtimeModule } from "../../src/integrations/codex/local-realtime.js";
 
@@ -61,7 +61,7 @@ function parseRawHttpResponse(bytes: Buffer): RawHttpResponse {
 }
 
 async function exchangeWebSocketUpgrade(
-  server: RunningLuckyTokenHttpServer,
+  server: RunningTokenHttpServer,
   path = "/v1/responses",
 ): Promise<Buffer> {
   return await new Promise<Buffer>((resolve, reject) => {
@@ -103,7 +103,7 @@ describe("Request Journey unsupported HTTP transport", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
   const subscriptions: DiagnosticsSubscription[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     for (const subscription of subscriptions.splice(0)) {
@@ -120,14 +120,14 @@ describe("Request Journey unsupported HTTP transport", () => {
 
   it("records a WebSocket upgrade rejection without changing the raw 426 wire", async () => {
     let runtimeCalls = 0;
-    const runtime: LuckyTokenRuntime = Object.freeze({
+    const runtime: TokenRuntime = Object.freeze({
       routes: Object.freeze([]),
       handle: async () => {
         runtimeCalls += 1;
         return new Response(null, { status: 204 });
       },
     });
-    const baselineServer = await startLuckyTokenHttpServer({
+    const baselineServer = await startTokenHttpServer({
       runtime,
       createRequestId: () => REQUEST_ID,
       port: 0,
@@ -135,7 +135,7 @@ describe("Request Journey unsupported HTTP transport", () => {
     servers.push(baselineServer);
     const baselineBytes = await exchangeWebSocketUpgrade(baselineServer);
 
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-upgrade-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-upgrade-journey-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -150,7 +150,7 @@ describe("Request Journey unsupported HTTP transport", () => {
         if (record.requestId === REQUEST_ID) publish(record);
       }),
     );
-    const observedServer = await startLuckyTokenHttpServer({
+    const observedServer = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
@@ -177,11 +177,11 @@ describe("Request Journey unsupported HTTP transport", () => {
     expect(wire.headers.has("upgrade")).toBe(false);
     // This is the current wire contract. P0 owns the Journey request ID, but
     // the transport rejection does not add it to the existing 426 response.
-    expect(wire.headers.has("x-luckytoken-request-id")).toBe(false);
+    expect(wire.headers.has("x-token-request-id")).toBe(false);
     expect(JSON.parse(wire.body.toString("utf8"))).toEqual({
       error: {
         message:
-          "LuckyToken supports HTTP transport only. Retry over HTTP instead of WebSocket.",
+          "Token supports HTTP transport only. Retry over HTTP instead of WebSocket.",
         type: "upgrade_required",
         code: "websocket_transport_not_supported",
         param: null,
@@ -304,11 +304,11 @@ describe("Request Journey unsupported HTTP transport", () => {
   });
 
   it("closes the Journey when a matched Upgrade handler rejects", async () => {
-    const runtime: LuckyTokenRuntime = Object.freeze({
+    const runtime: TokenRuntime = Object.freeze({
       routes: Object.freeze([]),
       handle: async () => new Response(null, { status: 404 }),
     });
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-upgrade-failure-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-upgrade-failure-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -319,7 +319,7 @@ describe("Request Journey unsupported HTTP transport", () => {
       publish = resolve;
     });
     subscriptions.push(authority.subscribeRequestJourneys(publish));
-    const server = await startLuckyTokenHttpServer({
+    const server = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,

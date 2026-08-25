@@ -3,8 +3,8 @@ import type {
   AttentionCondition,
   AttentionProjection,
   CredentialProfilesProjectionV1,
-} from "@luckytoken/application-control-plane/control-plane";
-import { RECENT_REQUEST_FAILURE_WINDOW_MS } from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
+import { RECENT_REQUEST_FAILURE_WINDOW_MS } from "@token/application-control-plane/control-plane";
 
 export interface OperationalAttentionAuthorityOptions {
   readonly now?: () => number;

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "luckytoken-provider-distribution-online-evidence-v1",
+  "schemaVersion": "token-provider-distribution-online-evidence-v1",
   "executedAt": "2026-08-14",
   "repositoryRevision": "22ed328a5b6d00189d6086c580c4d288246b8e39",
   "toolVersions": {
@@ -51,7 +51,7 @@
         "batches": 3,
         "failures": 0
       },
-      "artifactPath": "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-Uqe3iv/artifacts"
+      "artifactPath": "C:/Users/huich/AppData/Local/Temp/token-codex-cli-Uqe3iv/artifacts"
     },
     {
       "command": "npm run test:online-claude -- 3",
@@ -78,7 +78,7 @@
       "passed": 59,
       "attempted": 60,
       "failure": "codex_exec_timeout",
-      "artifactPath": "C:/Users/huich/AppData/Local/Temp/luckytoken-codex-cli-i0YAGb/artifacts",
+      "artifactPath": "C:/Users/huich/AppData/Local/Temp/token-codex-cli-i0YAGb/artifacts",
       "diagnosis": "The scenario completed its file change before Codex CLI plugin curated-sync hit Windows long-path errors.",
       "resolution": "The unchanged complete suite passed on rerun."
     }

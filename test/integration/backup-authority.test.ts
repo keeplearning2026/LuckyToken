@@ -21,8 +21,8 @@ describe("Ticket 24 backup authority", () => {
   });
 
   async function fixture() {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-t24-owned-"));
-    const exportRoot = await mkdtemp(join(tmpdir(), "luckytoken-t24-export-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-t24-owned-"));
+    const exportRoot = await mkdtemp(join(tmpdir(), "Token-t24-export-"));
     roots.push(root, exportRoot);
     const configPath = join(root, "config.json");
     const modelsPath = join(root, "models.json");
@@ -33,7 +33,7 @@ describe("Ticket 24 backup authority", () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-config-v2",
+        schemaVersion: "token-config-v2",
         providerPackages: { demo: { apiKey: CONFIG_SECRET } },
       }),
     );
@@ -47,7 +47,7 @@ describe("Ticket 24 backup authority", () => {
     await writeFile(
       tokenPath,
       JSON.stringify({
-        schemaVersion: "luckytoken-client-auth-v2",
+        schemaVersion: "Token-client-auth-v2",
         global: TOKEN_SECRET,
         projects: {},
         revision: 1,
@@ -64,7 +64,7 @@ describe("Ticket 24 backup authority", () => {
         {
           id: "configuration",
           path: configPath,
-          contract: "luckytoken-config",
+          contract: "token-config",
           version: 1,
           category: "configuration",
         },
@@ -78,14 +78,14 @@ describe("Ticket 24 backup authority", () => {
         {
           id: "aliases",
           path: aliasesPath,
-          contract: "luckytoken-model-aliases",
+          contract: "Token-model-aliases",
           version: 1,
           category: "configuration",
         },
         {
           id: "settings",
           path: settingsPath,
-          contract: "luckytoken-settings",
+          contract: "Token-settings",
           version: 1,
           category: "configuration",
         },
@@ -99,7 +99,7 @@ describe("Ticket 24 backup authority", () => {
         {
           id: "client-tokens:anthropic-messages",
           path: tokenPath,
-          contract: "luckytoken-client-auth",
+          contract: "Token-client-auth",
           version: 2,
           category: "client_tokens",
         },
@@ -107,7 +107,7 @@ describe("Ticket 24 backup authority", () => {
       snapshots: [
         {
           id: "request-diagnostics",
-          contract: "luckytoken-request-diagnostics-sqlite",
+          contract: "Token-request-diagnostics-sqlite",
           version: 1,
           category: "history",
           snapshot: async () => Buffer.from(HISTORY_SECRET),
@@ -131,14 +131,14 @@ describe("Ticket 24 backup authority", () => {
 
     expect(result.outcome).toBe("ok");
     expect(result.manifest).toMatchObject({
-      format: "luckytoken-backup",
+      format: "token-backup",
       formatVersion: 1,
       sensitive: false,
       entries: [
-        { id: "configuration", contract: "luckytoken-config", version: 1 },
+        { id: "configuration", contract: "token-config", version: 1 },
         { id: "models", contract: "pi-models-json", version: "0.84.2" },
-        { id: "aliases", contract: "luckytoken-model-aliases", version: 1 },
-        { id: "settings", contract: "luckytoken-settings", version: 1 },
+        { id: "aliases", contract: "Token-model-aliases", version: 1 },
+        { id: "settings", contract: "Token-settings", version: 1 },
       ],
     });
     const artifact = await readFile(destination, "utf8");
@@ -254,7 +254,7 @@ describe("Ticket 24 backup authority", () => {
       snapshots: [
         {
           id: "request-diagnostics",
-          contract: "luckytoken-request-diagnostics-sqlite",
+          contract: "Token-request-diagnostics-sqlite",
           version: 1,
           category: "history",
           sourcePath: externalDatabase,

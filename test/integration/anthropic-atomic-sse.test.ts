@@ -1,7 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
+import { createCommandCodeTestRuntime as createTokenRuntime } from "../support/commandcode-serving.js";
 
 const encoder = new TextEncoder();
 
@@ -10,7 +10,7 @@ function line(event: unknown): Uint8Array {
 }
 
 function request(stream: boolean): Request {
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer client-key",
@@ -63,7 +63,7 @@ describe("Anthropic Atomic SSE HTTP representation", () => {
       });
       return new Response(body, { status: 200 });
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "client-key",
       commandCodeApiKey: "upstream-key",
       commandCodeBaseUrl: "https://commandcode.test",
@@ -120,14 +120,14 @@ describe("Anthropic Atomic SSE HTTP representation", () => {
     const fetch: FetchFunction = async () => {
       throw new Error("must not dispatch");
     };
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "client-key",
       commandCodeApiKey: "upstream-key",
       commandCodeBaseUrl: "https://commandcode.test",
       fetch,
       modelId: "model",
     });
-    const invalid = new Request("http://luckytoken.test/v1/messages", {
+    const invalid = new Request("http://Token.test/v1/messages", {
       method: "POST",
       headers: {
         authorization: "Bearer client-key",

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createSecureManagementWindowOptions,
   desktopInstanceUserDataPath,
-  quitLuckyTokenProduct,
+  quitTokenProduct,
   startElectronDesktopLifecycle,
   type DesktopInstanceActivation,
 } from "../src/main/electron-app-lifecycle.js";
@@ -13,7 +13,7 @@ function activation(
   attempt: DesktopInstanceActivation["attempt"] = "initial",
 ): DesktopInstanceActivation {
   return {
-    contract: "luckytoken-desktop-instance-v1",
+    contract: "token-desktop-instance-v1",
     buildId,
     attempt,
   };
@@ -22,12 +22,12 @@ function activation(
 describe("Electron desktop lifecycle seam", () => {
   it("isolates disposable .electron-out builds from the installed product instance domain", () => {
     const isolated = desktopInstanceUserDataPath({
-      executablePath: "D:\\project\\LuckyToken\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
+      executablePath: "D:\\project\\Token\\packages\\desktop-shell\\.electron-out\\123\\Token.exe",
       appDataPath: "app-data-root",
       buildId: "abcdef0123456789abcdef0123456789abcdef",
     });
     expect(isolated?.replaceAll("\\", "/")).toBe(
-      "app-data-root/@luckytoken/desktop-shell-builds/abcdef0123456789abcdef0123456789",
+      "app-data-root/@token/desktop-shell-builds/abcdef0123456789abcdef0123456789",
     );
     expect(
       desktopInstanceUserDataPath({
@@ -218,7 +218,7 @@ describe("Electron desktop lifecycle seam", () => {
     const onFailure = vi.fn();
 
     await expect(
-      quitLuckyTokenProduct({
+      quitTokenProduct({
         backendOwnerKind: () => "desktop",
         ownsDesktopBackend: () => true,
         requestBackendQuit: async () => ({ outcome: "drained" }),
@@ -231,7 +231,7 @@ describe("Electron desktop lifecycle seam", () => {
 
     quitDesktop.mockClear();
     await expect(
-      quitLuckyTokenProduct({
+      quitTokenProduct({
         backendOwnerKind: () => "desktop",
         ownsDesktopBackend: () => true,
         requestBackendQuit: async () => ({ outcome: "conflict" }),
@@ -247,7 +247,7 @@ describe("Electron desktop lifecycle seam", () => {
     const quitDesktop = vi.fn();
     const requestBackendQuit = vi.fn(async () => ({ outcome: "drained" }));
     await expect(
-      quitLuckyTokenProduct({
+      quitTokenProduct({
         backendOwnerKind: () => "desktop",
         ownsDesktopBackend: () => false,
         requestBackendQuit,
@@ -262,7 +262,7 @@ describe("Electron desktop lifecycle seam", () => {
     const quitDesktop = vi.fn();
     const requestBackendQuit = vi.fn(async () => ({ outcome: "drained" }));
     await expect(
-      quitLuckyTokenProduct({
+      quitTokenProduct({
         backendOwnerKind: () => "cli",
         ownsDesktopBackend: () => false,
         requestBackendQuit,
@@ -277,7 +277,7 @@ describe("Electron desktop lifecycle seam", () => {
     const quitDesktop = vi.fn();
     const onFailure = vi.fn();
     await expect(
-      quitLuckyTokenProduct({
+      quitTokenProduct({
         backendOwnerKind: () => undefined,
         ownsDesktopBackend: () => false,
         requestBackendQuit: async () => ({ outcome: "drained" }),
@@ -293,7 +293,7 @@ describe("Electron desktop lifecycle seam", () => {
     const quitDesktop = vi.fn();
     const onFailure = vi.fn();
     await expect(
-      quitLuckyTokenProduct({
+      quitTokenProduct({
         backendOwnerKind: () => "desktop",
         ownsDesktopBackend: () => true,
         requestBackendQuit: async () => {

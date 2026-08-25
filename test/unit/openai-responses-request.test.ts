@@ -1056,7 +1056,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
           {
             type: "item_reference",
             id: "item_owned_1",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
         ],
       },
@@ -1065,7 +1065,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       {
         resolveItemReference: async (reference, context) => {
           expect(reference.id).toBe("item_owned_1");
-          expect(context.authority).toBe("luckytoken");
+          expect(context.authority).toBe("Token");
           return [{ type: "message", role: "user", content: "materialized" }];
         },
       },
@@ -1084,7 +1084,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
           {
             type: "item_reference",
             id: "item_owned_2",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
         ],
       },
@@ -1113,7 +1113,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
           {
             type: "item_reference",
             id: "item_owned_3",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
         ],
       },
@@ -1295,7 +1295,7 @@ describe("13 recheck: resolved references keep privileged promotion", () => {
           {
             type: "item_reference",
             id: "ref_sys",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
           { type: "message", role: "user", content: "hi" },
         ],
@@ -1359,7 +1359,7 @@ describe("13 recheck: resolver receives explicit limits", () => {
           {
             type: "item_reference",
             id: "item_owned_5",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
         ],
       },
@@ -1597,7 +1597,7 @@ describe("13 recheck: resolver failure branches", () => {
           {
             type: "item_reference",
             id: "ref_fail",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
           { type: "message", role: "user", content: "keep me" },
         ],
@@ -1631,7 +1631,7 @@ describe("13 recheck: resolver failure branches", () => {
           {
             type: "item_reference",
             id: "ref_limits",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
         ],
       },
@@ -1659,7 +1659,7 @@ describe("13 recheck: resolver failure branches", () => {
           {
             type: "item_reference",
             id: "ref_sig",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
         ],
       },
@@ -1980,7 +1980,7 @@ describe("13 recheck: resolver returns malformed items", () => {
           {
             type: "item_reference",
             id: "ref_malformed",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
           { type: "message", role: "user", content: "after" },
         ],
@@ -2009,7 +2009,7 @@ describe("13 recheck: resolver returns malformed items", () => {
           {
             type: "item_reference",
             id: "ref_unknown",
-            envelope: { authority: "luckytoken", version: 1 },
+            envelope: { authority: "Token", version: 1 },
           },
         ],
       },

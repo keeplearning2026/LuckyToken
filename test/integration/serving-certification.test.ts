@@ -10,7 +10,7 @@ import {
 } from "../support/commandcode-serving.js";
 
 function anthropicRequest(body: Record<string, unknown>): Request {
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer client-key",

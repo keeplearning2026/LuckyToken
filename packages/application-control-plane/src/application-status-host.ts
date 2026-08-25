@@ -884,7 +884,7 @@ export async function startApplicationStatusHost(
               conflict: {
                 code: "quit_requires_explicit_confirmation",
                 message:
-                  "Quitting would stop the LuckyToken gateway that another process started. Acknowledge the quit explicitly to continue.",
+                  "Quitting would stop the Token gateway that another process started. Acknowledge the quit explicitly to continue.",
               },
             };
           } else if (options.applicationCommandHandler === undefined) {

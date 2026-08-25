@@ -4,7 +4,7 @@ import {
   MAX_FAILURE_MESSAGE_LENGTH,
   MAX_FAILURE_SNAPSHOT_BYTES,
   type UpstreamFailureFactInput,
-} from "@luckytoken/provider-contract/diagnostics";
+} from "@token/provider-contract/diagnostics";
 
 export interface CommandCodeFailureCapturePolicy {
   readonly bodyReadTimeoutMs: number;

@@ -14,10 +14,10 @@ import {
 } from "../../src/diagnostics/index.js";
 import { createModelsDiscoveryHandler } from "../../src/models-discovery.js";
 import type { PublicModelSource } from "../../src/public-model-seam.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "66000000-0000-4000-8000-000000000001";
@@ -58,7 +58,7 @@ interface ResponseSnapshot {
 async function readResponse(response: Response): Promise<ResponseSnapshot> {
   return Object.freeze({
     status: response.status,
-    requestId: response.headers.get("x-luckytoken-request-id"),
+    requestId: response.headers.get("x-token-request-id"),
     mediaType: response.headers.get("content-type"),
     body: Object.freeze([...new Uint8Array(await response.arrayBuffer())]),
   });
@@ -92,7 +92,7 @@ describe("Request Journey model discovery", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
   const subscriptions: DiagnosticsSubscription[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     for (const subscription of subscriptions.splice(0)) {
@@ -108,7 +108,7 @@ describe("Request Journey model discovery", () => {
   });
 
   it("records the successful model-list encoding and terminal handoff", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-models-success-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-models-success-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -139,8 +139,8 @@ describe("Request Journey model discovery", () => {
       },
       now: () => 1_800_000_000_000,
     });
-    const server = await startLuckyTokenHttpServer({
-      runtime: createLuckyTokenRuntime({ clientProtocols: [handler] }),
+    const server = await startTokenHttpServer({
+      runtime: createTokenRuntime({ clientProtocols: [handler] }),
       diagnostics: authority,
       createRequestId: () => SUCCESS_REQUEST_ID,
       port: 0,
@@ -202,8 +202,8 @@ describe("Request Journey model discovery", () => {
       publicModels: projectionFailingSource(),
       now: () => 1_800_000_000_000,
     });
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-    const baselineServer = await startLuckyTokenHttpServer({
+    const runtime = createTokenRuntime({ clientProtocols: [handler] });
+    const baselineServer = await startTokenHttpServer({
       runtime,
       createRequestId: () => REQUEST_ID,
       port: 0,
@@ -213,7 +213,7 @@ describe("Request Journey model discovery", () => {
       await fetch(`${baselineServer.origin}/v1/models`),
     );
 
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-models-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-models-journey-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration({ directory: root }, root),
@@ -228,7 +228,7 @@ describe("Request Journey model discovery", () => {
         if (record.requestId === REQUEST_ID) publish(record);
       }),
     );
-    const observedServer = await startLuckyTokenHttpServer({
+    const observedServer = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
@@ -354,7 +354,7 @@ describe("Request Journey model discovery", () => {
       failureId: detail.incident?.primaryFailureId,
       role: "primary",
       classification: "model_list_projection_failed",
-      origin: "luckytoken",
+      origin: "Token",
       originPrecision: "exact",
       location: PRIMARY_LOCATION,
     });

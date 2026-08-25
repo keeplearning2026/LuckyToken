@@ -27,7 +27,7 @@ async function runNpm(arguments_, options) {
  * packages/desktop-shell/backend (next to the Tauri resources that the
  * installer ships), containing:
  *   node/node.exe        the pinned portable Node executable
- *   dist/                the compiled LuckyToken core (cli.js entry)
+ *   dist/                the compiled Token core (cli.js entry)
  *   node_modules/        the production dependency tree
  *   launcher.json        the stable launch contract next to the exe
  */
@@ -55,26 +55,26 @@ export async function assembleReleaseBackend({
   // 3. Pack and install the production dependency tree. The tarballs stay
   //    in the layout so the installed dependency graph is reproducible.
   const packTargets = [
-    { directory: ".", name: "luckytoken" },
+    { directory: ".", name: "token" },
     {
       directory: "packages/provider-contract",
-      name: "@luckytoken/provider-contract",
+      name: "@token/provider-contract",
     },
     {
       directory: "packages/commandcode-model-catalog",
-      name: "@luckytoken/commandcode-model-catalog",
+      name: "@token/commandcode-model-catalog",
     },
     {
       directory: "packages/provider-commandcode-private",
-      name: "@luckytoken/provider-commandcode-private",
+      name: "@token/provider-commandcode-private",
     },
     {
       directory: "packages/provider-commandcode-goat",
-      name: "@luckytoken/provider-commandcode-goat",
+      name: "@token/provider-commandcode-goat",
     },
     {
       directory: "packages/application-control-plane",
-      name: "@luckytoken/application-control-plane",
+      name: "@token/application-control-plane",
     },
   ];
   const tarballs = [];
@@ -171,7 +171,7 @@ if (isMain) {
       process.stdout.write(`Assembled release backend at ${destination}\n`);
     })
     .catch((error) => {
-      process.stderr.write(`LuckyToken: ${error.message}\n`);
+      process.stderr.write(`Token: ${error.message}\n`);
       process.exitCode = 1;
     });
 }

@@ -12,8 +12,8 @@ import {
   type DiagnosticsUnavailableError,
 } from "../../src/diagnostics/index.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
@@ -48,7 +48,7 @@ function createRuntime() {
   });
 }
 
-async function invoke(server: RunningLuckyTokenHttpServer): Promise<{
+async function invoke(server: RunningTokenHttpServer): Promise<{
   readonly status: number;
   readonly headers: readonly (readonly [string, string])[];
   readonly body: string;
@@ -82,7 +82,7 @@ async function invoke(server: RunningLuckyTokenHttpServer): Promise<{
 describe("Diagnostics startup fail-open", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
@@ -95,7 +95,7 @@ describe("Diagnostics startup fail-open", () => {
   });
 
   it("leaves diagnostics v1 unread and untouched while creating diagnostics v2", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-diagnostics-v2-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-v2-"));
     roots.push(root);
     const v1Path = join(root, "diagnostics.sqlite3");
     const v1Bytes = Buffer.from("legacy diagnostics v1 must remain untouched");
@@ -139,7 +139,7 @@ describe("Diagnostics startup fail-open", () => {
   });
 
   it("preserves the Data Plane and reports typed unavailability without mutating incompatible storage", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-diagnostics-fail-open-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-fail-open-"));
     roots.push(root);
     const databasePath = join(root, "diagnostics-v2.sqlite3");
     const database = new DatabaseSync(databasePath);
@@ -179,13 +179,13 @@ describe("Diagnostics startup fail-open", () => {
     ).not.toThrow();
     expect(() => observer.close({ outcome: "success" })).not.toThrow();
 
-    const baseline = await startLuckyTokenHttpServer({
+    const baseline = await startTokenHttpServer({
       runtime: createRuntime(),
       createRequestId: () => REQUEST_ID,
       port: 0,
     });
     servers.push(baseline);
-    const degraded = await startLuckyTokenHttpServer({
+    const degraded = await startTokenHttpServer({
       runtime: createRuntime(),
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,

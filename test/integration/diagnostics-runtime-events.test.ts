@@ -52,7 +52,7 @@ const RUNTIME_EVENTS = Object.freeze([
   Object.freeze({
     level: "info" as const,
     classification: "application_started",
-    safeMessage: "LuckyToken application started",
+    safeMessage: "Token application started",
   }),
   Object.freeze({
     level: "warning" as const,
@@ -82,7 +82,7 @@ describe("Diagnostics runtime-event management", () => {
   });
 
   it("persists bounded typed Runtime Events beside Journeys and queries them by ordered records cursor", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-runtime-events-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-runtime-events-"));
     roots.push(root);
     let clock = 1_787_558_400_000;
     const authority = await createDiagnosticsAuthority({
@@ -199,7 +199,7 @@ describe("Diagnostics runtime-event management", () => {
 
   it("fails open on observation and returns typed unavailability when runtime-event storage cannot start", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-runtime-events-unavailable-"),
+      join(tmpdir(), "Token-runtime-events-unavailable-"),
     );
     roots.push(root);
     const databasePath = join(root, "diagnostics-v2.sqlite3");

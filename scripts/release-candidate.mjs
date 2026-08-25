@@ -27,7 +27,7 @@ async function requireFile(path, label) {
 
 export async function discoverWindowsCandidate(outputRoot, version) {
   const resolvedOutputRoot = resolve(outputRoot);
-  const packageRoot = join(resolvedOutputRoot, "Token-win32-x64");
+  const packageRoot = join(resolvedOutputRoot, "token-win32-x64");
   const packagedExecutable = await requireFile(
     join(packageRoot, "Token.exe"),
     "packaged Token executable",
@@ -155,7 +155,7 @@ async function makeCandidate() {
     label: "release Backend assembly",
   });
   await npmCommand(
-    ["run", "make:prepared", "--workspace", "@luckytoken/desktop-shell"],
+    ["run", "make:prepared", "--workspace", "@token/desktop-shell"],
     { label: "Squirrel make" },
   );
   const after = await outputDirectories();
@@ -224,13 +224,13 @@ async function main() {
     "--untracked-files=all",
   ]);
   const dirty = initialStatus.length > 0;
-  const certificateFile = process.env.LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE;
-  const certificatePassword = process.env.LUCKYTOKEN_WINDOWS_CERTIFICATE_PASSWORD;
+  const certificateFile = process.env.TOKEN_WINDOWS_CERTIFICATE_FILE;
+  const certificatePassword = process.env.TOKEN_WINDOWS_CERTIFICATE_PASSWORD;
   const signingConfigured =
     certificateFile !== undefined && certificatePassword !== undefined;
   if ((certificateFile === undefined) !== (certificatePassword === undefined)) {
     throw new Error(
-      "Windows signing requires both LUCKYTOKEN_WINDOWS_CERTIFICATE_FILE and LUCKYTOKEN_WINDOWS_CERTIFICATE_PASSWORD",
+      "Windows signing requires both TOKEN_WINDOWS_CERTIFICATE_FILE and TOKEN_WINDOWS_CERTIFICATE_PASSWORD",
     );
   }
   if (options.official && dirty) {
@@ -261,7 +261,7 @@ async function main() {
 
   const selectedEnvironment = {
     ...process.env,
-    LUCKYTOKEN_PACKAGED_EXECUTABLE: candidate.packagedExecutable,
+    TOKEN_PACKAGED_EXECUTABLE: candidate.packagedExecutable,
   };
   await npmCommand(["run", "release:verify-layout"], {
     label: "release layout certification",
@@ -273,12 +273,12 @@ async function main() {
     { label: "distribution package certification", env: selectedEnvironment },
   );
   await npmCommand(
-    ["run", "test:product-e2e:run", "--workspace", "@luckytoken/desktop-shell"],
+    ["run", "test:product-e2e:run", "--workspace", "@token/desktop-shell"],
     { label: "packaged product certification", env: selectedEnvironment },
   );
 
   const machineCertification =
-    options.official || process.env.LUCKYTOKEN_RELEASE_MACHINE_CERTIFY === "1";
+    options.official || process.env.TOKEN_RELEASE_MACHINE_CERTIFY === "1";
   if (machineCertification) {
     const powershell = process.env.PWSH_EXE ?? "pwsh.exe";
     await run(
@@ -326,7 +326,7 @@ async function main() {
   }
 
   const manifest = {
-    schemaVersion: "luckytoken-release-candidate-v1",
+    schemaVersion: "token-release-candidate-v1",
     version,
     platform: "win32",
     arch: "x64",

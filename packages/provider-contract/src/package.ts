@@ -17,7 +17,7 @@ export interface ProviderPackageCreateInput {
   readonly host: ProviderHostCapabilities;
 }
 
-export interface LuckyTokenProviderPackage {
+export interface TokenProviderPackage {
   readonly contractVersion: typeof PROVIDER_PACKAGE_CONTRACT_VERSION;
   createProvider(input: ProviderPackageCreateInput): Provider;
 }
@@ -26,9 +26,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function assertLuckyTokenProviderPackage(
+export function assertTokenProviderPackage(
   value: unknown,
-): LuckyTokenProviderPackage {
+): TokenProviderPackage {
   if (!isRecord(value)) {
     throw new TypeError("providerPackage must be an object");
   }
@@ -40,5 +40,5 @@ export function assertLuckyTokenProviderPackage(
   if (typeof value.createProvider !== "function") {
     throw new TypeError("providerPackage.createProvider must be a function");
   }
-  return value as unknown as LuckyTokenProviderPackage;
+  return value as unknown as TokenProviderPackage;
 }

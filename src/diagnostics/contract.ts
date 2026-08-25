@@ -1,4 +1,4 @@
-import type { TerminalUsageFact } from "@luckytoken/provider-contract/usage";
+import type { TerminalUsageFact } from "@token/provider-contract/usage";
 
 export const REQUEST_JOURNEY_PHASES = Object.freeze([
   "http_admission",
@@ -169,7 +169,7 @@ export interface FailureDetectedObservation extends LocatedObservation {
   readonly failureId: string;
   readonly role: "primary" | "supporting";
   readonly classification: string;
-  readonly origin: "client" | "luckytoken" | "provider" | "network_os";
+  readonly origin: "client" | "Token" | "provider" | "network_os";
   readonly originPrecision: "exact" | "boundary" | "external_boundary";
   readonly safeMessage?: string;
   readonly exceptionFingerprint?: string;

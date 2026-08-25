@@ -1,7 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 
-import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
+import { createCommandCodeTestRuntime as createTokenRuntime } from "../support/commandcode-serving.js";
 
 it("carries an accepted Anthropic tool schema unchanged to CommandCode", async () => {
   let upstreamRequest: Request | undefined;
@@ -20,7 +20,7 @@ it("carries an accepted Anthropic tool schema unchanged to CommandCode", async (
       ].join("\n"),
     );
   };
-  const runtime = createLuckyTokenRuntime({
+  const runtime = createTokenRuntime({
     clientApiKey: "client-key",
     commandCodeApiKey: "upstream-key",
     commandCodeBaseUrl: "https://fixture.commandcode.test",
@@ -36,7 +36,7 @@ it("carries an accepted Anthropic tool schema unchanged to CommandCode", async (
   };
 
   const response = await runtime.handle(
-    new Request("http://luckytoken.test/v1/messages", {
+    new Request("http://Token.test/v1/messages", {
       method: "POST",
       headers: {
         authorization: "Bearer client-key",

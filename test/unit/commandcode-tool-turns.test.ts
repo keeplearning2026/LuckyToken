@@ -66,8 +66,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
         messages: [
           {
             role: "assistant",
-            api: "luckytoken-client-history",
-            provider: "luckytoken-client",
+            api: "Token-client-history",
+            provider: "Token-client",
             model: "client-model",
             content: [{ type: "text", text: `kept:${stopReason}` }],
             usage,
@@ -90,8 +90,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
       messages: [
         {
           role: "assistant",
-          api: "luckytoken-client-history",
-          provider: "luckytoken-client",
+          api: "Token-client-history",
+          provider: "Token-client",
           model: "client-model",
           content: [
             toolCall("a", "alpha", { nested: [1, true, null] }),
@@ -179,8 +179,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
   it("rejects duplicate call IDs and preserves the real result toolName", () => {
     const assistant = {
       role: "assistant" as const,
-      api: "luckytoken-client-history",
-      provider: "luckytoken-client",
+      api: "Token-client-history",
+      provider: "Token-client",
       model: "client-model",
       content: [toolCall("same", "alpha", {}), toolCall("same", "beta", {})],
       usage,
@@ -224,8 +224,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
         messages: [
           {
             role: "assistant",
-            api: sameTarget ? model.api : "luckytoken-client-history",
-            provider: sameTarget ? model.provider : "luckytoken-client",
+            api: sameTarget ? model.api : "Token-client-history",
+            provider: sameTarget ? model.provider : "Token-client",
             model: sameTarget ? model.id : "client-model",
             content: [call],
             usage,
@@ -282,8 +282,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
         messages: [
           {
             role: "assistant",
-            api: sameTarget ? model.api : "luckytoken-client-history",
-            provider: sameTarget ? model.provider : "luckytoken-client",
+            api: sameTarget ? model.api : "Token-client-history",
+            provider: sameTarget ? model.provider : "Token-client",
             model: sameTarget ? model.id : "client-model",
             content: [
               {
@@ -314,8 +314,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
       messages: [
         {
           role: "assistant",
-          api: "luckytoken-client-history",
-          provider: "luckytoken-client",
+          api: "Token-client-history",
+          provider: "Token-client",
           model: "client-model",
           content: [toolCall("mixed", "inspect", {}), toolCall("image", "see", {})],
           usage,
@@ -377,8 +377,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
         messages: [
           {
             role: "assistant",
-            api: "luckytoken-client-history",
-            provider: "luckytoken-client",
+            api: "Token-client-history",
+            provider: "Token-client",
             model: "client-model",
             content: [toolCall("lost", "lookup", {})],
             usage,
@@ -413,8 +413,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
         messages: [
           {
             role: "assistant",
-            api: "luckytoken-client-history",
-            provider: "luckytoken-client",
+            api: "Token-client-history",
+            provider: "Token-client",
             model: "client-model",
             content: [toolCall("lost", "lookup", {})],
             usage,
@@ -486,8 +486,8 @@ describe("CommandCode Pi tool-turn conversion", () => {
         messages: [
           {
             role: "assistant",
-            api: "luckytoken-client-history",
-            provider: "luckytoken-client",
+            api: "Token-client-history",
+            provider: "Token-client",
             model: "client-model",
             content: [toolCall("call", "tool", {})],
             usage,

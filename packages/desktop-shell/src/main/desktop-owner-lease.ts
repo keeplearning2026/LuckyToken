@@ -2,7 +2,7 @@ import type {
   ApplicationCommand,
   ApplicationCommandResult,
   ApplicationOwnership,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 export interface DesktopOwnerLeaseClientDependencies {
   readonly leaseId: string;
@@ -85,7 +85,7 @@ export function createDesktopOwnerLeaseClient(
       });
       if (result.outcome !== "lease_claimed") {
         dependencies.onFailure?.();
-        throw new Error("LuckyToken Backend refused the desktop ownership lease");
+        throw new Error("Token Backend refused the desktop ownership lease");
       }
       timer = schedule(() => {
         void renew();

@@ -1,4 +1,4 @@
-export const luckyTokenLoginItemName = "Token";
+export const TokenLoginItemName = "Token";
 
 export interface DesktopLoginItem {
   readonly name: string;
@@ -36,7 +36,7 @@ function sameExecutable(left: string, right: string): boolean {
   return normalizedPath(left) === normalizedPath(right);
 }
 
-function isLuckyTokenExecutable(path: string): boolean {
+function isTokenExecutable(path: string): boolean {
   return normalizedPath(path).endsWith("/token.exe");
 }
 
@@ -44,11 +44,11 @@ function isRepositoryBuildPath(path: string): boolean {
   return normalizedPath(path).includes("/.electron-out/");
 }
 
-function userLuckyTokenItems(
+function userTokenItems(
   snapshot: DesktopLoginItemSnapshot,
 ): readonly DesktopLoginItem[] {
   return (snapshot.launchItems ?? []).filter(
-    (item) => item.scope === "user" && isLuckyTokenExecutable(item.path),
+    (item) => item.scope === "user" && isTokenExecutable(item.path),
   );
 }
 
@@ -72,7 +72,7 @@ function removeLoginItem(
 export function cleanupRepositoryBuildLoginItems(
   platform: DesktopLoginItemPlatform,
 ): number {
-  const stale = userLuckyTokenItems(platform.get()).filter((item) =>
+  const stale = userTokenItems(platform.get()).filter((item) =>
     isRepositoryBuildPath(item.path),
   );
   for (const item of stale) removeLoginItem(platform, item);
@@ -88,11 +88,11 @@ export function reconcileInstalledLoginItem(
   platform: DesktopLoginItemPlatform,
   currentExecutable: string,
 ): boolean {
-  const items = userLuckyTokenItems(platform.get());
+  const items = userTokenItems(platform.get());
   const canonical = items.find(
     (item) =>
       sameExecutable(item.path, currentExecutable) &&
-      item.name === luckyTokenLoginItemName &&
+      item.name === TokenLoginItemName &&
       item.args.length === 0,
   );
   const stale = items.filter((item) => item !== canonical);
@@ -108,7 +108,7 @@ export function reconcileInstalledLoginItem(
       path: currentExecutable,
       args: [],
       enabled,
-      name: luckyTokenLoginItemName,
+      name: TokenLoginItemName,
     });
   }
   return enabled;
@@ -128,7 +128,7 @@ export function setInstalledDesktopAutoStart(
   currentExecutable: string,
   enabled: boolean,
 ): boolean {
-  const items = userLuckyTokenItems(platform.get());
+  const items = userTokenItems(platform.get());
   for (const item of items) removeLoginItem(platform, item);
   if (enabled) {
     platform.set({
@@ -136,14 +136,14 @@ export function setInstalledDesktopAutoStart(
       path: currentExecutable,
       args: [],
       enabled: true,
-      name: luckyTokenLoginItemName,
+      name: TokenLoginItemName,
     });
   } else {
     platform.set({
       openAtLogin: false,
       path: currentExecutable,
       args: [],
-      name: luckyTokenLoginItemName,
+      name: TokenLoginItemName,
     });
   }
   return effectiveDesktopAutoStart(platform, currentExecutable);

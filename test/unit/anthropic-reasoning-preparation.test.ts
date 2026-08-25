@@ -32,7 +32,7 @@ function invocation() {
             {
               type: "text",
               text: "visible answer",
-              luckytoken_continuity: {
+              token_continuity: {
                 version: 1,
                 source: {
                   provider: "google",

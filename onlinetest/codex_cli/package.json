@@ -1,5 +1,5 @@
 {
-  "name": "luckytoken-online-codex-cli",
+  "name": "token-online-codex-cli",
   "private": true,
   "type": "module",
   "scripts": {

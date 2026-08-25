@@ -12,11 +12,11 @@ describe("Windows login auto-start registrar seam", () => {
   it("builds a quoted sign-in command line from the launch executable and args", () => {
     expect(
       buildWindowsAutoStartCommand(
-        "C:\\Program Files\\LuckyToken\\node.exe",
-        ["C:\\Program Files\\LuckyToken\\cli.js", "serve", "--config", "D:\\a b\\config.json"],
+        "C:\\Program Files\\Token\\node.exe",
+        ["C:\\Program Files\\Token\\cli.js", "serve", "--config", "D:\\a b\\config.json"],
       ),
     ).toBe(
-      '"C:\\Program Files\\LuckyToken\\node.exe" "C:\\Program Files\\LuckyToken\\cli.js" serve --config "D:\\a b\\config.json"',
+      '"C:\\Program Files\\Token\\node.exe" "C:\\Program Files\\Token\\cli.js" serve --config "D:\\a b\\config.json"',
     );
     expect(buildWindowsAutoStartCommand("node", ["serve"])).toBe("node serve");
   });
@@ -24,7 +24,7 @@ describe("Windows login auto-start registrar seam", () => {
   it("enables, disables, and reports the effective registration through the Run key", async () => {
     const calls: string[][] = [];
     const registrar = createWindowsAutoStartRegistrar({
-      name: "LuckyToken",
+      name: "Token",
       command: "node serve",
       run: (args) => {
         calls.push([...args]);
@@ -36,8 +36,8 @@ describe("Windows login auto-start registrar seam", () => {
     await registrar.status();
 
     expect(calls).toEqual([
-      ["add", windowsRunKey, "/v", "LuckyToken", "/t", "REG_SZ", "/d", "node serve", "/f"],
-      ["query", windowsRunKey, "/v", "LuckyToken"],
+      ["add", windowsRunKey, "/v", "Token", "/t", "REG_SZ", "/d", "node serve", "/f"],
+      ["query", windowsRunKey, "/v", "Token"],
     ]);
     await expect(registrar.status()).resolves.toEqual({ enabled: true });
   });
@@ -45,7 +45,7 @@ describe("Windows login auto-start registrar seam", () => {
   it("reports disabled when the value is not registered and tolerates an idempotent disable", async () => {
     let queryStatus = 1;
     const registrar = createWindowsAutoStartRegistrar({
-      name: "LuckyToken",
+      name: "Token",
       command: "node serve",
       run: (args) => {
         if (args[0] === "query") return { status: queryStatus, stderr: "" };
@@ -57,7 +57,7 @@ describe("Windows login auto-start registrar seam", () => {
     await expect(registrar.status()).resolves.toEqual({ enabled: true });
 
     const failing = createWindowsAutoStartRegistrar({
-      name: "LuckyToken",
+      name: "Token",
       command: "node serve",
       run: () => ({ status: 1, stderr: "forbidden" }),
     });
@@ -66,7 +66,7 @@ describe("Windows login auto-start registrar seam", () => {
 
   it("fails enable/disable with an actionable message when the registry write is refused", async () => {
     const registrar = createWindowsAutoStartRegistrar({
-      name: "LuckyToken",
+      name: "Token",
       command: "node serve",
       run: () => ({ status: 5, stderr: "access denied" }),
     });

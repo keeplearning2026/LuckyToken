@@ -80,7 +80,7 @@ describe("OpenAI Responses reasoning semantics", () => {
             type: "reasoning",
             id: "rs_prior",
             summary: [{ type: "summary_text", text: "visible summary" }],
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source: {
                 provider: "anthropic",
@@ -145,7 +145,7 @@ describe("OpenAI Responses reasoning semantics", () => {
             status: "completed",
             summary: [{ type: "summary_text", text: "visible summary" }],
             encrypted_content: "encrypted-reasoning",
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source: {
                 provider: "openai",
@@ -208,7 +208,7 @@ describe("OpenAI Responses reasoning semantics", () => {
             status: "completed",
             summary: [{ type: "summary_text", text: "visible summary" }],
             encrypted_content: "encrypted-reasoning",
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source: {
                 provider: "future-provider",
@@ -250,7 +250,7 @@ describe("OpenAI Responses reasoning semantics", () => {
             call_id: "call_1",
             name: "lookup",
             arguments: "{}",
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source: {
                 provider: "google",
@@ -315,7 +315,7 @@ describe("OpenAI Responses reasoning semantics", () => {
               { type: "output_text", text: "first" },
               { type: "output_text", text: "second" },
             ],
-            luckytoken_continuity: {
+            token_continuity: {
               version: 1,
               source: {
                 provider: "google",

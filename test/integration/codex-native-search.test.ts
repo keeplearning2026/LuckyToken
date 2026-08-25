@@ -42,7 +42,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: {
           authorization: "Bearer caller-owned-token",
@@ -93,7 +93,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -133,7 +133,7 @@ describe("Codex Direct Mode web search", () => {
 
     await composition.runtime.handle(
       new Request(
-        "http://luckytoken.test/v1/alpha/search?query=hello%20world&limit=5",
+        "http://Token.test/v1/alpha/search?query=hello%20world&limit=5",
         {
           method: "POST",
           headers: { authorization: "Bearer codex-token" },
@@ -163,7 +163,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -232,7 +232,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([0x7b, 0x7d]),
@@ -275,7 +275,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer wrong-token" },
         body: Uint8Array.from([0x7b, 0x7d]),
@@ -316,7 +316,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: {
           authorization: "Bearer codex-token",
@@ -346,7 +346,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([0x7b, 0x7d]),
@@ -387,7 +387,7 @@ describe("Codex Direct Mode web search", () => {
     compositions.push(composition);
 
     const response = await composition.runtime.handle(
-      new Request("http://luckytoken.test/v1/alpha/search", {
+      new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
         body: Uint8Array.from([0x7b, 0x7d]),
@@ -426,7 +426,7 @@ describe("Codex Direct Mode web search", () => {
     });
     compositions.push(composition);
     const controller = new AbortController();
-    const request = new Request("http://luckytoken.test/v1/alpha/search", {
+    const request = new Request("http://Token.test/v1/alpha/search", {
       method: "POST",
       headers: { authorization: "Bearer codex-token" },
       body,

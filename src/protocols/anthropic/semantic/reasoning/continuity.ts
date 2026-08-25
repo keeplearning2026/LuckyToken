@@ -1,4 +1,4 @@
-import type { ConversionNotice } from "@luckytoken/provider-contract/diagnostics";
+import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 
 export interface AnthropicContinuitySource {
   readonly provider: string;
@@ -30,7 +30,7 @@ export type AnthropicContinuityAttachment =
       readonly value: string;
     };
 
-export interface LuckyTokenAnthropicContinuityEnvelopeV1 {
+export interface TokenAnthropicContinuityEnvelopeV1 {
   readonly version: 1;
   readonly source: AnthropicContinuitySource;
   readonly attachments: readonly AnthropicContinuityAttachment[];
@@ -247,11 +247,11 @@ export function decodeAnthropicContinuity(input: {
 export function encodeAnthropicContinuity(input: {
   readonly source: AnthropicContinuitySource;
   readonly attachments: readonly AnthropicContinuityAttachment[];
-}): LuckyTokenAnthropicContinuityEnvelopeV1 | undefined {
+}): TokenAnthropicContinuityEnvelopeV1 | undefined {
   if (input.attachments.length === 0) return undefined;
   const source = parseSource(input.source);
   if (source === undefined) return undefined;
-  const envelope: LuckyTokenAnthropicContinuityEnvelopeV1 = Object.freeze({
+  const envelope: TokenAnthropicContinuityEnvelopeV1 = Object.freeze({
     version: 1,
     source,
     attachments: Object.freeze(input.attachments.map((attachment) => Object.freeze({ ...attachment }))),
@@ -271,7 +271,7 @@ export function encodeAnthropicContinuity(input: {
                   : "thinking",
               hasNativeValue: true,
             },
-    jsonPath: "$.luckytoken_continuity",
+    jsonPath: "$.token_continuity",
   });
   return decoded.attachments.length === input.attachments.length ? envelope : undefined;
 }

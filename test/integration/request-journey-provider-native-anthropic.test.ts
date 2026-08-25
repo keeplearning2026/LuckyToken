@@ -20,10 +20,10 @@ import type { ExecutionOperation } from "../../src/execution.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "60000000-0000-4000-8000-000000000001";
@@ -134,11 +134,11 @@ function requiredAttemptValue<T>(
 describe("Anthropic Provider Native Request Journey", () => {
   it("keeps physical 429s supporting and locates final managed-Profile exhaustion", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-provider-native-journey-"),
+      join(tmpdir(), "Token-provider-native-journey-"),
     );
     const diagnosticsDirectory = join(root, "diagnostics");
     let authority: DiagnosticsAuthority | undefined;
-    let server: RunningLuckyTokenHttpServer | undefined;
+    let server: RunningTokenHttpServer | undefined;
 
     try {
       authority = await createDiagnosticsAuthority({
@@ -277,8 +277,8 @@ describe("Anthropic Provider Native Request Journey", () => {
         createSessionId: () => "60000000-0000-4000-8000-000000000002",
         now: () => 1_787_500_000_000,
       });
-      const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-      server = await startLuckyTokenHttpServer({
+      const runtime = createTokenRuntime({ clientProtocols: [handler] });
+      server = await startTokenHttpServer({
         runtime,
         diagnostics: authority,
         createRequestId: () => REQUEST_ID,
@@ -318,7 +318,7 @@ describe("Anthropic Provider Native Request Journey", () => {
       expect(response.headers.get("content-type")).toBe("application/json");
       expect(response.headers.get("request-id")).toBe("provider-attempt-2");
       expect(response.headers.get("retry-after")).toBe("1");
-      expect(response.headers.get("x-luckytoken-request-id")).toBe(REQUEST_ID);
+      expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
       expect(responseBody).toBe(upstreamBodies[1]);
       expect(outboundAttempts).toHaveLength(2);
       expect(outboundAttempts.map((attempt) => attempt.attempt)).toEqual([1, 2]);
@@ -573,7 +573,7 @@ describe("Anthropic Provider Native Request Journey", () => {
         expect.objectContaining({
           failureId: detail.incident?.primaryFailureId,
           classification: "provider_profile_exhausted_after_final_429",
-          origin: "luckytoken",
+          origin: "Token",
           originPrecision: "exact",
           location: PRIMARY_LOCATION,
         }),

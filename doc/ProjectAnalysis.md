@@ -1,18 +1,18 @@
-# LuckyToken 项目分析 / Project Analysis
+# Token 项目分析 / Project Analysis
 
 **文档性质：** 当前项目快速导览（current overview & map）
 
 **源码基线：** Provider Credential Profiles v1.5 implementation（2026-08-22）
 
-**权威架构：** [LuckyToken Core Architecture Specification](./Spec/LuckyTokenCoreSpec.md)
+**权威架构：** [Token Core Architecture Specification](./Spec/TokenCoreSpec.md)
 
-**Desktop 架构：** [LuckyToken Electron Product Architecture Specification](./Spec/LuckyTokenElectronArchitectureSpec.md)
+**Desktop 架构：** [Token Electron Product Architecture Specification](./Spec/TokenElectronArchitectureSpec.md)
 
-**实现维护者地图：** [LuckyTokenArchitecture.md](./LuckyTokenArchitecture.md)
+**实现维护者地图：** [TokenArchitecture.md](./TokenArchitecture.md)
 
 **设计约束：** [AGENTS.md](../AGENTS.md)
 
-**Provider credential authority：** [Provider Credential Profiles PRD v1.5](./Spec/LuckyTokenProviderCredentialProfilesPRD.md)；旧 one-slot `pi/auth.json` 描述均为历史资料。
+**Provider credential authority：** [Provider Credential Profiles PRD v1.5](./Spec/TokenProviderCredentialProfilesPRD.md)；旧 one-slot `pi/auth.json` 描述均为历史资料。
 
 本文只提供快速上下文，不复制完整规范。若本文与 Spec 或当前源码冲突，以 owning Spec + 当前源码为准。
 
@@ -20,7 +20,7 @@
 
 ## 1. 一句话认识
 
-**LuckyToken 是一个本地 AI 模型路由与协议边界产品。**
+**Token 是一个本地 AI 模型路由与协议边界产品。**
 
 它当前包含：
 
@@ -70,7 +70,7 @@ route / model resolution
 
 ## 3. 当前 Backend 多进程架构
 
-LuckyToken 现在有两个主要生命周期域：
+Token 现在有两个主要生命周期域：
 
 ```text
 Backend lifecycle
@@ -84,7 +84,7 @@ Backend Process
 │
 ├── InstanceAuthority
 │    └── InstanceLease
-│         └── ~/.luckytoken/instance.sqlite
+│         └── ~/.Token/instance.sqlite
 │             BEGIN IMMEDIATE
 │
 └── BackendApplication
@@ -130,7 +130,7 @@ acquire InstanceLease
 当前 discovery 默认路径：
 
 ```text
-~/.luckytoken/control-plane.json
+~/.Token/control-plane.json
 ```
 
 它只表示：
@@ -242,7 +242,7 @@ status.ownership.owner.kind === "desktop"
 
 ## 7. Request identity 与 credential ownership
 
-当前 LuckyToken **没有 global/project client-token 系统，也没有 `client-token` CLI**。
+当前 Token **没有 global/project client-token 系统，也没有 `client-token` CLI**。
 
 四类事实必须分开：
 
@@ -285,7 +285,7 @@ Control Plane descriptor 中的 capability 只认证本地 management IPC，不�
 CommandCode Private 作为独立 Provider package：
 
 ```text
-@luckytoken/provider-commandcode-private
+@token/provider-commandcode-private
 ```
 
 Semantic Conversion lane 中：
@@ -313,14 +313,14 @@ CommandCode Private Provider
 
 ## 9. Codex integration
 
-Codex integration 现在是 Backend-owned integration authority，而不是要求用户手工创建 LuckyToken client-token/profile。
+Codex integration 现在是 Backend-owned integration authority，而不是要求用户手工创建 Token client-token/profile。
 
-启用后 LuckyToken 管理 Codex root routing keys：
+启用后 Token 管理 Codex root routing keys：
 
 ```text
 model_provider = "openai"
 openai_base_url = "http://127.0.0.1:<public-model-port>/v1"
-model_catalog_json = "<LuckyToken-managed catalog>"
+model_catalog_json = "<Token-managed catalog>"
 ```
 
 同时保留 preimage，因此 disable/shutdown 可以恢复原值。Public Model snapshot generation 用于判断是否需要重新同步 catalog。
@@ -330,11 +330,11 @@ model_catalog_json = "<LuckyToken-managed catalog>"
 ## 10. 主要持久化 owner
 
 ```text
-~/.luckytoken/
+~/.Token/
 ├── instance.sqlite               # InstanceAuthority lock carrier only
 ├── control-plane.json            # discovery publication only
 ├── config.json                   # deployment config
-├── models.json                   # LuckyToken-owned models/provider config
+├── models.json                   # Token-owned models/provider config
 ├── public-models.json            # PublicModelAuthority
 ├── settings.json                 # registered settings
 ├── state/
@@ -342,7 +342,7 @@ model_catalog_json = "<LuckyToken-managed catalog>"
 │   ├── diagnostics/              # Runtime Diagnostics SQLite
 │   ├── request-ledger/           # Request Ledger SQLite
 │   └── deep-diagnostics/         # Deep Diagnostics SQLite
-├── integrations/codex/           # LuckyToken Codex integration state/catalog
+├── integrations/codex/           # Token Codex integration state/catalog
 └── pi/
     ├── credential-profiles/      # per-Provider credential Profile records
     └── models-catalog-cache.json # Provider model cache
@@ -377,9 +377,9 @@ macOS/Linux 目前只保留结构可移植性声明，不能写成“已认证�
 需要理解当前项目时，推荐：
 
 1. `AGENTS.md` — 全局不可破坏原则；
-2. `doc/Spec/LuckyTokenCoreSpec.md` — Core/Data Plane ownership 与三 lane；
-3. `doc/Spec/LuckyTokenElectronArchitectureSpec.md` — Backend/Desktop lifecycle；
-4. `doc/LuckyTokenArchitecture.md` — 当前源码维护者地图；
+2. `doc/Spec/TokenCoreSpec.md` — Core/Data Plane ownership 与三 lane；
+3. `doc/Spec/TokenElectronArchitectureSpec.md` — Backend/Desktop lifecycle；
+4. `doc/TokenArchitecture.md` — 当前源码维护者地图；
 5. `src/application.ts` — Backend Application composition/lifecycle；
 6. `src/instance-authority.ts` + `src/control-plane-discovery.ts` — singleton / discovery；
 7. `packages/desktop-shell/src/main/desktop-backend-connection.ts` — Desktop recovery；

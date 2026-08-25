@@ -15,14 +15,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
-import { startLuckyTokenHttpServer } from "../../src/server.js";
+import { startTokenHttpServer } from "../../src/server.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   createConfiguredPiModels,
-  type ConfiguredLuckyTokenDataPlane,
+  type ConfiguredTokenDataPlane,
 } from "../support/configured-data-plane.js";
 import {
   createOnlinePublicModelAuthority,
@@ -150,12 +150,12 @@ export async function createAnthropicOnlineHarness(
   if (apiKey.length === 0) throw new Error(`${input.apiKeyFile} is empty`);
 
   const totalSignal = AbortSignal.timeout(SUITE_TIMEOUT_MS);
-  const directory = await mkdtemp(join(tmpdir(), "luckytoken-anthropic-online-"));
+  const directory = await mkdtemp(join(tmpdir(), "Token-anthropic-online-"));
   const originalFetch = globalThis.fetch;
   const capture = createCapturingFetch(originalFetch);
   globalThis.fetch = capture.fetch as typeof globalThis.fetch;
-  let composition: ConfiguredLuckyTokenDataPlane | undefined;
-  let server: Awaited<ReturnType<typeof startLuckyTokenHttpServer>> | undefined;
+  let composition: ConfiguredTokenDataPlane | undefined;
+  let server: Awaited<ReturnType<typeof startTokenHttpServer>> | undefined;
   let closed = false;
 
   const close = async (): Promise<void> => {
@@ -168,11 +168,11 @@ export async function createAnthropicOnlineHarness(
   };
 
   try {
-    const stateDirectory = join(directory, ".luckytoken");
+    const stateDirectory = join(directory, ".Token");
     await mkdir(join(stateDirectory, "pi"), { recursive: true });
     const configPath = join(stateDirectory, "config.json");
     await writeFile(configPath, JSON.stringify({
-      schemaVersion: "luckytoken-config-v2",
+      schemaVersion: "token-config-v2",
       server: { port: 0 },
       clientProtocols: { "anthropic-messages": {} },
       providerPackages: {},
@@ -182,7 +182,7 @@ export async function createAnthropicOnlineHarness(
         requestTimeoutMs: REQUEST_TIMEOUT_MS,
       },
     }), "utf8");
-    const config = await loadLuckyTokenCliConfig(configPath);
+    const config = await loadTokenCliConfig(configPath);
     const credentialRecordStore = createInMemoryProviderCredentialRecordStore({
       createRevision: randomUUID,
     });
@@ -214,7 +214,7 @@ export async function createAnthropicOnlineHarness(
           providerId: aliasTarget.provider,
           modelId: aliasTarget.model,
         });
-    composition = await createConfiguredLuckyTokenDataPlane({
+    composition = await createConfiguredTokenDataPlane({
       config,
       credentialRecordStore,
       fetch: capture.fetch,
@@ -235,7 +235,7 @@ export async function createAnthropicOnlineHarness(
       throw new Error("online_resolved_provider_model_missing");
     }
     const providerApi = resolvedModel.api;
-    server = await startLuckyTokenHttpServer({
+    server = await startTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
       port: config.server.port,

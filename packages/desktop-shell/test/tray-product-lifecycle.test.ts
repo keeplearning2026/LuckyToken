@@ -10,7 +10,7 @@ function activation(
   attempt: DesktopInstanceActivation["attempt"] = "initial",
 ): DesktopInstanceActivation {
   return {
-    contract: "luckytoken-desktop-instance-v1",
+    contract: "token-desktop-instance-v1",
     buildId,
     attempt,
   };

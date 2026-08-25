@@ -172,7 +172,7 @@ function completeImages(
   response: Response,
   failure?: Readonly<{
     classification: string;
-    origin: "client" | "luckytoken" | "provider" | "network_os";
+    origin: "client" | "Token" | "provider" | "network_os";
     location: Readonly<{
       phase: "lane_request_preparation" | "upstream_execution" | "lane_response_processing";
       lane: "direct";

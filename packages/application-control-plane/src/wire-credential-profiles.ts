@@ -296,7 +296,7 @@ function decodeOptions(value: unknown): CredentialProfileOptionsProjection | und
       !providerId(provider.providerId) ||
       !metadata(provider.name, 128) ||
       (provider.source !== "pi_builtin" &&
-        provider.source !== "luckytoken_bundled" &&
+        provider.source !== "token_bundled" &&
         provider.source !== "user") ||
       !Array.isArray(provider.authMethods)
     ) return undefined;

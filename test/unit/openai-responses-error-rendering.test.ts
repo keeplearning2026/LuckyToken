@@ -8,7 +8,7 @@ import {
   mapUpstreamFailureFact,
   SAFE_RESPONSE_HEADERS,
 } from "../../src/protocols/openai-responses/error-rendering.js";
-import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 describe("OpenAI Responses non-streaming error envelope", () => {
   it("preserves distinct message/type/code/param fields", () => {

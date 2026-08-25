@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createLuckyTokenRuntime } from "../../../src/runtime.js";
+import { createTokenRuntime } from "../../../src/runtime.js";
 import type { ClientProtocolHandler } from "../../../src/http.js";
 import {
   createSettingsRegistry,
@@ -39,7 +39,7 @@ function enabledRuntime(
   protocols: readonly ClientProtocolHandler[],
 ) {
   return createProtocolAwareRuntime({
-    runtime: createLuckyTokenRuntime({ clientProtocols: [...protocols, models] }),
+    runtime: createTokenRuntime({ clientProtocols: [...protocols, models] }),
     isProtocolEnabled: (protocolId) =>
       registry.query([`protocols.${protocolId}.enabled`])[
         `protocols.${protocolId}.enabled`

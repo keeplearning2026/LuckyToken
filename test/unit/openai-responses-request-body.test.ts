@@ -12,7 +12,7 @@ import {
 } from "../../src/protocols/openai-responses/request-body.js";
 
 function request(body: Uint8Array | string, encoding?: string): Request {
-  return new Request("http://luckytoken.test/v1/responses", {
+  return new Request("http://Token.test/v1/responses", {
     method: "POST",
     headers: {
       "content-type": "application/json",

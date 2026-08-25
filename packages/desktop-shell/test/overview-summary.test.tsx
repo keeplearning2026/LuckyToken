@@ -6,7 +6,7 @@ import type {
   AnalyticsQuery,
   AnalyticsSummary,
   StatusSnapshot,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import { App } from "../src/renderer/app/App.js";
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
@@ -192,7 +192,7 @@ describe("Overview analytics", () => {
   });
 
   it("reconciles totals when a live request terminates", async () => {
-    const listeners = new Set<(record: import("@luckytoken/application-control-plane/control-plane").RequestJourneySummary) => void>();
+    const listeners = new Set<(record: import("@token/application-control-plane/control-plane").RequestJourneySummary) => void>();
     let count = 0;
     const getAnalytics = vi.fn(async (query: AnalyticsQuery) => query.command === "options"
       ? emptyOptions

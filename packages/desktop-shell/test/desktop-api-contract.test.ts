@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
 
-describe("LuckyTokenDesktopApi test seam", () => {
+describe("TokenDesktopApi test seam", () => {
   it("can be replaced by a deterministic fake without Electron or Backend", async () => {
     const api = createFakeDesktopApi({
       control: {

@@ -29,7 +29,7 @@ export interface BackupManifestEntrySummary {
 }
 
 export interface BackupManifestSummary {
-  readonly format: "luckytoken-backup";
+  readonly format: "token-backup";
   readonly formatVersion: 1;
   readonly createdAt: number;
   readonly sensitive: boolean;
@@ -61,7 +61,7 @@ export type BackupCommandHandler = (
   signal: AbortSignal,
 ) => Promise<BackupResult>;
 
-/** Exact, sanitized fact about one LuckyToken-owned file that cannot be
+/** Exact, sanitized fact about one Token-owned file that cannot be
  * safely interpreted by this application build. */
 export interface CompatibilityIssue {
   readonly path: string;

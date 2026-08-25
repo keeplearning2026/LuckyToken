@@ -1,4 +1,4 @@
-# `@luckytoken/provider-commandcode-private`
+# `@token/provider-commandcode-private`
 
 This private workspace package owns the complete CommandCode Private Pi Provider capability: its projection of the shared CommandCode model capability catalog, Pi IR ↔ CommandCode conversion, request preparation, HTTP attempt/retry lifecycle, JSONL assembly, diagnostics, and Provider authentication contract.
 
@@ -8,12 +8,12 @@ invent an effort or fall back to the model's highest advertised level.
 
 ## Product composition
 
-CommandCode Private is a **bundled LuckyToken product Provider**. Production LuckyToken discovers and registers it automatically through the standard Provider Package contract.
+CommandCode Private is a **bundled Token product Provider**. Production Token discovers and registers it automatically through the standard Provider Package contract.
 
 Users must **not** add this package to `config.providerPackages`:
 
 ```text
-@luckytoken/provider-commandcode-private
+@token/provider-commandcode-private
 ```
 
 That specifier is reserved by the product and explicit user configuration is rejected. `providerPackages` is only for external/user Provider Packages.
@@ -22,11 +22,11 @@ The model catalog is package-owned; no `models.json` entry is required. A missin
 
 ## Package contract
 
-LuckyToken loads the bundled package through its fixed `providerPackage` root export, validates the versioned Provider Package contract, creates one standard Pi `Provider`, and registers it through Pi `Models`. Core and Client Protocol modules do not import or special-case the CommandCode implementation.
+Token loads the bundled package through its fixed `providerPackage` root export, validates the versioned Provider Package contract, creates one standard Pi `Provider`, and registers it through Pi `Models`. Core and Client Protocol modules do not import or special-case the CommandCode implementation.
 
 The package root exports:
 
-- `providerPackage`, for LuckyToken bundled Provider composition;
+- `providerPackage`, for Token bundled Provider composition;
 - `createCommandCodePrivateProvider` and its option/policy types, for direct Pi integration and characterization tests.
 
 Current request construction does **not** derive project/workspace state from Pi metadata. `project.ts` supplies the fixed empty `ServerConfig` required by the current upstream compatibility contract; there is no current `projectDir → project snapshot/x-project-slug` flow.

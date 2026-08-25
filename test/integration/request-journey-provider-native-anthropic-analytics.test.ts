@@ -1,5 +1,5 @@
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
-import type { AnalyticsResult } from "@luckytoken/application-control-plane/control-plane";
+import type { AnalyticsResult } from "@token/application-control-plane/control-plane";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,10 +20,10 @@ import type { ExecutionOperation } from "../../src/execution.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "88000000-0000-4000-8000-000000000001";
@@ -176,7 +176,7 @@ function requireSummary(
 describe("Anthropic Provider Native terminal usage analytics producer", () => {
   it("projects terminal usage without changing Profile execution or either wire", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-anthropic-native-analytics-"),
+      join(tmpdir(), "Token-anthropic-native-analytics-"),
     );
 
     async function run(
@@ -195,7 +195,7 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
     ): Promise<RunResult> {
       const runRoot = join(root, `${fixture.name}-${mode}`);
       let authority: DiagnosticsManagementAuthority | undefined;
-      let server: RunningLuckyTokenHttpServer | undefined;
+      let server: RunningTokenHttpServer | undefined;
       let unsubscribe: (() => void) | undefined;
       let clock = 1_000;
       const outbound: WireSnapshot[] = [];
@@ -315,8 +315,8 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
           createSessionId: () => SESSION_ID,
           now: () => 1_800_000_000_000,
         });
-        const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-        server = await startLuckyTokenHttpServer({
+        const runtime = createTokenRuntime({ clientProtocols: [handler] });
+        server = await startTokenHttpServer({
           runtime,
           ...(authority === undefined ? {} : { diagnostics: authority }),
           createRequestId: () => REQUEST_ID,
@@ -392,7 +392,7 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
           "content-length": String(Buffer.byteLength(UPSTREAM_RESPONSE_BODY)),
           "content-type": "application/json",
           "request-id": "anthropic-upstream-usage-request",
-          "x-luckytoken-request-id": REQUEST_ID,
+          "x-token-request-id": REQUEST_ID,
         },
         body: UPSTREAM_RESPONSE_BODY,
       });
@@ -456,7 +456,7 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
           "content-length": String(Buffer.byteLength(UPSTREAM_SSE_BODY)),
           "content-type": "text/event-stream",
           "request-id": "anthropic-upstream-usage-request",
-          "x-luckytoken-request-id": REQUEST_ID,
+          "x-token-request-id": REQUEST_ID,
         },
         body: UPSTREAM_SSE_BODY,
       });

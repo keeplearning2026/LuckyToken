@@ -1402,7 +1402,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
               type: "reasoning",
               id: "rs_owned",
               encrypted_content: "owned-secret-bytes",
-              luckytoken_continuity: {
+              token_continuity: {
                 version: 1,
                 source: {
                   provider: "openai",
@@ -1650,7 +1650,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
               id: "rs_a",
               encrypted_content: "state-a",
               summary: [{ type: "summary_text", text: "a" }],
-              luckytoken_continuity: {
+              token_continuity: {
                 version: 1,
                 source: {
                   provider: "openai",
@@ -1679,7 +1679,7 @@ describe("14: Responses text, images, files, and reasoning continuity", () => {
               id: "rs_b",
               encrypted_content: "state-b",
               summary: [{ type: "summary_text", text: "b" }],
-              luckytoken_continuity: {
+              token_continuity: {
                 version: 1,
                 source: {
                   provider: "openai",

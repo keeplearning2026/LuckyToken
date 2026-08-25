@@ -67,7 +67,7 @@ export interface OnlineConformanceSample {
 }
 
 export interface OnlineConformanceArtifact {
-  readonly schemaVersion: "luckytoken-online-conformance-samples-v1";
+  readonly schemaVersion: "token-online-conformance-samples-v1";
   readonly generatedAt: string;
   readonly model: string;
   readonly cases: readonly OnlineConformanceSample[];
@@ -431,7 +431,7 @@ export async function runOnlineConformance(
     max_tokens: 512,
     temperature: 0,
     output_config: { effort: "high" },
-    metadata: { user_id: "luckytoken-online-conformance" },
+    metadata: { user_id: "token-online-conformance" },
     system: "Preserve the user's requested exact marker.",
     messages: [
       { role: "user", content: `Reply with exactly ${systemMarker}.` },
@@ -451,7 +451,7 @@ export async function runOnlineConformance(
     systemParams.temperature !== 0 ||
     systemParams.max_tokens !== 512 ||
     JSON.stringify(system.commandCode.request.body).includes(
-      "luckytoken-online-conformance",
+      "token-online-conformance",
     )
   ) {
     fail("system_controls_mapping");
@@ -821,7 +821,7 @@ export async function writeOnlineConformanceArtifact(
   forbiddenSecrets: readonly string[],
 ): Promise<string> {
   const artifact: OnlineConformanceArtifact = {
-    schemaVersion: "luckytoken-online-conformance-samples-v1",
+    schemaVersion: "token-online-conformance-samples-v1",
     generatedAt: new Date().toISOString(),
     model: modelId,
     cases,

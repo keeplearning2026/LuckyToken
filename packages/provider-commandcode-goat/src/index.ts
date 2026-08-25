@@ -1,7 +1,7 @@
 import {
   PROVIDER_PACKAGE_CONTRACT_VERSION,
-  type LuckyTokenProviderPackage,
-} from "@luckytoken/provider-contract/package";
+  type TokenProviderPackage,
+} from "@token/provider-contract/package";
 
 import { createCommandCodeGoatProvider } from "./provider.js";
 
@@ -24,4 +24,4 @@ export const providerPackage = Object.freeze({
     assertEmptyConfiguration(input.configuration, input.configurationPath);
     return createCommandCodeGoatProvider({ fetch: input.host.fetch });
   },
-} satisfies LuckyTokenProviderPackage);
+} satisfies TokenProviderPackage);

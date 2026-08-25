@@ -21,7 +21,7 @@ describe("12: Responses local response state", () => {
   });
 
   async function fixtureState(options: Partial<ResponseSessionStateOptions> = {}) {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-state-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-state-"));
     directories.push(directory);
     const stateFile = join(directory, "openai-responses.json");
     return {
@@ -1069,7 +1069,7 @@ describe("12 recheck: snapshot byte units stay mutually compatible", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-utf8-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-utf8-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({ stateFile });
@@ -1100,7 +1100,7 @@ describe("12 recheck: loaded history limits remain request-scoped", () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-closed-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-closed-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       // Hand-written structurally valid snapshot with more history items than
@@ -1145,7 +1145,7 @@ describe("12 recheck: memory store:false never touches disk", () => {
     const { mkdtemp, readFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-mem-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-mem-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({
@@ -1183,7 +1183,7 @@ describe("12 recheck: TTL-expired entries poison nothing", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-ttl-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-ttl-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       let current = 1_000_000;
@@ -1225,7 +1225,7 @@ describe("12 recheck: concurrent interleaving stays consistent", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-conc-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-conc-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({ stateFile });
@@ -1258,7 +1258,7 @@ describe("12 recheck: memory-only store leaves no file behind", () => {
     const { mkdtemp, access, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-nofile-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-nofile-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({
@@ -1283,7 +1283,7 @@ describe("12 recheck: TTL boundary values", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-ttlb-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-ttlb-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       let current = 1_000_000;
@@ -1315,7 +1315,7 @@ describe("12 recheck: TTL boundary values", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-cap-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-cap-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({ stateFile, maxEntries: 2 });
@@ -1350,7 +1350,7 @@ describe("12 recheck: quarantine then reload", () => {
     const { mkdtemp, writeFile, readFile, access, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-quar-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-quar-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       await writeFile(stateFile, "{ corrupt", "utf8");
@@ -1388,7 +1388,7 @@ describe("12 recheck: prototype pollution in stored items", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-proto-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-proto-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({ stateFile });
@@ -1414,7 +1414,7 @@ describe("12 recheck: prototype pollution in stored items", () => {
 
 describe("12 recheck: store:false combined with previous_response_id", () => {
   it("store:false=honor bypasses snapshot loading", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfh-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-sfh-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       await writeFile(stateFile, "{not-json", "utf8");
@@ -1438,7 +1438,7 @@ describe("12 recheck: store:false combined with previous_response_id", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-sfp-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({ stateFile, storeFalsePolicy: "honor" });
@@ -1467,7 +1467,7 @@ describe("12 recheck: store:false combined with previous_response_id", () => {
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfm-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-sfm-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({ stateFile, storeFalsePolicy: "memory" });
@@ -1500,7 +1500,7 @@ describe("12 recheck: store:false combined with previous_response_id", () => {
   });
 
   it("propagates memory-only storage to persisted-policy descendants", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-sfmp-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-sfmp-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       const state = createResponseSessionState({
@@ -1533,7 +1533,7 @@ describe("12 recheck: snapshot version mismatches are not fail-open", () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-ver-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-ver-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       await writeFile(
@@ -1557,7 +1557,7 @@ describe("12 recheck: snapshot version mismatches are not fail-open", () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-responses-nover-"));
+    const directory = await mkdtemp(join(tmpdir(), "Token-responses-nover-"));
     const stateFile = join(directory, "openai-responses.json");
     try {
       await writeFile(

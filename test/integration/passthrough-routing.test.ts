@@ -97,7 +97,7 @@ function projectedStreamFrom(
 function request(
   body: string,
 ): Request {
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer client",

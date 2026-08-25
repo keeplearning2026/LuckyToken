@@ -156,7 +156,7 @@ describe("ModelConfig (extracted from Pi coding-agent)", () => {
     // unknown modelOverride field pass schema validation exactly as the
     // pinned ModelConfig accepts them — composition ignores what it does not
     // apply. This documents the pinned meaning instead of generalizing
-    // compat into LuckyToken feature flags.
+    // compat into Token feature flags.
     const config = ModelConfig.parse(
       JSON.stringify({
         providers: {

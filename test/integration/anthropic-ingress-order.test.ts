@@ -1,7 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
+import { createCommandCodeTestRuntime as createTokenRuntime } from "../support/commandcode-serving.js";
 
 const fetchMustNotRun: FetchFunction = async () => {
   throw new Error("upstream fetch must not run");
@@ -19,7 +19,7 @@ function request(input: {
     "anthropic-version": input.version,
   };
   if (input.beta !== undefined) headers["anthropic-beta"] = input.beta;
-  return new Request("http://luckytoken.test/v1/messages", {
+  return new Request("http://Token.test/v1/messages", {
     method: "POST",
     headers,
     body: input.body,
@@ -27,7 +27,7 @@ function request(input: {
 }
 
 describe("Anthropic ingress failure order", () => {
-  const runtime = createLuckyTokenRuntime({
+  const runtime = createTokenRuntime({
     clientApiKey: "client-key",
     commandCodeApiKey: "upstream-key",
     commandCodeBaseUrl: "https://fixture.commandcode.test",
@@ -35,7 +35,7 @@ describe("Anthropic ingress failure order", () => {
     modelId: "model",
   });
 
-  it("does not gate protocol validity on a LuckyToken client credential", async () => {
+  it("does not gate protocol validity on a Token client credential", async () => {
     const response = await runtime.handle(
       request({
         authorization: "Bearer wrong-key",

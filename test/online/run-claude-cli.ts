@@ -2,7 +2,7 @@
  * Real Claude Code client -> Anthropic Messages -> Pi AI IR -> CommandCode.
  *
  * Run from `onlinetest/claude` with `npm test`. The suite self-hosts the
- * current LuckyToken code and generates an isolated project settings file.
+ * current Token code and generates an isolated project settings file.
  */
 import {
   InMemoryCredentialStore,
@@ -16,18 +16,18 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadLuckyTokenCliConfig } from "../../src/cli-config.js";
+import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
   createOnlinePublicModelAuthority,
   reconcileOnlinePublicModels,
 } from "./public-model-fixture.js";
 import {
-  createConfiguredLuckyTokenDataPlane,
+  createConfiguredTokenDataPlane,
   createConfiguredPiModels,
 } from "../support/configured-data-plane.js";
-import type { LuckyTokenRuntime } from "../../src/runtime.js";
-import { startLuckyTokenHttpServer } from "../../src/server.js";
+import type { TokenRuntime } from "../../src/runtime.js";
+import { startTokenHttpServer } from "../../src/server.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
 const DEFAULT_PROVIDER_ID = "commandcode-private";
@@ -274,7 +274,7 @@ export async function injectClaudeContinuityProbe(
           ...(event as Record<string, unknown>),
           content_block: {
             ...(contentBlock as Record<string, unknown>),
-            luckytoken_continuity: continuityProbeEnvelope(marker),
+            token_continuity: continuityProbeEnvelope(marker),
           },
         };
         return `${match[1]}${JSON.stringify(projected)}${match[3] ?? ""}`;
@@ -295,7 +295,7 @@ export async function injectClaudeContinuityProbe(
         injected = true;
         return {
           ...(block as Record<string, unknown>),
-          luckytoken_continuity: continuityProbeEnvelope(marker),
+          token_continuity: continuityProbeEnvelope(marker),
         };
       });
     }
@@ -490,10 +490,10 @@ function scenarios(): readonly ClaudeScenario[] {
 }
 
 function captureRuntime(
-  runtime: LuckyTokenRuntime,
+  runtime: TokenRuntime,
   captures: CapturedRequest[],
   marker: () => string,
-): LuckyTokenRuntime {
+): TokenRuntime {
   const continuityInjected = new Set<string>();
   return Object.freeze({
     routes: runtime.routes,
@@ -863,7 +863,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
 
   const runId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
   const runRoot = join(ONLINE_ROOT, ".runs", runId);
-  const stateDirectory = join(runRoot, ".luckytoken");
+  const stateDirectory = join(runRoot, ".Token");
   const configDirectory = join(runRoot, "claude-home");
   const workspace = join(runRoot, "workspace");
   await mkdir(join(stateDirectory, "pi"), { recursive: true });
@@ -875,7 +875,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   await writeFile(
     configPath,
     JSON.stringify({
-      schemaVersion: "luckytoken-config-v2",
+      schemaVersion: "token-config-v2",
       server: { port: 0 },
       clientProtocols: {
         "anthropic-messages": {},
@@ -886,7 +886,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     }),
     "utf8",
   );
-  const config = await loadLuckyTokenCliConfig(configPath);
+  const config = await loadTokenCliConfig(configPath);
   const aliasTarget = aliasTargetFor(providerId, model);
   const publicModelAuthority =
     alias === undefined
@@ -931,7 +931,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   if (stored?.type !== "api_key" || stored.key !== apiKey) {
     throw new Error(`Provider login did not persist a credential for ${providerId}`);
   }
-  const composition = await createConfiguredLuckyTokenDataPlane({
+  const composition = await createConfiguredTokenDataPlane({
     config,
     credentialSeedStore: credentials,
     fetch: globalThis.fetch,
@@ -947,7 +947,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   const captures: CapturedRequest[] = [];
   let marker = "bootstrap";
   const runtime = captureRuntime(composition.runtime, captures, () => marker);
-  const server = await startLuckyTokenHttpServer({
+  const server = await startTokenHttpServer({
     runtime,
     host: "127.0.0.1",
     port: config.server.port,

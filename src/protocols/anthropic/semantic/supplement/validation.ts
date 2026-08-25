@@ -333,7 +333,7 @@ function validateWebFetchContent(value: Record<string, unknown>, path: string): 
 }
 
 function validateTextBlock(block: Record<string, unknown>, path: string): void {
-  exactKeys(block, ["type", "text", "cache_control", "citations", "luckytoken_continuity"], path);
+  exactKeys(block, ["type", "text", "cache_control", "citations", "token_continuity"], path);
   string(block.text, `${path}.text`, true);
   validateCacheControl(block.cache_control, `${path}.cache_control`);
   if (block.citations !== undefined && block.citations !== null) {
@@ -544,13 +544,13 @@ export function validateAnthropicSupplementContentBlock(
       validateSearchResult(block, path);
       return;
     case "thinking":
-      exactKeys(block, ["type", "thinking", "signature", "luckytoken_continuity"], path);
+      exactKeys(block, ["type", "thinking", "signature", "token_continuity"], path);
       return;
     case "redacted_thinking":
-      exactKeys(block, ["type", "data", "luckytoken_continuity"], path);
+      exactKeys(block, ["type", "data", "token_continuity"], path);
       return;
     case "tool_use":
-      exactKeys(block, ["type", "id", "name", "input", "cache_control", "caller", "luckytoken_continuity"], path);
+      exactKeys(block, ["type", "id", "name", "input", "cache_control", "caller", "token_continuity"], path);
       validateCacheControl(block.cache_control, `${path}.cache_control`);
       validateCaller(block.caller, `${path}.caller`);
       return;

@@ -90,7 +90,7 @@ describe("Anthropic foreign continuity full-history round trip", () => {
     expect(clientResponse.content[0]).toMatchObject({
       type: "thinking",
       signature: "",
-      luckytoken_continuity: {
+      token_continuity: {
         source: {
           provider: "opencode-go",
           api: "openai-completions",

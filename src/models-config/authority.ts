@@ -8,7 +8,7 @@ import type {
   ModelsFileError,
   ModelsFileState,
   ModelsProjection,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 import lockfile from "proper-lockfile";
 
 import {
@@ -17,7 +17,7 @@ import {
 } from "../providers/models-json-schema.js";
 
 /**
- * Authoritative LuckyToken-owned models.json store (Ticket 08).
+ * Authoritative Token-owned models.json store (Ticket 08).
  *
  * The file at `path` is the single authority. Every command re-reads the
  * file, so external edits become visible immediately; every successful write

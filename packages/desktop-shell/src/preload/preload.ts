@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   DesktopControlPlaneApi,
   DesktopPlatformApi,
-  LuckyTokenDesktopApi,
+  TokenDesktopApi,
 } from "../shared/desktop-api.js";
 import { desktopIpcChannels } from "../shared/ipc-channels.js";
 
@@ -153,10 +153,10 @@ const platform: DesktopPlatformApi = {
 
 Object.freeze(control);
 Object.freeze(platform);
-const api: LuckyTokenDesktopApi = Object.freeze({
+const api: TokenDesktopApi = Object.freeze({
   contractVersion: 1,
   control,
   platform,
 });
 
-contextBridge.exposeInMainWorld("luckytoken", api);
+contextBridge.exposeInMainWorld("Token", api);

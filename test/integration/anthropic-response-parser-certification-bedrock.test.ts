@@ -84,7 +84,7 @@ describe("Anthropic Bedrock response-parser certification", () => {
     expect(converted.message.content[0]).toMatchObject({
       type: "thinking",
       signature: "",
-      luckytoken_continuity: {
+      token_continuity: {
         source: {
           provider: "amazon-bedrock",
           api: "bedrock-converse-stream",

@@ -16,7 +16,7 @@ import {
   type CompatibilityIssue,
   type ControlPlaneEndpoint,
   type RequestJourneySummary,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 import {
   buildServeAutoStartCommand,
@@ -29,8 +29,8 @@ import {
   createConfiguredBackupAuthority,
   recoveryBackupSnapshots,
 } from "./backup/index.js";
-import { loadLuckyTokenCliConfig } from "./cli-config.js";
-import { createConfiguredLuckyTokenDataPlane } from "./composition.js";
+import { loadTokenCliConfig } from "./cli-config.js";
+import { createConfiguredTokenDataPlane } from "./composition.js";
 import {
   createControlPlaneDiscovery,
   resolveControlPlaneDescriptorPath,
@@ -92,7 +92,7 @@ import { createCodexIntegrationAuthority } from "./integrations/codex/integratio
 import { createAgentInjectionSnapshot } from "./integrations/agents/snapshot.js";
 import { createAgentIntegrationCoordinator } from "./integrations/agents/coordinator.js";
 import { createPiIntegrationAdapter } from "./integrations/pi/adapter.js";
-import { LUCKYTOKEN_RELEASE_VERSION } from "./version.js";
+import { TOKEN_RELEASE_VERSION } from "./version.js";
 
 export type ApplicationOwnerKind = "cli" | "desktop";
 export type ApplicationExitReason = "closed" | "drained" | "timed_out";
@@ -104,17 +104,17 @@ export interface ApplicationExit {
   readonly reason: ApplicationExitReason;
 }
 
-export interface RunningLuckyTokenApplication {
+export interface RunningTokenApplication {
   readonly ownership: ApplicationOwnership;
   readonly exited: Promise<ApplicationExit>;
   requestShutdown(): Promise<ApplicationExit>;
   close(): Promise<void>;
 }
 
-export type StartLuckyTokenApplicationResult =
+export type StartTokenApplicationResult =
   | {
       readonly kind: "running";
-      readonly application: RunningLuckyTokenApplication;
+      readonly application: RunningTokenApplication;
     }
   | {
       readonly kind: "attached";
@@ -127,7 +127,7 @@ export interface ApplicationRouteFact {
   readonly pathname: string;
 }
 
-export interface LuckyTokenApplicationEvents {
+export interface TokenApplicationEvents {
   readonly onRoute?: (route: ApplicationRouteFact) => void;
   readonly onAttached?: (ownership: ApplicationOwnership | undefined) => void;
   readonly onExit?: (exit: ApplicationExit) => void;
@@ -142,16 +142,16 @@ export type DiagnosticsAuthorityFactory = (
   input: DiagnosticsAuthorityFactoryInput,
 ) => Promise<DiagnosticsManagementAuthority>;
 
-export interface StartLuckyTokenApplicationOptions {
+export interface StartTokenApplicationOptions {
   readonly configPath: string;
   readonly descriptorOverride?: string;
   readonly ownerKind?: ApplicationOwnerKind;
   readonly desktopExe?: string;
   readonly buildId?: string;
   readonly createFirstRunConfig?: boolean;
-  readonly events?: LuckyTokenApplicationEvents;
+  readonly events?: TokenApplicationEvents;
   /** Internal composition dependency used by integration tests. Production
-   * derives one authority from LuckyToken-owned current-user application state. */
+   * derives one authority from Token-owned current-user application state. */
   readonly instanceAuthority?: InstanceAuthority;
   /** Internal process-boundary test seam. Production always validates with
    * an installed Codex CLI before publishing integration files. */
@@ -173,7 +173,7 @@ function endpointForCurrentUser(runtimeDirectory: string): ControlPlaneEndpoint 
 
 async function tryAttachToActiveInstance(
   discovery: ControlPlaneDiscovery,
-  events: LuckyTokenApplicationEvents | undefined,
+  events: TokenApplicationEvents | undefined,
 ): Promise<{ readonly ownership: ApplicationOwnership | undefined } | undefined> {
   const endpoint = await discovery.read();
   if (endpoint === undefined) return undefined;
@@ -200,7 +200,7 @@ async function tryAttachToActiveInstance(
 async function acquireInstanceAuthorityOrAttach(options: {
   readonly authority: InstanceAuthority;
   readonly discovery: ControlPlaneDiscovery;
-  readonly events: LuckyTokenApplicationEvents | undefined;
+  readonly events: TokenApplicationEvents | undefined;
 }): Promise<
   | { readonly kind: "acquired"; readonly lease: InstanceLease }
   | { readonly kind: "attached"; readonly ownership: ApplicationOwnership | undefined }
@@ -257,7 +257,7 @@ function createAutoStartRegistrar(options: {
   });
 }
 
-interface ControlledLuckyTokenApplication extends RunningLuckyTokenApplication {
+interface ControlledTokenApplication extends RunningTokenApplication {
   finish(reason: ApplicationExitReason): Promise<ApplicationExit>;
 }
 
@@ -265,8 +265,8 @@ function createLifecycle(options: {
   readonly ownership: ApplicationOwnership;
   readonly cleanup: () => Promise<void>;
   readonly drain?: () => Promise<"drained" | "timed_out">;
-  readonly events?: LuckyTokenApplicationEvents;
-}): ControlledLuckyTokenApplication {
+  readonly events?: TokenApplicationEvents;
+}): ControlledTokenApplication {
   let settled: ApplicationExit | undefined;
   let cleanupPromise: Promise<void> | undefined;
   let resolveExited: ((exit: ApplicationExit) => void) | undefined;
@@ -310,8 +310,8 @@ async function startRecoveryApplication(options: {
   readonly ownerKind: ApplicationOwnerKind;
   readonly desktopExe?: string;
   readonly buildId?: string;
-  readonly events?: LuckyTokenApplicationEvents;
-}): Promise<StartLuckyTokenApplicationResult> {
+  readonly events?: TokenApplicationEvents;
+}): Promise<StartTokenApplicationResult> {
   const endpoint = endpointForCurrentUser(dirname(options.descriptorPath));
   let publication: DiscoveryPublication | undefined;
 
@@ -324,7 +324,7 @@ async function startRecoveryApplication(options: {
   });
   const controlPipe = await createProductionControlPipe();
   const autoStartRegistrar = createAutoStartRegistrar(options);
-  const lifecycleHolder: { current?: ControlledLuckyTokenApplication } = {};
+  const lifecycleHolder: { current?: ControlledTokenApplication } = {};
   let desktopOwnerLeaseTimer: ReturnType<typeof setInterval> | undefined;
   const desktopOwnerLease =
     options.ownerKind === "desktop"
@@ -341,8 +341,8 @@ async function startRecoveryApplication(options: {
   const controlPlane = await startControlPlane({
     endpoint,
     application: {
-      id: "luckytoken",
-      version: LUCKYTOKEN_RELEASE_VERSION,
+      id: "Token",
+      version: TOKEN_RELEASE_VERSION,
       ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
     },
     initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
@@ -392,7 +392,7 @@ async function startRecoveryApplication(options: {
     await controlPlane.close().catch((error: unknown) => failures.push(error));
     await options.instanceLease.close().catch((error: unknown) => failures.push(error));
     if (failures.length > 0) {
-      throw new Error("LuckyToken recovery Control Plane cleanup failed");
+      throw new Error("Token recovery Control Plane cleanup failed");
     }
   };
   const lifecycle = createLifecycle({
@@ -420,17 +420,17 @@ async function startRecoveryApplication(options: {
 
 async function startNormalApplication(options: {
   readonly configPath: string;
-  readonly config: Awaited<ReturnType<typeof loadLuckyTokenCliConfig>>;
+  readonly config: Awaited<ReturnType<typeof loadTokenCliConfig>>;
   readonly descriptorPath: string;
   readonly discovery: ControlPlaneDiscovery;
   readonly instanceLease: InstanceLease;
   readonly ownerKind: ApplicationOwnerKind;
   readonly desktopExe?: string;
   readonly buildId?: string;
-  readonly events?: LuckyTokenApplicationEvents;
+  readonly events?: TokenApplicationEvents;
   readonly codexCatalogValidator?: CodexCatalogValidator;
   readonly diagnosticsAuthorityFactory?: DiagnosticsAuthorityFactory;
-}): Promise<StartLuckyTokenApplicationResult> {
+}): Promise<StartTokenApplicationResult> {
   const { config } = options;
   const endpoint = endpointForCurrentUser(dirname(options.descriptorPath));
 
@@ -446,7 +446,7 @@ async function startNormalApplication(options: {
     | undefined;
   let attentionRefreshTimer: ReturnType<typeof setInterval> | undefined;
   let cleanupPromise: Promise<void> | undefined;
-  let lifecycle: ControlledLuckyTokenApplication | undefined;
+  let lifecycle: ControlledTokenApplication | undefined;
   let desktopOwnerLease: DesktopOwnerLeaseAuthority | undefined;
   let desktopOwnerLeaseTimer: ReturnType<typeof setInterval> | undefined;
   let catalogControllerForCleanup:
@@ -857,7 +857,7 @@ async function startNormalApplication(options: {
     const diagnosticsManagement = ownedDiagnosticsAuthority;
     const historyAuthority = createHistoryAuthority({
       diagnostics: diagnosticsManagement,
-      applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
+      applicationVersion: TOKEN_RELEASE_VERSION,
       ownedRoots: [
         resolve(dirname(options.configPath)),
         resolve(config.pi.directory),
@@ -868,11 +868,11 @@ async function startNormalApplication(options: {
     const backupAuthority = createConfiguredBackupAuthority({
       configPath: options.configPath,
       config,
-      applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
+      applicationVersion: TOKEN_RELEASE_VERSION,
       snapshots: Object.freeze([
         {
           id: "request-diagnostics",
-          contract: "luckytoken-diagnostics-sqlite",
+          contract: "token-diagnostics-sqlite",
           version: 1,
           category: "history" as const,
           sourcePath: join(config.diagnostics.directory, "diagnostics-v2.sqlite3"),
@@ -900,10 +900,10 @@ async function startNormalApplication(options: {
       startListener: async (address) => {
         const shutdownController = new AbortController();
         let composition:
-          | Awaited<ReturnType<typeof createConfiguredLuckyTokenDataPlane>>
+          | Awaited<ReturnType<typeof createConfiguredTokenDataPlane>>
           | undefined;
         try {
-          composition = await createConfiguredLuckyTokenDataPlane({
+          composition = await createConfiguredTokenDataPlane({
             configuration: config,
             models: providerRuntime.models,
             providerAuthBindings: providerRuntime.providerAuthBindings,
@@ -942,7 +942,7 @@ async function startNormalApplication(options: {
           return listener;
         } catch (error) {
           shutdownController.abort(
-            new Error("LuckyToken model gateway startup failed"),
+            new Error("Token model gateway startup failed"),
           );
           let startupError = error;
           if (composition !== undefined) {
@@ -951,7 +951,7 @@ async function startNormalApplication(options: {
             } catch (closeError) {
               startupError = new AggregateError(
                 [startupError, closeError],
-                "LuckyToken model gateway startup failed and its Data Plane could not be finalized",
+                "Token model gateway startup failed and its Data Plane could not be finalized",
               );
             }
           }
@@ -961,7 +961,7 @@ async function startNormalApplication(options: {
             } catch (restoreError) {
               throw new AggregateError(
                 [startupError, restoreError],
-                "LuckyToken model gateway startup failed and Agent integrations could not be restored",
+                "Token model gateway startup failed and Agent integrations could not be restored",
               );
             }
           }
@@ -1022,7 +1022,7 @@ async function startNormalApplication(options: {
       cleanupPromise ??= (async () => {
         const failures = await closeOwnedResources();
         if (failures.length > 0) {
-          throw new Error("LuckyToken application resource cleanup failed");
+          throw new Error("Token application resource cleanup failed");
         }
       })();
       await cleanupPromise;
@@ -1031,8 +1031,8 @@ async function startNormalApplication(options: {
     controlPlane = await startControlPlane({
       endpoint,
       application: {
-        id: "luckytoken",
-        version: LUCKYTOKEN_RELEASE_VERSION,
+        id: "Token",
+        version: TOKEN_RELEASE_VERSION,
         ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       },
       initialStatus: Object.freeze({
@@ -1195,7 +1195,7 @@ async function startNormalApplication(options: {
             } catch {
               return {
                 outcome: "failed",
-                error: "Agent integrations could not be restored; LuckyToken remains running.",
+                error: "Agent integrations could not be restored; Token remains running.",
               };
             }
             const outcome = await supervisor?.quit({
@@ -1297,9 +1297,9 @@ async function startNormalApplication(options: {
   }
 }
 
-export async function startLuckyTokenApplication(
-  options: StartLuckyTokenApplicationOptions,
-): Promise<StartLuckyTokenApplicationResult> {
+export async function startTokenApplication(
+  options: StartTokenApplicationOptions,
+): Promise<StartTokenApplicationResult> {
   const ownerKind = options.ownerKind ?? "cli";
   const configPath = resolve(options.configPath);
   const descriptorPath = resolveControlPlaneDescriptorPath({
@@ -1339,9 +1339,9 @@ export async function startLuckyTokenApplication(
       await createFirstRunConfig(configPath);
     }
 
-    let config: Awaited<ReturnType<typeof loadLuckyTokenCliConfig>>;
+    let config: Awaited<ReturnType<typeof loadTokenCliConfig>>;
     try {
-      config = await loadLuckyTokenCliConfig(configPath);
+      config = await loadTokenCliConfig(configPath);
     } catch (error) {
       return await startRecoveryApplication({
         configPath,
@@ -1361,7 +1361,7 @@ export async function startLuckyTokenApplication(
       const recoveryBackupAuthority = createConfiguredBackupAuthority({
         configPath,
         config,
-        applicationVersion: LUCKYTOKEN_RELEASE_VERSION,
+        applicationVersion: TOKEN_RELEASE_VERSION,
         snapshots: recoveryBackupSnapshots(config),
       });
       return await startRecoveryApplication({

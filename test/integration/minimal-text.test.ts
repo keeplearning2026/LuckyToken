@@ -1,7 +1,7 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import { createCommandCodeTestRuntime as createLuckyTokenRuntime } from "../support/commandcode-serving.js";
+import { createCommandCodeTestRuntime as createTokenRuntime } from "../support/commandcode-serving.js";
 
 describe("minimal Anthropic text route", () => {
   it("crosses the full route while ignoring non-version client headers", async () => {
@@ -33,7 +33,7 @@ describe("minimal Anthropic text route", () => {
       );
     };
 
-    const runtime = createLuckyTokenRuntime({
+    const runtime = createTokenRuntime({
       clientApiKey: "fixture-client-key",
       commandCodeApiKey: "fixture-commandcode-key",
       commandCodeBaseUrl: "https://fixture.commandcode.test/nested/base",
@@ -45,7 +45,7 @@ describe("minimal Anthropic text route", () => {
     });
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           authorization: "Bearer fixture-client-key",

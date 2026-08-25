@@ -89,7 +89,7 @@ function request(
     body,
   };
   if (signal !== undefined) init.signal = signal;
-  return new Request("http://luckytoken.test/v1/messages", init);
+  return new Request("http://Token.test/v1/messages", init);
 }
 
 function dependencies(
@@ -225,7 +225,7 @@ describe("atomic HTTP failure delivery", () => {
     const never = vi.fn(() => streamFrom([]));
     const wrongRoute = await handleHttpRequest(
       dependencies(never),
-      new Request("http://luckytoken.test/no-route"),
+      new Request("http://Token.test/no-route"),
     );
     expect(wrongRoute.status).toBe(404);
 

@@ -24,10 +24,10 @@ import {
 } from "../../src/provider-native-responses/index.js";
 import { parseProviderNativeResponsesConfiguration } from "../../src/provider-native-responses/configuration.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "64000000-0000-4000-8000-000000000001";
@@ -140,11 +140,11 @@ function completedStep(
 describe("OpenAI Responses Provider Native Request Journey", () => {
   it("keeps the Responses native lane observable through final Profile exhaustion", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-openai-provider-native-journey-"),
+      join(tmpdir(), "Token-openai-provider-native-journey-"),
     );
     const diagnosticsDirectory = join(root, "diagnostics");
     let authority: DiagnosticsManagementAuthority | undefined;
-    let server: RunningLuckyTokenHttpServer | undefined;
+    let server: RunningTokenHttpServer | undefined;
 
     try {
       authority = await createDiagnosticsAuthority({
@@ -304,8 +304,8 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         createResponseId: () => "resp_semantic_must_not_render",
         now: () => 1_788_000_000_000,
       });
-      const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
-      server = await startLuckyTokenHttpServer({
+      const runtime = createTokenRuntime({ clientProtocols: [handler] });
+      server = await startTokenHttpServer({
         runtime,
         diagnostics: latchedAuthority,
         createRequestId: () => REQUEST_ID,
@@ -356,7 +356,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
       expect(response.headers.get("retry-after")).toBe("0");
       expect(response.headers.get("set-cookie")).toBeNull();
       expect(response.headers.get("authorization")).toBeNull();
-      expect(response.headers.get("x-luckytoken-request-id")).toBe(REQUEST_ID);
+      expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
       expect(responseBody).toBe(upstreamBodies[1]);
 
       expect(outboundAttempts).toHaveLength(2);
@@ -597,7 +597,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         expect.objectContaining({
           failureId: detail.incident?.primaryFailureId,
           classification: "provider_profile_exhausted_after_final_429",
-          origin: "luckytoken",
+          origin: "Token",
           originPrecision: "exact",
           location: PRIMARY_LOCATION,
         }),

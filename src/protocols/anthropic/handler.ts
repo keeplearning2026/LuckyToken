@@ -1,5 +1,5 @@
 import type { Models } from "@earendil-works/pi-ai";
-import type { UpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { randomUUID } from "node:crypto";
 import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
 
@@ -135,7 +135,7 @@ interface AnthropicEarlyFailure {
   readonly stepInstanceId: string;
   readonly location: RequestJourneyLocation;
   readonly classification: string;
-  readonly origin: "client" | "luckytoken";
+  readonly origin: "client" | "Token";
 }
 
 function observeAnthropicEarlyFailure(
@@ -222,7 +222,7 @@ function encodedBoundedSummary(value: unknown): Readonly<{
   }
   const fallback = new TextEncoder().encode(
     JSON.stringify({
-      schema: "luckytoken.bounded_summary.v1",
+      schema: "Token.bounded_summary.v1",
       completeness: "counts_only_due_to_byte_bound",
       originalBytes: bytes.byteLength,
     }),
@@ -355,7 +355,7 @@ function toResponse(prepared: PreparedHttpResponse): Response {
  *  exactly once (success, error, and passthrough alike). */
 function attachRequestId(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
-  headers.set("x-luckytoken-request-id", requestId);
+  headers.set("x-token-request-id", requestId);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -611,7 +611,7 @@ async function handleAnthropicMessages(
         {
           ...activeEarlyStep,
           classification: "model_unavailable",
-          origin: "luckytoken",
+          origin: "Token",
         },
       );
     }
@@ -790,7 +790,7 @@ async function handleAnthropicMessages(
     };
     try {
       const invocationSnapshot = encodedBoundedSummary({
-        schema: "luckytoken.pi_invocation_summary.v1",
+        schema: "Token.pi_invocation_summary.v1",
         selector: invocation.client.renderState.selector,
         model: { provider: model.provider, id: model.id, api: model.api },
         systemPrompt: invocation.invocation.pi.context.systemPrompt,
@@ -943,7 +943,7 @@ async function handleAnthropicMessages(
     completeJourneyStep(journey, "p4.create_pi_stream", executionLocation);
     try {
       const terminalSummary = encodedBoundedSummary({
-        schema: "luckytoken.pi_terminal_summary.v1",
+        schema: "Token.pi_terminal_summary.v1",
         role: message.role,
         stopReason: message.stopReason,
         contentBlockCount: message.content.length,
@@ -1083,7 +1083,7 @@ async function handleAnthropicMessages(
         failureId: `${requestId}:${failedStep.classification}`,
         role: "primary",
         classification: failedStep.classification,
-        origin: "luckytoken",
+        origin: "Token",
         originPrecision: "exact",
         location: failedStep.location,
       });
@@ -1202,7 +1202,7 @@ async function handleAnthropicMessages(
         {
           ...failure,
           classification: "protocol_ingress_failed",
-          origin: "luckytoken",
+          origin: "Token",
         },
       );
     }

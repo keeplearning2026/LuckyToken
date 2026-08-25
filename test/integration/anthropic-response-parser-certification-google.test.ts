@@ -104,7 +104,7 @@ describe("Anthropic Google response-parser certification", () => {
       expect.objectContaining({
         type: "thinking",
         signature: "",
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "thinking",
             value: "Z29vZ2xlLXRoaW5raW5nLXN0YXRl",
@@ -113,7 +113,7 @@ describe("Anthropic Google response-parser certification", () => {
       }),
       expect.objectContaining({
         type: "text",
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "text",
             value: "Z29vZ2xlLXRleHQtc3RhdGU=",
@@ -123,7 +123,7 @@ describe("Anthropic Google response-parser certification", () => {
       expect.objectContaining({
         type: "tool_use",
         caller: { type: "direct" },
-        luckytoken_continuity: expect.objectContaining({
+        token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "toolCall",
             callId: "call-1",

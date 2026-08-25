@@ -8,15 +8,15 @@ import {
   configuredCredentialProfileBackupSnapshot,
   recoveryBackupSnapshots,
 } from "../../src/backup/configured.js";
-import type { LuckyTokenCliConfig } from "../../src/cli-config.js";
+import type { TokenCliConfig } from "../../src/cli-config.js";
 
 describe("configured backup contract versions", () => {
   it("recovery backup never reads or snapshots legacy diagnostics stores", () => {
     const config = {
-      schemaVersion: "luckytoken-config-v2",
+      schemaVersion: "token-config-v2",
       pi: {
-        directory: "C:\\luckytoken",
-        modelsJson: "C:\\luckytoken\\models.json",
+        directory: "C:\\Token",
+        modelsJson: "C:\\Token\\models.json",
       },
     } as Record<string, unknown>;
     for (const name of [
@@ -33,7 +33,7 @@ describe("configured backup contract versions", () => {
     }
 
     const snapshots = recoveryBackupSnapshots(
-      config as unknown as LuckyTokenCliConfig,
+      config as unknown as TokenCliConfig,
     );
     expect(snapshots).toEqual([]);
     expect(Object.isFrozen(snapshots)).toBe(true);
@@ -43,12 +43,12 @@ describe("configured backup contract versions", () => {
     const config = {
       schemaVersion: 1,
       pi: {
-        directory: "C:\\luckytoken",
-        modelsJson: "C:\\luckytoken\\models.json",
+        directory: "C:\\Token",
+        modelsJson: "C:\\Token\\models.json",
       },
-    } as unknown as LuckyTokenCliConfig;
+    } as unknown as TokenCliConfig;
 
-    const files = configuredBackupFiles("C:\\luckytoken\\config.json", config);
+    const files = configuredBackupFiles("C:\\Token\\config.json", config);
     expect(files.find((file) => file.id === "models")).toMatchObject({
       contract: "pi-models-json",
       version: "0.84.2",
@@ -56,14 +56,14 @@ describe("configured backup contract versions", () => {
     expect(files.find((file) => file.id === "provider-credentials")).toBeUndefined();
     expect(configuredCredentialProfileBackupSnapshot(config)).toMatchObject({
       id: "provider-credential-profiles",
-      contract: "luckytoken-provider-credential-profiles",
+      contract: "Token-provider-credential-profiles",
       version: 1,
       category: "credentials",
     });
   });
 
   it("snapshots independent Provider records and never reads obsolete auth.json", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-profile-backup-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-profile-backup-"));
     try {
       const directory = join(root, "credential-profiles");
       await mkdir(directory, { recursive: true });
@@ -75,7 +75,7 @@ describe("configured backup contract versions", () => {
       );
       const source = configuredCredentialProfileBackupSnapshot({
         pi: { directory: root },
-      } as LuckyTokenCliConfig);
+      } as TokenCliConfig);
       const snapshot = JSON.parse(Buffer.from(
         await source.snapshot(new AbortController().signal),
       ).toString("utf8")) as {

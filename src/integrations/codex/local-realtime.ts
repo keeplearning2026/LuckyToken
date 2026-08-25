@@ -475,7 +475,7 @@ function completeRealtimeHttp(
   response: Response,
   failure?: Readonly<{
     classification: string;
-    origin: "client" | "luckytoken" | "provider" | "network_os";
+    origin: "client" | "Token" | "provider" | "network_os";
     location: ReturnType<typeof realtimeLocation>;
   }>,
 ): Response {
@@ -727,7 +727,7 @@ async function rejectRealtimeUpgrade(
     failureId,
     role: "primary",
     classification,
-    origin: status === 401 ? "client" : "luckytoken",
+    origin: status === 401 ? "client" : "Token",
     originPrecision: "exact",
     location: failureLocation,
   });
@@ -813,7 +813,7 @@ function createCodexDirectRealtimeWebSocketUpgradeHandler(
     session: RealtimeWebSocketSession,
     classification: string,
     location: ReturnType<typeof realtimeLocation>,
-    origin: "client" | "luckytoken" | "provider" | "network_os",
+    origin: "client" | "Token" | "provider" | "network_os",
   ): void => {
     if (session.primaryFailureId !== undefined) return;
     const failureId = `${session.context.requestId}:${classification}`;
@@ -992,7 +992,7 @@ function createCodexDirectRealtimeWebSocketUpgradeHandler(
       session,
       "server_shutdown",
       realtimeLocation("lane_response_processing", "preserve_realtime_close"),
-      "luckytoken",
+      "Token",
     );
   };
 

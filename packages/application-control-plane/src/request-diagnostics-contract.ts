@@ -1,7 +1,7 @@
 import type {
   TerminalUsageClass,
   TerminalUsageFact,
-} from "@luckytoken/provider-contract/usage";
+} from "@token/provider-contract/usage";
 
 /** Maximum records returned by one unified diagnostics query. */
 export const MAX_REQUEST_DIAGNOSTICS_QUERY_LIMIT = 1_000 as const;
@@ -217,7 +217,7 @@ export interface FailureDetectedPersistedObservation
   readonly failureId: string;
   readonly role: "primary" | "supporting";
   readonly classification: string;
-  readonly origin: "client" | "luckytoken" | "provider" | "network_os";
+  readonly origin: "client" | "Token" | "provider" | "network_os";
   readonly originPrecision: "exact" | "boundary" | "external_boundary";
   readonly safeMessage?: string;
   readonly exceptionFingerprint?: string;

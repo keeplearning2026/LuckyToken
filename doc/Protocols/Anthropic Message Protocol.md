@@ -49,7 +49,7 @@ Streaming event 如何组成完整 Message？
 哪些是 model-dependent / beta / extension？
 ```
 
-本文不描述 Pi、LuckyToken conversion、Gate C、Provider adaptation 或其他协议。
+本文不描述 Pi、Token conversion、Gate C、Provider adaptation 或其他协议。
 
 ------
 

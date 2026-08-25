@@ -15,13 +15,13 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
 
-const SANDBOX_MARKER = "LUCKYTOKEN_TEST_CODEX_SANDBOX";
-const SANDBOX_ROOT = "LUCKYTOKEN_TEST_CODEX_SANDBOX_ROOT";
-const SANDBOX_NONCE = "LUCKYTOKEN_TEST_CODEX_SANDBOX_NONCE";
-const SANDBOX_LEASE_FILE = ".luckytoken-test-sandbox-lease";
+const SANDBOX_MARKER = "TOKEN_TEST_CODEX_SANDBOX";
+const SANDBOX_ROOT = "TOKEN_TEST_CODEX_SANDBOX_ROOT";
+const SANDBOX_NONCE = "TOKEN_TEST_CODEX_SANDBOX_NONCE";
+const SANDBOX_LEASE_FILE = ".Token-test-sandbox-lease";
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
 const CODEX_CONFIG_FILE = "config.toml";
-const CODEX_CATALOG_FILE = "luckytoken-model-catalog.json";
+const CODEX_CATALOG_FILE = "token-model-catalog.json";
 
 function commandLine() {
   const separator = process.argv.indexOf("--", 2);
@@ -175,9 +175,9 @@ async function assertInheritedSandbox(env) {
 
 function startCleanupWatchdog(root, nonce) {
   const environment = {
-    LUCKYTOKEN_WATCHDOG_PARENT_PID: String(process.pid),
-    LUCKYTOKEN_WATCHDOG_SANDBOX_ROOT: root,
-    LUCKYTOKEN_WATCHDOG_SANDBOX_NONCE: nonce,
+    TOKEN_WATCHDOG_PARENT_PID: String(process.pid),
+    TOKEN_WATCHDOG_SANDBOX_ROOT: root,
+    TOKEN_WATCHDOG_SANDBOX_NONCE: nonce,
   };
   for (const name of ["SystemRoot", "TEMP", "TMP", "TMPDIR"]) {
     const value = process.env[name];
@@ -257,7 +257,7 @@ async function main() {
   const sourceCodexHome = configuredCodexHome
     ? resolve(configuredCodexHome)
     : join(homedir(), ".codex");
-  const guardRoot = await mkdtemp(join(tmpdir(), "luckytoken-test-codex-"));
+  const guardRoot = await mkdtemp(join(tmpdir(), "Token-test-codex-"));
   const sandboxCodexHome = join(guardRoot, "codex-home");
   const sandboxPiAgentDirectory = join(guardRoot, "pi-agent");
   const sandboxNonce = randomUUID();

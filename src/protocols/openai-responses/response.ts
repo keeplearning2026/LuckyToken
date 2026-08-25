@@ -9,7 +9,7 @@ import {
 import { redactMessage } from "./error-rendering.js";
 import {
   encodeResponsesContinuity,
-  type LuckyTokenContinuityEnvelopeV1,
+  type TokenContinuityEnvelopeV1,
   type WireContinuityAttachment,
 } from "./semantic/reasoning/continuity.js";
 
@@ -36,7 +36,7 @@ export interface ResponsesMessageOutputItem {
   role: "assistant";
   status: "completed";
   content: Array<{ type: "output_text"; text: string; annotations: [] }>;
-  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
+  token_continuity?: TokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesFunctionCallOutputItem {
@@ -47,7 +47,7 @@ export interface ResponsesFunctionCallOutputItem {
   namespace?: string;
   arguments: string;
   status: "completed";
-  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
+  token_continuity?: TokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesCustomToolCallOutputItem {
@@ -58,7 +58,7 @@ export interface ResponsesCustomToolCallOutputItem {
   namespace?: string;
   input: string;
   status: "completed";
-  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
+  token_continuity?: TokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesReasoningOutputItem {
@@ -69,7 +69,7 @@ export interface ResponsesReasoningOutputItem {
   content?: Array<{ type: "reasoning_text"; text: string }>;
   /** Restored only from a verified Responses-owned continuity envelope. */
   encrypted_content?: string;
-  luckytoken_continuity?: LuckyTokenContinuityEnvelopeV1;
+  token_continuity?: TokenContinuityEnvelopeV1;
 }
 
 export interface ResponsesCompactionOutputItem {
@@ -422,7 +422,7 @@ function convertUsage(
 
 function continuityEnvelope(
   block: ResponsesContinuityBlock | undefined,
-): LuckyTokenContinuityEnvelopeV1 | undefined {
+): TokenContinuityEnvelopeV1 | undefined {
   if (block === undefined) return undefined;
   const attachments: WireContinuityAttachment[] = [];
   const continuity = block.continuity;
@@ -544,7 +544,7 @@ function convertOutput(
       }
       const envelope = continuityEnvelope(responseContinuity);
       if (envelope !== undefined) {
-        item.luckytoken_continuity = envelope;
+        item.token_continuity = envelope;
       }
       output.push(item);
       textBlockIndex += 1;
@@ -568,7 +568,7 @@ function convertOutput(
         (entry) => entry.target === "text" && entry.contentIndex === contentIndex,
       );
       const envelope = continuityEnvelope(responseContinuity);
-      if (envelope !== undefined) item.luckytoken_continuity = envelope;
+      if (envelope !== undefined) item.token_continuity = envelope;
       output.push(item);
       textBlockIndex += 1;
       continue;
@@ -657,7 +657,7 @@ function convertOutput(
           entry.target === "toolCall" && entry.contentIndex === contentIndex,
       );
       const envelope = continuityEnvelope(responseContinuity);
-      if (envelope !== undefined) item.luckytoken_continuity = envelope;
+      if (envelope !== undefined) item.token_continuity = envelope;
       output.push(item);
     } else {
       const item: ResponsesFunctionCallOutputItem = {
@@ -674,7 +674,7 @@ function convertOutput(
           entry.target === "toolCall" && entry.contentIndex === contentIndex,
       );
       const envelope = continuityEnvelope(responseContinuity);
-      if (envelope !== undefined) item.luckytoken_continuity = envelope;
+      if (envelope !== undefined) item.token_continuity = envelope;
       output.push(item);
     }
     toolCallIndex += 1;

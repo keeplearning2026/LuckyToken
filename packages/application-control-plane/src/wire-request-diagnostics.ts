@@ -1,7 +1,7 @@
 import {
   decodeTerminalUsageFact,
   type TerminalUsageClass,
-} from "@luckytoken/provider-contract/usage";
+} from "@token/provider-contract/usage";
 
 import {
   MAX_REQUEST_DIAGNOSTICS_DETAIL_ITEMS,
@@ -436,7 +436,7 @@ function decodeFailureObservation(
     (value.role !== "primary" && value.role !== "supporting") ||
     !boundedText(value.classification, 256) ||
     (value.origin !== "client" &&
-      value.origin !== "luckytoken" &&
+      value.origin !== "Token" &&
       value.origin !== "provider" &&
       value.origin !== "network_os") ||
     (value.originPrecision !== "exact" &&

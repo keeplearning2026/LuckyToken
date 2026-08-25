@@ -2,7 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import {
   COMMANDCODE_MODEL_FACTS,
   projectCommandCodeModel,
-} from "@luckytoken/commandcode-model-catalog";
+} from "@token/commandcode-model-catalog";
 
 import {
   COMMANDCODE_GOAT_API_ID,

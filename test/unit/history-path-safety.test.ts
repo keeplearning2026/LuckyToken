@@ -5,10 +5,10 @@ import { validateExportDestination } from "../../src/history/index.js";
 /**
  * Ticket 23 export destination validation matrix (pure, deterministic):
  * absolute-only, control-char rejection, Windows reserved device names,
- * LuckyToken-owned-root rejection, and the parent-directory creation rule.
+ * Token-owned-root rejection, and the parent-directory creation rule.
  */
 
-const OWNED_ROOTS = ["C:\\Users\\fixture\\.luckytoken", "C:\\ProgramData\\LuckyToken"];
+const OWNED_ROOTS = ["C:\\Users\\fixture\\.Token", "C:\\ProgramData\\Token"];
 
 describe("history export destination validation (Ticket 23)", () => {
   it("accepts canonical absolute paths outside owned roots", () => {
@@ -74,19 +74,19 @@ describe("history export destination validation (Ticket 23)", () => {
     ).toBe(true);
   });
 
-  it("rejects destinations inside LuckyToken-owned directory trees", () => {
+  it("rejects destinations inside Token-owned directory trees", () => {
     for (const path of [
-      "C:\\Users\\fixture\\.luckytoken\\settings.json",
-      "C:\\Users\\fixture\\.luckytoken\\state\\pi\\models.json",
-      "C:\\Users\\fixture\\.luckytoken\\client-auth\\token.json",
-      "C:\\ProgramData\\LuckyToken\\anything.json",
+      "C:\\Users\\fixture\\.Token\\settings.json",
+      "C:\\Users\\fixture\\.Token\\state\\pi\\models.json",
+      "C:\\Users\\fixture\\.Token\\client-auth\\token.json",
+      "C:\\ProgramData\\Token\\anything.json",
     ]) {
       expect(validateExportDestination(path, OWNED_ROOTS).ok).toBe(false);
     }
     // A sibling directory is not owned.
     expect(
       validateExportDestination(
-        "C:\\Users\\fixture\\.luckytoken-backup\\export.json",
+        "C:\\Users\\fixture\\.token-backup\\export.json",
         OWNED_ROOTS,
       ).ok,
     ).toBe(true);
@@ -95,7 +95,7 @@ describe("history export destination validation (Ticket 23)", () => {
   it("treats Windows path casing aliases as the same owned directory", () => {
     expect(
       validateExportDestination(
-        "c:\\users\\FIXTURE\\.LUCKYTOKEN\\history.json",
+        "c:\\users\\FIXTURE\\.Token\\history.json",
         OWNED_ROOTS,
       ),
     ).toEqual({ ok: false, code: "invalid_destination" });

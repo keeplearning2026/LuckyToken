@@ -11,7 +11,7 @@ import {
   commandCodePrivateProviderId,
   createCommandCodePrivateProvider,
 } from "../../packages/provider-commandcode-private/src/provider.js";
-import { findUpstreamFailureFact } from "@luckytoken/provider-contract/diagnostics";
+import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

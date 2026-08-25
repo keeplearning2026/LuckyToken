@@ -4,7 +4,7 @@ Date: 2026-08-23
 
 Status: implementation baseline for `@earendil-works/pi-ai` 0.84.2 and `@anthropic-ai/sdk` 0.91.1
 
-Scope: Anthropic Messages as the Client Protocol after the request has committed to LuckyToken's Semantic Conversion lane. Provider Native and Direct Mode requests bypass this audit. OpenAI Responses source semantics are deliberately outside this document.
+Scope: Anthropic Messages as the Client Protocol after the request has committed to Token's Semantic Conversion lane. Provider Native and Direct Mode requests bypass this audit. OpenAI Responses source semantics are deliberately outside this document.
 
 ## Conclusion
 
@@ -22,9 +22,9 @@ The most important release blockers are:
 
 ## Authority and method
 
-The fixed usability decisions in `Spec/LuckyTokenAnthropicSemanticConversionArchitectureSpec.md` section 12.1 are normative. This audit records evidence and target dispositions; it does not redefine those decisions.
+The fixed usability decisions in `Spec/TokenAnthropicSemanticConversionArchitectureSpec.md` section 12.1 are normative. This audit records evidence and target dispositions; it does not redefine those decisions.
 
-The source grammar is the pinned official Anthropic SDK `MessageCreateParamsBase`, `ContentBlockParam`, `ToolUnion`, `ThinkingConfigParam`, `ToolChoice`, and response/SSE types in `node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts`. The target builders and response parsers are the pinned Pi 0.84.2 files in `node_modules/@earendil-works/pi-ai/dist/api`. LuckyToken's baseline behavior is in `src/protocols/anthropic/request.ts`, `tools.ts`, `response.ts`, and `sse.ts`.
+The source grammar is the pinned official Anthropic SDK `MessageCreateParamsBase`, `ContentBlockParam`, `ToolUnion`, `ThinkingConfigParam`, `ToolChoice`, and response/SSE types in `node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts`. The target builders and response parsers are the pinned Pi 0.84.2 files in `node_modules/@earendil-works/pi-ai/dist/api`. Token's baseline behavior is in `src/protocols/anthropic/request.ts`, `tools.ts`, `response.ts`, and `sse.ts`.
 
 The audit uses these dispositions:
 
@@ -66,7 +66,7 @@ The audit uses these dispositions:
 | enabled `budget_tokens` | `>=1024` and `< max_tokens` | converted through a coarse budget ladder | hard source relationship; target-degradable after context clamping | Anthropic reasoning | reject an invalid source relationship; if context clamping later leaves no valid ceiling above the budget, disable reasoning and warn |
 | historical `thinking.signature` | string required | Pi `thinkingSignature`, but synthetic Client provenance | replay-required | Anthropic reasoning/continuity | native replay only under compatible provenance; otherwise visible thinking plus bounded foreign carrier/fallback |
 | historical `redacted_thinking.data` | string required | Pi redacted thinking/signature, synthetic provenance | replay-required | Anthropic reasoning/continuity | same attachment and validated provenance required |
-| `luckytoken_continuity` v1 | absent in baseline | absent | replay-required extension | Anthropic continuity codec | closed-world bounded item-local decode/encode; malformed attachments warn individually |
+| `token_continuity` v1 | absent in baseline | absent | replay-required extension | Anthropic continuity codec | closed-world bounded item-local decode/encode; malformed attachments warn individually |
 | final assistant prefill | detected | degraded to ordinary history with notice | degradable continuation constraint | supplement plus Pi association | validate exact target continuation semantics; otherwise history fallback with warning |
 | unresolved tool call | baseline can synthesize a tool result | invented model-visible repair | hard relationship | Pi context conversion | remove repair; preserve exact legal history or Fail |
 
@@ -146,7 +146,7 @@ The independent Anthropic semantic-conversion online suite was rerun on
 2026-08-24. GOAT accepted a final Provider body containing
 `thinking: {type: "disabled"}`, but the response still contained thinking.
 Therefore this target/model does not have a certified exact reasoning-disable
-mapping. LuckyToken removes known reasoning controls, emits a `degraded`
+mapping. Token removes known reasoning controls, emits a `degraded`
 warning, accepts the target default, and preserves any thinking actually
 returned by the Provider. The corresponding online case asserts the final
 Provider body and Client response independently.

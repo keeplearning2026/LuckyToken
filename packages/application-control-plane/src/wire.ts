@@ -1493,7 +1493,7 @@ function decodeEffectiveCatalog(
 ): EffectiveCatalogProjection | undefined {
   if (
     !isRecord(value) ||
-    value.schemaVersion !== "luckytoken-effective-catalog-v1" ||
+    value.schemaVersion !== "token-effective-catalog-v1" ||
     !isRecord(value.baseline) ||
     value.baseline.package !== "@earendil-works/pi-coding-agent" ||
     value.baseline.version !== "0.84.2" ||
@@ -1525,7 +1525,7 @@ function decodeEffectiveCatalog(
     );
   }
   return Object.freeze({
-    schemaVersion: "luckytoken-effective-catalog-v1",
+    schemaVersion: "token-effective-catalog-v1",
     baseline: Object.freeze({
       package: value.baseline.package as "@earendil-works/pi-coding-agent",
       version: value.baseline.version as "0.84.2",
@@ -1864,7 +1864,7 @@ const failureMessages: Readonly<Record<DataPlaneFailure["code"], string>> = {
   start_failed:
     "The model gateway could not start. Check its configured address and try again.",
   stop_failed:
-    "The model gateway could not stop cleanly. Restart LuckyToken before trying again.",
+    "The model gateway could not stop cleanly. Restart Token before trying again.",
 };
 
 function decodeDataPlaneFailure(value: unknown): DataPlaneFailure | undefined {
@@ -2287,7 +2287,7 @@ export function decodeHello(value: unknown): HelloResult | undefined {
     value.type === "compatible" &&
     value.contractVersion === controlPlaneVersion &&
     isRecord(value.application) &&
-    value.application.id === "luckytoken" &&
+    value.application.id === "Token" &&
     typeof value.application.version === "string" &&
     (value.application.buildId === undefined ||
       (typeof value.application.buildId === "string" &&
@@ -2296,7 +2296,7 @@ export function decodeHello(value: unknown): HelloResult | undefined {
     return {
       type: "compatible",
       application: {
-        id: "luckytoken",
+        id: "Token",
         version: value.application.version,
         ...(value.application.buildId === undefined
           ? {}
@@ -2369,9 +2369,9 @@ const applicationCommandConflictMessages: Readonly<
   Record<ApplicationCommandConflict["code"], string>
 > = {
   quit_requires_explicit_confirmation:
-    "Quitting would stop the LuckyToken gateway that another process started. Acknowledge the quit explicitly to continue.",
+    "Quitting would stop the Token gateway that another process started. Acknowledge the quit explicitly to continue.",
   desktop_owner_lease_mismatch:
-    "The desktop ownership lease belongs to a newer LuckyToken shell.",
+    "The desktop ownership lease belongs to a newer Token shell.",
 };
 
 function decodeApplicationCommandConflict(
@@ -2545,7 +2545,7 @@ function decodeRuntimeCommandConflict(
   if (value.code === "application_restart_required") {
     return {
       code: value.code,
-      message: "Restart LuckyToken before starting the model gateway again.",
+      message: "Restart Token before starting the model gateway again.",
     };
   }
   return undefined;

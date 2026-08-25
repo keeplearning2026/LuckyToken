@@ -746,7 +746,7 @@ Additional workspace roots 必须与 cwd/home 使用一致的 path representatio
 | `messages` | 已转换的 CommandCode wire messages；required，可为空但不推荐 |
 | `tools` | 当前可用 tool definitions；required；没有 tool 时为 `[]` |
 | `system` | caller 提供 string 时发送；`undefined` 时 omission |
-| `max_tokens` | required；LuckyToken 使用 `options.maxTokens ?? model.maxTokens`，model catalog 对明确的 `maxOutputTokens` 使用该值，否则使用官方 CLI default 64000 |
+| `max_tokens` | required；Token 使用 `options.maxTokens ?? model.maxTokens`，model catalog 对明确的 `maxOutputTokens` 使用该值，否则使用官方 CLI default 64000 |
 | `stream` | literal `true`，不可设置为 false |
 | `temperature` | number 时发送，包括 `0`；`undefined` 时 omission |
 | `reasoning_effort` | caller 指定时先 normalize；未知 non-empty value 使用 `max`；normalized value 只有在 selected model capability 支持时才发送 |
@@ -922,7 +922,7 @@ export type ToolMessage = {
 ```
 
 - `toolCallId: string`：必须与配对的 `tool-call.toolCallId` 相同。
-- `toolName: string`：wire 接受空或非空；LuckyToken Pi conversion 对真实结果保留非空 Pi toolName。
+- `toolName: string`：wire 接受空或非空；Token Pi conversion 对真实结果保留非空 Pi toolName。
 - `output.type: "text"`：工具成功输出；`"error-text"`：工具失败/被拒/中断。
 - `output.value: string`：工具输出纯文本。多行以 `\n` 连接（多行/长文本均接受）。结构化数据（JSON）应转成字符串。
 - `output` 必须是单个对象 `{type, value}`。数组、裸字符串、缺失均被拒绝。
@@ -2558,7 +2558,7 @@ export interface FinishEvent
 | `other` | provider-specific reason not covered above |
 | missing or future unknown string | tolerant fallback |
 
-Receiver 应接受任意 string 和 missing value，因为 CommandCode client 没有对 wire event 做 closed-enum validation。对 LuckyToken 的 Pi boundary，只有 exact `length` 直接决定 normalized result；其他值由已提交的实际 ToolCall content 决定 `toolUse` / `stop`。Exact `tool-calls` 只参与 wire/content consistency diagnostic，不能替代实际内容。
+Receiver 应接受任意 string 和 missing value，因为 CommandCode client 没有对 wire event 做 closed-enum validation。对 Token 的 Pi boundary，只有 exact `length` 直接决定 normalized result；其他值由已提交的实际 ToolCall content 决定 `toolUse` / `stop`。Exact `tool-calls` 只参与 wire/content consistency diagnostic，不能替代实际内容。
 
 `finishReason:"error"` 仍然是一个正常 `type:"finish"` event，source client 不会仅因该 value throw。只有独立的 `type:"error"` event 才进入 stream error path。
 
@@ -2646,7 +2646,7 @@ export async function decodeOneCommandCodeResponse(
 }
 ~~~
 
-当前 profile 不设置通用 finish-acceptance helper。Application/B-specific adapter 直接读取并保留 `resultA.finish.finishReason` 与 `resultA.finish.rawFinishReason`；derived stop reason 只能在对应 boundary 按实际 target contract 计算，不能覆盖原始字段。LuckyToken 的 Pi mapping 使用本节 content-derived 规则。
+当前 profile 不设置通用 finish-acceptance helper。Application/B-specific adapter 直接读取并保留 `resultA.finish.finishReason` 与 `resultA.finish.rawFinishReason`；derived stop reason 只能在对应 boundary 按实际 target contract 计算，不能覆盖原始字段。Token 的 Pi mapping 使用本节 content-derived 规则。
 
 ## 8.2 Usage
 
@@ -2799,7 +2799,7 @@ Conversion boundary：
 
 5. 不得把 CommandCode raw `{"type":"finish",...}` JSON line直接当作 B event；“转换”与“原样转发”是两种不同操作。
 
-   LuckyToken 的具体 Pi mapping 由 `PI AI IR-Commandcode Private Conversion.md` 冻结，并采用 §8.1.2 的 content-derived normalization；未知 Protocol B 不能复用该 target-specific 规则。
+   Token 的具体 Pi mapping 由 `PI AI IR-Commandcode Private Conversion.md` 冻结，并采用 §8.1.2 的 content-derived normalization；未知 Protocol B 不能复用该 target-specific 规则。
 
 
 ## 9.3 Reasoning policy
@@ -2814,7 +2814,7 @@ Protocol B 可能：
 
 不要无条件把 reasoning 拼进 visible assistant text，这会改变 response semantics。
 
-LuckyToken 当前 target 是 Pi AI IR，具有独立 `ThinkingContent`，因此 CommandCode reasoning 直接映射为 Thinking；已经收到的 representable content 不受 model catalog `reasoning:false` 请求能力标记限制。
+Token 当前 target 是 Pi AI IR，具有独立 `ThinkingContent`，因此 CommandCode reasoning 直接映射为 Thinking；已经收到的 representable content 不受 model catalog `reasoning:false` 请求能力标记限制。
 
 ## 9.4 真正 SSE framing
 
@@ -3227,7 +3227,7 @@ AI 在生成实现前必须逐项确认：
 - [ ] `memory/taste/skills` 明确发送 `null`。
 - [ ] permission mapping 默认 `standard`。
 - [ ] request-side `tool-call.input` 必须是 JSON object，但不按工具 `input_schema` 校验键名、值类型或必填字段。
-- [ ] request-side wire 接受空或非空 `tool-result.toolName`；LuckyToken conversion 对真实结果保留非空 Pi name、synthetic 使用 pending call name。成功使用 `text`、真实失败使用 `error-text`、synthetic 使用 Provider-local `text|error-text` policy（默认 `text`）。
+- [ ] request-side wire 接受空或非空 `tool-result.toolName`；Token conversion 对真实结果保留非空 Pi name、synthetic 使用 pending call name。成功使用 `text`、真实失败使用 `error-text`、synthetic 使用 Provider-local `text|error-text` policy（默认 `text`）。
 - [ ] `max_tokens` 必填；caller/options 优先，model catalog 对明确 `maxOutputTokens` 使用模型值，否则使用官方 CLI 默认 64000。
 - [ ] `stream` 是 literal `true`。
 - [ ] Pi reasoning 先按 selected model 的 thinking-level map/capability clamp；只发送 model 支持的 CommandCode effort，off/absence omission。

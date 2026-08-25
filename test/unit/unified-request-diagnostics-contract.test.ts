@@ -21,7 +21,7 @@ import {
   type RequestJourneyRecord,
   type RequestJourneySummary,
   type RuntimeEventRecord,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 const JOURNEY_SUMMARY: RequestJourneySummary = Object.freeze({
   id: 1,

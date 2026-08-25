@@ -19,7 +19,7 @@ function commandCodeText(text: string): Response {
 }
 
 describe("local HTTP client access contract", () => {
-  it("serves Anthropic requests without a LuckyToken client credential", async () => {
+  it("serves Anthropic requests without a Token client credential", async () => {
     const fetch: FetchFunction = async () => commandCodeText("anonymous");
     const runtime = createCommandCodeTestRuntime({
       clientApiKey: "unused",
@@ -30,7 +30,7 @@ describe("local HTTP client access contract", () => {
     });
 
     const response = await runtime.handle(
-      new Request("http://luckytoken.test/v1/messages", {
+      new Request("http://Token.test/v1/messages", {
         method: "POST",
         headers: {
           "content-type": "application/json",

@@ -5,7 +5,7 @@ import {
   decodeCredentialProfilesCommandResult,
   decodeProviderProfileAuthCommand,
   decodeProviderProfileAuthCommandResult,
-} from "@luckytoken/application-control-plane/control-plane";
+} from "@token/application-control-plane/control-plane";
 
 const state = {
   providers: [{

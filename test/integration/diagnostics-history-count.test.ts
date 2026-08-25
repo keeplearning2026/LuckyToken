@@ -93,7 +93,7 @@ describe("unified Diagnostics history count", () => {
 
   it("counts the half-open Journey and Runtime range without changing records or artifacts", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "luckytoken-diagnostics-history-count-"),
+      join(tmpdir(), "Token-diagnostics-history-count-"),
     );
     roots.push(root);
     let diagnosticsTime = 10_000;

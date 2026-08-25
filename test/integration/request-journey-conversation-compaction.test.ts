@@ -21,10 +21,10 @@ import type { ExecutionOperation } from "../../src/execution.js";
 import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 import { createOpenAIResponsesCompactHandler } from "../../src/protocols/openai-responses/compact.js";
 import type { PublicModelSource } from "../../src/public-model-seam.js";
-import { createLuckyTokenRuntime } from "../../src/runtime.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
-  startLuckyTokenHttpServer,
-  type RunningLuckyTokenHttpServer,
+  startTokenHttpServer,
+  type RunningTokenHttpServer,
 } from "../../src/server.js";
 
 const REQUEST_ID = "67000000-0000-4000-8000-000000000001";
@@ -69,7 +69,7 @@ interface OutboundSnapshot {
 async function readResponse(response: Response): Promise<ResponseSnapshot> {
   return Object.freeze({
     status: response.status,
-    requestId: response.headers.get("x-luckytoken-request-id"),
+    requestId: response.headers.get("x-token-request-id"),
     mediaType: response.headers.get("content-type"),
     body: await response.text(),
   });
@@ -105,7 +105,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
   const subscriptions: DiagnosticsSubscription[] = [];
-  const servers: RunningLuckyTokenHttpServer[] = [];
+  const servers: RunningTokenHttpServer[] = [];
 
   afterEach(async () => {
     for (const subscription of subscriptions.splice(0)) {
@@ -121,7 +121,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
   });
 
   it("locates an unprojectable Provider Native compact response without changing its safe 502", async () => {
-    const root = await mkdtemp(join(tmpdir(), "luckytoken-compact-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-compact-journey-"));
     roots.push(root);
     const model = compactModel();
     const ambientCapture: ProviderAuthBindingCapture = Object.freeze({
@@ -189,7 +189,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
       createSessionId: () => "67000000-0000-4000-8000-000000000002",
       maxRequestBytes: 8_192,
     });
-    const runtime = createLuckyTokenRuntime({ clientProtocols: [handler] });
+    const runtime = createTokenRuntime({ clientProtocols: [handler] });
     const requestBody = JSON.stringify({
       model: ALIAS,
       input: [
@@ -201,7 +201,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
       ],
     });
 
-    const baselineServer = await startLuckyTokenHttpServer({
+    const baselineServer = await startTokenHttpServer({
       runtime,
       createRequestId: () => REQUEST_ID,
       port: 0,
@@ -231,7 +231,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
         if (record.requestId === REQUEST_ID) publish(record);
       }),
     );
-    const observedServer = await startLuckyTokenHttpServer({
+    const observedServer = await startTokenHttpServer({
       runtime,
       diagnostics: authority,
       createRequestId: () => REQUEST_ID,
@@ -371,7 +371,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
       failureId: detail.incident?.primaryFailureId,
       role: "primary",
       classification: "provider_native_alias_projection_failed",
-      origin: "luckytoken",
+      origin: "Token",
       originPrecision: "exact",
       location: PRIMARY_LOCATION,
     });

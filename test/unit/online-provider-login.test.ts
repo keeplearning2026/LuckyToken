@@ -11,7 +11,7 @@ import { createConfiguredPiModels } from "../support/configured-data-plane.js";
 
 describe("online Provider login", () => {
   it("persists login through an exact Provider Profile binding", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "luckytoken-online-login-"));
+    const directory = await mkdtemp(join(tmpdir(), "token-online-login-"));
     try {
       const credentialRecordStore = createInMemoryProviderCredentialRecordStore({
         createRevision: randomUUID,

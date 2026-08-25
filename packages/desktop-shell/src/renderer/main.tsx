@@ -9,6 +9,6 @@ if (root === null) throw new Error("Token desktop root is missing");
 
 createRoot(root).render(
   <StrictMode>
-    <App api={window.luckytoken} />
+    <App api={window.Token} />
   </StrictMode>,
 );
