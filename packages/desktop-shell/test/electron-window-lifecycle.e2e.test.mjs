@@ -49,9 +49,7 @@ async function writeConfig(home, port) {
             conversion: {
               request: {
                 unknownContent: "error",
-                localCacheControl: "ignore",
               },
-              response: { unknownPiContent: "error" },
             },
           },
           "openai-responses": {

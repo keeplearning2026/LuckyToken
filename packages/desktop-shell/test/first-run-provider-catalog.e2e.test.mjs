@@ -47,8 +47,7 @@ async function writeIsolatedFirstUseConfig(stateRoot, port) {
       clientProtocols: {
         "anthropic-messages": {
           conversion: {
-            request: { unknownContent: "error", localCacheControl: "ignore" },
-            response: { unknownPiContent: "error" },
+            request: { unknownContent: "error" },
           },
         },
         "openai-responses": {

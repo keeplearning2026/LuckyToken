@@ -118,6 +118,132 @@ instead of a false empty history. Artifacts are copied only at existing
 ownership seams, redacted before persistence, and bounded by the `diagnostics`
 configuration limits.
 
+### Enable journey capture in the desktop
+
+Open the management window and select **Settings → Data & privacy**. The
+**Full journey capture** card shows the resolved capture folder and diagnostics
+storage health. It has two independent controls:
+
+- **Capture every request journey** retains available artifact bodies for both
+  successful and unsuccessful requests. It is disabled by default.
+- **Force capture when a request fails** retains available artifact bodies for
+  failed, aborted, or interrupted requests. It is enabled by default.
+
+The status reads **All requests**, **Failures only**, or **Off**. Changes are
+hot-applied, but each request keeps the policy that was active when that
+request was admitted. Timeline, outcome, failure location, and artifact
+descriptors remain recorded even when body retention is off.
+
+The body-retention switches are Settings values, not keys in `config.json`.
+The `diagnostics` section of `config.json` controls only the storage directory
+and limits. The shipped defaults allow one naturally streamed JSON, JSONL, or
+SSE artifact up to 64 MiB, all artifacts for one journey up to 512 MiB, and
+retained artifact bodies up to 5 GiB, seven days, or 1,000 journeys, whichever
+retention limit is reached first.
+
+### Diagnose a request in the desktop UI
+
+1. Select **Overview** and find the request in the **Requests** table. The
+   initial time range is the current local day. Use the filter button to change
+   **From/To** or filter by Provider, Profile, Model, Protocol, Session, or
+   Outcome; use refresh when needed.
+2. Expand the row with its disclosure arrow. **Request result** separates the
+   HTTP result, duration, and diagnostics completeness. **Request facts** shows
+   the Request ID, session, selected Profile, requested model, and resolved
+   Provider/model when those facts were observed.
+3. For an unsuccessful request, start with **Why this request failed/ended**.
+   Its classification and **Detected at** location identify the primary phase
+   and lane step. Then read **What happened** from Accepted through Responded.
+4. Expand **Technical timeline** for the ordered observations. A started step
+   without a matching completion is useful evidence for interruption or a
+   hang; timeline entries are observations, not inferred causes.
+5. Expand **Diagnostic captures** to inspect request, intermediate, upstream,
+   and response artifacts. **View JSON** reads the first 64 KiB page;
+   **Next page** advances through a large artifact while keeping only one page
+   in renderer memory.
+
+Capture state is part of the evidence:
+
+- `captured` means the displayed bytes were stored completely;
+- `partial` means only a bounded prefix is available;
+- `unavailable` means no body is available and the displayed reason explains
+  why, such as capture policy, redaction failure, capacity, or retention expiry;
+- `not_applicable` means that artifact does not belong to the selected lane.
+
+Always check the **Redacted**, **Truncated**, byte-count, media-type, and reason
+labels. **Diagnostics: Complete** means the required diagnostic record was
+stored; it does not promise that an optional Provider fact existed or was
+observable.
+
+### Read the request, intermediate state, and response artifacts
+
+Use the committed lane shown in the request detail before interpreting artifact
+names. A practical reading order is:
+
+| Lane | Request-side evidence | Response-side evidence |
+|---|---|---|
+| Local Native / Direct Mode | `client_request_wire`, `local_outbound_request_envelope`, `local_outbound_request_wire` | `local_upstream_response_envelope`, `local_upstream_response_wire`, then `client_response_wire` |
+| Provider Native Preservation | `client_request_wire`, `provider_native_outbound_request_envelope.<attempt>`, `provider_native_outbound_request_wire.<attempt>` | `provider_native_upstream_response_envelope.<attempt>`, `provider_native_upstream_response_wire.<attempt>`, `provider_native_preserved_response_wire`, then `client_response_wire` |
+| Semantic Conversion | `client_request_wire`, `pi_invocation_snapshot`, `pi_provider_request_payload` | `pi_provider_response_metadata`, `pi_provider_response_ir`, `pi_terminal_summary`, then `client_response_wire` |
+
+Envelope artifacts contain only safe HTTP metadata; wire/payload artifacts
+contain the bounded, redacted body available at that ownership seam. Attempt
+suffixes let retries or Profile transitions be compared in order.
+
+For Semantic Conversion, Pi 0.84.2 exposes the final Provider request payload,
+safe response status/headers, and decoded Pi `AssistantMessage`. Adapter- or
+SDK-internal raw Provider response events are not an observable contract and
+are therefore not guaranteed artifacts. Use `pi_provider_response_ir` to see
+the decoded Provider result and `client_response_wire` to see what Token
+returned to the client. The native lanes instead preserve the actual upstream
+response wire they own.
+
+### Read the capture files directly
+
+Prefer the UI because it queries the running diagnostics authority and reports
+typed unavailability. For read-only offline inspection, the installed default
+is:
+
+```text
+%USERPROFILE%\.Token\state\request-diagnostics\
+├── diagnostics-v3.sqlite3
+├── diagnostics-v3.sqlite3-wal / diagnostics-v3.sqlite3-shm   (when active)
+└── full-journeys\
+    ├── .inflight\                                            (unfinished; ignore)
+    └── YYYY-MM-DD\
+        └── request-<hash>\
+            ├── manifest.json
+            └── artifacts\
+                └── artifact-<hash>.json | .jsonl | .sse
+```
+
+If `diagnostics.directory` is customized, use the exact **Capture folder**
+shown in **Settings → Data & privacy** instead of assuming the default.
+
+The folder and file names are deliberately opaque hashes. Open
+`manifest.json` first: it contains the real Request ID, protocol, lane, outcome,
+and every artifact descriptor, including `artifactId`, `artifactKind`, state,
+redaction/truncation facts, and the relative `file` when a body exists. Follow
+that relative file into `artifacts/`; JSON, JSONL, and SSE bodies are ordinary
+UTF-8 text and can be opened in a text editor or JSON viewer. Ignore
+`.inflight`, because an active or interrupted capture may still be finalized or
+discarded.
+
+Treat the tree and SQLite database as read-only and do not edit, rename, or
+delete individual files while Token is running. Use **Delete history** in
+**Settings → Data & privacy** for managed deletion. Use **Create a full backup**
+for a consistent diagnostic-index backup; full-journey body files remain in
+the capture folder, so copy only the finalized journey folders needed for a
+support bundle. Although bodies are centrally redacted before persistence,
+request content can still be sensitive; inspect a bundle before sharing it.
+
+If a successful request has artifact descriptors but no bodies, enable
+**Capture every request journey** and send a new request. If Semantic
+Conversion lacks a raw Provider response body, use its response metadata and
+Pi response IR as described above. If the UI reports degraded or unavailable
+diagnostics, use the stored reason and diagnostics health rather than treating
+missing evidence as proof that serving failed.
+
 Two CommandCode Providers are shipped as bundled product packages and registered
 automatically through the standard Pi Provider contract:
 

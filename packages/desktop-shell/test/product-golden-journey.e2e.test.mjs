@@ -184,9 +184,7 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
             conversion: {
               request: {
                 unknownContent: "error",
-                localCacheControl: "ignore",
               },
-              response: { unknownPiContent: "error" },
             },
           },
           "openai-responses": {
