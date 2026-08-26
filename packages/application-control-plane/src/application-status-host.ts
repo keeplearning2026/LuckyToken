@@ -56,6 +56,7 @@ import {
 } from "./pipe-transport.js";
 import {
   decodeRequestArtifactChunkReadResult,
+  decodeRequestArtifactFileReferenceReadResult,
   decodeRequestJourneyDetailReadResult,
   decodeRequestJourneyQueryReadResult,
   decodeRequestJourneySummary,
@@ -540,6 +541,28 @@ export async function startApplicationStatusHost(
             }
             await writeFrame(state.connection, {
               type: "request_artifact_result",
+              requestId: request.requestId,
+              result,
+            });
+          }
+        } else if (request.type === "resolve_request_artifact_file") {
+          if (diagnostics === undefined) {
+            await sendError(
+              state.connection,
+              request.requestId,
+              "unknown_command",
+            );
+          } else {
+            const result = await executeDiagnosticsRead(
+              () => diagnostics.resolveRequestArtifactFile(request.input),
+              decodeRequestArtifactFileReferenceReadResult,
+            );
+            if (result === undefined) {
+              await sendError(state.connection, request.requestId, "invalid_request");
+              continue;
+            }
+            await writeFrame(state.connection, {
+              type: "request_artifact_file_result",
               requestId: request.requestId,
               result,
             });

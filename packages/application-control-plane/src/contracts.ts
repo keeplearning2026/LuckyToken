@@ -1,5 +1,7 @@
 import type {
   RequestArtifactChunkReadResult,
+  RequestArtifactFileReferenceReadResult,
+  RequestArtifactFileResolveInput,
   RequestArtifactGetInput,
   RequestJourneyDetailReadResult,
   RequestJourneyGetInput,
@@ -927,6 +929,9 @@ export interface ControlPlaneClient {
   getRequestArtifact(
     input: RequestArtifactGetInput,
   ): Promise<RequestArtifactChunkReadResult>;
+  resolveRequestArtifactFile(
+    input: RequestArtifactFileResolveInput,
+  ): Promise<RequestArtifactFileReferenceReadResult>;
   queryRuntimeEvents(
     query?: RuntimeEventQuery,
   ): Promise<RuntimeEventQueryReadResult>;

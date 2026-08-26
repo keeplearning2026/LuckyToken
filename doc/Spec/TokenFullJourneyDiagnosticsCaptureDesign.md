@@ -35,7 +35,7 @@ The 64 MiB limit is a diagnostics JSON-artifact limit. It does not change semant
 
 ## 2. Review baseline and disposition
 
-The pre-implementation review proved that this contract could not be met by increasing one constant: capture was one-shot and 256 KiB-limited, the per-Journey budget was 4 MiB, bodies were SQLite BLOBs, semantic snapshots were lossy, safe HTTP envelopes and desktop body inspection were absent, and only one limited non-interference case existed. Those Token-owned gaps are now addressed by the artifact recorder, independent process, v3 index/file tree, complete protocol-owned snapshots, safe envelope artifacts, paged viewer, and cross-lane tests.
+The pre-implementation review proved that this contract could not be met by increasing one constant: capture was one-shot and 256 KiB-limited, the per-Journey budget was 4 MiB, bodies were SQLite BLOBs, semantic snapshots were lossy, safe HTTP envelopes and desktop body inspection were absent, and only one limited non-interference case existed. Those Token-owned gaps are now addressed by the artifact recorder, independent process, v3 index/file tree, complete protocol-owned snapshots, safe envelope artifacts, system-viewer inspection, and cross-lane tests.
 
 Two ownership limits remain deliberately truthful:
 
@@ -105,7 +105,7 @@ interface JourneyCapturePolicySource {
 
 Production adapts the Settings Authority; diagnostics tests use an in-memory adapter. `begin()` catches policy-source failure and uses the catalog defaults (`allRequestsEnabled=false`, `failedRequestsEnabled=true`). Neither `begin()` nor any observer call exposes the policy or a result that serving code can branch on.
 
-The Application Control Plane exposes a named, read-only diagnostics storage query containing the resolved full-journey directory and fixed artifact limit. It does not expose child-process IPC details, temporary paths, SQLite handles, file handles, or arbitrary filesystem operations. Electron Main remains a thin typed bridge; the Renderer changes the switch only with the existing Settings command and displays the directory returned by the diagnostics query.
+The Application Control Plane exposes a named, read-only diagnostics storage query containing the resolved full-journey directory and fixed artifact limit. For a named desktop open action it may additionally resolve one existing artifact record to its child-validated managed absolute file path for trusted Electron Main only. It does not expose child-process IPC details, temporary paths, SQLite handles, file handles, or arbitrary filesystem operations. Electron Main remains a thin typed bridge; the Renderer changes the switch only with the existing Settings command and displays the directory returned by the diagnostics query.
 
 ## 5. Deep artifact capture module
 
@@ -275,10 +275,10 @@ Tests that can reach Codex state must use a fresh temporary `CODEX_HOME`, copy o
 
 ## 10. Control Plane and desktop inspection
 
-Keep artifact retrieval paged and add metadata-first inspection. The renderer must never load artifact bytes or a 64 MiB body into one message, state value, or DOM node.
+Keep generic artifact retrieval paged and add metadata-first inspection. The renderer must never receive a capture filesystem path, artifact bytes, or a 64 MiB body in one message, state value, or DOM node.
 
 - Fetch descriptors and safe envelopes first.
-- A named desktop open action lets Electron Main fetch body pages with explicit offset/limit into one private bounded temporary file, open it with the system default viewer, and fall back to the platform chooser when no association exists.
+- A named desktop open action resolves `requestId + artifactId` inside the diagnostics authority, verifies that the indexed existing file remains below the managed root, and returns that one absolute path to trusted Electron Main. Main opens the original sanitized file directly with the system default viewer and falls back to the platform chooser when no association exists; it does not read or copy the body.
 - Group captures by journey stage, show readable collision-safe filenames, and use a contextual magnifier action for each available file; do not render raw bodies inline.
 - Support stage-to-stage comparison by requesting bounded windows, not whole bodies.
 - Display `complete`, `partial`, or `unavailable`, original/captured byte counts, redaction status, and reason prominently.
@@ -293,6 +293,6 @@ Keep artifact retrieval paged and add metadata-first inspection. The renderer mu
 4. Wire Direct Mode and both Provider Native implementations at their lane-owned seams.
 5. Wire `pi_provider_request_payload`, safe response metadata, and decoded response IR independently for OpenAI Responses and Anthropic Messages through official Pi 0.84.2 public callbacks.
 6. Replace lossy semantic snapshots with complete protocol-owned artifacts while retaining optional summaries only as explicitly labelled convenience artifacts.
-7. Add the Settings toggle/directory display, paged/virtualized desktop viewer, and the full cross-lane certification matrix.
+7. Add the Settings toggle/directory display, system-viewer desktop open flow, and the full cross-lane certification matrix.
 
 The milestone is implemented under the required public-boundary scene above. Missing required callback/IR stages remain visible as `partial` or `unavailable` rather than being hidden behind summaries. Raw Provider response events and Adapter/SDK-internal HTTP wire are intentionally not part of the Semantic diagnostic contract.

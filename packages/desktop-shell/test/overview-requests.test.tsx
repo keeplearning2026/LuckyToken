@@ -203,7 +203,6 @@ describe("Overview Request Journeys", () => {
     expect(openRequestArtifact).toHaveBeenCalledWith({
       requestId: "request-10",
       artifactId: "client_response_wire",
-      mediaType: "application/json",
     });
     expect(captures?.querySelector("pre")).toBeNull();
     await act(async () => { for (const listener of listeners) listener(summary(11, "running")); });

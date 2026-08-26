@@ -65,6 +65,8 @@ import {
 } from "./analytics-contract.js";
 import type {
   RequestArtifactChunkReadResult,
+  RequestArtifactFileReferenceReadResult,
+  RequestArtifactFileResolveInput,
   RequestArtifactGetInput,
   RequestJourneyDetailReadResult,
   RequestJourneyGetInput,
@@ -76,6 +78,8 @@ import type {
 } from "./request-diagnostics-contract.js";
 import {
   decodeRequestArtifactChunkReadResult,
+  decodeRequestArtifactFileReferenceReadResult,
+  decodeRequestArtifactFileResolveInput,
   decodeRequestArtifactGetInput,
   decodeRequestJourneyDetailReadResult,
   decodeRequestJourneyGetInput,
@@ -151,6 +155,11 @@ export type ClientRequest =
       readonly type: "get_request_artifact";
       readonly requestId: string;
       readonly input: RequestArtifactGetInput;
+    }
+  | {
+      readonly type: "resolve_request_artifact_file";
+      readonly requestId: string;
+      readonly input: RequestArtifactFileResolveInput;
     }
   | {
       readonly type: "query_runtime_events";
@@ -282,6 +291,11 @@ export type ServerMessage =
       readonly type: "request_artifact_result";
       readonly requestId: string;
       readonly result: RequestArtifactChunkReadResult;
+    }
+  | {
+      readonly type: "request_artifact_file_result";
+      readonly requestId: string;
+      readonly result: RequestArtifactFileReferenceReadResult;
     }
   | {
       readonly type: "runtime_events_result";
@@ -2031,6 +2045,19 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       request: { type: "get_request_artifact", requestId, input },
     };
   }
+  if (value.type === "resolve_request_artifact_file") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "input"])) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    const input = decodeRequestArtifactFileResolveInput(value.input);
+    if (input === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: { type: "resolve_request_artifact_file", requestId, input },
+    };
+  }
   if (value.type === "query_runtime_events") {
     if (!hasOnlyKeys(value, ["type", "requestId", "query"])) {
       return { type: "invalid", requestId, code: "invalid_request" };
@@ -2668,6 +2695,13 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "request_artifact_result", requestId, result };
+  }
+  if (value.type === "request_artifact_file_result") {
+    if (!hasOnlyKeys(value, ["type", "requestId", "result"])) return undefined;
+    const result = decodeRequestArtifactFileReferenceReadResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "request_artifact_file_result", requestId, result };
   }
   if (value.type === "runtime_events_result") {
     if (!hasOnlyKeys(value, ["type", "requestId", "result"])) return undefined;

@@ -244,6 +244,9 @@ export {
   type RequestAnalyticsOutcome,
   type RequestArtifactDescriptor,
   type RequestArtifactChunkReadResult,
+  type RequestArtifactFileReference,
+  type RequestArtifactFileReferenceReadResult,
+  type RequestArtifactFileResolveInput,
   type RequestArtifactGetInput,
   type RequestArtifactReadResult,
   type RequestArtifactState,
@@ -287,6 +290,9 @@ export {
 } from "./request-diagnostics-contract.js";
 export {
   decodeRequestArtifactChunkReadResult,
+  decodeRequestArtifactFileReference,
+  decodeRequestArtifactFileReferenceReadResult,
+  decodeRequestArtifactFileResolveInput,
   decodeRequestArtifactGetInput,
   decodeRequestArtifactReadResult,
   decodeRequestJourneyDetailReadResult,

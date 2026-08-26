@@ -37,6 +37,8 @@ export type {
   ClientResponsePresentation,
   DiagnosticsSubscription,
   RequestArtifactDescriptor,
+  RequestArtifactFileReference,
+  RequestArtifactFileResolveInput,
   RequestArtifactGetInput,
   RequestArtifactReadResult,
   RequestHandoffOutcome,

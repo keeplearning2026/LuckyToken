@@ -165,9 +165,10 @@ retention limit is reached first.
    media type, and byte count. Select its magnifier to open that one sanitized
    file with the system default viewer. If no association exists, Windows asks
    which installed application to use. JSON files are indented; JSONL remains
-   one record per line and SSE opens as an `.sse` text file. The desktop pages
-   large files through the Control Plane, so the Renderer never loads a 64 MiB
-   body into React state.
+   one record per line and SSE opens as an `.sse` text file. Electron Main opens
+   the existing sanitized capture directly after the diagnostics authority
+   validates its record and managed path; it does not read or copy the file.
+   The Renderer receives neither the filesystem path nor body bytes.
 
 Capture state is part of the evidence:
 

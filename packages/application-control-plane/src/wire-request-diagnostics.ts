@@ -25,6 +25,9 @@ import {
   type RequestAnalyticsOutcome,
   type RequestArtifactDescriptor,
   type RequestArtifactChunkReadResult,
+  type RequestArtifactFileReference,
+  type RequestArtifactFileReferenceReadResult,
+  type RequestArtifactFileResolveInput,
   type RequestArtifactGetInput,
   type RequestArtifactReadResult,
   type RequestArtifactState,
@@ -67,6 +70,7 @@ const MAX_STEP_TEXT = 128;
 const MAX_SOURCE_PATH_TEXT = 1_024;
 const MAX_SAFE_TEXT = 4_096;
 const MAX_MEDIA_TYPE_TEXT = 256;
+const MAX_ABSOLUTE_PATH_TEXT = 32 * 1_024;
 
 const PHASES = new Set<RequestJourneyPhase>([
   "http_admission",
@@ -1259,6 +1263,20 @@ export function decodeRequestArtifactGetInput(
   });
 }
 
+export function decodeRequestArtifactFileResolveInput(
+  value: unknown,
+): RequestArtifactFileResolveInput | undefined {
+  return isRecord(value) &&
+    hasOnlyKeys(value, ["requestId", "artifactId"]) &&
+    boundedText(value.requestId, MAX_ID_TEXT) &&
+    boundedText(value.artifactId, MAX_ID_TEXT)
+    ? Object.freeze({
+        requestId: value.requestId,
+        artifactId: value.artifactId,
+      })
+    : undefined;
+}
+
 export function decodeRequestArtifactReadResult(
   value: unknown,
 ): RequestArtifactReadResult | undefined {
@@ -1296,6 +1314,26 @@ export function decodeRequestArtifactReadResult(
     nextOffset: value.nextOffset,
     complete: value.complete,
     dataBase64: value.dataBase64 as string,
+  });
+}
+
+export function decodeRequestArtifactFileReference(
+  value: unknown,
+): RequestArtifactFileReference | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["requestId", "artifactId", "absolutePath"]) ||
+    !boundedText(value.requestId, MAX_ID_TEXT) ||
+    !boundedText(value.artifactId, MAX_ID_TEXT) ||
+    !boundedText(value.absolutePath, MAX_ABSOLUTE_PATH_TEXT) ||
+    value.absolutePath.includes("\0")
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    requestId: value.requestId,
+    artifactId: value.artifactId,
+    absolutePath: value.absolutePath,
   });
 }
 
@@ -1404,6 +1442,12 @@ export function decodeRequestArtifactChunkReadResult(
   value: unknown,
 ): RequestArtifactChunkReadResult | undefined {
   return decodeReadResult(value, decodeRequestArtifactReadResult);
+}
+
+export function decodeRequestArtifactFileReferenceReadResult(
+  value: unknown,
+): RequestArtifactFileReferenceReadResult | undefined {
+  return decodeReadResult(value, decodeRequestArtifactFileReference);
 }
 
 export function decodeRuntimeEventQueryReadResult(

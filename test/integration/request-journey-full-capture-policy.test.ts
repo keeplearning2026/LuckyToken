@@ -229,6 +229,14 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     expect(manifest.artifacts[0]?.file).toMatch(
       /^artifacts\/client-request-wire-[a-f0-9]{8}\.json$/u,
     );
+    await expect(authority.resolveRequestArtifactFile({
+      requestId,
+      artifactId: "client_request_wire",
+    })).resolves.toEqual({
+      requestId,
+      artifactId: "client_request_wire",
+      absolutePath: join(journeyDirectory, manifest.artifacts[0]!.file!),
+    });
     expect(
       await readFile(join(journeyDirectory, manifest.artifacts[0]!.file!), "utf8"),
     ).toBe('{\n  "marker": "folder-artifact"\n}');

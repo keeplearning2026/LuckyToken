@@ -1,5 +1,7 @@
 import type {
   RequestArtifactChunkReadResult,
+  RequestArtifactFileReferenceReadResult,
+  RequestArtifactFileResolveInput,
   RequestArtifactGetInput,
   RequestJourneyDetailReadResult,
   RequestJourneyGetInput,
@@ -294,6 +296,18 @@ export async function connectApplicationControlPlane(
     ): Promise<RequestArtifactChunkReadResult> {
       const response = await request({ type: "get_request_artifact", input });
       if (response.type !== "request_artifact_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      return response.result;
+    },
+    async resolveRequestArtifactFile(
+      input: RequestArtifactFileResolveInput,
+    ): Promise<RequestArtifactFileReferenceReadResult> {
+      const response = await request({
+        type: "resolve_request_artifact_file",
+        input,
+      });
+      if (response.type !== "request_artifact_file_result") {
         throw new Error("Control Plane response is malformed");
       }
       return response.result;

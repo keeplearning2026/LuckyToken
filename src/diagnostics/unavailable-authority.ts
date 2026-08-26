@@ -1,5 +1,6 @@
 import type {
   AnalyticsQueryResult,
+  RequestArtifactFileReference,
   RequestArtifactReadResult,
   RequestJourneyQueryResult,
   RequestJourneyRecord,
@@ -45,6 +46,9 @@ export function createUnavailableDiagnosticsAuthority(): DiagnosticsManagementAu
       return unavailable();
     },
     getRequestArtifact(): Promise<RequestArtifactReadResult> {
+      return unavailable();
+    },
+    resolveRequestArtifactFile(): Promise<RequestArtifactFileReference> {
       return unavailable();
     },
     queryRuntimeEvents(): Promise<RuntimeEventQueryResult> {

@@ -344,7 +344,6 @@ function ArtifactCaptureList({
       const response = await api.control.openRequestArtifact({
         requestId: record.requestId,
         artifactId: artifact.artifactId,
-        ...(artifact.mediaType === undefined ? {} : { mediaType: artifact.mediaType }),
       });
       setOpenStates((existing) => ({
         ...existing,

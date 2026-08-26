@@ -4,6 +4,8 @@ import {
   MAX_REQUEST_ARTIFACT_CHUNK_BYTES,
   MAX_REQUEST_DIAGNOSTICS_QUERY_LIMIT,
   controlPlaneVersion,
+  decodeRequestArtifactFileReference,
+  decodeRequestArtifactFileResolveInput,
   decodeRequestArtifactGetInput,
   decodeRequestArtifactReadResult,
   decodeRequestJourneyGetInput,
@@ -530,6 +532,29 @@ describe("unified request diagnostics Control Plane contract", () => {
       decodeRequestArtifactGetInput({
         ...artifactInput,
         limit: MAX_REQUEST_ARTIFACT_CHUNK_BYTES + 1,
+      }),
+    ).toBeUndefined();
+
+    const fileInput = {
+      requestId: JOURNEY_SUMMARY.requestId,
+      artifactId: "client-response-wire",
+    } as const;
+    expect(decodeRequestArtifactFileResolveInput(fileInput)).toEqual(fileInput);
+    expect(
+      decodeRequestArtifactFileResolveInput({ ...fileInput, offset: 0 }),
+    ).toBeUndefined();
+
+    const fileReference = {
+      ...fileInput,
+      absolutePath: "D:\\diagnostics\\client-response-wire.json",
+    } as const;
+    expect(decodeRequestArtifactFileReference(fileReference)).toEqual(
+      fileReference,
+    );
+    expect(
+      decodeRequestArtifactFileReference({
+        ...fileReference,
+        absolutePath: "D:\\bad\0path.json",
       }),
     ).toBeUndefined();
 

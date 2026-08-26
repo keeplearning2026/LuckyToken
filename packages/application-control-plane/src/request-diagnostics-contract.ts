@@ -361,6 +361,11 @@ export interface RequestArtifactGetInput {
   readonly limit: number;
 }
 
+export interface RequestArtifactFileResolveInput {
+  readonly requestId: string;
+  readonly artifactId: string;
+}
+
 export interface RequestArtifactReadResult {
   readonly requestId: string;
   readonly artifactId: string;
@@ -368,6 +373,17 @@ export interface RequestArtifactReadResult {
   readonly nextOffset: number;
   readonly complete: boolean;
   readonly dataBase64: string;
+}
+
+/**
+ * Trusted local-management reference to an existing sanitized artifact file.
+ * This is consumed by Electron Main for OS integration and is never projected
+ * into the Renderer diagnostics record.
+ */
+export interface RequestArtifactFileReference {
+  readonly requestId: string;
+  readonly artifactId: string;
+  readonly absolutePath: string;
 }
 
 export interface RuntimeEventRecord {
@@ -414,6 +430,8 @@ export type RequestJourneyDetailReadResult =
   DiagnosticsReadResult<RequestJourneyRecord>;
 export type RequestArtifactChunkReadResult =
   DiagnosticsReadResult<RequestArtifactReadResult>;
+export type RequestArtifactFileReferenceReadResult =
+  DiagnosticsReadResult<RequestArtifactFileReference>;
 export type RuntimeEventQueryReadResult =
   DiagnosticsReadResult<RuntimeEventQueryResult>;
 
@@ -454,6 +472,9 @@ export interface UnifiedDiagnosticsManagement {
   getRequestArtifact(
     input: RequestArtifactGetInput,
   ): Promise<RequestArtifactReadResult>;
+  resolveRequestArtifactFile(
+    input: RequestArtifactFileResolveInput,
+  ): Promise<RequestArtifactFileReference>;
   queryRuntimeEvents(
     query?: RuntimeEventQuery,
   ): Promise<RuntimeEventQueryResult>;

@@ -17,6 +17,7 @@ function diagnosticsWorkerMain(): void {
     openSync,
     readFileSync,
     readSync,
+    realpathSync,
     renameSync,
     rmSync,
     rmdirSync,
@@ -274,6 +275,7 @@ function diagnosticsWorkerMain(): void {
   database.exec("PRAGMA foreign_keys = ON");
 
   const storageRoot = resolve(data.directory);
+  const canonicalStorageRoot = realpathSync(storageRoot);
   const storagePath = (relativePath: string): string => {
     const absolutePath = resolve(storageRoot, relativePath);
     if (
@@ -283,6 +285,17 @@ function diagnosticsWorkerMain(): void {
       throw new Error("Diagnostics artifact path escaped its storage root");
     }
     return absolutePath;
+  };
+  const existingStorageFile = (relativePath: string): string => {
+    const canonicalPath = realpathSync(storagePath(relativePath));
+    if (
+      canonicalPath === canonicalStorageRoot ||
+      !canonicalPath.startsWith(`${canonicalStorageRoot}${sep}`) ||
+      !statSync(canonicalPath).isFile()
+    ) {
+      throw new Error("Diagnostics artifact is not a managed file");
+    }
+    return canonicalPath;
   };
   const opaqueSegment = (prefix: string, value: string): string =>
     `${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
@@ -2639,6 +2652,42 @@ function diagnosticsWorkerMain(): void {
         return;
       }
 
+      if (message.type === "resolve_artifact_file") {
+        if (
+          message.requestId === undefined ||
+          message.artifactId === undefined
+        ) {
+          throw new Error("Artifact file query requires request and artifact ids");
+        }
+        const artifact = database
+          .prepare(
+            `SELECT body_path AS bodyPath
+             FROM request_journey_artifacts
+             WHERE request_id = ? AND artifact_id = ?`,
+          )
+          .get(message.requestId, message.artifactId) as
+          | { readonly bodyPath: string | null }
+          | undefined;
+        if (artifact === undefined || artifact.bodyPath === null) {
+          port.postMessage({
+            type: "command_error",
+            commandId: message.commandId,
+            message: "Request artifact body is unavailable",
+          });
+          return;
+        }
+        port.postMessage({
+          type: "result",
+          commandId: message.commandId,
+          value: {
+            requestId: message.requestId,
+            artifactId: message.artifactId,
+            absolutePath: existingStorageFile(artifact.bodyPath),
+          },
+        });
+        return;
+      }
+
       if (message.type === "get_artifact") {
         if (
           message.requestId === undefined ||
@@ -2674,7 +2723,7 @@ function diagnosticsWorkerMain(): void {
         }
         const offset = message.offset!;
         const limit = message.limit!;
-        const absolutePath = storagePath(artifact.bodyPath);
+        const absolutePath = existingStorageFile(artifact.bodyPath);
         const bodyBytes = statSync(absolutePath).size;
         const nextOffset = Math.min(bodyBytes, offset + limit);
         const chunk = new Uint8Array(Math.max(0, nextOffset - offset));

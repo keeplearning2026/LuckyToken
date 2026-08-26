@@ -106,7 +106,6 @@ export type DesktopBackendState =
 export interface DesktopRequestArtifactOpenInput {
   readonly requestId: string;
   readonly artifactId: string;
-  readonly mediaType?: string;
 }
 
 export type DesktopRequestArtifactOpenResult =

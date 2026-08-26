@@ -70,7 +70,6 @@ const backendConnection = createElectronBackendConnection({
 const requestArtifactOpener = createDesktopRequestArtifactOpener({
   reader: () => controlPlaneSession.client(),
   platform: {
-    temporaryDirectory: () => app.getPath("temp"),
     openPath: async (path) => {
       const defaultViewerError = await shell.openPath(path);
       if (defaultViewerError.length === 0) return true;
@@ -424,6 +423,5 @@ if (!squirrelStartup) app.on("will-quit", () => {
   void Promise.allSettled([
     desktopIpcBridge.dispose(),
     backendConnection.dispose(),
-    requestArtifactOpener.dispose(),
   ]);
 });

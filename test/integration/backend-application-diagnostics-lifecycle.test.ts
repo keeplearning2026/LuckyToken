@@ -294,6 +294,8 @@ describe("Backend Application DiagnosticsAuthority lifecycle", () => {
         Promise.reject(new Error("not used by this lifecycle test")),
       getRequestArtifact: () =>
         Promise.reject(new Error("not used by this lifecycle test")),
+      resolveRequestArtifactFile: () =>
+        Promise.reject(new Error("not used by this lifecycle test")),
       queryRuntimeEvents: () =>
         Promise.resolve(Object.freeze({ records: Object.freeze([]), hasMore: false })),
       getAnalytics: () => Promise.reject(new Error("not used by this lifecycle test")),

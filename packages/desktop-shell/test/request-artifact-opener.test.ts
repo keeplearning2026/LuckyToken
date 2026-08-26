@@ -1,67 +1,60 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { resolve } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createDesktopRequestArtifactOpener } from "../src/main/request-artifact-opener.js";
 
 describe("desktop request artifact opener", () => {
-  const roots: string[] = [];
-
-  afterEach(async () => {
-    await Promise.all(
-      roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-    );
-  });
-
-  it("pages a capture through the Control Plane into a readable local file", async () => {
-    const root = await mkdtemp(join(tmpdir(), "Token-artifact-opener-test-"));
-    roots.push(root);
-    const body = Buffer.from('{\n  "safe": true\n}', "utf8");
-    const openedPaths: string[] = [];
-    const getRequestArtifact = vi.fn(async (input: {
+  it("opens the validated persisted capture directly without reading or copying it", async () => {
+    const absolutePath = resolve("diagnostics/client-request-wire.json");
+    const resolveRequestArtifactFile = vi.fn(async (input: {
       readonly requestId: string;
       readonly artifactId: string;
-      readonly offset: number;
-      readonly limit: number;
-    }) => {
-      const nextOffset = Math.min(body.byteLength, input.offset + 7);
-      return {
-        outcome: "ok" as const,
-        result: {
-          requestId: input.requestId,
-          artifactId: input.artifactId,
-          offset: input.offset,
-          nextOffset,
-          complete: nextOffset === body.byteLength,
-          dataBase64: body.subarray(input.offset, nextOffset).toString("base64"),
-        },
-      };
-    });
+    }) => ({
+      outcome: "ok" as const,
+      result: { ...input, absolutePath },
+    }));
+    const openPath = vi.fn(async () => true);
     const opener = createDesktopRequestArtifactOpener({
-      reader: () => ({ getRequestArtifact }),
-      platform: {
-        temporaryDirectory: () => root,
-        openPath: async (path) => {
-          openedPaths.push(path);
-          return true;
-        },
-      },
+      reader: () => ({ resolveRequestArtifactFile }),
+      platform: { openPath },
     });
 
     await expect(opener.open({
       requestId: "request-1",
       artifactId: "client_request_wire",
-      mediaType: "application/json",
     })).resolves.toEqual({ outcome: "opened" });
 
-    expect(openedPaths).toHaveLength(1);
-    expect(openedPaths[0]).toMatch(/client-request-wire\.json$/u);
-    await expect(readFile(openedPaths[0]!, "utf8")).resolves.toBe(body.toString("utf8"));
-    expect(getRequestArtifact).toHaveBeenCalledTimes(3);
+    expect(resolveRequestArtifactFile).toHaveBeenCalledWith({
+      requestId: "request-1",
+      artifactId: "client_request_wire",
+    });
+    expect(openPath).toHaveBeenCalledWith(absolutePath);
+  });
 
-    await opener.dispose();
-    await expect(access(openedPaths[0]!)).rejects.toThrow();
+  it("does not open a mismatched file reference", async () => {
+    const openPath = vi.fn(async () => true);
+    const opener = createDesktopRequestArtifactOpener({
+      reader: () => ({
+        resolveRequestArtifactFile: async () => ({
+          outcome: "ok" as const,
+          result: {
+            requestId: "another-request",
+            artifactId: "client_request_wire",
+            absolutePath: resolve("diagnostics/client-request-wire.json"),
+          },
+        }),
+      }),
+      platform: { openPath },
+    });
+
+    await expect(opener.open({
+      requestId: "request-1",
+      artifactId: "client_request_wire",
+    })).resolves.toEqual({
+      outcome: "unavailable",
+      message: "Capture file is unavailable.",
+    });
+    expect(openPath).not.toHaveBeenCalled();
   });
 });

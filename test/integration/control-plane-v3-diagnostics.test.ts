@@ -11,6 +11,8 @@ import {
   type ControlPlaneEndpoint,
   type DiagnosticsSubscription,
   type PipeConnection,
+  type RequestArtifactFileReference,
+  type RequestArtifactFileResolveInput,
   type RequestArtifactGetInput,
   type RequestArtifactReadResult,
   type RequestJourneyGetInput,
@@ -135,6 +137,12 @@ const ARTIFACT: RequestArtifactReadResult = Object.freeze({
   dataBase64: "c2FmZQ==",
 });
 
+const ARTIFACT_FILE: RequestArtifactFileReference = Object.freeze({
+  requestId: JOURNEY_SUMMARY.requestId,
+  artifactId: "client-response-wire",
+  absolutePath: "D:\\diagnostics\\client-response-wire.json",
+});
+
 const RUNTIME_EVENT: RuntimeEventRecord = Object.freeze({
   kind: "runtime_event",
   id: 2,
@@ -177,6 +185,10 @@ function createDiagnosticsFixture(): Readonly<{
         calls.push(`artifact:${input.requestId}:${input.artifactId}:${input.offset}:${input.limit}`);
         return ARTIFACT;
       },
+      resolveRequestArtifactFile: async (input: RequestArtifactFileResolveInput) => {
+        calls.push(`artifact-file:${input.requestId}:${input.artifactId}`);
+        return ARTIFACT_FILE;
+      },
       queryRuntimeEvents: async (query?: RuntimeEventQuery) => {
         calls.push(`runtime:${JSON.stringify(query ?? {})}`);
         return Object.freeze({ records: Object.freeze([RUNTIME_EVENT]), hasMore: false });
@@ -203,6 +215,7 @@ function unavailableDiagnosticsAdapter(): UnifiedDiagnosticsManagement {
     queryRequestJourneys: unavailable,
     getRequestJourney: unavailable,
     getRequestArtifact: unavailable,
+    resolveRequestArtifactFile: unavailable,
     queryRuntimeEvents: unavailable,
     subscribeRequestJourneys: () =>
       Object.freeze({ unsubscribe: () => undefined }),
@@ -264,6 +277,12 @@ describe("Application Control Plane v4 unified diagnostics", () => {
         limit: 256,
       }),
     ).resolves.toEqual({ outcome: "ok", result: ARTIFACT });
+    await expect(
+      connected.resolveRequestArtifactFile({
+        requestId: JOURNEY_SUMMARY.requestId,
+        artifactId: ARTIFACT.artifactId,
+      }),
+    ).resolves.toEqual({ outcome: "ok", result: ARTIFACT_FILE });
     await expect(connected.queryRuntimeEvents({ afterId: 1, limit: 10 })).resolves.toEqual({
       outcome: "ok",
       result: { records: [RUNTIME_EVENT], hasMore: false },
@@ -272,6 +291,7 @@ describe("Application Control Plane v4 unified diagnostics", () => {
       "query:{\"limit\":10}",
       `get:${JOURNEY_SUMMARY.requestId}`,
       `artifact:${JOURNEY_SUMMARY.requestId}:${ARTIFACT.artifactId}:0:256`,
+      `artifact-file:${JOURNEY_SUMMARY.requestId}:${ARTIFACT.artifactId}`,
       "runtime:{\"afterId\":1,\"limit\":10}",
     ]);
 
@@ -360,6 +380,12 @@ describe("Application Control Plane v4 unified diagnostics", () => {
     } as const;
     await expect(
       unavailableClient.queryRequestJourneys({ limit: 10 }),
+    ).resolves.toEqual(typedUnavailable);
+    await expect(
+      unavailableClient.resolveRequestArtifactFile({
+        requestId: JOURNEY_SUMMARY.requestId,
+        artifactId: ARTIFACT.artifactId,
+      }),
     ).resolves.toEqual(typedUnavailable);
     await expect(
       unavailableClient.getRequestJourney({ requestId: JOURNEY_SUMMARY.requestId }),

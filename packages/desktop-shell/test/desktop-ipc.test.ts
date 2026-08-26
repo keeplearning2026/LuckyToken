@@ -68,6 +68,7 @@ function fixture() {
     })),
     getRequestJourney: vi.fn(async () => ({ outcome: "ok", result: {} })),
     getRequestArtifact: vi.fn(async () => ({ outcome: "ok", result: {} })),
+    resolveRequestArtifactFile: vi.fn(async () => ({ outcome: "ok", result: {} })),
     queryRuntimeEvents: vi.fn(async () => ({
       outcome: "ok",
       result: { records: [], hasMore: false },
@@ -162,7 +163,6 @@ describe("typed Electron desktop IPC", () => {
     const artifactInput = {
       requestId: JOURNEY.requestId,
       artifactId: "client-request-wire",
-      mediaType: "application/json",
     } as const;
     const runtimeQuery = { afterId: 6, limit: 10 } as const;
 

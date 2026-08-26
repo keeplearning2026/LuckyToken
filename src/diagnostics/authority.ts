@@ -5,6 +5,8 @@ import type {
   AnalyticsQuery,
   AnalyticsQueryResult,
   DiagnosticsSubscription,
+  RequestArtifactFileReference,
+  RequestArtifactFileResolveInput,
   RequestArtifactGetInput,
   RequestArtifactReadResult,
   RequestJourneyGetInput,
@@ -1781,6 +1783,15 @@ export async function createDiagnosticsAuthority(
         offset: input.offset,
         limit: input.limit,
       })) as RequestArtifactReadResult;
+    },
+    async resolveRequestArtifactFile(
+      input: RequestArtifactFileResolveInput,
+    ): Promise<RequestArtifactFileReference> {
+      return (await command({
+        type: "resolve_artifact_file",
+        requestId: input.requestId,
+        artifactId: input.artifactId,
+      })) as RequestArtifactFileReference;
     },
     async queryRuntimeEvents(
       query?: RuntimeEventQuery,
