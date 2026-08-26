@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 
@@ -215,17 +216,24 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
           </div>
           <button
             type="button"
-            className="secondary"
+            className={`switch-control${captureEnabled ? " on" : ""}`}
+            aria-label={captureEnabled === undefined
+              ? "Full journey capture unavailable"
+              : captureEnabled
+                ? "Disable full journey capture"
+                : "Enable full journey capture"}
             aria-pressed={captureEnabled === true}
+            aria-busy={captureBusy}
             disabled={captureBusy || captureEnabled === undefined}
             onClick={() => void toggleJourneyCapture(
               FULL_JOURNEY_SETTING,
               captureEnabled,
             )}
-          >
-            {captureEnabled
+            title={captureEnabled
               ? "Disable full journey capture"
               : "Enable full journey capture"}
+          >
+            <span aria-hidden="true" />
           </button>
         </div>
         <div className="settings-action-row">
@@ -238,17 +246,24 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
           </div>
           <button
             type="button"
-            className="secondary"
+            className={`switch-control${failedCaptureEnabled ? " on" : ""}`}
+            aria-label={failedCaptureEnabled === undefined
+              ? "Failed-request capture unavailable"
+              : failedCaptureEnabled
+                ? "Disable failed-request capture"
+                : "Enable failed-request capture"}
             aria-pressed={failedCaptureEnabled === true}
+            aria-busy={captureBusy}
             disabled={captureBusy || failedCaptureEnabled === undefined}
             onClick={() => void toggleJourneyCapture(
               FAILED_JOURNEY_SETTING,
               failedCaptureEnabled,
             )}
-          >
-            {failedCaptureEnabled
+            title={failedCaptureEnabled
               ? "Disable failed-request capture"
               : "Enable failed-request capture"}
+          >
+            <span aria-hidden="true" />
           </button>
         </div>
         <div className="settings-action-copy">
@@ -288,8 +303,15 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
                   : `${total.toLocaleString()} stored history record${total === 1 ? "" : "s"} will be removed after confirmation.`}
             </p>
           </div>
-          <button type="button" className="danger-button" disabled={busy || total === undefined || total === 0} onClick={() => void deleteAll()}>
-            Delete history
+          <button
+            type="button"
+            className="settings-icon-button danger"
+            aria-label="Delete history"
+            title="Delete history"
+            disabled={busy || total === undefined || total === 0}
+            onClick={() => void deleteAll()}
+          >
+            <Trash2 size={18} aria-hidden="true" />
           </button>
         </div>
         {deleteGate?.outcome === "confirmation_required" ? (

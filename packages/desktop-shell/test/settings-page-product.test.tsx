@@ -11,6 +11,7 @@ let root: ReturnType<typeof createRoot>;
 beforeEach(() => { (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true; container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 async function click(name: string): Promise<void> { await act(async () => { const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === name); if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing button: ${name}`); button.click(); }); }
+async function clickAria(name: string): Promise<void> { await act(async () => { const button = container.querySelector(`button[aria-label="${name}"]`); if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing button: ${name}`); button.click(); }); }
 async function render(api: ReturnType<typeof createFakeDesktopApi>): Promise<void> { await act(async () => root.render(<App api={api} />)); await act(async () => { (container.querySelector('button[aria-label="Settings"]') as HTMLButtonElement).click(); }); }
 
 const settingsResult = () => ({ outcome: "ok" as const, settings: Object.fromEntries(["modelProvider", "openaiBaseUrl", "modelCatalogJson"].map((field) => { const key = `integrations.codex.preimage.${field}`; return [key, { key, type: "nullable-string" as const, default: null, validation: { type: "nullable-string" }, sensitivity: "public" as const, applyMode: "hot-apply" as const, value: null }]; })) });
@@ -22,7 +23,9 @@ describe("Settings product slice", () => {
     expect(container.textContent).toContain("3 stored history records");
     expect(container.textContent).not.toContain("captures");
     expect(container.querySelector('.settings-danger-section .settings-status')?.textContent).toBe("3 records");
-    expect(container.querySelector('button.danger-button')?.textContent).toContain("Delete history");
+    const deleteButton = container.querySelector('button[aria-label="Delete history"]');
+    expect(deleteButton?.textContent).toBe("");
+    expect(deleteButton?.querySelector(".lucide-trash-2")).not.toBeNull();
   });
 
   it("controls all-request and failed-request capture through registered settings and shows the folder", async () => {
@@ -97,13 +100,13 @@ describe("Settings product slice", () => {
     expect(container.textContent).toContain("64 MiB per JSON file");
     expect(container.textContent).toContain("Force capture when a request fails");
     expect(container.textContent).toContain("Failures only");
-    await click("Enable full journey capture");
+    await clickAria("Enable full journey capture");
     expect(executeSettings).toHaveBeenCalledWith({
       command: "set",
       key: "diagnostics.fullJourneyCapture.enabled",
       value: true,
     });
-    await click("Disable failed-request capture");
+    await clickAria("Disable failed-request capture");
     expect(executeSettings).toHaveBeenCalledWith({
       command: "set",
       key: "diagnostics.failedJourneyCapture.enabled",
@@ -120,6 +123,9 @@ describe("Settings product slice", () => {
     expect(container.textContent).toContain("Model provider");
     expect(container.textContent).toContain("model_provider");
     expect(container.textContent).not.toContain("deep diagnostics");
+    const saveButton = container.querySelector('button[aria-label="Save restore values"]');
+    expect(saveButton?.textContent).toBe("");
+    expect(saveButton?.querySelector(".lucide-save")).not.toBeNull();
     expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.preimage.modelProvider", "integrations.codex.preimage.openaiBaseUrl", "integrations.codex.preimage.modelCatalogJson"] });
   });
 
@@ -130,7 +136,9 @@ describe("Settings product slice", () => {
     expect(container.querySelectorAll('.settings-tabs [role="tab"]')).toHaveLength(3);
     expect(container.textContent).toContain("Startup behavior");
     expect(container.textContent).toContain("Start Token automatically");
-    expect(container.querySelector('.settings-action-row button[aria-pressed="false"]')?.textContent).toBe("Enable auto-start");
+    const autoStart = container.querySelector('.settings-action-row .switch-control[aria-pressed="false"]');
+    expect(autoStart?.getAttribute("aria-label")).toBe("Enable auto-start");
+    expect(autoStart?.textContent).toBe("");
   });
 
   it("enables Windows auto-start from General settings and reflects the effective state", async () => {
@@ -142,10 +150,10 @@ describe("Settings product slice", () => {
       },
     }));
 
-    await click("Enable auto-start");
+    await clickAria("Enable auto-start");
 
     expect(setAutoStart).toHaveBeenCalledWith(true);
-    expect(container.querySelector('.settings-action-row button[aria-pressed="true"]')?.textContent).toBe("Disable auto-start");
+    expect(container.querySelector('.settings-action-row .switch-control[aria-pressed="true"]')?.getAttribute("aria-label")).toBe("Disable auto-start");
     expect(container.querySelector('.settings-status')?.textContent).toBe("On");
   });
 });

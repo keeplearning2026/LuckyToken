@@ -65,12 +65,21 @@ export function GeneralSettings({ api }: { readonly api: TokenDesktopApi }) {
         </div>
         <button
           type="button"
-          className="secondary"
+          className={`switch-control${enabled ? " on" : ""}`}
+          aria-label={
+            unavailable || enabled === undefined
+              ? "Auto-start unavailable"
+              : enabled
+                ? "Disable auto-start"
+                : "Enable auto-start"
+          }
           aria-pressed={enabled ?? false}
+          aria-busy={busy}
           disabled={enabled === undefined || busy || unavailable}
           onClick={() => void toggle()}
+          title={enabled ? "Disable auto-start" : "Enable auto-start"}
         >
-          {busy ? "Updating…" : enabled ? "Disable auto-start" : "Enable auto-start"}
+          <span aria-hidden="true" />
         </button>
       </div>
     </section>

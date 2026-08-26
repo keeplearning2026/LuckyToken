@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Save } from "lucide-react";
 
 import type { TokenDesktopApi, RuntimeEventRecord } from "../../shared/desktop-api.js";
 
@@ -106,7 +107,17 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
       </div>
       {storageNotice === undefined ? null : <p className={storageNoticeError ? "error-text" : "setting-state"} role="status">{storageNotice}</p>}
       <div className="settings-form-actions">
-        <button type="button" disabled={busy} onClick={() => void saveCodexRestoreValues()}>{busy ? "Saving…" : "Save restore values"}</button>
+        <button
+          type="button"
+          className="settings-icon-button save"
+          aria-label="Save restore values"
+          aria-busy={busy}
+          title={busy ? "Saving restore values" : "Save restore values"}
+          disabled={busy}
+          onClick={() => void saveCodexRestoreValues()}
+        >
+          <Save size={18} aria-hidden="true" />
+        </button>
       </div>
     </div>
     <div className="page-card settings-section">

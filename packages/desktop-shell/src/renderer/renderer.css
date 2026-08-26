@@ -303,8 +303,15 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .settings-action-copy { min-width: 0; }
 .settings-action-copy strong { display: block; margin-bottom: 4px; font-size: 14px; }
 .settings-action-copy p { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
-.settings-action-row button, .settings-form-actions button { flex: 0 0 auto; border: 0; border-radius: 9px; background: var(--text); color: var(--canvas); padding: 8px 12px; white-space: nowrap; }
+.settings-action-row button:not(.switch-control, .settings-icon-button), .settings-form-actions button:not(.settings-icon-button) { flex: 0 0 auto; border: 0; border-radius: 9px; background: var(--text); color: var(--canvas); padding: 8px 12px; white-space: nowrap; }
 .settings-action-row button:disabled, .settings-form-actions button:disabled { opacity: .42; cursor: default; }
+.settings-action-row > .switch-control { flex: 0 0 auto; }
+.settings-icon-button { flex: 0 0 auto; width: 38px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--text); padding: 0; }
+.settings-icon-button:hover { background: var(--surface-muted); }
+.settings-icon-button.danger { color: var(--danger); }
+.settings-icon-button.danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.settings-icon-button.save { color: var(--green); }
+.settings-icon-button.save:hover { background: color-mix(in srgb, var(--green) 10%, transparent); }
 .settings-danger-section { background: color-mix(in srgb, var(--danger) 3%, var(--surface-soft)); }
 .settings-callout { margin: -2px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-muted); color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
 .settings-callout code { color: var(--text); }
