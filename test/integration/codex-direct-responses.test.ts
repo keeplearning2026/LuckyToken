@@ -2,7 +2,7 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,
@@ -12,7 +12,7 @@ import {
   type RunningTokenHttpServer,
 } from "../../src/server.js";
 
-function nativeModels(...ids: string[]): CodexNativeModelSource {
+function directModels(...ids: string[]): CodexDirectModelSource {
   const set = new Set(ids);
   return Object.freeze({
     has: (id: string) => set.has(id),
@@ -82,7 +82,7 @@ function request(model: string, token: string, stream = false): Request {
   });
 }
 
-describe("Codex-native Responses routing", () => {
+describe("Codex Direct Mode Responses routing", () => {
   const compositions: OpenAIResponsesServingTestComposition[] = [];
   const servers: RunningTokenHttpServer[] = [];
   afterEach(async () => {
@@ -100,7 +100,7 @@ describe("Codex-native Responses routing", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       modelId: options.modelId ?? "deepseek/deepseek-v4-flash",
       fetch: options.fetch,
-      codexNativeModels: nativeModels("gpt-native"),
+      codexDirectModels: directModels("gpt-native"),
     });
     compositions.push(composition);
     return composition;
@@ -235,12 +235,12 @@ describe("Codex-native Responses routing", () => {
       },
     });
 
-    const response = await runtime.handle(request("gpt-native", "not-the-local-codex-token"));
+    const response = await runtime.handle(request("gpt-native", "not-a-token-owned-codex-token"));
 
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers.get("authorization")).toBe(
-      "Bearer not-the-local-codex-token",
+      "Bearer not-a-token-owned-codex-token",
     );
   });
 

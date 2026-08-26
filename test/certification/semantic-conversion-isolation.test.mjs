@@ -52,12 +52,12 @@ test("OpenAI Responses semantic conversion has no Anthropic semantic dependency"
   });
 });
 
-test("native preservation lanes have no Anthropic semantic-conversion dependency", async () => {
+test("Direct Mode and Provider Native have no Anthropic semantic-conversion dependency", async () => {
   await assertNoDependency({
     entries: [
       path.join(repositoryRoot, "src/provider-native-anthropic"),
       path.join(repositoryRoot, "src/provider-native-responses"),
-      path.join(repositoryRoot, "src/codex-native-seam.ts"),
+      path.join(repositoryRoot, "src/codex-direct-seam.ts"),
     ],
     forbidden: (dependency) =>
       dependency.startsWith("src/protocols/anthropic/semantic/"),

@@ -3,7 +3,7 @@ import {
   copyDirectResponseMetadata,
   preservesDirectResponse,
   preservesDirectStatusText,
-} from "./local-native-http-response.js";
+} from "./direct-http-response.js";
 
 import type {
   ArtifactRecorder,

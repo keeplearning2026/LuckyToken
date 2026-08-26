@@ -1,4 +1,4 @@
-import type { CodexFetchFunction } from "../../codex-native-seam.js";
+import type { CodexDirectFetch } from "../../codex-direct-seam.js";
 import {
   observeRequestJourney,
   type ClientProtocolHandler,
@@ -7,7 +7,7 @@ import {
 import {
   preserveDirectResponse,
   preserveDirectStatusText,
-} from "../../local-native-http-response.js";
+} from "../../direct-http-response.js";
 
 export const CODEX_IMAGES_GENERATIONS_URL =
   "https://chatgpt.com/backend-api/codex/images/generations";
@@ -16,7 +16,7 @@ export const CODEX_IMAGES_EDITS_URL =
 export const CODEX_IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 
 export interface CreateCodexDirectImagesHandlerOptions {
-  readonly fetch: CodexFetchFunction;
+  readonly fetch: CodexDirectFetch;
   readonly maxRequestBytes: number;
 }
 

@@ -493,6 +493,6 @@ The architecture migration is complete only when:
 4. final-wire and round-trip behavior remains equivalent to the frozen Responses baseline;
 5. all supported source-protocol/target-API mappings have explicit outcomes and final-wire tests;
 6. each protocol has an explicit Provider-response capability matrix and end-to-end response/replay tests;
-7. native lanes remain independent;
+7. Direct Mode and Provider Native Preservation remain independent;
 8. no compatibility shim, dual read/write path, raw-wire carrier, or global Client Protocol semantic union is used by OpenAI Responses;
 9. no obsolete `src/semantic-conversion/` directory remains after all protocol cutovers.

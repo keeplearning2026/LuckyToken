@@ -209,7 +209,7 @@ describe("Request Journey Worker analytics projection", () => {
             phase: "request_resolution",
             step:
               fixture.lane === "direct"
-                ? "recognize_local_model"
+                ? "recognize_direct_model"
                 : "resolve_public_model",
             ...(fixture.lane === "direct"
               ? { lane: "direct" as const }
@@ -281,7 +281,7 @@ describe("Request Journey Worker analytics projection", () => {
               fixture.lane === "semantic_conversion"
                 ? "normalize_terminal_usage"
                 : fixture.lane === "direct"
-                  ? "observe_local_usage"
+                  ? "observe_direct_usage"
                   : "observe_provider_native_usage",
             subject: "usage",
           },

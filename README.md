@@ -97,8 +97,8 @@ lock participates in singleton correctness.
 
 The model Data Plane is loopback-only and Token does not maintain a
 separate global/project client-token authority. Provider credentials remain
-owned by Pi/Provider credential authorities, while Local Native Codex requests
-preserve the Codex request credential on that native lane. The complete
+owned by Pi/Provider credential authorities, while Codex Direct Mode requests
+preserve the caller credential envelope to their fixed upstream. The complete
 `.Token/` directory and every `auth.json` are ignored by Git.
 
 ## Unified Request Diagnostics
@@ -182,7 +182,7 @@ names. A practical reading order is:
 
 | Lane | Request-side evidence | Response-side evidence |
 |---|---|---|
-| Local Native / Direct Mode | `client_request_wire`, `local_outbound_request_envelope`, `local_outbound_request_wire` | `local_upstream_response_envelope`, `local_upstream_response_wire`, then `client_response_wire` |
+| Direct Mode | `client_request_wire`, `direct_outbound_request_envelope`, `direct_outbound_request_wire` | `direct_upstream_response_envelope`, `direct_upstream_response_wire`, then `client_response_wire` |
 | Provider Native Preservation | `client_request_wire`, `provider_native_outbound_request_envelope.<attempt>`, `provider_native_outbound_request_wire.<attempt>` | `provider_native_upstream_response_envelope.<attempt>`, `provider_native_upstream_response_wire.<attempt>`, `provider_native_preserved_response_wire`, then `client_response_wire` |
 | Semantic Conversion | `client_request_wire`, `pi_invocation_snapshot`, `pi_provider_request_payload` | `pi_provider_response_metadata`, `pi_provider_response_ir`, `pi_terminal_summary`, then `client_response_wire` |
 
@@ -195,7 +195,7 @@ safe response status/headers, and decoded Pi `AssistantMessage`. Adapter- or
 SDK-internal raw Provider response events are not an observable contract and
 are therefore not guaranteed artifacts. Use `pi_provider_response_ir` to see
 the decoded Provider result and `client_response_wire` to see what Token
-returned to the client. The native lanes instead preserve the actual upstream
+returned to the client. Direct Mode and Provider Native instead preserve the actual upstream
 response wire they own.
 
 ### Read the capture files directly
@@ -387,8 +387,8 @@ state is reported as drift/conflict instead of guessing or overwriting
 silently.
 
 The generated catalog combines Codex-native models with the currently published
-Token Public Models. Native Codex requests use the Local Native
-Preservation lane and preserve the Codex request bearer; published external
+Token Public Models. Codex-native requests use Direct Mode and preserve the
+caller credential envelope; published external
 models use the appropriate Provider Native or Semantic Conversion lane. There
 is no `TOKEN_API_KEY` setup and no Token `client-token` command.
 

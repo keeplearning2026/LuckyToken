@@ -71,7 +71,7 @@ When only an external boundary is known, the origin precision is `external_bound
 |---|---|---|---|---|
 | P0 | `http_admission` | Node HTTP accepts an inbound request or upgrade | request ID, operation candidate, cancellation/timeout lifecycle | method, path, transport state, abort/timeout reason |
 | P1 | `protocol_ingress` | a Fetch `Request` exists | route result, Client Protocol, captured Client Request Wire, parsed wire candidate, Request Identity | route, media type, encoding, size, parse/validation location |
-| P2 | `request_resolution` | a model-serving request has a selector candidate | local recognition result, Public Model result, Provider Native eligibility, committed lane | selector, capability decision, provider/model snapshot when resolved |
+| P2 | `request_resolution` | a model-serving request has a selector candidate | Direct Mode recognition result, Public Model result, Provider Native eligibility, committed lane | selector, capability decision, provider/model snapshot when resolved |
 | P3 | `lane_request_preparation` | one lane or non-lane operation owns the request | credential/profile facts, outbound native request or Pi invocation facts | committed lane, failing Lane Step, safe credential/profile attribution |
 | P4 | `upstream_execution` | execution or upstream dispatch begins | attempts, upstream request/response facts, Pi events where applicable | operation, attempt, transport phase, upstream status and safe IDs |
 | P5 | `lane_response_processing` | a lane has an upstream/native/Pi result | preserved native response or Client-protocol-ready semantic result | response read/parse/projection step, terminal facts |
@@ -94,7 +94,7 @@ When only an external boundary is known, the origin precision is `external_bound
 | 7 | P1 | `establish_request_identity` | serving/compaction operations | effective session ID and optional client session ID | invalid identity carrier handled per protocol contract |
 | 8 | P1 | `validate_client_wire` | serving/compaction operations | protocol validation result | missing required fields, invalid known shapes |
 | 9 | P2 | `extract_model_selector` | model-bound operations | opaque client selector | missing/invalid selector |
-| 10 | P2 | `recognize_direct` | operations supporting Direct Mode | explicit local capability result | local recognition authority unavailable |
+| 10 | P2 | `recognize_direct` | operations supporting Direct Mode | explicit Direct Mode capability result | Direct Mode recognition authority unavailable |
 | 11 | P2 | `resolve_public_model` | requests not claimed locally | alias/provider/real-model snapshot | unknown or unavailable alias/model |
 | 12 | P2 | `recognize_provider_native` | resolved compatible operations | explicit provider/API/operation capability result | invalid or absent capability contract |
 | 13 | P2 | `commit_lane` | model-bound operations | exactly one lane or explicit failure | no valid execution contract |
@@ -107,14 +107,14 @@ Request Identity is correlation/session information. It is not Client authorizat
 
 | Order | Phase | Lane Step | Input | Output/artifact | Failure source examples |
 |---:|---|---|---|---|---|
-| 1 | P3 | `recognize_local_model` | opaque selector | local model/capability fact | model registry/capability authority |
+| 1 | P3 | `recognize_direct_model` | opaque selector | Direct Mode model/capability fact | model registry/capability authority |
 | 2 | P3 | `preserve_caller_envelope` | authoritative Client Wire | bounded transport-ready caller envelope; credentials remain unobserved | request read/cancellation failure |
-| 3 | P3 | `project_local_request` | authoritative Client Wire | boundary-required model/header projection | invalid boundary projection |
+| 3 | P3 | `project_direct_request` | authoritative Client Wire | boundary-required model/header projection | invalid boundary projection |
 | 4 | P3 | `construct_direct_envelope` | preserved request | fixed endpoint, method, headers, encoding | endpoint/header construction failure |
-| 5 | P4 | `dispatch_direct_transport` | local upstream envelope | upstream response handle | DNS/connect/TLS/write/timeout/cancellation |
+| 5 | P4 | `dispatch_direct_transport` | Direct Mode upstream envelope | upstream response handle | DNS/connect/TLS/write/timeout/cancellation |
 | 6 | P4 | `read_direct_response` | upstream response handle | bounded upstream response artifact | body read, stream, unexpected EOF |
 | 7 | P5 | `preserve_direct_response` | compatible upstream wire | Client Wire response candidate | incompatible or malformed preserved response |
-| 8 | P5 | `observe_local_usage` | preserved response | optional normalized usage | malformed optional usage; never change response outcome |
+| 8 | P5 | `observe_direct_usage` | preserved response | optional normalized usage | malformed optional usage; never change response outcome |
 
 Images uses `commit_direct_images_lane`; Realtime HTTP and WebSocket use `commit_direct_realtime_lane`. A Realtime WebSocket Journey records admission with `transport=websocket`, enters `relay_realtime_frames` only after the upstream handshake succeeds, and remains active until both socket directions settle. Its P5 terminal step is `preserve_realtime_close`; normal close commits `success`, caller-abnormal or shutdown close commits `aborted`, and upstream connection/frame failure commits `failed`. P8 records the WebSocket close handoff. Observations never include credentials, account IDs, SDP, audio, or complete frame payloads.
 
@@ -254,11 +254,11 @@ Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_a
 | Client Request Wire | Client Protocol edge | yes | yes | yes | yes, bounded and redacted |
 | Parsed Client Request summary | Client Protocol adapter | yes | yes | yes | yes when parsing succeeded |
 | Lane decision | request resolution | yes | yes | yes | yes |
-| Local outbound request wire | Direct Mode | yes | n/a | n/a | yes when constructed |
+| Direct Mode outbound request wire | Direct Mode | yes | n/a | n/a | yes when constructed |
 | Provider Native outbound request wire | Provider Native | n/a | yes | n/a | yes when constructed |
 | Complete protocol-owned invocation/Pi IR | Client Protocol adapter | n/a | n/a | yes | yes when finalized |
 | Pi Provider request payload at the public `onPayload` seam | owning Client Protocol semantic executor | n/a | n/a | yes | yes when assembled |
-| Upstream response wire | owning native lane transport | yes | yes | n/a | yes when observed |
+| Upstream response wire | owning preservation-lane transport | yes | yes | n/a | yes when observed |
 | Pi response metadata and decoded response IR | owning Client Protocol semantic executor | n/a | n/a | yes | yes when observed/decoded |
 | Complete Pi terminal IR | owning Client Protocol semantic module | n/a | n/a | yes | yes when any event was observed |
 | Client Response Wire | Client Protocol edge / HTTP transport | yes | yes | yes | yes when constructed |
@@ -266,7 +266,7 @@ Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_a
 | Failure and exception chain | failing owner + redaction choke point | yes | yes | yes | yes |
 | Safe request context | Journey observation | yes | yes | yes | yes |
 
-Credential values, cookies, authorization capabilities, raw local credential state, Control Plane capability, and unrelated environment values are never Request Artifacts. A safe Profile identifier, display name, auth type, and selection reason are attribution facts rather than credential material.
+Credential values, cookies, authorization capabilities, raw caller credential values, Control Plane capability, and unrelated environment values are never Request Artifacts. A safe Profile identifier, display name, auth type, and selection reason are attribution facts rather than credential material.
 
 ## 11. Failure source matrix
 
@@ -350,7 +350,7 @@ write_http_response / response_body
 5. Artifact absence is explicit and reasoned; missing data is never silently presented as complete capture.
 6. Redaction and truncation are permanent artifact facts and cannot be hidden by the UI.
 7. Semantic Conversion Provider request payload, response metadata, and decoded response IR come only from the selected Pi Provider's public `onPayload`/`onResponse` lifecycle and the owning protocol executor; raw Provider response events are not a required artifact.
-8. Native artifacts do not enter Pi AI IR, and Semantic Conversion artifacts do not reuse either native lane's transport or credential implementation.
+8. Preservation-lane artifacts do not enter Pi AI IR, and Semantic Conversion artifacts do not reuse either Direct Mode or Provider Native transport or credential implementation.
 9. Observation and persistence failure cannot become the primary Request Incident or replace or modify the model-serving response. Record the completeness degradation when possible; if the single authority is unavailable, expose operational health/attention without creating a secondary request store.
 10. Semantic outcome commit, Client response preparation, HTTP handoff, and client consumption are distinct lifecycle facts.
 
@@ -431,7 +431,7 @@ Ordinary `observe` inputs contain typed immutable facts only. They must not cont
 Artifacts are copied only where their owning module already has the bytes:
 
 - the Client Protocol edge copies from the body bytes it already reads;
-- a Native lane copies from the outbound envelope or response bytes it already constructs or consumes;
+- a Direct Mode or Provider Native lane copies from the outbound envelope or response bytes it already constructs or consumes;
 - the Semantic Conversion path asks the Flight Recorder for a strictly bounded own-data JSON snapshot of its finalized invocation and terminal message at their ownership seams;
 - the Semantic Provider request payload is observed only from the value returned by the owning protocol's `onPayload`; response metadata comes only from Pi `onResponse`, and response IR only from the completed Pi `AssistantMessage`; the Flight Recorder does not retain any of those objects;
 - P6/P8 copies from the already prepared or materialized Client response bytes.
@@ -554,7 +554,7 @@ Request Journey structure and Runtime Events remain until explicit user deletion
 
 All-request full-scene bodies are disabled by default; failed/aborted/interrupted full-scene bodies are enabled by default. The Diagnostics Module snapshots both Settings values once at P0, and neither can change during the Journey. The Data Plane does not read either setting. Journey timeline, Incident, safe failure facts, outcome, and artifact descriptors remain always-on even when body retention is disabled.
 
-Credential-bearing HTTP header values, URL userinfo, Control Plane capabilities, Profile/AuthResult objects, local credential state, and unrelated environment values are excluded by their owning module before observation. Safe Profile ID/display name/auth type and selection reason may enter as attribution facts. A body can contain arbitrary secret-named fields, so its bounded raw chunks cross only the private Backend-to-diagnostics-process IPC seam transiently; they never enter SQLite, files, exports, subscriptions, or renderer results.
+Credential-bearing HTTP header values, URL userinfo, Control Plane capabilities, Profile/AuthResult objects, raw caller credential values, and unrelated environment values are excluded by their owning module before observation. Safe Profile ID/display name/auth type and selection reason may enter as attribution facts. A body can contain arbitrary secret-named fields, so its bounded raw chunks cross only the private Backend-to-diagnostics-process IPC seam transiently; they never enter SQLite, files, exports, subscriptions, or renderer results.
 
 The independent diagnostics process applies centralized bounded complete-document redaction after `finish` proves byte completeness and before any body reaches the filesystem. JSON/`+json` parses and redacts secret-named fields and credential patterns. JSONL/NDJSON frames and redacts every record. SSE frames complete events, redacts JSON `data:` payloads, preserves `[DONE]`, and fails closed for unclassified data. If syntax, known-sensitive scrubbing, or artifact serialization fails, it drops the body and persists `unavailable:redaction_failed` or the more precise typed reason. Binary bodies persist only media type, original/captured length when known, a policy-approved integrity hash, and an explicit body-unavailable reason. Redaction and truncation facts are permanent and survive projection and retention eviction.
 
@@ -572,7 +572,7 @@ The Application Control Plane is the only management seam into the running diagn
 
 Each `queryRequestJourneys` result and closed-Journey subscription may include
 one bounded row-level usage projection. The authoritative Semantic Conversion
-source is the terminal Pi `AssistantMessage.usage`; native preservation lanes
+source is the terminal Pi `AssistantMessage.usage`; Direct Mode and Provider Native
 may publish the same product fact from their lane-owned response boundary. The
 product fact contains exactly non-negative safe-integer `input`, `output`, and
 `cacheRead` values plus `done`, `failed`, `aborted`, or `unsupported` terminal
@@ -655,8 +655,8 @@ The eventual unified record must be certified against at least these scenarios:
 | unsupported media type or encoding | P1 `validate_media_and_encoding` |
 | oversized or invalid JSON body | P1 `read_and_decode_body` |
 | unknown/unavailable model | P2 `resolve_public_model` |
-| Direct Mode upstream rejects caller credential | P4/P5 Local upstream response preservation |
-| Direct Mode transport/body-read failure | P4 Local dispatch/read step |
+| Direct Mode upstream rejects caller credential | P4/P5 Direct Mode upstream response preservation |
+| Direct Mode transport/body-read failure | P4 Direct Mode dispatch/read step |
 | Provider Native auth failure | P3 Provider Native `resolve_provider_auth` |
 | Anthropic OAuth body projection failure | P3 Provider Native `project_native_body` |
 | Provider Native final 429/Profile switch | P4 retry/profile steps with ordered attempts |

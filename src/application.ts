@@ -937,7 +937,7 @@ async function startNormalApplication(options: {
             fetch: globalThis.fetch,
             codexDirectFetch: createCodexDirectHttpFetch(),
             shutdownSignal: shutdownController.signal,
-            codexNativeModels: codexIntegrationAuthority.nativeModels,
+            codexDirectModels: codexIntegrationAuthority.directModels,
           });
           const listener = await startRunningDataPlaneListener({
             dataPlane: composition,

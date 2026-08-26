@@ -533,7 +533,7 @@ async function handleOpenAIResponses(
     activeEarlyStep = undefined;
     const streamRequested = (body as { readonly stream?: unknown }).stream === true;
     if (dependencies.directLane !== undefined) {
-      const localRecognitionLocation = {
+      const directRecognitionLocation = {
         phase: "request_resolution",
         lane: "direct",
         step: "recognize_direct",
@@ -541,15 +541,15 @@ async function handleOpenAIResponses(
       enterResponsesJourneyStep(
         journey,
         "p2.recognize_direct",
-        localRecognitionLocation,
+        directRecognitionLocation,
       );
-      const localClaimed = dependencies.directLane.claims(selector);
+      const directClaimed = dependencies.directLane.claims(selector);
       completeResponsesJourneyStep(
         journey,
         "p2.recognize_direct",
-        localRecognitionLocation,
+        directRecognitionLocation,
       );
-      if (localClaimed) {
+      if (directClaimed) {
         observeResponsesJourney(journey, {
           kind: "lane_committed",
           lane: "direct",

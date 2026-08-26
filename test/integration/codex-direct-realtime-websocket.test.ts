@@ -14,7 +14,7 @@ import {
 import {
   createCodexDirectRealtimeModule,
   type CodexRealtimeWebSocketConnect,
-} from "../../src/integrations/codex/local-realtime.js";
+} from "../../src/integrations/codex/direct-realtime.js";
 import {
   startTokenHttpServer,
   type RunningTokenHttpServer,

@@ -109,7 +109,7 @@ Node HTTP adapter
         ▼
 Runtime route/profile selection
         │
-        ├── Direct Mode ───────→ compatible local upstream
+        ├── Direct Mode ───────→ compatible fixed upstream
         │
         ├── Provider Native Preservation ────→ provider-native upstream
         │
@@ -1389,7 +1389,7 @@ Data Plane composition 同时能看见三条独立 lane 的窄 seam，但不能�
 ```text
 Direct Mode
   compatible Client Wire
-  → local model recognition + preserved caller envelope
+  → Direct Mode model/capability recognition + preserved caller envelope
   → direct transport
 
 Provider Native Preservation
@@ -2374,7 +2374,7 @@ flowchart LR
 
 | 原则 | 当前实现证据 | 结论 |
 | --- | --- | --- |
-| Pi 是 Semantic Conversion 的唯一共享语义边界 | Anthropic/Responses conversion 与 CommandCode package 零互相 import；native lanes bypass Pi IR 且不共享 credential/transport authority | 符合 |
+| Pi 是 Semantic Conversion 的唯一共享语义边界 | Anthropic/Responses conversion 与 CommandCode package 零互相 import；Direct Mode 与 Provider Native bypass Pi IR 且不共享 credential/transport authority | 符合 |
 | High cohesion / low coupling | Client Protocol、三条 Data Plane lane、Backend lifecycle、Desktop connection、Provider credential 各自有独立 owner/test | 符合 |
 | Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Direct Mode caller envelope、Provider JSONL state 分模块拥有 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
@@ -2613,7 +2613,7 @@ flowchart TB
 1. `src/application.ts` → `instance-authority.ts` / `control-plane-discovery.ts`：Backend 如何取得 authority、启动和关闭；
 2. `packages/desktop-shell/src/main/desktop-backend-connection.ts`：Desktop 如何 discovery/attach/recover；
 3. `src/server.ts` → `runtime.ts` → `http.ts`：Data Plane request 如何进入/取消；
-4. `src/credentials/profile-authority.ts` 与 `src/integrations/codex/local-*`：Provider Profile binding 与透明 Direct Mode caller envelope 如何保持隔离；
+4. `src/credentials/profile-authority.ts` 与 `src/integrations/codex/direct-*`：Provider Profile binding 与透明 Direct Mode caller envelope 如何保持隔离；
 5. `src/protocols/anthropic/handler.ts`，再分别进入 request/options/response/SSE；
 6. Pi `Models.streamSimple()` public contract；
 7. `src/providers/package-loader.ts` → Private package 的

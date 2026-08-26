@@ -7,16 +7,16 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
-  CodexFetchFunction,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
+  CodexDirectFetch,
+  CodexDirectModelSource,
+} from "../../src/codex-direct-seam.js";
 import {
   createDiagnosticsAuthority,
   parseDiagnosticsConfiguration,
   type DiagnosticsManagementAuthority,
 } from "../../src/diagnostics/index.js";
 import type { ExecutionOperation } from "../../src/execution.js";
-import { createCodexDirectResponsesLane } from "../../src/integrations/codex/local-responses.js";
+import { createCodexDirectResponsesLane } from "../../src/integrations/codex/direct-responses.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createTokenRuntime } from "../../src/runtime.js";
 import {
@@ -27,7 +27,7 @@ import {
 const REQUEST_ID = "87000000-0000-4000-8000-000000000001";
 const SESSION_ID = "87000000-0000-4000-8000-000000000002";
 const UPSTREAM_RESPONSE_BODY = JSON.stringify({
-  id: "resp_local_usage",
+  id: "resp_direct_usage",
   object: "response",
   created_at: 1,
   status: "completed",
@@ -35,7 +35,7 @@ const UPSTREAM_RESPONSE_BODY = JSON.stringify({
   output: [
     {
       type: "message",
-      id: "msg_local_usage",
+      id: "msg_direct_usage",
       role: "assistant",
       status: "completed",
       content: [
@@ -95,7 +95,7 @@ function requireSummary(
 describe("Direct Mode terminal usage analytics producer", () => {
   it("projects terminal usage without changing the served or outbound wire", async () => {
     const root = await mkdtemp(
-      join(tmpdir(), "Token-local-native-analytics-"),
+      join(tmpdir(), "Token-direct-mode-analytics-"),
     );
 
     async function run(
@@ -138,10 +138,10 @@ describe("Direct Mode terminal usage analytics producer", () => {
         const semanticExecution = vi.fn(async () => {
           throw new Error("Semantic Conversion must not execute");
         }) as unknown as ExecutionOperation;
-        const nativeModels: CodexNativeModelSource = Object.freeze({
+        const directModels: CodexDirectModelSource = Object.freeze({
           has: (modelId: string) => modelId === "gpt-native",
         });
-        const localFetch: CodexFetchFunction = async (input, init) => {
+        const directFetch: CodexDirectFetch = async (input, init) => {
           const request = new Request(input, init);
           outbound.push({
             url: request.url,
@@ -158,8 +158,8 @@ describe("Direct Mode terminal usage analytics producer", () => {
         const handler = createOpenAIResponsesHandler({
           models: piModels,
           directLane: createCodexDirectResponsesLane({
-            models: nativeModels,
-            fetch: localFetch,
+            models: directModels,
+            fetch: directFetch,
           }),
           executeOperation: semanticExecution,
           stateFile: join(runRoot, "responses-state.json"),
@@ -176,7 +176,7 @@ describe("Direct Mode terminal usage analytics producer", () => {
 
         const requestBody = JSON.stringify({
           model: "gpt-native",
-          input: "measure native usage",
+          input: "measure Direct Mode usage",
         });
         const response = await fetch(`${server.origin}/v1/responses`, {
           method: "POST",

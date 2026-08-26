@@ -21,7 +21,7 @@ import {
 } from "./http.js";
 import type { TokenRuntime } from "./runtime.js";
 import type { WebSocketUpgradeHandler } from "./websocket-upgrade.js";
-import { preservesDirectStatusText } from "./local-native-http-response.js";
+import { preservesDirectStatusText } from "./direct-http-response.js";
 
 export interface TokenHttpServerOptions {
   readonly runtime: TokenRuntime;

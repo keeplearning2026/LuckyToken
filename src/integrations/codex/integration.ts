@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { CodexNativeModelSource } from "../../codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../codex-direct-seam.js";
 import type {
   AgentIntegrationAdapter,
   AgentIntegrationEffect,
@@ -65,7 +65,7 @@ export interface CodexIntegrationProjection {
 
 export interface CodexIntegrationAuthority extends AgentIntegrationAdapter {
   readonly id: "codex";
-  readonly nativeModels: CodexNativeModelSource;
+  readonly directModels: CodexDirectModelSource;
   query(): Promise<CodexIntegrationProjection>;
   setScope(scope: AgentInjectionScope): Promise<CodexIntegrationProjection>;
   reconcile(action: CodexIntegrationAction): Promise<CodexIntegrationProjection>;
@@ -489,7 +489,7 @@ export function createCodexIntegrationAuthority(
   let currentNativeIds: ReadonlySet<string> = new Set<string>();
   let operationQueue = Promise.resolve();
 
-  const nativeModels: CodexNativeModelSource = Object.freeze({
+  const directModels: CodexDirectModelSource = Object.freeze({
     has(modelId: string): boolean {
       return currentNativeIds.has(modelId);
     },
@@ -825,7 +825,7 @@ export function createCodexIntegrationAuthority(
 
   return Object.freeze({
     id: "codex",
-    nativeModels,
+    directModels,
     query: async () => {
       await operationQueue;
       return project(await readState(statePath));

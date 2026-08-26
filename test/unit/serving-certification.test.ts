@@ -180,9 +180,9 @@ describe("serving composition certification", () => {
           offlineResult: "CERTIFIED",
           onlineStatus: "online-passed",
         },
-        anthropicNativePassthrough: {
-          id: "anthropic-native-passthrough",
-          seam: "POST /v1/messages native passthrough",
+        anthropicProviderNative: {
+          id: "anthropic-provider-native",
+          seam: "POST /v1/messages Provider Native Preservation",
           offlineResult: "CERTIFIED",
           onlineStatus: "not-applicable",
         },
@@ -192,9 +192,15 @@ describe("serving composition certification", () => {
           offlineResult: "CERTIFIED",
           onlineStatus: "online-passed",
         },
-        responsesNativePassthrough: {
-          id: "responses-native-passthrough",
-          seam: "POST /v1/responses native passthrough",
+        responsesDirectMode: {
+          id: "responses-direct-mode",
+          seam: "POST /v1/responses Direct Mode",
+          offlineResult: "CERTIFIED",
+          onlineStatus: "not-applicable",
+        },
+        responsesProviderNative: {
+          id: "responses-provider-native",
+          seam: "POST /v1/responses Provider Native Preservation",
           offlineResult: "CERTIFIED",
           onlineStatus: "not-applicable",
         },

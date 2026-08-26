@@ -6,7 +6,7 @@ Repository:
 keeplearning2026/Token
 ```
 
-Token serves client protocol wires through three independent data-plane lanes. Within Semantic Conversion, each Client Protocol owns a cohesive vertical module: Client Wire conversion, its protocol-specific invocation and supplement, reasoning/continuity policy, target projection policy, semantic execution lifecycle, response conversion, and certification tests. Client Protocol modules do not share a semantic invocation, supplement, reasoning request model, projector registry, semantic execution Module, projection outcome type, or semantic error type. They may call the same pinned Pi AI dependency through an existing narrow infrastructure capability and may reuse proven mechanism-only leaf utilities, but no Token Semantic Conversion kernel is shared between Client Protocols. The two native preservation lanes bypass every Semantic Conversion module and remain independent from each other:
+Token serves client protocol wires through three independent data-plane lanes. Within Semantic Conversion, each Client Protocol owns a cohesive vertical module: Client Wire conversion, its protocol-specific invocation and supplement, reasoning/continuity policy, target projection policy, semantic execution lifecycle, response conversion, and certification tests. Client Protocol modules do not share a semantic invocation, supplement, reasoning request model, projector registry, semantic execution Module, projection outcome type, or semantic error type. They may call the same pinned Pi AI dependency through an existing narrow infrastructure capability and may reuse proven mechanism-only leaf utilities, but no Token Semantic Conversion kernel is shared between Client Protocols. Direct Mode and Provider Native Preservation bypass every Semantic Conversion module and remain independent from each other:
 
 ```text
 Anthropic / OpenAI Responses / other client protocol wires
@@ -14,8 +14,8 @@ Anthropic / OpenAI Responses / other client protocol wires
              ┌────────────────┼────────────────┐
              │                │                │
              ▼                ▼                ▼
-      Local Native     Provider Native     Protocol-owned
-      Preservation      Preservation      Semantic Module
+       Direct Mode      Provider Native     Protocol-owned
+                         Preservation      Semantic Module
              │                │                  │
              │                │                  ▼
              │                │       Protocol-owned Semantic
@@ -25,7 +25,7 @@ Anthropic / OpenAI Responses / other client protocol wires
              │                │             Pi Providers
              │                │                  │
              ▼                ▼                  ▼
-      Local Upstream   Provider Upstream     Provider Wire
+      Direct Upstream  Provider Upstream     Provider Wire
 ```
 
 The three lanes may share only the minimum request-edge and lifecycle facts needed for routing and observation; they do not share execution, credential, transport, or semantic-conversion abstractions.
@@ -133,7 +133,7 @@ Each Client Protocol specification names its request consumers and the source fi
 - Consumer declarations may overlap only when the protocol contract requires Pi-first emission followed by final-wire verification or certified repair. The final Provider field still has one authoritative writer and one outcome.
 - A consumer validates only the values and nested paths it reads. Unclaimed sibling keys do not invalidate a claimed object.
 - Reject only when a consumed value is malformed, a minimum request fact is missing, a security, permission, or data-residency constraint would be broken, a tool-call/result relationship is invalid, or no valid final target request can be constructed.
-- Native Preservation lane commitment precedes Semantic Conversion extraction. Native lanes preserve the authoritative raw wire and do not apply semantic consumer declarations.
+- Direct Mode or Provider Native lane commitment precedes Semantic Conversion extraction. These preservation lanes keep the authoritative raw wire and do not apply semantic consumer declarations.
 
 Every unclaimed-field warning is bounded, request-local, and fail-open. Observation failure never changes routing, conversion, dispatch, or the Client result.
 
@@ -257,7 +257,7 @@ A cross-layer semantic dependency is permitted only when all of the following ho
 4. Credentials, authentication, transport, retry, lifecycle ownership, and execution objects remain within their owning lane and layer.
 5. The exception has an explicit typed contract and end-to-end tests covering the supported path, incompatible target, malformed metadata, and model-switch fallback.
 
-Opaque reasoning continuity is a canonical exception: response projection may need the actual upstream Provider/API/model provenance to bind Pi signature fields into a client-carried opaque envelope, while request projection may need the resolved target adapter's replay capability to restore those fields or preserve only the visible reasoning. This does not permit direct Provider imports or weaken the separation between Local Native Preservation, Provider Native Preservation, and Semantic Conversion.
+Opaque reasoning continuity is a canonical exception: response projection may need the actual upstream Provider/API/model provenance to bind Pi signature fields into a client-carried opaque envelope, while request projection may need the resolved target adapter's replay capability to restore those fields or preserve only the visible reasoning. This does not permit direct Provider imports or weaken the separation between Direct Mode, Provider Native Preservation, and Semantic Conversion.
 
 The protocol-owned semantic executor's `onPayload` function is an internal execution seam, not a callback into a request converter and therefore not a cross-layer exception.
 
@@ -266,11 +266,11 @@ The protocol-owned semantic executor's `onPayload` function is an internal execu
 Protocol-owned Semantic Modules and Pi Provider execution are not used when no semantic conversion takes place. Token has exactly three valid data-plane lanes, and they are independent architectural contracts rather than variants of one shared execution abstraction:
 
 ```text
-1. Local Native Preservation
+1. Direct Mode
    Compatible Client Wire
-   → local model recognition
-   → local credential authority
-   → local native passthrough transport
+   → explicit Direct Mode model/capability recognition
+   → preserved caller credential envelope
+   → fixed direct transport
    → Compatible Upstream Wire
 
 2. Provider Native Preservation
@@ -289,22 +289,22 @@ Protocol-owned Semantic Modules and Pi Provider execution are not used when no s
 
 These lanes must remain independent:
 
-- Local Native Preservation owns its own model recognition, local credential lookup, request construction, transport, and response handling. It must not depend on alias resolution, Pi `Models`, Provider Native Passthrough, Pi AI IR, or Pi Provider execution.
-- Provider Native Preservation may use alias/model resolution, the resolved Pi `Model`, `Models.getAuth()`, request-local effective model facts, and provider/protocol-specific transport rules. It must not enter Pi AI IR or Pi Provider execution, and it must not read or reuse Local Native credentials, model registries, transports, or execution abstractions.
-- Each Semantic Conversion Client Protocol module owns its Client Wire conversion, protocol-specific semantic policy, target projection, semantic execution lifecycle, and Pi AI response IR → Client Wire conversion. It may invoke the established Pi execution capability but does not share a Semantic Conversion executor with another Client Protocol. It must not import, call, or reuse either native passthrough lane's request builders, credential authorities, transports, or response handling.
-- The two native lanes must not be unified behind a shared native target, native credential, native executor, native transport, or fallback abstraction. Similar wire-construction code may remain duplicated when sharing it would couple credential ownership or lifecycle.
+- Direct Mode owns its own model/capability recognition, preserved caller envelope, request construction, fixed transport, and response handling. It must not depend on alias resolution, Pi `Models`, Provider Native Preservation, Pi AI IR, or Pi Provider execution. It does not read `auth.json`, validate caller credentials, or create a local credential authority; the fixed upstream authenticates the preserved caller envelope.
+- Provider Native Preservation may use alias/model resolution, the resolved Pi `Model`, `Models.getAuth()`, request-local effective model facts, and provider/protocol-specific transport rules. It must not enter Pi AI IR or Pi Provider execution, and it must not read or reuse Direct Mode caller-envelope facts, model/capability authority, transports, or execution abstractions.
+- Each Semantic Conversion Client Protocol module owns its Client Wire conversion, protocol-specific semantic policy, target projection, semantic execution lifecycle, and Pi AI response IR → Client Wire conversion. It may invoke the established Pi execution capability but does not share a Semantic Conversion executor with another Client Protocol. It must not import, call, or reuse either preservation lane's request builders, credential authorities, transports, or response handling.
+- Direct Mode and Provider Native Preservation must not be unified behind a shared preservation target, credential authority, executor, transport, or fallback abstraction. Similar wire-construction code may remain duplicated when sharing it would couple credential ownership or lifecycle.
 - Runtime/composition or the Client Protocol edge may select a lane using only the minimum routing facts required by that lane. After a lane is selected and execution begins, failure in that lane must not fall through to another lane.
-- Local Native eligibility is established by that integration's explicit local model/capability contract. Provider Native eligibility is established by an explicit `(provider, api/protocol)` transport contract or equivalent model capability; fuzzy provider-name similarity or payload resemblance is not sufficient.
-- Native lanes preserve model-visible request and response semantics rather than translating them. Only boundary-required model identity projection, the exact credential-bound Anthropic OAuth body projection defined below, credential/auth transport, header filtering, content encoding, and endpoint construction may alter the wire representation.
-- The raw client wire remains authoritative on native lanes. Native passthrough must not reconstruct or semantically normalize unrelated request fields merely to forward them.
-- Credentials remain owned by the authority of the selected lane. Local credentials never become Pi Provider credentials; Pi Provider credentials never become Local Native credentials; neither credential representation enters Pi AI IR.
+- Direct Mode eligibility is established by that integration's explicit model/capability contract. Provider Native eligibility is established by an explicit `(provider, api/protocol)` transport contract or equivalent model capability; fuzzy provider-name similarity or payload resemblance is not sufficient.
+- The preservation lanes keep model-visible request and response semantics rather than translating them. Only boundary-required model identity projection, the exact credential-bound Anthropic OAuth body projection defined below, credential/auth transport, header filtering, content encoding, and endpoint construction may alter the wire representation.
+- The raw client wire remains authoritative on the preservation lanes. Neither lane may reconstruct or semantically normalize unrelated request fields merely to forward them.
+- Credentials remain owned by the authority of the selected lane. Direct Mode caller credentials remain opaque Client Wire facts for its fixed upstream; Pi Provider credentials never become Direct Mode caller-envelope facts; neither credential representation enters Pi AI IR.
 - If serving a request requires semantic reinterpretation, invented defaults, cross-protocol repair, or an uncertain mapping, that request is not native preservation. Route it to Semantic Conversion before execution begins, or fail explicitly if no valid semantic mapping exists.
 
-A Client Protocol edge may invoke narrow lane-specific seams, but it must not implement the concrete transport rules of any lane itself. Local Native, Provider Native, and Semantic Conversion are three separate execution paths with separate ownership and lifecycle.
+A Client Protocol edge may invoke narrow lane-specific seams, but it must not implement the concrete transport rules of any lane itself. Direct Mode, Provider Native Preservation, and Semantic Conversion are three separate execution paths with separate ownership and lifecycle.
 
 ### Provider Native Request Reconstruction Contract
 
-This contract applies only to Provider Native Preservation. It does not change or extend Local Native Preservation.
+This contract applies only to Provider Native Preservation. It does not change or extend Direct Mode.
 
 For Provider Native, the compatible client request body is authoritative for model-visible semantics. By default, the lane may replace only the boundary-required top-level `model` selector with the resolved Provider model or deployment identity. It must not add, remove, default, repair, normalize, reinterpret, or otherwise change any other body field, value, relationship, or extension. Transport encoding or compression may change only when decoding produces the preserved body with the permitted projection.
 

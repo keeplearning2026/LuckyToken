@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
 import {
   createDiagnosticsAuthority,
   parseDiagnosticsConfiguration,
@@ -14,7 +14,7 @@ import {
   createOpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
 
-const nativeModels: CodexNativeModelSource = Object.freeze({
+const directModels: CodexDirectModelSource = Object.freeze({
   has: () => false,
 });
 
@@ -34,7 +34,7 @@ describe("Request Journey Codex Direct Mode web search", () => {
           headers: { "content-type": "application/json" },
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: nativeModels,
+      codexDirectModels: directModels,
       diagnostics,
     });
     let publish!: (record: RequestJourneySummary) => void;

@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options
 import type { CommandCodeCompatibilityPolicy } from "@token/provider-commandcode-private";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:27fbe489b535632786475895181d97eca776a830a91111461245f2a192ef240d";
+  "sha256:555d9cfe6c9207557e9671e7c4916267fa3a2b9bd4b5e14250c5c0fed79cfd04";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -91,9 +91,10 @@ export interface ServingCertificationManifest {
   };
   readonly profiles: {
     readonly anthropicConversion: ServingCertificationProfile;
-    readonly anthropicNativePassthrough: ServingCertificationProfile;
+    readonly anthropicProviderNative: ServingCertificationProfile;
     readonly responsesConversion: ServingCertificationProfile;
-    readonly responsesNativePassthrough: ServingCertificationProfile;
+    readonly responsesDirectMode: ServingCertificationProfile;
+    readonly responsesProviderNative: ServingCertificationProfile;
     readonly commandCodeProvider: ServingCertificationProfile;
   };
   readonly coverage: Readonly<Record<string, "verified">>;
@@ -377,9 +378,9 @@ export function certifyServingComposition(
         offlineResult: "CERTIFIED",
         onlineStatus: "online-passed",
       },
-      anthropicNativePassthrough: {
-        id: "anthropic-native-passthrough",
-        seam: "POST /v1/messages native passthrough",
+      anthropicProviderNative: {
+        id: "anthropic-provider-native",
+        seam: "POST /v1/messages Provider Native Preservation",
         offlineResult: "CERTIFIED",
         onlineStatus: "not-applicable",
       },
@@ -389,9 +390,15 @@ export function certifyServingComposition(
         offlineResult: "CERTIFIED",
         onlineStatus: "online-passed",
       },
-      responsesNativePassthrough: {
-        id: "responses-native-passthrough",
-        seam: "POST /v1/responses native passthrough",
+      responsesDirectMode: {
+        id: "responses-direct-mode",
+        seam: "POST /v1/responses Direct Mode",
+        offlineResult: "CERTIFIED",
+        onlineStatus: "not-applicable",
+      },
+      responsesProviderNative: {
+        id: "responses-provider-native",
+        seam: "POST /v1/responses Provider Native Preservation",
         offlineResult: "CERTIFIED",
         onlineStatus: "not-applicable",
       },

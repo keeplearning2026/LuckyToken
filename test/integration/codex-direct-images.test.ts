@@ -2,7 +2,7 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
 
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
 import type {
   RequestJourneyObservationAuthority,
   RequestJourneyObservationInput,
@@ -16,7 +16,7 @@ import {
   type OpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
 
-const noNativeModels: CodexNativeModelSource = Object.freeze({
+const noDirectModels: CodexDirectModelSource = Object.freeze({
   has: () => false,
 });
 
@@ -48,7 +48,7 @@ describe("Codex Direct Mode images", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch,
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -108,7 +108,7 @@ describe("Codex Direct Mode images", () => {
         return new Response("edited", { status: 200 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -192,7 +192,7 @@ describe("Codex Direct Mode images", () => {
           },
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -215,7 +215,7 @@ describe("Codex Direct Mode images", () => {
     });
   });
 
-  it("preserves upstream auth failures while enforcing the local request-size limit", async () => {
+  it("preserves upstream auth failures while enforcing the Token request-size limit", async () => {
     let upstreamCalls = 0;
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
@@ -226,7 +226,7 @@ describe("Codex Direct Mode images", () => {
         return new Response("upstream denied", { status: 401 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
       maxRequestBytes: 4,
     });
     compositions.push(composition);
@@ -264,7 +264,7 @@ describe("Codex Direct Mode images", () => {
         return new Response("unexpected");
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
       maxRequestBytes: 4,
     });
     compositions.push(composition);
@@ -303,7 +303,7 @@ describe("Codex Direct Mode images", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch: async () => new Response("must not execute", { status: 200 }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const body = new ReadableStream<Uint8Array>({
@@ -351,7 +351,7 @@ describe("Codex Direct Mode images", () => {
         });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const request = () =>
@@ -414,7 +414,7 @@ describe("Codex Direct Mode images", () => {
           },
         })),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
       diagnostics,
     });
     compositions.push(composition);
@@ -468,7 +468,7 @@ describe("Codex Direct Mode images", () => {
           },
         })),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -503,7 +503,7 @@ describe("Codex Direct Mode images", () => {
         });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const controller = new AbortController();
@@ -550,7 +550,7 @@ describe("Codex Direct Mode images", () => {
         return new Response(Uint8Array.from([0xde, 0xad]), { status: 202 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
       diagnostics: hostileDiagnostics,
     });
     compositions.push(composition);
@@ -591,7 +591,7 @@ describe("Codex Direct Mode images", () => {
           headers: upstreamHeaders,
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const server = await startTokenHttpServer({

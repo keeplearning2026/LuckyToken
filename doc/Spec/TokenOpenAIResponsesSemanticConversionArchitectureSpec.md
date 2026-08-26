@@ -438,4 +438,4 @@ The Responses protocol contract is satisfied when:
 4. every enabled mapping has a final-wire test and every unconsumed fact has an explicit outcome;
 5. every target response API has Pi attachment and Client rendering/replay coverage;
 6. all three direct Responses online Provider scripts pass;
-7. no obsolete shared Semantic Conversion directory remains, while Anthropic and both Native lanes remain behaviorally unchanged.
+7. no obsolete shared Semantic Conversion directory remains, while Anthropic, Direct Mode, and Provider Native Preservation remain behaviorally unchanged.

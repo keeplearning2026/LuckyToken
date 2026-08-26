@@ -1,12 +1,12 @@
 import type {
-  CodexFetchFunction,
-  CodexNativeModelSource,
-} from "../../codex-native-seam.js";
+  CodexDirectFetch,
+  CodexDirectModelSource,
+} from "../../codex-direct-seam.js";
 import {
-  CodexResponsesPassthroughBodyReadError,
-  CodexResponsesPassthroughTransportError,
-  passthroughCodexResponsesCompact,
-} from "../../codex-responses-passthrough.js";
+  CodexDirectResponsesBodyReadError,
+  CodexDirectResponsesTransportError,
+  executeCodexDirectResponsesCompact,
+} from "../../codex-direct-responses-transport.js";
 import type { DirectResponsesCompactLane } from "../../protocols/openai-responses/compact-contract.js";
 import type {
   RequestJourneyLocation,
@@ -20,11 +20,11 @@ import {
 import {
   preserveDirectResponse,
   preserveDirectStatusText,
-} from "../../local-native-http-response.js";
+} from "../../direct-http-response.js";
 
 export interface CreateCodexDirectCompactLaneOptions {
-  readonly models: CodexNativeModelSource;
-  readonly fetch: CodexFetchFunction;
+  readonly models: CodexDirectModelSource;
+  readonly fetch: CodexDirectFetch;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -38,7 +38,7 @@ function errorResponse(status: number, type: string, message: string): Response 
   return toResponse(renderResponsesError(status, type, message));
 }
 
-function observeLocalCompact(
+function observeDirectCompact(
   journey: RequestJourneyObserver | undefined,
   observation: RequestJourneyObservationInput,
 ): void {
@@ -49,21 +49,21 @@ function observeLocalCompact(
   }
 }
 
-function enterLocalCompactStep(
+function enterDirectCompactStep(
   journey: RequestJourneyObserver | undefined,
   stepInstanceId: string,
   location: RequestJourneyLocation,
 ): void {
-  observeLocalCompact(journey, { kind: "step_entered", stepInstanceId, location });
+  observeDirectCompact(journey, { kind: "step_entered", stepInstanceId, location });
 }
 
-function completeLocalCompactStep(
+function completeDirectCompactStep(
   journey: RequestJourneyObserver | undefined,
   stepInstanceId: string,
   location: RequestJourneyLocation,
   completion: "success" | "failed",
 ): void {
-  observeLocalCompact(journey, {
+  observeDirectCompact(journey, {
     kind: "step_completed",
     stepInstanceId,
     completion,
@@ -71,7 +71,7 @@ function completeLocalCompactStep(
   });
 }
 
-function observeLocalCompactTerminal(
+function observeDirectCompactTerminal(
   journey: RequestJourneyObserver | undefined,
   response: Response,
   outcome: "success" | "failed",
@@ -83,8 +83,8 @@ function observeLocalCompactTerminal(
   } as const;
   const presentationStep =
     outcome === "success" ? "p6.prepare_direct_response" : "p6.render_direct_error_response";
-  enterLocalCompactStep(journey, presentationStep, presentationLocation);
-  observeLocalCompact(journey, {
+  enterDirectCompactStep(journey, presentationStep, presentationLocation);
+  observeDirectCompact(journey, {
     kind: "client_response_prepared",
     status: response.status,
     ...(response.headers.get("content-type") === null
@@ -92,20 +92,20 @@ function observeLocalCompactTerminal(
       : { mediaType: response.headers.get("content-type")! }),
     location: presentationLocation,
   });
-  completeLocalCompactStep(journey, presentationStep, presentationLocation, "success");
+  completeDirectCompactStep(journey, presentationStep, presentationLocation, "success");
   const outcomeLocation = {
     phase: "outcome_commit",
     lane: "direct",
     step: "commit_request_outcome",
   } as const;
-  enterLocalCompactStep(journey, "p7.commit_request_outcome", outcomeLocation);
-  observeLocalCompact(journey, {
+  enterDirectCompactStep(journey, "p7.commit_request_outcome", outcomeLocation);
+  observeDirectCompact(journey, {
     kind: "work_outcome_committed",
     outcome,
     terminalAuthority: "codex_direct_compact_lane",
     location: outcomeLocation,
   });
-  completeLocalCompactStep(journey, "p7.commit_request_outcome", outcomeLocation, "success");
+  completeDirectCompactStep(journey, "p7.commit_request_outcome", outcomeLocation, "success");
 }
 
 export function createCodexDirectCompactLane(
@@ -118,15 +118,15 @@ export function createCodexDirectCompactLane(
     async execute(
       input: Parameters<DirectResponsesCompactLane["execute"]>[0],
     ): Promise<Response> {
-      observeLocalCompact(input.journey, {
+      observeDirectCompact(input.journey, {
         kind: "model_resolved",
         requestedModel: input.selector,
-        providerId: "codex-local",
+        providerId: "codex-direct",
         modelId: input.selector,
         location: {
           phase: "request_resolution",
           lane: "direct",
-          step: "recognize_local_model",
+          step: "recognize_direct_model",
         },
       });
       const envelopeLocation = {
@@ -134,19 +134,19 @@ export function createCodexDirectCompactLane(
         lane: "direct",
         step: "preserve_caller_envelope",
       } as const;
-      enterLocalCompactStep(
+      enterDirectCompactStep(
         input.journey,
         "p3.preserve_caller_envelope",
         envelopeLocation,
       );
-      completeLocalCompactStep(
+      completeDirectCompactStep(
         input.journey,
         "p3.preserve_caller_envelope",
         envelopeLocation,
         "success",
       );
       try {
-        const upstream = await passthroughCodexResponsesCompact({
+        const upstream = await executeCodexDirectResponsesCompact({
           rawBody: input.rawBody,
           requestUrl: input.request.url,
           requestHeaders: input.request.headers,
@@ -159,7 +159,7 @@ export function createCodexDirectCompactLane(
           lane: "direct",
           step: "preserve_direct_response",
         } as const;
-        enterLocalCompactStep(
+        enterDirectCompactStep(
           input.journey,
           "p5.preserve_direct_response",
           preserveLocation,
@@ -169,13 +169,13 @@ export function createCodexDirectCompactLane(
           statusText: upstream.statusText,
           headers: upstream.headers,
         });
-        completeLocalCompactStep(
+        completeDirectCompactStep(
           input.journey,
           "p5.preserve_direct_response",
           preserveLocation,
           "success",
         );
-        observeLocalCompactTerminal(
+        observeDirectCompactTerminal(
           input.journey,
           response,
           response.status >= 400 ? "failed" : "success",
@@ -184,15 +184,15 @@ export function createCodexDirectCompactLane(
       } catch (error) {
         if (input.request.signal.aborted) throw error;
         if (
-          error instanceof CodexResponsesPassthroughTransportError ||
-          error instanceof CodexResponsesPassthroughBodyReadError
+          error instanceof CodexDirectResponsesTransportError ||
+          error instanceof CodexDirectResponsesBodyReadError
         ) {
           const response = errorResponse(
             502,
             "api_error",
             "Upstream compact request failed",
           );
-          observeLocalCompactTerminal(input.journey, response, "failed");
+          observeDirectCompactTerminal(input.journey, response, "failed");
           return preserveDirectResponse(response);
         }
         throw error;

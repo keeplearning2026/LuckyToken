@@ -21,7 +21,7 @@ function declaredProviders(text, constantName) {
 test("Provider Native Responses claims only its certified provider/api tuples", async () => {
   const implementation = await source("src/provider-native-responses/index.ts");
   const fixtures = await source("test/unit/responses-native-provider-sender.test.ts");
-  const contract = await source("test/unit/openai-responses-passthrough-contract.test.ts");
+  const contract = await source("test/unit/provider-native-responses-contract.test.ts");
   const providers = declaredProviders(
     implementation,
     "CERTIFIED_OPENAI_RESPONSES_PROVIDERS",

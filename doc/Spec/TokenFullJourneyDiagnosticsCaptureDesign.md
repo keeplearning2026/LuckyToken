@@ -6,7 +6,7 @@ Status: reviewed and implemented, based on source and test evidence inspected on
 
 Token should support bounded, fail-open capture of the complete diagnostic scene for all three independent data-plane lanes:
 
-1. Local Native Preservation;
+1. Direct Mode;
 2. Provider Native Preservation;
 3. protocol-owned Semantic Conversion for OpenAI Responses and Anthropic Messages.
 
@@ -178,14 +178,14 @@ If syntax is malformed, the value crosses an unsupported boundary, or completene
 
 The tables define required diagnostic stages. Each lane publishes only facts it already owns at an existing lifecycle seam.
 
-### 7.1 Local Native Preservation
+### 7.1 Direct Mode
 
 | Stage | Required artifact | Authoritative owner/seam |
 | --- | --- | --- |
 | Client ingress | Method, safe path/query/header envelope, complete decoded JSON body | Server request body owner after normal body acquisition |
-| Lane commitment | Local Native lane/model recognition outcome without credentials | Local Native router |
-| Local upstream request | Final method, URL with secrets removed, safe headers, exact outbound body | `src/codex-responses-passthrough.ts` after ordinary request construction |
-| Local upstream response | Status, safe headers, complete body as normally consumed | Local Native response owner |
+| Lane commitment | Direct Mode model/capability recognition outcome without credentials | Direct Mode router |
+| Direct Mode upstream request | Final method, URL with secrets removed, safe headers, exact outbound body | `src/codex-direct-responses-transport.ts` after ordinary request construction |
+| Direct Mode upstream response | Status, safe headers, complete body as normally consumed | Direct Mode response owner |
 | Client egress | Status, safe headers, exact body emitted to the client | `src/server.ts` response-emission owner |
 
 No Pi Model, Pi AI IR, Provider Native transport, alias resolver, or semantic module participates.
@@ -265,7 +265,7 @@ The tests must also prove that diagnostic failures are contained synchronously: 
 
 Add end-to-end success and failure capture tests for:
 
-- Local Native Preservation;
+- Direct Mode;
 - Provider Native OpenAI Responses;
 - Provider Native Anthropic Messages;
 - OpenAI Responses Semantic Conversion;
@@ -290,7 +290,7 @@ Keep artifact retrieval paged and add metadata-first inspection. The renderer mu
 1. Revise `TokenRequestJourneyDiagnosticsSpec.md` and introduce the Settings-owned switch, Diagnostics-owned managed folder, independent child-process isolation, v3 artifact/completeness/configuration contract, and exact 64 MiB JSON limit.
 2. Add red Settings, storage-directory, non-interference, and boundary tests before production wiring.
 3. Implement the policy snapshot Adapter, chunked recorder, isolated complete-document redaction, bounded IPC queue/process supervisor, provisional v3 file storage/index, health reporting, and paged read contract.
-4. Wire Local Native and both Provider Native implementations at their lane-owned seams.
+4. Wire Direct Mode and both Provider Native implementations at their lane-owned seams.
 5. Wire `pi_provider_request_payload`, safe response metadata, and decoded response IR independently for OpenAI Responses and Anthropic Messages through official Pi 0.84.2 public callbacks.
 6. Replace lossy semantic snapshots with complete protocol-owned artifacts while retaining optional summaries only as explicitly labelled convenience artifacts.
 7. Add the Settings toggle/directory display, paged/virtualized desktop viewer, and the full cross-lane certification matrix.

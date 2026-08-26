@@ -73,15 +73,16 @@ test("binds the shared policy and all three conversion authorities by content", 
   }
 });
 
-test("certifies five named profiles and records complete online evidence", async () => {
+test("certifies six named profiles and records complete online evidence", async () => {
   const record = JSON.parse(await readFile(recordUrl, "utf8"));
   assert.deepEqual(
     record.profiles.map(({ id, route, offlineResult }) => [id, route, offlineResult]),
     [
       ["anthropic-conversion", "POST /v1/messages conversion", "CERTIFIED"],
-      ["anthropic-native-passthrough", "POST /v1/messages native passthrough", "CERTIFIED"],
+      ["anthropic-provider-native", "POST /v1/messages Provider Native Preservation", "CERTIFIED"],
       ["responses-conversion", "POST /v1/responses conversion", "CERTIFIED"],
-      ["responses-native-passthrough", "POST /v1/responses native passthrough", "CERTIFIED"],
+      ["responses-direct-mode", "POST /v1/responses Direct Mode", "CERTIFIED"],
+      ["responses-provider-native", "POST /v1/responses Provider Native Preservation", "CERTIFIED"],
       ["commandcode-provider", "Pi Provider commandcode-private", "CERTIFIED"],
     ],
   );

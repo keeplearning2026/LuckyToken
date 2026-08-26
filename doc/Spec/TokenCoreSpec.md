@@ -1393,7 +1393,7 @@ Data Plane request execution 现在有且只有三条独立 architectural lane�
 ```text
 1. Direct Mode
    Compatible Client Wire
-   → explicit local model/capability recognition
+   → explicit Direct Mode model/capability recognition
    → preserve caller credential envelope
    → direct transport
    → Compatible Upstream Wire
@@ -6947,7 +6947,7 @@ Summary：
 | **HTTP Boundary** | HTTP runtime; route/protocol policy | request transport lifecycle state while active; no separate long-lived state required | `route/read`; `emit` | conversational semantics; Provider wire |
 | **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; filesystem; HTTP connection internals |
 | **Request Identity** | known session-header registry; fallback identity generator | none beyond optional bounded request-id helpers | `resolveRequestIdentity(headers)` | Model; Context; Provider credentials/wire |
-| **Direct Mode Caller Envelope** | compatible inbound request wire | request-local caller headers/query only | preserve caller envelope to one fixed upstream | local authentication; Pi AI IR; Provider credential store; unrelated native lanes |
+| **Direct Mode Caller Envelope** | compatible inbound request wire | request-local caller headers/query only | preserve caller envelope to one fixed upstream | authentication inside Token; Pi AI IR; Provider credential store; unrelated preservation lanes |
 | **Provider Package Loader** | versioned Package Contract; dynamic import capability; narrow host capabilities; Pi `MutableModels` | staged external Providers only during startup | `loadProviderPackages` | Client wire; Provider-native wire; package-private configuration semantics |
 | **Token-owned concrete Provider** | stable integration config; compatibility policy; direct integration capabilities | provider-owned mutable catalog/cache/runtime state only if any | `stream`; `streamSimple`; optional refresh/deferred operations | request-identity internals; Direct Mode caller envelope; Client wire; generic whole-request object |
 | **CommandCode Private Provider** | endpoint/config; compatibility policy; fixed ServerConfig factory; Trace Context generation; direct transport capability where needed | provider-owned mutable runtime state only if any | `streamSimple` | raw client headers; Client Protocol; HTTP response object; project filesystem/Git state |
@@ -7513,7 +7513,7 @@ Token Core Architecture v6.0
         ├── no Token global/project client-token boundary
         ├── no projectDir / project-slug fact flow in current Core
         ├── CommandCode Private uses fixed empty ServerConfig
-        ├── native lanes preserve compatible raw client wire
+        ├── Direct Mode and Provider Native preserve compatible raw client wire
         └── lane failure never falls through to another lane
 ```
 

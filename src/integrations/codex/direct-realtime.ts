@@ -1,4 +1,4 @@
-import type { CodexFetchFunction } from "../../codex-native-seam.js";
+import type { CodexDirectFetch } from "../../codex-direct-seam.js";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import {
@@ -8,7 +8,7 @@ import {
   type ClientProtocolRequestContext,
 } from "../../http.js";
 import type { WebSocketUpgradeHandler } from "../../websocket-upgrade.js";
-import { preserveDirectStatusText } from "../../local-native-http-response.js";
+import { preserveDirectStatusText } from "../../direct-http-response.js";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 
 export const CODEX_REALTIME_CALLS_URL =
@@ -16,7 +16,7 @@ export const CODEX_REALTIME_CALLS_URL =
 export const CODEX_REALTIME_HTTP_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface CreateCodexDirectRealtimeOptions {
-  readonly fetch: CodexFetchFunction;
+  readonly fetch: CodexDirectFetch;
   readonly connectWebSocket?: CodexRealtimeWebSocketConnect;
 }
 

@@ -2,9 +2,9 @@ import type { AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import type {
-  CodexFetchFunction,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
+  CodexDirectFetch,
+  CodexDirectModelSource,
+} from "../../src/codex-direct-seam.js";
 import type {
   RequestJourneyBeginInput,
   RequestJourneyCloseInput,
@@ -17,7 +17,7 @@ import type {
   ImmutableArtifactMeta,
 } from "../../src/diagnostics/contract.js";
 import type { ExecutionOperation } from "../../src/execution.js";
-import { createCodexDirectCompactLane } from "../../src/integrations/codex/local-compact.js";
+import { createCodexDirectCompactLane } from "../../src/integrations/codex/direct-compact.js";
 import { createOpenAIResponsesCompactHandler } from "../../src/protocols/openai-responses/compact.js";
 import type { ProviderResponsesLane } from "../../src/provider-native-responses/contract.js";
 import { createTokenRuntime } from "../../src/runtime.js";
@@ -159,7 +159,7 @@ function semanticMessage(model: Model<string>): AssistantMessage {
 
 describe("Request Journey successful conversation compaction", () => {
   it("keeps Direct Mode compact synthetic failures free of Token-owned headers", async () => {
-    const nativeModels: CodexNativeModelSource = {
+    const directModels: CodexDirectModelSource = {
       has: (selector) => selector === "gpt-native",
     };
     const models = new Proxy({} as Models, {
@@ -170,7 +170,7 @@ describe("Request Journey successful conversation compaction", () => {
     const handler = createOpenAIResponsesCompactHandler({
       models,
       directLane: createCodexDirectCompactLane({
-        models: nativeModels,
+        models: directModels,
         fetch: async () => {
           throw new Error("upstream unavailable");
         },
@@ -189,13 +189,13 @@ describe("Request Journey successful conversation compaction", () => {
 
   it("keeps the Direct Mode compact lane observable through final in-process handoff", async () => {
     const recording = recordingAuthority();
-    const nativeModels: CodexNativeModelSource = {
+    const directModels: CodexDirectModelSource = {
       has: (selector) => selector === "gpt-native",
     };
     const outbound: string[] = [];
     const outboundUrls: string[] = [];
     const outboundAcceptEncodings: Array<string | null> = [];
-    const fetch: CodexFetchFunction = async (input, init) => {
+    const fetch: CodexDirectFetch = async (input, init) => {
       const request = new Request(input, init);
       outboundUrls.push(request.url);
       outboundAcceptEncodings.push(request.headers.get("accept-encoding"));
@@ -213,7 +213,7 @@ describe("Request Journey successful conversation compaction", () => {
     const handler = createOpenAIResponsesCompactHandler({
       models,
       directLane: createCodexDirectCompactLane({
-        models: nativeModels,
+        models: directModels,
         fetch,
       }),
       stateFile: "unused-local-compact-journey.json",
@@ -246,12 +246,12 @@ describe("Request Journey successful conversation compaction", () => {
         }),
         expect.objectContaining({
           kind: "artifact_observed",
-          artifactKind: "local_outbound_request_wire",
+          artifactKind: "direct_outbound_request_wire",
           state: "captured",
         }),
         expect.objectContaining({
           kind: "artifact_observed",
-          artifactKind: "local_upstream_response_wire",
+          artifactKind: "direct_upstream_response_wire",
           state: "captured",
         }),
         expect.objectContaining({

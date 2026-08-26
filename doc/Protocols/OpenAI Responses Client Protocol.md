@@ -13,12 +13,12 @@ This document defines the Client wire, local state, rendering, Direct Mode / Pro
 
 ```text
 Responses request + raw model selector
-→ explicit local model/capability claim
+→ explicit Direct Mode model/capability claim
 → preserve caller credential envelope
 → direct Responses transport
 ```
 
-The current production direct lane is Codex Direct Mode. Selection happens before Public Model/Pi Model resolution and before local `previous_response_id` expansion. The original Responses bytes, query, and end-to-end headers remain authoritative. Token does not read `auth.json`, validate caller credentials, or derive replacement forward auth; the fixed upstream owns authentication.
+The current production direct lane is Codex Direct Mode. Selection happens before Public Model/Pi Model resolution and before protocol-owned `previous_response_id` expansion. The original Responses bytes, query, and end-to-end headers remain authoritative. Token does not read `auth.json`, validate caller credentials, or derive replacement forward auth; the fixed upstream owns authentication.
 
 ### 1.2 Provider Native Preservation
 
@@ -347,7 +347,7 @@ Native coverage must never be used to claim completeness for Responses↔Pi conv
 
 ## 13. Configuration and composition
 
-The protocol is optional and independently registered. Its config schema is adapter-owned, validates unknown keys at startup, and is snapshotted immutably. Composition binds request identity, local/provider native lane seams, state store, resolvers, notices, semantic execution, and rendering without copying Responses business rules into Runtime.
+The protocol is optional and independently registered. Its config schema is adapter-owned, validates unknown keys at startup, and is snapshotted immutably. Composition binds request identity, Direct Mode and Provider Native lane seams, state store, resolvers, notices, semantic execution, and rendering without copying Responses business rules into Runtime.
 
 ```json
 {

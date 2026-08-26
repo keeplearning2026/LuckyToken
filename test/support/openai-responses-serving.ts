@@ -24,16 +24,16 @@ import {
   type TokenRuntime,
 } from "../../src/runtime.js";
 import type { OpenAIResponsesConfiguration } from "../../src/protocols/openai-responses/configuration.js";
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
-import { createCodexDirectResponsesLane } from "../../src/integrations/codex/local-responses.js";
-import { createCodexDirectSearchHandler } from "../../src/integrations/codex/local-search.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
+import { createCodexDirectResponsesLane } from "../../src/integrations/codex/direct-responses.js";
+import { createCodexDirectSearchHandler } from "../../src/integrations/codex/direct-search.js";
 import {
   createCodexDirectImagesEditsHandler,
   createCodexDirectImagesGenerationsHandler,
-} from "../../src/integrations/codex/local-images.js";
+} from "../../src/integrations/codex/direct-images.js";
 import {
   createCodexDirectRealtimeModule,
-} from "../../src/integrations/codex/local-realtime.js";
+} from "../../src/integrations/codex/direct-realtime.js";
 
 export interface OpenAIResponsesServingTestOptions {
   clientApiKey: string;
@@ -51,7 +51,7 @@ export interface OpenAIResponsesServingTestOptions {
   directory?: string;
   configuration?: OpenAIResponsesConfiguration;
   diagnostics?: RequestJourneyObservationAuthority;
-  codexNativeModels?: CodexNativeModelSource;
+  codexDirectModels?: CodexDirectModelSource;
 }
 
 export interface OpenAIResponsesServingTestComposition {
@@ -113,10 +113,10 @@ export async function createOpenAIResponsesServingTestComposition(
         : options.configuration.conversion.response.storeFalse,
   });
   const directLane =
-    options.codexNativeModels === undefined
+    options.codexDirectModels === undefined
       ? undefined
       : createCodexDirectResponsesLane({
-          models: options.codexNativeModels,
+          models: options.codexDirectModels,
           fetch: options.fetch,
         });
   const handler = createOpenAIResponsesHandler({

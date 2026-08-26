@@ -635,4 +635,4 @@ The Anthropic Semantic Conversion contract is satisfied when:
 7. replay-required reasoning metadata survives every certified compatible complete-history round trip;
 8. unsupported hard controls fail through request validation or the Pi/main-call contract before Supplement projection, candidate target unavailability warns without blocking dispatch, and policy-authorized fallbacks degrade honestly;
 9. all three fixed-target independent Anthropic online Provider scripts pass;
-10. OpenAI Responses and both Native lanes remain unchanged.
+10. OpenAI Responses, Direct Mode, and Provider Native Preservation remain unchanged.

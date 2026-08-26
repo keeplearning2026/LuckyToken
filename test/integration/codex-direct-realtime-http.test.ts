@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
 
-const noNativeModels: CodexNativeModelSource = Object.freeze({
+const noDirectModels: CodexDirectModelSource = Object.freeze({
   has: () => false,
 });
 
@@ -62,7 +62,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
         });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const offer = multipartOffer();
@@ -132,7 +132,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
           },
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -178,7 +178,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
         return new Response("answer", { status: 200 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -213,7 +213,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
         return new Response("answer", { status: 200 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -254,7 +254,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
         return new Response("upstream denied", { status: 401 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const multipart = (parts: string[]) => {
@@ -330,7 +330,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
         return new Response("unexpected");
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const body = new ReadableStream<Uint8Array>({
@@ -380,7 +380,7 @@ describe("Codex Direct Mode realtime HTTP", () => {
         });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const request = () =>

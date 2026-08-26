@@ -324,5 +324,5 @@ The OpenAI Responses migration is complete when:
 5. every unconsumed candidate fact has a Responses-owned `omitted` or named bounded `degraded` disposition;
 6. no Supplement candidate becomes `failed` or prevents Provider dispatch merely because the resolved target cannot express it;
 7. final-wire and replay behavior remains certified;
-8. both Native Preservation lanes remain unchanged;
+8. Direct Mode and Provider Native Preservation remain unchanged;
 9. no compatibility shim, dual execution path, or common Client Protocol semantic union was introduced.

@@ -31,8 +31,8 @@ One of the three independent request execution contracts: Direct Mode, Provider 
 _Avoid_: Execution mode, fallback path
 
 **Direct Mode**:
-The lane that preserves a compatible Client Wire through local model recognition and a fixed local-native transport without entering Pi; caller credentials remain part of that wire and are authenticated only by the fixed upstream.
-_Avoid_: Generic native passthrough
+The lane that preserves a compatible Client Wire through explicit Direct Mode model/capability recognition, a preserved caller envelope, and a fixed direct transport without entering Pi; caller credentials remain part of that wire and are authenticated only by the fixed upstream.
+_Avoid_: the former local-preservation lane name, generic native passthrough
 
 **Provider Native Preservation**:
 The lane that preserves a compatible Client Wire through resolved Pi model facts, Provider credential authority, and a provider-native transport without entering Pi AI IR execution.

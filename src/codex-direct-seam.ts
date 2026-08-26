@@ -1,6 +1,6 @@
-export type CodexFetchFunction = typeof globalThis.fetch;
+export type CodexDirectFetch = typeof globalThis.fetch;
 
 /** Read-only Direct Mode model identity seam published by the Codex integration authority. */
-export interface CodexNativeModelSource {
+export interface CodexDirectModelSource {
   has(modelId: string): boolean;
 }

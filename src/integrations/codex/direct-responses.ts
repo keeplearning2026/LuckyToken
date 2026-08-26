@@ -1,13 +1,13 @@
 import type { DirectResponsesLane } from "../../protocols/openai-responses/handler.js";
 import type {
-  CodexFetchFunction,
-  CodexNativeModelSource,
-} from "../../codex-native-seam.js";
+  CodexDirectFetch,
+  CodexDirectModelSource,
+} from "../../codex-direct-seam.js";
 import {
-  CodexResponsesPassthroughBodyReadError,
-  CodexResponsesPassthroughTransportError,
-  passthroughCodexResponses,
-} from "../../codex-responses-passthrough.js";
+  CodexDirectResponsesBodyReadError,
+  CodexDirectResponsesTransportError,
+  executeCodexDirectResponses,
+} from "../../codex-direct-responses-transport.js";
 import { extractResponsesPassthroughUsage } from "../../protocols/openai-responses/passthrough-usage.js";
 import {
   renderResponsesError,
@@ -21,11 +21,11 @@ import type {
 import {
   preserveDirectResponse,
   preserveDirectStatusText,
-} from "../../local-native-http-response.js";
+} from "../../direct-http-response.js";
 
 export interface CreateCodexDirectResponsesLaneOptions {
-  readonly models: CodexNativeModelSource;
-  readonly fetch: CodexFetchFunction;
+  readonly models: CodexDirectModelSource;
+  readonly fetch: CodexDirectFetch;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -42,7 +42,7 @@ function observeCodexDirectJourney(
   try {
     journey?.observe(observation);
   } catch {
-    // Local lane behavior is authoritative over observation failure.
+    // Direct Mode behavior is authoritative over observation failure.
   }
 }
 
@@ -104,10 +104,10 @@ function observeCodexDirectTerminal(
 
 async function executeDirect(
   input: Parameters<DirectResponsesLane["execute"]>[0],
-  fetch: CodexFetchFunction,
+  fetch: CodexDirectFetch,
 ): Promise<Response> {
   try {
-    const upstream = await passthroughCodexResponses({
+    const upstream = await executeCodexDirectResponses({
       rawBody: input.rawBody,
       requestUrl: input.request.url,
       requestHeaders: input.request.headers,
@@ -130,7 +130,7 @@ async function executeDirect(
         location: {
           phase: "lane_response_processing",
           lane: "direct",
-          step: "observe_local_usage",
+          step: "observe_direct_usage",
         },
       });
     }
@@ -164,14 +164,14 @@ async function executeDirect(
     return preserveDirectStatusText(response);
   } catch (error) {
     if (
-      error instanceof CodexResponsesPassthroughTransportError ||
-      error instanceof CodexResponsesPassthroughBodyReadError
+      error instanceof CodexDirectResponsesTransportError ||
+      error instanceof CodexDirectResponsesBodyReadError
     ) {
       const response = toResponse(
         renderResponsesError(
           502,
           "api_error",
-          error instanceof CodexResponsesPassthroughTransportError
+          error instanceof CodexDirectResponsesTransportError
             ? "Upstream provider request failed"
             : "Upstream provider response could not be read",
         ),
@@ -201,12 +201,12 @@ export function createCodexDirectResponsesLane(
       observeCodexDirectJourney(input.journey, {
         kind: "model_resolved",
         requestedModel: input.selector,
-        providerId: "codex-local",
+        providerId: "codex-direct",
         modelId: input.selector,
         location: {
           phase: "request_resolution",
           lane: "direct",
-          step: "recognize_local_model",
+          step: "recognize_direct_model",
         },
       });
       const envelopeLocation = {

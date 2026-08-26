@@ -1,13 +1,13 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
 import {
   createOpenAIResponsesServingTestComposition,
   type OpenAIResponsesServingTestComposition,
 } from "../support/openai-responses-serving.js";
 
-const noNativeModels: CodexNativeModelSource = Object.freeze({
+const noDirectModels: CodexDirectModelSource = Object.freeze({
   has: () => false,
 });
 
@@ -20,7 +20,7 @@ describe("Codex Direct Mode web search", () => {
     );
   });
 
-  it("forwards caller credentials without consulting local Codex auth", async () => {
+  it("forwards caller credentials without consulting Token-owned Codex auth", async () => {
     const requestBytes = Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0xff]);
     const responseBytes = Uint8Array.from([0x00, 0x80, 0xff, 0x41]);
     let outbound: Request | undefined;
@@ -37,7 +37,7 @@ describe("Codex Direct Mode web search", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch,
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -88,7 +88,7 @@ describe("Codex Direct Mode web search", () => {
         });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -127,7 +127,7 @@ describe("Codex Direct Mode web search", () => {
         return new Response("{}", { status: 200 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -158,7 +158,7 @@ describe("Codex Direct Mode web search", () => {
         return new Response("{}", { status: 200 });
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -228,7 +228,7 @@ describe("Codex Direct Mode web search", () => {
           },
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -271,7 +271,7 @@ describe("Codex Direct Mode web search", () => {
         );
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -312,7 +312,7 @@ describe("Codex Direct Mode web search", () => {
       },
       modelId: "deepseek/deepseek-v4-flash",
       maxRequestBytes: 4,
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -345,7 +345,7 @@ describe("Codex Direct Mode web search", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch: async () => new Response("must not execute", { status: 200 }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const body = new ReadableStream<Uint8Array>({
@@ -376,7 +376,7 @@ describe("Codex Direct Mode web search", () => {
         throw new Error("socket failed with codex-token");
       },
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -419,7 +419,7 @@ describe("Codex Direct Mode web search", () => {
           { status: 200 },
         ),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
 
@@ -459,7 +459,7 @@ describe("Codex Direct Mode web search", () => {
       commandCodeBaseUrl: "https://commandcode.test",
       fetch: async () => new Response("must not execute", { status: 200 }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
     });
     compositions.push(composition);
     const controller = new AbortController();

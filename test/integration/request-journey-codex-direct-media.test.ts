@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
 import {
   createDiagnosticsAuthority,
   parseDiagnosticsConfiguration,
@@ -12,7 +12,7 @@ import {
 } from "../../src/diagnostics/index.js";
 import { createOpenAIResponsesServingTestComposition } from "../support/openai-responses-serving.js";
 
-const noNativeModels: CodexNativeModelSource = Object.freeze({
+const noDirectModels: CodexDirectModelSource = Object.freeze({
   has: () => false,
 });
 
@@ -32,7 +32,7 @@ describe("Request Journey Codex Direct Mode media", () => {
           headers: { "content-type": "application/json" },
         }),
       modelId: "deepseek/deepseek-v4-flash",
-      codexNativeModels: noNativeModels,
+      codexDirectModels: noDirectModels,
       diagnostics,
     });
     const records: RequestJourneySummary[] = [];

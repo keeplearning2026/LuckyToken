@@ -1,12 +1,12 @@
 {
   "schemaVersion": "token-serving-conformance-v2",
   "certificationBasis": "offline-and-online",
-  "scope": "all-frozen-conversion-passthrough-and-commandcode-profiles",
+  "scope": "all-frozen-conversion-preservation-and-commandcode-profiles",
   "authorities": [
     {
       "id": "shared-architecture-policy",
       "path": "doc/Protocols/Protocol Conversion Architecture and Policy.md",
-      "sha256": "sha256:43125d9989cfd51bec4262dbad8fa686520eb2eebcc5667b4f28c9a78cb307e5"
+      "sha256": "sha256:ea3484078858268ec167f9188ffe83211d881aee704ea7c8f60ea0ecc6c5f648"
     },
     {
       "id": "anthropic-pi-conversion",
@@ -16,7 +16,7 @@
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:b9972c4e71c53de070fdb957b19588301ca4dd887932d34ecf829db5c0b8cd10"
+      "sha256": "sha256:398a82e8f20571f7f4708ff4ec4284fce32c180c15379f19a50f44dc6a727880"
     },
     {
       "id": "pi-commandcode-conversion",
@@ -46,8 +46,8 @@
       ]
     },
     {
-      "id": "anthropic-native-passthrough",
-      "route": "POST /v1/messages native passthrough",
+      "id": "anthropic-provider-native",
+      "route": "POST /v1/messages Provider Native Preservation",
       "offlineResult": "CERTIFIED",
       "tests": [
         "test/unit/anthropic-passthrough-certification.test.ts",
@@ -74,13 +74,27 @@
       ]
     },
     {
-      "id": "responses-native-passthrough",
-      "route": "POST /v1/responses native passthrough",
+      "id": "responses-direct-mode",
+      "route": "POST /v1/responses Direct Mode",
       "offlineResult": "CERTIFIED",
       "tests": [
-        "test/unit/openai-responses-passthrough-architecture.test.ts",
-        "test/unit/openai-responses-passthrough-contract.test.ts",
-        "test/unit/openai-responses-passthrough-header-matrix.test.ts"
+        "test/unit/openai-responses-three-lane-architecture.test.ts",
+        "test/unit/openai-responses-three-lane-routing.test.ts",
+        "test/integration/codex-direct-responses.test.ts",
+        "test/integration/request-journey-direct-mode.test.ts"
+      ]
+    },
+    {
+      "id": "responses-provider-native",
+      "route": "POST /v1/responses Provider Native Preservation",
+      "offlineResult": "CERTIFIED",
+      "tests": [
+        "test/unit/provider-native-responses-contract.test.ts",
+        "test/unit/provider-native-responses-header-matrix.test.ts",
+        "test/unit/provider-native-responses-projection.test.ts",
+        "test/unit/responses-native-provider-sender.test.ts",
+        "test/unit/responses-native-provider-retry.test.ts",
+        "test/integration/request-journey-provider-native-openai.test.ts"
       ]
     },
     {
@@ -207,13 +221,13 @@
       "tests": [
         "test/unit/live-client-token-authority.test.ts",
         "test/unit/profile-bound-pi-execution.test.ts",
-        "test/unit/openai-responses-passthrough-architecture.test.ts",
-        "test/integration/codex-native-responses.test.ts",
-        "test/integration/codex-native-search.test.ts",
-        "test/integration/codex-native-images.test.ts",
-        "test/integration/codex-native-realtime-http.test.ts",
-        "test/integration/codex-native-realtime-websocket.test.ts",
-        "test/integration/request-journey-local-native.test.ts",
+        "test/unit/openai-responses-three-lane-architecture.test.ts",
+        "test/integration/codex-direct-responses.test.ts",
+        "test/integration/codex-direct-search.test.ts",
+        "test/integration/codex-direct-images.test.ts",
+        "test/integration/codex-direct-realtime-http.test.ts",
+        "test/integration/codex-direct-realtime-websocket.test.ts",
+        "test/integration/request-journey-direct-mode.test.ts",
         "test/integration/request-journey-provider-native-openai.test.ts",
         "test/integration/request-journey-semantic-openai.test.ts"
       ]

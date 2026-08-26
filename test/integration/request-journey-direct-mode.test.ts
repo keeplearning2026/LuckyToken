@@ -6,16 +6,16 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
-  CodexFetchFunction,
-  CodexNativeModelSource,
-} from "../../src/codex-native-seam.js";
+  CodexDirectFetch,
+  CodexDirectModelSource,
+} from "../../src/codex-direct-seam.js";
 import {
   createDiagnosticsAuthority,
   parseDiagnosticsConfiguration,
   type DiagnosticsAuthority,
 } from "../../src/diagnostics/index.js";
 import type { ExecutionOperation } from "../../src/execution.js";
-import { createCodexDirectResponsesLane } from "../../src/integrations/codex/local-responses.js";
+import { createCodexDirectResponsesLane } from "../../src/integrations/codex/direct-responses.js";
 import {
   createOpenAIResponsesHandler,
 } from "../../src/protocols/openai-responses/handler.js";
@@ -60,7 +60,7 @@ describe("Direct Mode Request Journey", () => {
   });
 
   it("locates a Codex response-body read failure without entering either other lane", async () => {
-    const root = await mkdtemp(join(tmpdir(), "Token-local-journey-"));
+    const root = await mkdtemp(join(tmpdir(), "Token-direct-journey-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -98,7 +98,7 @@ describe("Direct Mode Request Journey", () => {
     };
 
     const credentialSecret = "client-token";
-    const nativeModels: CodexNativeModelSource = Object.freeze({
+    const directModels: CodexDirectModelSource = Object.freeze({
       has: (modelId: string) => modelId === "gpt-native",
     });
     const outboundRequests: Array<{
@@ -106,7 +106,7 @@ describe("Direct Mode Request Journey", () => {
       readonly method: string;
       readonly body: string;
     }> = [];
-    const localFetch: CodexFetchFunction = async (input, init) => {
+    const directFetch: CodexDirectFetch = async (input, init) => {
       const outbound = new Request(input, init);
       outboundRequests.push({
         url: outbound.url,
@@ -123,14 +123,14 @@ describe("Direct Mode Request Journey", () => {
           status: 200,
           headers: {
             "content-type": "application/json",
-            "x-request-id": "upstream-local-request",
+            "x-request-id": "upstream-direct-request",
           },
         },
       );
     };
     const directLane = createCodexDirectResponsesLane({
-      models: nativeModels,
-      fetch: localFetch,
+      models: directModels,
+      fetch: directFetch,
     });
     const handler = createOpenAIResponsesHandler({
       models: piModels,
@@ -152,7 +152,7 @@ describe("Direct Mode Request Journey", () => {
 
     const requestBody = JSON.stringify({
       model: "gpt-native",
-      input: "diagnose local body read",
+      input: "diagnose Direct Mode body read",
     });
     const expectedResponseBody = JSON.stringify({
       error: {
@@ -218,7 +218,7 @@ describe("Direct Mode Request Journey", () => {
     expect(primaryFailure).toMatchObject({
       kind: "failure_detected",
       role: "primary",
-      classification: "local_upstream_response_body_read_failed",
+      classification: "direct_upstream_response_body_read_failed",
       origin: "network_os",
       originPrecision: "boundary",
       location: FAILURE_LOCATION,
@@ -345,13 +345,13 @@ describe("Direct Mode Request Journey", () => {
           state: "captured",
         }),
         expect.objectContaining({
-          artifactId: "local_outbound_request_envelope",
-          artifactKind: "local_outbound_request_envelope",
+          artifactId: "direct_outbound_request_envelope",
+          artifactKind: "direct_outbound_request_envelope",
           state: "captured",
         }),
         expect.objectContaining({
-          artifactId: "local_outbound_request_wire",
-          artifactKind: "local_outbound_request_wire",
+          artifactId: "direct_outbound_request_wire",
+          artifactKind: "direct_outbound_request_wire",
           state: "captured",
           mediaType: "application/json",
           originalBytes: Buffer.byteLength(requestBody),
@@ -359,15 +359,15 @@ describe("Direct Mode Request Journey", () => {
           truncated: false,
         }),
         expect.objectContaining({
-          artifactId: "local_upstream_response_wire",
-          artifactKind: "local_upstream_response_wire",
+          artifactId: "direct_upstream_response_wire",
+          artifactKind: "direct_upstream_response_wire",
           state: "unavailable",
           mediaType: "application/json",
           reason: "response_body_read_failed",
         }),
         expect.objectContaining({
-          artifactId: "local_upstream_response_envelope",
-          artifactKind: "local_upstream_response_envelope",
+          artifactId: "direct_upstream_response_envelope",
+          artifactKind: "direct_upstream_response_envelope",
           state: "captured",
         }),
         expect.objectContaining({
@@ -390,7 +390,7 @@ describe("Direct Mode Request Journey", () => {
 
     const outboundArtifact = await authority.getRequestArtifact({
       requestId: REQUEST_ID,
-      artifactId: "local_outbound_request_wire",
+      artifactId: "direct_outbound_request_wire",
       offset: 0,
       limit: 256 * 1_024,
     });

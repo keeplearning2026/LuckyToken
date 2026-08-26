@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 async function source(path: string): Promise<string> {
@@ -8,10 +8,10 @@ async function source(path: string): Promise<string> {
 describe("OpenAI Responses three-lane architecture certification", () => {
   it("keeps Direct Mode independent from Provider Native, Pi IR, and Pi model identity", async () => {
     for (const file of [
-      "src/codex-native-seam.ts",
-      "src/codex-responses-passthrough.ts",
-      "src/integrations/codex/local-responses.ts",
-      "src/integrations/codex/local-compact.ts",
+      "src/codex-direct-seam.ts",
+      "src/codex-direct-responses-transport.ts",
+      "src/integrations/codex/direct-responses.ts",
+      "src/integrations/codex/direct-compact.ts",
       "src/integrations/codex/native-catalog-source.ts",
     ]) {
       const text = await source(file);
@@ -39,7 +39,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
     }
   });
 
-  it("keeps Semantic conversion independent from both Native transports", async () => {
+  it("keeps Semantic conversion independent from Direct Mode and Provider Native transports", async () => {
     for (const file of [
       "src/credentials/profile-bound-pi-execution.ts",
       "src/protocols/openai-responses/semantic.ts",
@@ -48,7 +48,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
       const text = await source(file);
       expect(text).not.toMatch(/provider-native-responses/u);
       expect(text).not.toMatch(/integrations[\\/]codex/u);
-      expect(text).not.toMatch(/codex-responses-passthrough/u);
+      expect(text).not.toMatch(/codex-direct-responses-transport/u);
       expect(text).not.toMatch(/passthroughResponsesRequest/u);
       expect(text).not.toMatch(/provider-native-anthropic/u);
     }
@@ -99,8 +99,45 @@ describe("OpenAI Responses three-lane architecture certification", () => {
 
   it("requires the Backend-owned Codex integration authority to supply Direct Mode identity", async () => {
     const text = await source("src/composition.ts");
-    expect(text).not.toMatch(/createCodexNativeModelSource/u);
+    expect(text).not.toMatch(/createCodexDirectModelSource/u);
     expect(text).not.toMatch(/integrations[\\/]codex[\\/]native-models/u);
+  });
+
+  it("uses Direct Mode vocabulary without erasing Codex-native catalog provenance", async () => {
+    const legacyVocabulary =
+      /Local Native|local_native|local-native|local_outbound|local_upstream|recognize_local_model|project_local_request|observe_local_usage|codex-local/u;
+    for (const file of [
+      "AGENTS.md",
+      "CONTEXT.md",
+      "README.md",
+      "doc/Protocols/Protocol Conversion Architecture and Policy.md",
+      "doc/Protocols/OpenAI Responses Client Protocol.md",
+      "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
+      "doc/Spec/TokenRequestJourneyDiagnosticsSpec.md",
+      "doc/Spec/TokenFullJourneyDiagnosticsCaptureDesign.md",
+      "src/codex-direct-seam.ts",
+      "src/codex-direct-responses-transport.ts",
+      "src/direct-http-response.ts",
+      "src/protocols/openai-responses/handler.ts",
+      "src/protocols/openai-responses/compact.ts",
+    ]) {
+      expect(await source(file), file).not.toMatch(legacyVocabulary);
+    }
+
+    const codexIntegrationFiles = await readdir("src/integrations/codex");
+    expect(codexIntegrationFiles).not.toEqual(
+      expect.arrayContaining([
+        "local-responses.ts",
+        "local-compact.ts",
+        "local-search.ts",
+        "local-images.ts",
+        "local-realtime.ts",
+        "native-models.ts",
+      ]),
+    );
+    expect(await source("src/integrations/codex/native-catalog-source.ts")).toContain(
+      "CodexNativeCatalogSource",
+    );
   });
 
   it("has no active production import of the retired generic native implementations", async () => {

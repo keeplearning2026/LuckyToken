@@ -103,11 +103,11 @@ For each lane, publish step entry immediately before owned work and step complet
 
 #### Direct Mode
 
-- local model recognition and lane commitment;
+- Direct Mode model/capability recognition and lane commitment;
 - caller-envelope preservation and direct envelope construction;
 - dispatch and response read;
-- native response preservation and real terminal usage extraction;
-- local failures located only in Direct Mode steps.
+- direct response preservation and real terminal usage extraction;
+- Direct Mode failures located only in Direct Mode steps.
 
 #### Provider Native Preservation
 
@@ -141,7 +141,7 @@ Add Worker commands over the same database for:
 
 History count and deletion include only sealed Journeys. An active Journey remains writable and cannot be turned into orphan events by a concurrent management cleanup.
 
-Analytics producers publish only facts known at their real ownership seam. Semantic Conversion copies `input`, `output`, and `cacheRead` only from terminal Pi `AssistantMessage.usage`; native lanes publish the same three-field fact from their own response boundary. A complete all-zero fact is valid. Requests without a fact contribute only to `missingUsageRequests`; no adapter invents tokens, duration, Profile, model, outcome, cost, cache-write, reasoning usage, or normalized totals.
+Analytics producers publish only facts known at their real ownership seam. Semantic Conversion copies `input`, `output`, and `cacheRead` only from terminal Pi `AssistantMessage.usage`; Direct Mode and Provider Native publish the same three-field fact from their own response boundary. A complete all-zero fact is valid. Requests without a fact contribute only to `missingUsageRequests`; no adapter invents tokens, duration, Profile, model, outcome, cost, cache-write, reasoning usage, or normalized totals.
 
 **Green gate:** large paged analytics input is not materialized as one row array, backups are consistent and temporary files are removed, and all management failure returns typed unavailability rather than a fabricated empty-complete result.
 

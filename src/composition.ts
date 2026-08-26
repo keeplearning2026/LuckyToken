@@ -8,24 +8,24 @@ import {
   type CoreServingCertificationManifest,
 } from "./core-serving-certification.js";
 import type {
-  CodexFetchFunction,
-  CodexNativeModelSource,
-} from "./codex-native-seam.js";
+  CodexDirectFetch,
+  CodexDirectModelSource,
+} from "./codex-direct-seam.js";
 import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 import { createExecutionOperation } from "./execution.js";
 import type { ProviderAuthBindingAuthority } from "./credentials/profile-contract.js";
 import { credentialActivityForExecutionFacts } from "./credentials/activity.js";
 import type { ClientProtocolHandler } from "./http.js";
-import { createCodexDirectCompactLane } from "./integrations/codex/local-compact.js";
-import { createCodexDirectResponsesLane } from "./integrations/codex/local-responses.js";
-import { createCodexDirectSearchHandler } from "./integrations/codex/local-search.js";
+import { createCodexDirectCompactLane } from "./integrations/codex/direct-compact.js";
+import { createCodexDirectResponsesLane } from "./integrations/codex/direct-responses.js";
+import { createCodexDirectSearchHandler } from "./integrations/codex/direct-search.js";
 import {
   createCodexDirectImagesEditsHandler,
   createCodexDirectImagesGenerationsHandler,
-} from "./integrations/codex/local-images.js";
+} from "./integrations/codex/direct-images.js";
 import {
   createCodexDirectRealtimeModule,
-} from "./integrations/codex/local-realtime.js";
+} from "./integrations/codex/direct-realtime.js";
 import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import type { PublicModelSource } from "./public-model-seam.js";
 import { createAnthropicProviderNativeLane } from "./provider-native-anthropic/index.js";
@@ -67,8 +67,8 @@ export interface ConfiguredTokenDataPlaneOptions {
   readonly diagnostics?: RequestJourneyObservationAuthority;
   readonly isProtocolEnabled: (protocolId: string) => boolean;
   readonly fetch: FetchFunction;
-  readonly codexDirectFetch?: CodexFetchFunction;
-  readonly codexNativeModels?: CodexNativeModelSource;
+  readonly codexDirectFetch?: CodexDirectFetch;
+  readonly codexDirectModels?: CodexDirectModelSource;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
@@ -186,17 +186,17 @@ export async function createConfiguredTokenDataPlane(
       ),
     });
     const directLane =
-      options.codexNativeModels === undefined
+      options.codexDirectModels === undefined
         ? undefined
         : createCodexDirectResponsesLane({
-            models: options.codexNativeModels,
+            models: options.codexDirectModels,
             fetch: codexDirectFetch,
           });
     const directCompactLane =
-      options.codexNativeModels === undefined
+      options.codexDirectModels === undefined
         ? undefined
         : createCodexDirectCompactLane({
-            models: options.codexNativeModels,
+            models: options.codexDirectModels,
             fetch: codexDirectFetch,
           });
     const configuration = bindOpenAIResponsesConfiguration(

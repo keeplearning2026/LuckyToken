@@ -2,7 +2,7 @@ import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 
-import type { CodexFetchFunction } from "../../codex-native-seam.js";
+import type { CodexDirectFetch } from "../../codex-direct-seam.js";
 
 function requestBody(init: RequestInit | undefined): Uint8Array | undefined {
   const body = init?.body;
@@ -44,7 +44,7 @@ function responseHeaders(rawHeaders: readonly string[]): Headers {
  * client does not transparently decode Content-Encoding, so the upstream
  * response body and representation headers remain mutually authoritative.
  */
-export function createCodexDirectHttpFetch(): CodexFetchFunction {
+export function createCodexDirectHttpFetch(): CodexDirectFetch {
   return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
@@ -110,5 +110,5 @@ export function createCodexDirectHttpFetch(): CodexFetchFunction {
       if (body === undefined) client.end();
       else client.end(Buffer.from(body.buffer, body.byteOffset, body.byteLength));
     });
-  }) as CodexFetchFunction;
+  }) as CodexDirectFetch;
 }

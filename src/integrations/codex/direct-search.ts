@@ -1,4 +1,4 @@
-import type { CodexFetchFunction } from "../../codex-native-seam.js";
+import type { CodexDirectFetch } from "../../codex-direct-seam.js";
 import {
   observeRequestJourney,
   type ClientProtocolHandler,
@@ -7,13 +7,13 @@ import {
 import {
   preserveDirectResponse,
   preserveDirectStatusText,
-} from "../../local-native-http-response.js";
+} from "../../direct-http-response.js";
 
 export const CODEX_SEARCH_URL =
   "https://chatgpt.com/backend-api/codex/alpha/search";
 
 export interface CreateCodexDirectSearchHandlerOptions {
-  readonly fetch: CodexFetchFunction;
+  readonly fetch: CodexDirectFetch;
   readonly maxRequestBytes: number;
 }
 

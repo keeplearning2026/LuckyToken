@@ -548,16 +548,16 @@ They MUST NOT be represented as having taken effect in the Response object.
 
 ## 15. Native Responses preservation
 
-OpenAI Responses currently has **two distinct native lanes**. Both preserve Responses-wire semantics without forcing the request through Pi AI IR, but their model/credential authority is intentionally different.
+OpenAI Responses currently has **two distinct preservation lanes**: Direct Mode and Provider Native Preservation. Both preserve Responses-wire semantics without forcing the request through Pi AI IR, but their model/credential authority is intentionally different.
 
 ### 15.1 Direct Mode Responses
 
-The handler checks the raw model selector against the explicit local Responses lane **before** Public Model/Pi Model resolution or `previous_response_id` expansion:
+The handler checks the raw model selector against the explicit Direct Mode Responses lane **before** Public Model/Pi Model resolution or `previous_response_id` expansion:
 
 ```text
 raw Responses body + selector
 → DirectResponsesLane.claims(selector)
-→ local model registry/capability
+→ Direct Mode model/capability source
 → preserve caller envelope
 → direct Responses transport
 ```
@@ -578,9 +578,9 @@ raw Responses body
 
 This lane preserves the raw Responses body as the model-visible authority while applying only boundary-required model identity projection, Provider auth/header rules, endpoint construction, response alias projection, and safe response handling. It does not execute Pi Client↔Provider semantic conversion.
 
-### 15.3 Shared native requirements
+### 15.3 Shared preservation requirements
 
-Both native lanes preserve handles, hosted tools, conversation/prompt state, background jobs, and future wire fields without inventing Pi representations. They require:
+Both preservation lanes preserve handles, hosted tools, conversation/prompt state, background jobs, and future wire fields without inventing Pi representations. They require:
 
 - explicit lane-specific compatibility/capability selection;
 - independent credential authority and transport ownership;

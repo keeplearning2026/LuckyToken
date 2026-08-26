@@ -17,7 +17,7 @@ import {
   startTokenHttpServer,
   type RunningTokenHttpServer,
 } from "../../src/server.js";
-import { createCodexDirectRealtimeModule } from "../../src/integrations/codex/local-realtime.js";
+import { createCodexDirectRealtimeModule } from "../../src/integrations/codex/direct-realtime.js";
 
 const REQUEST_ID = "68000000-0000-4000-8000-000000000001";
 const PRIMARY_LOCATION = {

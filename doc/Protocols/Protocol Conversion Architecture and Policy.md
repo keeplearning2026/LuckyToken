@@ -13,7 +13,7 @@ Token has exactly three peer Data Plane execution contracts. They may share only
 
 ```text
 Compatible Client wire
-→ explicit local model/capability recognition
+→ explicit Direct Mode model/capability recognition
 → preserved caller envelope
 → direct request construction/transport
 → protocol-compatible upstream wire
@@ -23,7 +23,7 @@ This lane deliberately does not enter Pi. Its model eligibility, caller envelope
 
 Requirements:
 
-1. Eligibility comes from an explicit local model/capability contract, never fuzzy name similarity or payload resemblance.
+1. Eligibility comes from an explicit Direct Mode model/capability contract, never fuzzy name similarity or payload resemblance.
 2. Raw compatible Client wire remains authoritative for model-visible fields; unrelated fields are not reconstructed through a semantic DTO.
 3. Caller credentials remain opaque Client Wire facts forwarded only to the fixed Direct Mode upstream; Token does not validate them or reuse them as Pi/Provider credentials.
 4. End-to-end headers, including caller credentials and cookies, are preserved. Host, length, hop-by-hop/connection-declared fields and WebSocket handshake transport headers are rebuilt; stale response representation headers are removed when Fetch exposes decoded bytes.
@@ -68,11 +68,11 @@ Pi is the only shared semantic boundary for this lane.
 - No shared protocol DTO or second semantic IR may bypass Pi.
 - A conversion handler MUST NOT inject a custom `fetch` to observe Provider traffic. The selected Provider owns its transport and may expose failure facts only through trusted protocol-neutral Pi diagnostics.
 
-### 1.4 Shared native-preservation rules
+### 1.4 Shared preservation rules
 
-The two native lanes are separate architectures, not two adapters behind one generic native executor. Similar wire code may remain duplicated when sharing it would couple credential ownership or lifecycle.
+Direct Mode and Provider Native Preservation are separate architectures, not two adapters behind one generic preservation executor. Similar wire code may remain duplicated when sharing it would couple credential ownership or lifecycle.
 
-Both native lanes:
+Both preservation lanes:
 
 1. use separate conformance tests/metrics/documentation from Semantic Conversion;
 2. do not treat native success as evidence that Pi conversion is complete;
@@ -343,7 +343,8 @@ It does not record credentials, authorization/cookie headers, full model message
 
 For every supported route, certification MUST state which profile was exercised:
 
-- `native-passthrough`, or
-- `client-wire → Pi → provider-wire`.
+- `direct-mode`;
+- `provider-native-preservation`; or
+- `client-wire → Pi → provider-wire` Semantic Conversion.
 
-No test may use one profile to claim coverage for the other.
+No test may use one profile to claim coverage for another.

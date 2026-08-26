@@ -327,7 +327,7 @@ doc/AnthropicMessagesPiProviderSemanticAudit.md
 - `src/protocols/openai-responses/**`;
 - OpenAI Responses specifications, audits, projectors, fixtures, and online tests;
 - Provider Native Preservation behavior;
-- Local Native Preservation behavior;
+- Direct Mode behavior;
 - Pi AI or `node_modules` modifications;
 - a shared Semantic Conversion Invocation, Supplement, outcome, error, registry, or
   executor;
@@ -1016,7 +1016,7 @@ Gate:
 Gate:
 
 - Anthropic can be added or removed without editing another Client Protocol Module;
-- Provider Native and Local Native lane tests remain unchanged and green;
+- Provider Native and Direct Mode lane tests remain unchanged and green;
 - every plan requirement has direct evidence rather than absence-of-failure.
 
 ### Slice 9 — Independent online and real-client certification
@@ -1155,5 +1155,5 @@ The refactor is complete only when all of the following are true:
 14. All three direct Anthropic online scripts pass independently.
 15. Claude Code/Claude CLI separately proves the original OpenCode GO system-role
     failure is resolved.
-16. OpenAI Responses and both Native Preservation lanes remain behaviorally
+16. OpenAI Responses, Direct Mode, and Provider Native Preservation remain behaviorally
     unchanged.

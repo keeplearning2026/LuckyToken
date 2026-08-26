@@ -552,7 +552,7 @@ export function createOpenAIResponsesCompactHandler(
           "success",
           true,
         );
-        const localRecognitionLocation = {
+        const directRecognitionLocation = {
           phase: "request_resolution",
           lane: "direct",
           step: "recognize_direct",
@@ -560,13 +560,13 @@ export function createOpenAIResponsesCompactHandler(
         enterCompactStep(
           journey,
           "p2.recognize_direct",
-          localRecognitionLocation,
+          directRecognitionLocation,
         );
         const directClaimed = options.directLane?.claims(selector) === true;
         completeCompactStep(
           journey,
           "p2.recognize_direct",
-          localRecognitionLocation,
+          directRecognitionLocation,
         );
         if (directClaimed) {
           observeCompactJourney(journey, {

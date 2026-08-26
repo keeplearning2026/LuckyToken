@@ -11,7 +11,7 @@ import {
   createConfiguredTokenDataPlane as createProductionDataPlane,
   type ConfiguredTokenDataPlane as ProductionDataPlane,
 } from "../../src/composition.js";
-import type { CodexNativeModelSource } from "../../src/codex-native-seam.js";
+import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
 import type {
   CredentialProfileManagement,
   ProviderAuthBindingAuthority,
@@ -56,7 +56,7 @@ export interface TestConfiguredDataPlaneOptions {
   readonly configValueAdapters?: ConfigValueAdapters;
   readonly authContext?: AuthContext;
   readonly modelsStore?: ModelsStore;
-  readonly codexNativeModels?: CodexNativeModelSource;
+  readonly codexDirectModels?: CodexDirectModelSource;
   readonly publicModelAuthority?: PublicModelAuthority;
   readonly providerRuntime?: ProviderRuntime;
 }
@@ -344,9 +344,9 @@ export async function createConfiguredTokenDataPlane(
       return setting?.value !== false;
     },
     fetch: options.fetch,
-    ...(options.codexNativeModels === undefined
+    ...(options.codexDirectModels === undefined
       ? {}
-      : { codexNativeModels: options.codexNativeModels }),
+      : { codexDirectModels: options.codexDirectModels }),
     ...(options.createMessageId === undefined
       ? {}
       : { createMessageId: options.createMessageId }),

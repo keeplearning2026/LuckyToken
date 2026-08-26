@@ -152,7 +152,7 @@ describe("Codex integration authority", () => {
     expect(await readFile(join(codexHome, "config.toml"), "utf8")).toContain(
       'openai_base_url = "http://127.0.0.1:3000/v1"',
     );
-    expect(authority.nativeModels.has("gpt-native")).toBe(true);
+    expect(authority.directModels.has("gpt-native")).toBe(true);
 
     await authority.reconcile("shutdown");
     expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe("");
@@ -200,7 +200,7 @@ describe("Codex integration authority", () => {
     expect(projection.desiredEnabled).toBe(false);
     expect(projection.scope).toBe("favorite");
     expect(projection.observedState).toBe("native");
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(false);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(false);
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(before);
   });
 
@@ -314,7 +314,7 @@ describe("Codex integration authority", () => {
     expect(content).toContain("model_catalog_json = ");
     expect(content).toContain('model = "old-model"');
     expect(content).toContain("foo = true");
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(true);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(true);
     expect(catalog.models.map((entry) => entry.slug)).toEqual([
       "gpt-native",
       "anthropic/claude-opus",
@@ -359,7 +359,7 @@ describe("Codex integration authority", () => {
     expect(restored).not.toContain("model_catalog_json");
     expect(restored).not.toContain("openai_base_url");
     expect(restored).toContain('model = "old-model"');
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(false);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(false);
 
     await expect(fx.authority.reconcile("disable")).resolves.toMatchObject({
       desiredEnabled: false,
@@ -457,7 +457,7 @@ describe("Codex integration authority", () => {
 
     expect(disabled.observedState).toBe("native");
     expect(restored).toBe(original);
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(false);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(false);
   });
 
   it("shutdown applies the configured restore target without changing durable Enable intent", async () => {
@@ -477,7 +477,7 @@ describe("Codex integration authority", () => {
     expect(shutdown.desiredEnabled).toBe(true);
     expect(shutdown.needsSync).toBe(true);
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(original);
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(false);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(false);
   });
 
   it("shutdown fails instead of claiming success when the configured target cannot be restored", async () => {
@@ -488,7 +488,7 @@ describe("Codex integration authority", () => {
     await expect(fx.authority.reconcile("shutdown")).rejects.toThrow(
       "Codex integration could not be restored before Token shutdown",
     );
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(true);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(true);
   });
 
   it("keeps Enable ON when the configured restore target cannot be applied", async () => {
@@ -503,7 +503,7 @@ describe("Codex integration authority", () => {
       observedState: "unavailable",
       message: "Codex config.toml was not found while restoring the integration.",
     });
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(true);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(true);
   });
 
   it("changes made while Token is closed do not replace the configured restore target", async () => {
@@ -518,7 +518,7 @@ describe("Codex integration authority", () => {
     await writeFile(join(fx.codexHome, "config.toml"), changedWhileClosed, "utf8");
 
     await fx.authority.reconcile("startup");
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(true);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(true);
     await fx.authority.reconcile("shutdown");
 
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe("");
@@ -553,7 +553,7 @@ describe("Codex integration authority", () => {
       validateCatalog: async () => undefined,
     });
     await authority.reconcile("enable");
-    expect(authority.nativeModels.has("gpt-a")).toBe(true);
+    expect(authority.directModels.has("gpt-a")).toBe(true);
 
     entries = [{ slug: "gpt-b" }];
     await authority.reconcile("sync");
@@ -562,8 +562,8 @@ describe("Codex integration authority", () => {
       "utf8",
     );
 
-    expect(authority.nativeModels.has("gpt-a")).toBe(false);
-    expect(authority.nativeModels.has("gpt-b")).toBe(true);
+    expect(authority.directModels.has("gpt-a")).toBe(false);
+    expect(authority.directModels.has("gpt-b")).toBe(true);
     expect(catalog).toContain("gpt-b");
     expect(catalog).not.toContain("gpt-a");
 
@@ -573,7 +573,7 @@ describe("Codex integration authority", () => {
     const failed = await authority.reconcile("sync");
 
     expect(failed.observedState).toBe("unavailable");
-    expect(authority.nativeModels.has("gpt-b")).toBe(true);
+    expect(authority.directModels.has("gpt-b")).toBe(true);
     expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(
       configBeforeFailure,
     );
@@ -596,7 +596,7 @@ describe("Codex integration authority", () => {
       observedState: "unavailable",
       message: "The Codex model catalog could not be read. No Codex files were changed.",
     });
-    expect(fx.authority.nativeModels.has("anything")).toBe(false);
+    expect(fx.authority.directModels.has("anything")).toBe(false);
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(original);
     await expect(readFile(result.catalogPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -702,6 +702,6 @@ describe("Codex integration authority", () => {
     expect(countRootKey(active, "model_catalog_json")).toBe(1);
     expect(active).toContain('model_provider = "openai"');
     expect(active).toContain('openai_base_url = "http://127.0.0.1:3000/v1"');
-    expect(fx.authority.nativeModels.has("gpt-native")).toBe(true);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(true);
   });
 });
