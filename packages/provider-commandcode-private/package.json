@@ -1,6 +1,6 @@
 {
   "name": "@token/provider-commandcode-private",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "files": ["dist"],
@@ -16,7 +16,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.84.2",
-    "@token/commandcode-model-catalog": "0.1.0",
-    "@token/provider-contract": "0.1.0"
+    "@token/commandcode-model-catalog": "1.0.0",
+    "@token/provider-contract": "1.0.0"
   }
 }

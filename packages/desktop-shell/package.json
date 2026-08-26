@@ -1,6 +1,6 @@
 {
   "name": "@token/desktop-shell",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "main": ".vite/build/main.js",
   "scripts": {
@@ -25,7 +25,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@token/application-control-plane": "0.1.0",
+    "@token/application-control-plane": "1.0.0",
     "electron-squirrel-startup": "1.0.1",
     "lucide-react": "^1.33.0",
     "react": "19.2.7",

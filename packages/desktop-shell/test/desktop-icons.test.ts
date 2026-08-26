@@ -54,6 +54,10 @@ function decodeRgbaPng(path: string): {
   readonly width: number;
   readonly height: number;
   readonly alphaAt: (x: number, y: number) => number;
+  readonly rgbaAt: (
+    x: number,
+    y: number,
+  ) => readonly [red: number, green: number, blue: number, alpha: number];
 } {
   const bytes = readFileSync(path);
   const width = bytes.readUInt32BE(16);
@@ -112,6 +116,15 @@ function decodeRgbaPng(path: string): {
     width,
     height,
     alphaAt: (x, y) => pixels.readUInt8(y * stride + x * 4 + 3),
+    rgbaAt: (x, y) => {
+      const offset = y * stride + x * 4;
+      return [
+        pixels.readUInt8(offset),
+        pixels.readUInt8(offset + 1),
+        pixels.readUInt8(offset + 2),
+        pixels.readUInt8(offset + 3),
+      ];
+    },
   };
 }
 
@@ -162,6 +175,14 @@ describe("Electron desktop icons", () => {
     expect(
       icon.alphaAt(Math.floor(icon.width / 2), Math.floor(icon.height / 2)),
     ).toBeGreaterThan(250);
+
+    const [red, green, blue, alpha] = icon.rgbaAt(
+      Math.floor(icon.width / 8),
+      Math.floor(icon.height / 8),
+    );
+    expect(Math.min(red, green, blue)).toBeGreaterThanOrEqual(245);
+    expect(Math.max(red, green, blue) - Math.min(red, green, blue)).toBeLessThanOrEqual(5);
+    expect(alpha).toBeGreaterThan(250);
   });
 
   it("derives the Windows and macOS containers from the application master", () => {
