@@ -146,7 +146,9 @@ retention limit is reached first.
 1. Select **Overview** and find the request in the **Requests** table. The
    initial time range is the current local day. Use the filter button to change
    **From/To** or filter by Provider, Profile, Model, Protocol, Session, or
-   Outcome; use refresh when needed.
+   Outcome; use refresh when needed. Optional Claude Code
+   `POST /v1/messages/count_tokens` probes remain in diagnostics storage but
+   are excluded from the Overview request list and statistics.
 2. Expand the row with its disclosure arrow. **Request result** separates the
    HTTP result, duration, and diagnostics completeness. **Request facts** shows
    the Request ID, session, selected Profile, requested model, and resolved
@@ -157,14 +159,19 @@ retention limit is reached first.
 4. Expand **Technical timeline** for the ordered observations. A started step
    without a matching completion is useful evidence for interruption or a
    hang; timeline entries are observations, not inferred causes.
-5. Expand **Diagnostic captures** to inspect request, intermediate, upstream,
-   and response artifacts. **View JSON** reads the first 64 KiB page;
-   **Next page** advances through a large artifact while keeping only one page
-   in renderer memory.
+5. Expand **Diagnostic captures** to inspect files grouped as Client request,
+   Pi invocation, Provider request/response, execution result, and Client
+   response. Each row shows a readable file name, capture/redaction state,
+   media type, and byte count. Select its magnifier to open that one sanitized
+   file with the system default viewer. If no association exists, Windows asks
+   which installed application to use. JSON files are indented; JSONL remains
+   one record per line and SSE opens as an `.sse` text file. The desktop pages
+   large files through the Control Plane, so the Renderer never loads a 64 MiB
+   body into React state.
 
 Capture state is part of the evidence:
 
-- `captured` means the displayed bytes were stored completely;
+- `captured` means the file bytes were stored completely;
 - `partial` means only a bounded prefix is available;
 - `unavailable` means no body is available and the displayed reason explains
   why, such as capture policy, redaction failure, capacity, or retention expiry;
@@ -214,20 +221,23 @@ is:
         └── request-<hash>\
             ├── manifest.json
             └── artifacts\
-                └── artifact-<hash>.json | .jsonl | .sse
+                └── client-request-wire-<hash>.json
+                    pi-provider-request-payload-<hash>.json
+                    client-response-wire-<hash>.sse
 ```
 
 If `diagnostics.directory` is customized, use the exact **Capture folder**
 shown in **Settings → Data & privacy** instead of assuming the default.
 
-The folder and file names are deliberately opaque hashes. Open
-`manifest.json` first: it contains the real Request ID, protocol, lane, outcome,
-and every artifact descriptor, including `artifactId`, `artifactKind`, state,
-redaction/truncation facts, and the relative `file` when a body exists. Follow
-that relative file into `artifacts/`; JSON, JSONL, and SSE bodies are ordinary
-UTF-8 text and can be opened in a text editor or JSON viewer. Ignore
-`.inflight`, because an active or interrupted capture may still be finalized or
-discarded.
+Journey folders remain opaque request hashes so unchecked request IDs never
+become paths. Artifact file names use a readable stage name plus a short hash
+for collision safety. `manifest.json` remains the authority for the real
+Request ID, protocol, lane, outcome, and every artifact descriptor, including
+`artifactId`, `artifactKind`, state, redaction/truncation facts, and the relative
+`file` when a body exists. JSON, JSONL, and SSE bodies are ordinary UTF-8 text;
+JSON is written over multiple indented lines unless indentation alone would
+push a boundary-sized capture past the fixed 64 MiB ceiling. Ignore `.inflight`,
+because an active or interrupted capture may still be finalized or discarded.
 
 Treat the tree and SQLite database as read-only and do not edit, rename, or
 delete individual files while Token is running. Use **Delete history** in

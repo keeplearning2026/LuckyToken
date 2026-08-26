@@ -13,7 +13,7 @@ export const desktopIpcChannels = Object.freeze({
   agentIntegrations: "Token:control:agent-integrations",
   requestJourneysQuery: "Token:control:request-journeys:query",
   requestJourneyGet: "Token:control:request-journey:get",
-  requestArtifactGet: "Token:control:request-artifact:get",
+  requestArtifactOpen: "Token:control:request-artifact:open",
   requestJourneysSubscribe: "Token:control:request-journeys:subscribe",
   requestJourneysUnsubscribe: "Token:control:request-journeys:unsubscribe",
   requestJourneysEvent: "Token:control:request-journeys:event",

@@ -1,10 +1,20 @@
 import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, RefreshCw, SlidersHorizontal } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileJson2,
+  FileText,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+} from "lucide-react";
 
 import {
   formatPercent,
   formatTimestamp,
   formatTokenCount,
+  diagnosticArtifactFileName,
   type AnalyticsFilter,
   type AnalyticsSummary,
   type TokenDesktopApi,
@@ -231,19 +241,87 @@ function observationText(
   }
 }
 
-interface ArtifactPreview {
-  readonly text: string;
-  readonly pageOffset: number;
-  readonly nextOffset: number;
-  readonly complete: boolean;
-  readonly loading: boolean;
+interface ArtifactOpenState {
+  readonly opening: boolean;
   readonly error?: string;
 }
 
-function decodeArtifactChunk(dataBase64: string): string {
-  const binary = atob(dataBase64);
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+const ARTIFACT_TITLES: Readonly<Record<string, string>> = Object.freeze({
+  client_request_envelope: "Client request metadata",
+  client_request_wire: "Client request body",
+  direct_outbound_request_envelope: "Direct upstream request metadata",
+  direct_outbound_request_wire: "Direct upstream request body",
+  direct_upstream_response_envelope: "Direct upstream response metadata",
+  direct_upstream_response_wire: "Direct upstream response body",
+  provider_native_outbound_request_envelope: "Provider request metadata",
+  provider_native_outbound_request_wire: "Provider request body",
+  provider_native_upstream_response_envelope: "Provider response metadata",
+  provider_native_upstream_response_wire: "Provider response body",
+  provider_native_preserved_response_wire: "Preserved provider response",
+  pi_invocation_snapshot: "Pi invocation",
+  pi_provider_request_payload: "Provider request body",
+  pi_provider_response_metadata: "Provider response metadata",
+  pi_provider_response_ir: "Pi decoded provider response",
+  pi_terminal_summary: "Pi terminal result",
+  client_response_envelope: "Client response metadata",
+  client_response_wire: "Client response body",
+});
+
+type CaptureStageId =
+  | "client-request"
+  | "pi-invocation"
+  | "provider-request"
+  | "provider-response"
+  | "execution-result"
+  | "client-response"
+  | "other";
+
+const CAPTURE_STAGES: readonly Readonly<{
+  id: CaptureStageId;
+  label: string;
+  description: string;
+}>[] = Object.freeze([
+  { id: "client-request", label: "Client request", description: "What Token received from the client." },
+  { id: "pi-invocation", label: "Pi invocation", description: "Semantic Conversion input prepared for Pi." },
+  { id: "provider-request", label: "Provider request", description: "What Token or Pi prepared for the upstream Provider." },
+  { id: "provider-response", label: "Provider response", description: "What returned from upstream and what Pi could decode." },
+  { id: "execution-result", label: "Execution result", description: "Terminal model-execution facts recorded by Pi." },
+  { id: "client-response", label: "Client response", description: "What Token prepared to return to the client." },
+  { id: "other", label: "Other evidence", description: "Additional lane-owned diagnostic files." },
+]);
+
+function captureStage(artifactKind: string): CaptureStageId {
+  if (artifactKind.startsWith("client_request_")) return "client-request";
+  if (artifactKind === "pi_invocation_snapshot") return "pi-invocation";
+  if (
+    artifactKind.includes("outbound_request") ||
+    artifactKind === "pi_provider_request_payload"
+  ) return "provider-request";
+  if (
+    artifactKind.includes("upstream_response") ||
+    artifactKind === "provider_native_preserved_response_wire" ||
+    artifactKind.startsWith("pi_provider_response_")
+  ) return "provider-response";
+  if (artifactKind === "pi_terminal_summary") return "execution-result";
+  if (artifactKind.startsWith("client_response_")) return "client-response";
+  return "other";
+}
+
+function artifactTitle(artifactKind: string): string {
+  return ARTIFACT_TITLES[artifactKind] ?? humanizeDiagnosticName(artifactKind);
+}
+
+function artifactRedactionLabel(
+  redaction: RequestJourneyRecord["artifacts"][number]["redaction"],
+): string {
+  switch (redaction) {
+    case "applied":
+      return "Sensitive values redacted";
+    case "failed":
+      return "Redaction failed";
+    case "not_required":
+      return "No redaction needed";
+  }
 }
 
 function ArtifactCaptureList({
@@ -253,87 +331,102 @@ function ArtifactCaptureList({
   readonly api: TokenDesktopApi;
   readonly record: RequestJourneyRecord;
 }) {
-  const [previews, setPreviews] = useState<Readonly<Record<string, ArtifactPreview>>>({});
-  const load = async (artifactId: string): Promise<void> => {
-    const current = previews[artifactId];
-    if (current?.loading === true || current?.complete === true) return;
-    const offset = current?.nextOffset ?? 0;
-    setPreviews((existing) => ({
+  const [openStates, setOpenStates] = useState<Readonly<Record<string, ArtifactOpenState>>>({});
+  const openArtifact = async (
+    artifact: RequestJourneyRecord["artifacts"][number],
+  ): Promise<void> => {
+    if (openStates[artifact.artifactId]?.opening === true) return;
+    setOpenStates((existing) => ({
       ...existing,
-      [artifactId]: {
-        text: existing[artifactId]?.text ?? "",
-        pageOffset: existing[artifactId]?.pageOffset ?? 0,
-        nextOffset: offset,
-        complete: false,
-        loading: true,
-      },
+      [artifact.artifactId]: { opening: true },
     }));
     try {
-      const response = await api.control.getRequestArtifact({
+      const response = await api.control.openRequestArtifact({
         requestId: record.requestId,
-        artifactId,
-        offset,
-        limit: 64 * 1_024,
+        artifactId: artifact.artifactId,
+        ...(artifact.mediaType === undefined ? {} : { mediaType: artifact.mediaType }),
       });
-      if (response.outcome !== "ok") throw new Error("Diagnostics storage is unavailable.");
-      const page = response.result;
-      const text = decodeArtifactChunk(page.dataBase64);
-      setPreviews((existing) => ({
+      setOpenStates((existing) => ({
         ...existing,
-        [artifactId]: {
-          // Keep exactly one bounded page in renderer memory. A 64 MiB capture
-          // must never grow into one renderer state value or DOM node.
-          text,
-          pageOffset: offset,
-          nextOffset: page.nextOffset,
-          complete: page.complete,
-          loading: false,
-        },
+        [artifact.artifactId]: response.outcome === "opened"
+          ? { opening: false }
+          : { opening: false, error: response.message },
       }));
     } catch {
-      setPreviews((existing) => ({
+      setOpenStates((existing) => ({
         ...existing,
-        [artifactId]: {
-          text: existing[artifactId]?.text ?? "",
-          pageOffset: existing[artifactId]?.pageOffset ?? 0,
-          nextOffset: offset,
-          complete: false,
-          loading: false,
-          error: "Artifact content is temporarily unavailable.",
+        [artifact.artifactId]: {
+          opening: false,
+          error: "Capture file is unavailable.",
         },
       }));
     }
   };
 
   if (record.artifacts.length === 0) return <p>No diagnostic captures were recorded.</p>;
-  return <ul>{record.artifacts.map((artifact) => {
-    const preview = previews[artifact.artifactId];
-    const readable = artifact.state === "captured" || artifact.state === "partial";
-    return <li key={artifact.artifactId}>
-      <strong>{humanizeDiagnosticName(artifact.artifactKind)}</strong>
-      <span>{humanizeDiagnosticName(artifact.state)} · {artifact.redaction === "applied" ? "Redacted" : humanizeDiagnosticName(artifact.redaction)}{artifact.truncated ? " · Truncated" : ""}</span>
-      <small>{[
-        artifact.mediaType,
-        displayArtifactBytes(artifact.capturedBytes),
-        artifact.reason,
-      ].filter((part): part is string => part !== undefined).join(" · ")}</small>
-      {readable ? <button
-        type="button"
-        className="secondary"
-        disabled={preview?.loading === true || preview?.complete === true}
-        onClick={() => void load(artifact.artifactId)}
-      >
-        {preview === undefined ? "View JSON" : preview.loading ? "Loading…" : preview.complete ? "Complete" : "Next page"}
-      </button> : null}
-      {preview?.error === undefined ? null : <p className="error-text">{preview.error}</p>}
-      {preview === undefined || preview.text.length === 0
-        ? null
-        : <>
-          <small>Bytes {preview.pageOffset}–{preview.nextOffset}</small>
-          <pre className="diagnostic-artifact-preview">{preview.text}</pre>
-        </>}
-    </li>;
-  })}</ul>;
+  const groups = CAPTURE_STAGES.map((stage) => ({
+    ...stage,
+    artifacts: record.artifacts.filter(
+      (artifact) => captureStage(artifact.artifactKind) === stage.id,
+    ),
+  })).filter((stage) => stage.artifacts.length > 0);
+  return <div className="diagnostic-capture-groups">{groups.map((group) => (
+    <section className="diagnostic-capture-group" aria-labelledby={`capture-stage-${group.id}`} key={group.id}>
+      <header>
+        <div>
+          <h4 id={`capture-stage-${group.id}`}>{group.label}</h4>
+          <p>{group.description}</p>
+        </div>
+        <span>{group.artifacts.length} {group.artifacts.length === 1 ? "file" : "files"}</span>
+      </header>
+      <ul>{group.artifacts.map((artifact) => {
+        const state = openStates[artifact.artifactId];
+        const readable = (artifact.state === "captured" || artifact.state === "partial") &&
+          (artifact.capturedBytes ?? 0) > 0;
+        const fileName = diagnosticArtifactFileName(
+          artifact.artifactId,
+          artifact.mediaType,
+        );
+        const title = artifactTitle(artifact.artifactKind);
+        const isEventStream = artifact.mediaType?.split(";", 1)[0]?.trim().toLowerCase() ===
+          "text/event-stream";
+        const actionLabel = `Open ${title} (${fileName})`;
+        return <li className="diagnostic-capture-item" key={artifact.artifactId}>
+          <span className="diagnostic-capture-file-icon" aria-hidden="true">
+            {isEventStream ? <FileText size={18} /> : <FileJson2 size={18} />}
+          </span>
+          <div className="diagnostic-capture-file">
+            <div className="diagnostic-capture-file-heading">
+              <strong>{title}</strong>
+              <span className={`diagnostic-capture-state ${artifact.state}`}>
+                {humanizeDiagnosticName(artifact.state)}
+              </span>
+              {readable ? <button
+                type="button"
+                className="diagnostic-capture-open"
+                aria-label={actionLabel}
+                title={actionLabel}
+                disabled={state?.opening === true}
+                onClick={() => void openArtifact(artifact)}
+              >
+                {state?.opening === true
+                  ? <LoaderCircle className="spinning" size={17} aria-hidden="true" />
+                  : <Search size={17} aria-hidden="true" />}
+              </button> : null}
+            </div>
+            <code>{fileName}</code>
+            <p>{artifactRedactionLabel(artifact.redaction)}{artifact.truncated ? " · Truncated" : ""}</p>
+            <small>{[
+              artifact.mediaType,
+              displayArtifactBytes(artifact.capturedBytes),
+              artifact.reason,
+            ].filter((part): part is string => part !== undefined).join(" · ")}</small>
+            {state?.error === undefined ? null : <p className="error-text" role="status">{state.error}</p>}
+          </div>
+        </li>;
+      })}</ul>
+    </section>
+  ))}</div>;
 }
 
 function RequestDetailPanel({ api, record }: { readonly api: TokenDesktopApi; readonly record: RequestJourneyRecord }) {
@@ -463,7 +556,7 @@ function RequestDetailPanel({ api, record }: { readonly api: TokenDesktopApi; re
       </details>
       <details>
         <summary>Diagnostic captures <span>{record.artifacts.length}</span></summary>
-        <p>Capture status describes stored diagnostic data; it does not prove upstream behavior.</p>
+        <p>Files are grouped by journey stage. Use the magnifier to open one sanitized capture with the system viewer.</p>
         <ArtifactCaptureList api={api} record={record} />
       </details>
     </div>

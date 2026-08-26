@@ -286,6 +286,18 @@ function diagnosticsWorkerMain(): void {
   };
   const opaqueSegment = (prefix: string, value: string): string =>
     `${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+  const readableArtifactSegment = (artifactId: string): string => {
+    const slug = artifactId
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 80) || "capture";
+    const hash = createHash("sha256")
+      .update(artifactId)
+      .digest("hex")
+      .slice(0, 8);
+    return `${slug}-${hash}`;
+  };
   const inflightJourneyRelative = (
     runtimeId: string,
     requestId: string,
@@ -305,7 +317,7 @@ function diagnosticsWorkerMain(): void {
     join(
       inflightJourneyRelative(runtimeId, requestId),
       "artifacts",
-      `${opaqueSegment("artifact", artifactId)}${suffix}`,
+      `${readableArtifactSegment(artifactId)}${suffix}`,
     );
   const artifactKey = (
     runtimeId: string,
@@ -1173,7 +1185,7 @@ function diagnosticsWorkerMain(): void {
          FROM request_journeys
         WHERE (? IS NULL OR accepted_at >= ?)
           AND (? IS NULL OR accepted_at < ?)
-          AND operation <> 'unsupported_transport'
+          AND operation NOT IN ('unsupported_transport', 'token_counting')
           AND record_id > ?
         ORDER BY record_id
         LIMIT ?`,

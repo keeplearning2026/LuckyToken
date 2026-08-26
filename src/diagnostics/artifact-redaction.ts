@@ -150,6 +150,7 @@ function sanitizeJson(
 function sanitizeJsonText(
   text: string,
   budget: RedactionBudget,
+  indentation?: number,
 ): string {
   let parsed: unknown;
   try {
@@ -158,7 +159,11 @@ function sanitizeJsonText(
     throw new RedactionUnavailable("redaction_invalid_json");
   }
   const documentBudget: RedactionBudget = { nodes: 0, changed: false };
-  const result = JSON.stringify(sanitizeJson(parsed, 0, documentBudget));
+  const result = JSON.stringify(
+    sanitizeJson(parsed, 0, documentBudget),
+    null,
+    indentation,
+  );
   budget.nodes = Math.max(budget.nodes, documentBudget.nodes);
   if (documentBudget.changed) budget.changed = true;
   return result;
@@ -264,12 +269,18 @@ export function redactRequestArtifact(
       return unavailable("redaction_invalid_utf8", "failed");
     }
     const budget: RedactionBudget = { nodes: 0, changed: false };
-    const sanitized = isJson
-      ? sanitizeJsonText(decoded, budget)
+    let sanitized = isJson
+      ? sanitizeJsonText(decoded, budget, 2)
       : isJsonLines
         ? sanitizeJsonLines(decoded, budget)
         : sanitizeSse(decoded, budget);
-    const encoded = new TextEncoder().encode(sanitized);
+    let encoded = new TextEncoder().encode(sanitized);
+    if (isJson && encoded.byteLength > MAX_REDACTED_BYTES) {
+      // Pretty printing is a human-facing representation, not a reason to
+      // discard an otherwise valid capture at the fixed 64 MiB boundary.
+      sanitized = sanitizeJsonText(decoded, budget);
+      encoded = new TextEncoder().encode(sanitized);
+    }
     if (encoded.byteLength > MAX_REDACTED_BYTES) {
       return unavailable("redaction_output_exceeded", "failed");
     }

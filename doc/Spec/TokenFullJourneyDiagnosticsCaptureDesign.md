@@ -145,12 +145,12 @@ Persistence uses a new diagnostics schema and a Diagnostics-process-owned file t
     YYYY-MM-DD/<request-id>/
       manifest.json
       artifacts/
-        0001-client-request.json
-        0002-provider-request.json
+        client-request-wire-<hash>.json
+        pi-provider-request-payload-<hash>.json
         ...
 ```
 
-Request and artifact IDs are hashed into opaque path segments and every resolved path is checked to remain below the managed root. Directories are private to the current user; files are created with owner-only permissions where supported. Only sanitized complete bodies are written as `.part` files below `.inflight`; raw IPC chunks never reach disk. On close, the child commits the closed index row and provisional relative references, then atomically writes the manifest and renames the directory into its final date partition outside the SQLite transaction. A crash on either side is recoverable: the next diagnostics-process start finds closed rows still pointing into `.inflight`, finalizes them idempotently, and removes only unreferenced `.inflight` orphans. No request path performs or waits for recovery.
+Runtime and request IDs are hashed into opaque path segments. Artifact names use only a bounded allowlisted slug plus a short hash and a media-accurate extension. Every resolved path is checked to remain below the managed root. Directories are private to the current user; files are created with owner-only permissions where supported. Only sanitized complete bodies are written as `.part` files below `.inflight`; raw IPC chunks never reach disk. On close, the child commits the closed index row and provisional relative references, then atomically writes the manifest and renames the directory into its final date partition outside the SQLite transaction. A crash on either side is recoverable: the next diagnostics-process start finds closed rows still pointing into `.inflight`, finalizes them idempotently, and removes only unreferenced `.inflight` orphans. No request path performs or waits for recovery.
 
 SQLite remains the authoritative Journey index and manifest relationship; the file tree is child-process-owned artifact-body storage, not a second diagnostics authority. Queries and exports go through the Control Plane, never by scanning the folder from the Renderer or Data Plane. Deletion first removes/seals index references transactionally and then garbage-collects unreferenced Journey directories. Retention applies the same rule. Under the project compatibility policy, replace the obsolete v2 shape rather than adding dual readers/writers or a migration shim unless compatibility is explicitly requested.
 
@@ -164,7 +164,7 @@ Credential-bearing request/response headers and URL credentials are excluded at 
 
 After `finish` proves the complete byte count, the child performs fail-closed redaction and only then writes a sanitized file:
 
-- JSON and `+json`: parse the complete document, redact secret-named fields and credential patterns in strings, then serialize;
+- JSON and `+json`: parse the complete document, redact secret-named fields and credential patterns in strings, then serialize with two-space indentation for human reading; if indentation alone would cross the 64 MiB ceiling, keep the bounded compact sanitized form;
 - JSONL/NDJSON: frame complete records and redact every JSON record;
 - SSE: frame complete events, redact JSON `data:` payloads, preserve `[DONE]`, and reject unclassified non-JSON data rather than guessing it safe;
 - safe envelopes: retain method/status, sanitized URL, and allowlisted protocol/diagnostic headers; authorization, cookie, API-key, signing, proxy-credential, and unknown header values never enter IPC;
@@ -275,11 +275,11 @@ Tests that can reach Codex state must use a fresh temporary `CODEX_HOME`, copy o
 
 ## 10. Control Plane and desktop inspection
 
-Keep artifact retrieval paged and add metadata-first inspection. The renderer must never load a 64 MiB body in one message or DOM node.
+Keep artifact retrieval paged and add metadata-first inspection. The renderer must never load artifact bytes or a 64 MiB body into one message, state value, or DOM node.
 
 - Fetch descriptors and safe envelopes first.
-- Fetch body pages on demand with explicit offset/limit and cancellation.
-- Render large JSON incrementally or through a virtualized text/tree view.
+- A named desktop open action lets Electron Main fetch body pages with explicit offset/limit into one private bounded temporary file, open it with the system default viewer, and fall back to the platform chooser when no association exists.
+- Group captures by journey stage, show readable collision-safe filenames, and use a contextual magnifier action for each available file; do not render raw bodies inline.
 - Support stage-to-stage comparison by requesting bounded windows, not whole bodies.
 - Display `complete`, `partial`, or `unavailable`, original/captured byte counts, redaction status, and reason prominently.
 - Put both switches in Settings → Data & privacy: all-request capture defaults off and failed-request capture defaults on. Describe their sensitive-data and disk-use implications and display the resolved managed directory.

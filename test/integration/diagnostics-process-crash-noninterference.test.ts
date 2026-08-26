@@ -431,6 +431,15 @@ describe("diagnostics child-process crash non-interference", () => {
     const artifactId = "rename_fault";
     const opaque = (prefix: string, value: string): string =>
       `${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+    const readableArtifact = (value: string): string => {
+      const slug = value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gu, "-")
+        .replace(/^-+|-+$/gu, "")
+        .slice(0, 80) || "artifact";
+      const suffix = createHash("sha256").update(value).digest("hex").slice(0, 8);
+      return `${slug}-${suffix}`;
+    };
     const sessions: DiagnosticsWorkerSession[] = [];
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -460,7 +469,7 @@ describe("diagnostics child-process crash non-interference", () => {
       opaque("runtime", runtimeId),
       opaque("request", REQUEST_ID),
       "artifacts",
-      `${opaque("artifact", artifactId)}.json`,
+      `${readableArtifact(artifactId)}.json`,
     );
     await mkdir(blockedFinalPath, { recursive: true });
     const baseline = await startTokenHttpServer({

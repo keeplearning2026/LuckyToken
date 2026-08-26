@@ -30,7 +30,7 @@ describe("TokenDesktopApi test seam", () => {
     expect(api.control).toMatchObject({
       queryRequestJourneys: expect.any(Function),
       getRequestJourney: expect.any(Function),
-      getRequestArtifact: expect.any(Function),
+      openRequestArtifact: expect.any(Function),
       queryRuntimeEvents: expect.any(Function),
       onRequestJourneys: expect.any(Function),
       onRuntimeEvents: expect.any(Function),

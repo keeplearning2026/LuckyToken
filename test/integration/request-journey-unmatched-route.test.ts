@@ -223,4 +223,58 @@ describe("Request Journey unmatched HTTP routes", () => {
       location: HANDOFF_LOCATION,
     });
   });
+
+  it("classifies the optional count_tokens probe without changing its 404 response", async () => {
+    const requestId = "65000000-0000-4000-8000-000000000002";
+    const root = await mkdtemp(join(tmpdir(), "Token-token-counting-journey-"));
+    roots.push(root);
+    const authority = await createDiagnosticsAuthority({
+      configuration: parseDiagnosticsConfiguration({ directory: root }, root),
+    });
+    authorities.push(authority);
+    const server = await startTokenHttpServer({
+      runtime: createTokenRuntime({ clientProtocols: [] }),
+      diagnostics: authority,
+      createRequestId: () => requestId,
+      port: 0,
+    });
+    servers.push(server);
+
+    const response = await readResponse(
+      await fetch(`${server.origin}/v1/messages/count_tokens`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(response).toEqual({
+      status: 404,
+      requestId,
+      mediaType: null,
+      body: [],
+    });
+
+    const all = await authority.queryRequestJourneys({ limit: 10 });
+    expect(all.records).toEqual([
+      expect.objectContaining({
+        requestId,
+        operation: "token_counting",
+        outcome: "failed",
+      }),
+    ]);
+    const overview = await authority.queryRequestJourneys({
+      limit: 10,
+      excludeOperations: ["unsupported_transport", "token_counting"],
+    });
+    expect(overview.records).toEqual([]);
+
+    const detail = await authority.getRequestJourney({ requestId });
+    expect(detail.admission).toMatchObject({
+      method: "POST",
+      path: "/v1/messages/count_tokens",
+    });
+    expect(detail.incident?.failures).toContainEqual(
+      expect.objectContaining({ classification: "unmatched_route" }),
+    );
+  });
 });

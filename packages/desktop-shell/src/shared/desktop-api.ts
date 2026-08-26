@@ -23,8 +23,6 @@ import type {
   PublicModelsCommandResult,
   ProviderProfileAuthCommand,
   ProviderProfileAuthCommandResult,
-  RequestArtifactChunkReadResult,
-  RequestArtifactGetInput,
   RequestJourneyDetailReadResult,
   RequestJourneyGetInput,
   RequestJourneyQuery,
@@ -73,6 +71,27 @@ export function formatTokensPerSecond(tokensPerSecond: number): string {
   return tokensPerSecond === 0 ? "0 tokens/s" : `${tokensPerSecond.toFixed(1)} tokens/s`;
 }
 
+export function diagnosticArtifactFileName(
+  artifactId: string,
+  mediaType?: string,
+): string {
+  const stem = artifactId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 80) || "capture";
+  const essence = mediaType?.split(";", 1)[0]?.trim().toLowerCase();
+  const extension = essence === "text/event-stream"
+    ? "sse"
+    : essence === "application/jsonl" ||
+        essence === "application/x-jsonlines" ||
+        essence === "application/ndjson" ||
+        essence === "application/x-ndjson"
+      ? "jsonl"
+      : "json";
+  return `${stem}.${extension}`;
+}
+
 export type DesktopBackendState =
   | {
       readonly revision: number;
@@ -83,6 +102,19 @@ export type DesktopBackendState =
       readonly kind: "ready";
       readonly status: StatusSnapshot;
     };
+
+export interface DesktopRequestArtifactOpenInput {
+  readonly requestId: string;
+  readonly artifactId: string;
+  readonly mediaType?: string;
+}
+
+export type DesktopRequestArtifactOpenResult =
+  | Readonly<{ readonly outcome: "opened" }>
+  | Readonly<{
+      readonly outcome: "unavailable";
+      readonly message: "Capture file is unavailable.";
+    }>;
 
 export interface DesktopControlPlaneApi {
   getBackendState(): Promise<DesktopBackendState>;
@@ -108,7 +140,9 @@ export interface DesktopControlPlaneApi {
 
   queryRequestJourneys(query?: RequestJourneyQuery): Promise<RequestJourneyQueryReadResult>;
   getRequestJourney(input: RequestJourneyGetInput): Promise<RequestJourneyDetailReadResult>;
-  getRequestArtifact(input: RequestArtifactGetInput): Promise<RequestArtifactChunkReadResult>;
+  openRequestArtifact(
+    input: DesktopRequestArtifactOpenInput,
+  ): Promise<DesktopRequestArtifactOpenResult>;
   queryRuntimeEvents(query?: RuntimeEventQuery): Promise<RuntimeEventQueryReadResult>;
   onRequestJourneys(listener: RequestJourneySubscriber): () => void;
   onRuntimeEvents(listener: RuntimeEventSubscriber): () => void;

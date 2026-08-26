@@ -10,6 +10,7 @@ import {
   Tray,
 } from "electron";
 import squirrelStartup from "electron-squirrel-startup";
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,6 +29,7 @@ import {
   type TrayHealth,
 } from "./control-plane-session.js";
 import { registerDesktopIpcHandlers } from "./desktop-ipc.js";
+import { createDesktopRequestArtifactOpener } from "./request-artifact-opener.js";
 import {
   cleanupRepositoryBuildLoginItems,
   effectiveDesktopAutoStart,
@@ -64,6 +66,52 @@ const backendConnection = createElectronBackendConnection({
   session: controlPlaneSession,
   desktopOwnerLease,
   onRecoveryFailure: () => updateTray("attention"),
+});
+const requestArtifactOpener = createDesktopRequestArtifactOpener({
+  reader: () => controlPlaneSession.client(),
+  platform: {
+    temporaryDirectory: () => app.getPath("temp"),
+    openPath: async (path) => {
+      const defaultViewerError = await shell.openPath(path);
+      if (defaultViewerError.length === 0) return true;
+      if (process.platform === "win32") {
+        const chooser = spawn(
+          "rundll32.exe",
+          ["shell32.dll,OpenAs_RunDLL", path],
+          { detached: true, stdio: "ignore", windowsHide: true },
+        );
+        await new Promise<void>((resolve, reject) => {
+          chooser.once("spawn", resolve);
+          chooser.once("error", reject);
+        });
+        chooser.unref();
+        return true;
+      }
+      const selection = await dialog.showOpenDialog({
+        title: "Choose an application to inspect the capture",
+        properties: process.platform === "darwin"
+          ? ["openFile", "openDirectory"]
+          : ["openFile"],
+      });
+      const executable = selection.filePaths[0];
+      if (selection.canceled || executable === undefined) return false;
+      const viewer = process.platform === "darwin"
+        ? spawn("open", ["-a", executable, path], {
+            detached: true,
+            stdio: "ignore",
+          })
+        : spawn(executable, [path], {
+            detached: true,
+            stdio: "ignore",
+          });
+      await new Promise<void>((resolve, reject) => {
+        viewer.once("spawn", resolve);
+        viewer.once("error", reject);
+      });
+      viewer.unref();
+      return true;
+    },
+  },
 });
 
 /**
@@ -198,6 +246,7 @@ const desktopIpcBridge = registerDesktopIpcHandlers({
       });
       return result.canceled ? undefined : result.filePath;
     },
+    openRequestArtifact: (input) => requestArtifactOpener.open(input),
     openExternal: async (url) => {
       await shell.openExternal(url);
     },
@@ -375,5 +424,6 @@ if (!squirrelStartup) app.on("will-quit", () => {
   void Promise.allSettled([
     desktopIpcBridge.dispose(),
     backendConnection.dispose(),
+    requestArtifactOpener.dispose(),
   ]);
 });

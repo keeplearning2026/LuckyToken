@@ -108,7 +108,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       limit: 256 * 1_024,
     });
     expect(Buffer.from(first.dataBase64, "base64").toString("utf8")).toBe(
-      '{"marker":"enabled-at-admission"}',
+      '{\n  "marker": "enabled-at-admission"\n}',
     );
 
     allRequestsEnabled = false;
@@ -226,10 +226,12 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     expect(manifest.requestId).toBe(requestId);
     expect(manifest.artifacts).toHaveLength(1);
     expect(manifest.artifacts[0]?.artifactId).toBe("client_request_wire");
-    expect(manifest.artifacts[0]?.file).toMatch(/^artifacts\/.+\.json$/u);
+    expect(manifest.artifacts[0]?.file).toMatch(
+      /^artifacts\/client-request-wire-[a-f0-9]{8}\.json$/u,
+    );
     expect(
       await readFile(join(journeyDirectory, manifest.artifacts[0]!.file!), "utf8"),
-    ).toBe('{"marker":"folder-artifact"}');
+    ).toBe('{\n  "marker": "folder-artifact"\n}');
     expect(await readdir(join(root, "diagnostics"))).toContain(
       "diagnostics-v3.sqlite3",
     );

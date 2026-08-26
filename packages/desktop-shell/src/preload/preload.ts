@@ -20,7 +20,7 @@ type InvokeResults = {
   [desktopIpcChannels.agentIntegrations]: ReturnType<DesktopControlPlaneApi["executeAgentIntegrations"]>;
   [desktopIpcChannels.requestJourneysQuery]: ReturnType<DesktopControlPlaneApi["queryRequestJourneys"]>;
   [desktopIpcChannels.requestJourneyGet]: ReturnType<DesktopControlPlaneApi["getRequestJourney"]>;
-  [desktopIpcChannels.requestArtifactGet]: ReturnType<DesktopControlPlaneApi["getRequestArtifact"]>;
+  [desktopIpcChannels.requestArtifactOpen]: ReturnType<DesktopControlPlaneApi["openRequestArtifact"]>;
   [desktopIpcChannels.requestJourneysSubscribe]: Promise<void>;
   [desktopIpcChannels.requestJourneysUnsubscribe]: Promise<void>;
   [desktopIpcChannels.runtimeEventsQuery]: ReturnType<DesktopControlPlaneApi["queryRuntimeEvents"]>;
@@ -93,8 +93,8 @@ const control: DesktopControlPlaneApi = {
     invoke(desktopIpcChannels.requestJourneysQuery, query),
   getRequestJourney: (input) =>
     invoke(desktopIpcChannels.requestJourneyGet, input),
-  getRequestArtifact: (input) =>
-    invoke(desktopIpcChannels.requestArtifactGet, input),
+  openRequestArtifact: (input) =>
+    invoke(desktopIpcChannels.requestArtifactOpen, input),
   queryRuntimeEvents: (query) =>
     invoke(desktopIpcChannels.runtimeEventsQuery, query),
   onRequestJourneys(listener) {

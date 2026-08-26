@@ -102,7 +102,7 @@ interface FixtureJourney {
   readonly journeyOutcome: "success" | "failed" | "aborted";
   readonly usage?: TerminalUsageFact;
   readonly executionDurationMs?: number;
-  readonly operation?: "model_generation" | "unsupported_transport";
+  readonly operation?: "model_generation" | "token_counting" | "unsupported_transport";
 }
 
 function usageFact(
@@ -423,6 +423,15 @@ describe("Request Journey Worker analytics projection", () => {
         requestOutcome: "failed",
         journeyOutcome: "failed",
       });
+      appendJourney({
+        requestId: "82000000-0000-4000-8000-000000000008",
+        acceptedAt: at(14, 45),
+        protocol: "anthropic-messages",
+        operation: "token_counting",
+        workOutcome: "failed",
+        requestOutcome: "failed",
+        journeyOutcome: "failed",
+      });
 
       const analytics = authority as unknown as FutureAnalyticsAuthority;
       const range = { from: at(10), to: at(15) } as const;
@@ -430,7 +439,7 @@ describe("Request Journey Worker analytics projection", () => {
         limit: 100,
         from: at(14),
         to: at(15),
-        excludeOperations: ["unsupported_transport"],
+        excludeOperations: ["unsupported_transport", "token_counting"],
       });
       expect(overviewProjection.records.map((record) => record.requestId)).toEqual([
         "82000000-0000-4000-8000-000000000005",

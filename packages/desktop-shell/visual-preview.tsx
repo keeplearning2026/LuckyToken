@@ -189,6 +189,75 @@ const profilesResult = () => ({
   options,
 });
 
+const previewCreatedAt = Date.now() - 42_000;
+const previewRequest = {
+  id: 42,
+  runtimeId: "preview-runtime",
+  requestId: "preview-request-42",
+  operation: "model_generation",
+  protocol: "anthropic-messages",
+  lane: "semantic_conversion",
+  requestedModel: "commandcode-goat/deepseek-v4-flash",
+  providerId: "commandcode-goat",
+  realModelId: "deepseek/deepseek-v4-flash",
+  clientSessionId: "preview-session",
+  profileId: "goat-profile-1",
+  profileDisplayName: "Profile 1",
+  httpStatus: 200,
+  outcome: "success",
+  completeness: "complete",
+  createdAt: previewCreatedAt,
+  closedAt: previewCreatedAt + 3_840,
+  usage: {
+    terminalClass: "done",
+    inputTokens: 18_422,
+    cacheReadTokens: 7_680,
+    outputTokens: 642,
+    cacheHitRate: 7_680 / 26_102,
+    outputTokensPerSecond: 42.8,
+  },
+} as const;
+
+const previewDetail = {
+  ...previewRequest,
+  admission: {
+    operationCandidate: "model_generation",
+    transport: "http",
+    method: "POST",
+    path: "/v1/messages",
+    acceptedAt: previewCreatedAt,
+    cancellation: { caller: "active", shutdown: "active" },
+  },
+  timeline: [],
+  artifacts: [
+    { artifactId: "client_request_envelope", artifactKind: "client_request_envelope", state: "captured", mediaType: "application/json", capturedBytes: 941, redaction: "not_required", truncated: false },
+    { artifactId: "client_request_wire", artifactKind: "client_request_wire", state: "captured", mediaType: "application/json", capturedBytes: 151_084, redaction: "applied", truncated: false },
+    { artifactId: "pi_invocation_snapshot", artifactKind: "pi_invocation_snapshot", state: "captured", mediaType: "application/json", capturedBytes: 162_282, redaction: "not_required", truncated: false },
+    { artifactId: "pi_provider_request_payload", artifactKind: "pi_provider_request_payload", state: "captured", mediaType: "application/json", capturedBytes: 152_084, redaction: "not_required", truncated: false },
+    { artifactId: "pi_provider_response_metadata", artifactKind: "pi_provider_response_metadata", state: "captured", mediaType: "application/json", capturedBytes: 426, redaction: "not_required", truncated: false },
+    { artifactId: "pi_provider_response_ir", artifactKind: "pi_provider_response_ir", state: "captured", mediaType: "application/json", capturedBytes: 1_137, redaction: "not_required", truncated: false },
+    { artifactId: "pi_terminal_summary", artifactKind: "pi_terminal_summary", state: "captured", mediaType: "application/json", capturedBytes: 276, redaction: "not_required", truncated: false },
+    { artifactId: "client_response_envelope", artifactKind: "client_response_envelope", state: "captured", mediaType: "application/json", capturedBytes: 186, redaction: "not_required", truncated: false },
+    { artifactId: "client_response_wire", artifactKind: "client_response_wire", state: "captured", mediaType: "text/event-stream", capturedBytes: 2_280, redaction: "applied", truncated: false },
+  ],
+  workOutcome: {
+    outcome: "success",
+    terminalAuthority: "pi_execution",
+    location: { phase: "outcome_commit", lane: "semantic_conversion", step: "commit_request_outcome" },
+  },
+  clientPresentation: {
+    status: 200,
+    mediaType: "text/event-stream",
+    location: { phase: "client_response_preparation", lane: "semantic_conversion", step: "prepare_client_response" },
+  },
+  handoffOutcome: {
+    outcome: "finished",
+    transport: "http",
+    writableFinished: true,
+    location: { phase: "http_handoff", lane: "semantic_conversion", step: "write_http_response" },
+  },
+} as const;
+
 const api = createFakeDesktopApi({
   control: {
     getBackendState: async () => ({
@@ -260,12 +329,46 @@ const api = createFakeDesktopApi({
       },
       results: [],
     } as any),
-    queryRequestJourneys: async () => ({ outcome: "ok", records: [], hasMore: false } as any),
-    getRequestJourney: async () => ({ outcome: "unavailable", code: "diagnostics_unavailable" } as any),
-    getRequestArtifact: async () => ({ outcome: "unavailable", code: "diagnostics_unavailable" } as any),
+    queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [previewRequest], hasMore: false } } as any),
+    getRequestJourney: async () => ({ outcome: "ok", result: previewDetail } as any),
+    openRequestArtifact: async () => ({ outcome: "opened" } as any),
     queryRuntimeEvents: async () => ({ outcome: "ok", records: [], hasMore: false } as any),
     onRequestJourneys: () => () => undefined,
     onRuntimeEvents: () => () => undefined,
+    getAnalytics: async (query: any) => query.command === "options"
+      ? {
+          version: 3,
+          command: "options",
+          providers: ["commandcode-goat"],
+          profiles: [{ profileId: "goat-profile-1", displayName: "Profile 1", providerId: "commandcode-goat" }],
+          models: ["deepseek/deepseek-v4-flash"],
+          protocols: ["anthropic-messages"],
+          sessions: ["preview-session"],
+          outcomes: ["success"],
+        }
+      : {
+          version: 3,
+          command: "summary",
+          totals: {
+            total: 1,
+            success: 1,
+            failed: 0,
+            aborted: 0,
+            other: 0,
+            pending: 0,
+            successRate: 1,
+            failureRate: 0,
+            abortRate: 0,
+            usageRequests: 1,
+            missingUsageRequests: 0,
+            speedRequests: 1,
+            inputTokens: 18_422,
+            cacheReadTokens: 7_680,
+            outputTokens: 642,
+            cacheHitRate: 7_680 / 26_102,
+            outputTokensPerSecond: 42.8,
+          },
+        },
   },
 });
 

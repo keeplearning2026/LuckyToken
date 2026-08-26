@@ -799,8 +799,10 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
           limit: 256 * 1_024,
         });
         expect(
-          Buffer.from(outboundArtifact.dataBase64, "base64").toString("utf8"),
-        ).toBe(persistedOutboundBody);
+          JSON.parse(
+            Buffer.from(outboundArtifact.dataBase64, "base64").toString("utf8"),
+          ),
+        ).toEqual(JSON.parse(persistedOutboundBody));
       }
       for (const artifactId of [
         "provider_native_upstream_response_wire.2",
@@ -813,8 +815,9 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
           offset: 0,
           limit: 256 * 1_024,
         });
-        expect(Buffer.from(artifact.dataBase64, "base64").toString("utf8"))
-          .toBe(upstreamBodies[1]);
+        expect(
+          JSON.parse(Buffer.from(artifact.dataBase64, "base64").toString("utf8")),
+        ).toEqual(JSON.parse(upstreamBodies[1]));
       }
 
       const serializedDetail = JSON.stringify(detail);

@@ -316,6 +316,15 @@ function selectClientProtocol(
   );
 }
 
+function unmatchedRequestOperation(
+  method: string,
+  pathname: string,
+): "token_counting" | "unmatched_request" {
+  return method === "POST" && pathname === "/v1/messages/count_tokens"
+    ? "token_counting"
+    : "unmatched_request";
+}
+
 export async function handleHttpRequest(
   dependencies: HttpBoundaryDependencies,
   request: Request,
@@ -381,6 +390,7 @@ export async function handleHttpRequest(
     });
     protocol = selectClientProtocol(dependencies.clientProtocols, request);
     if (protocol === undefined) {
+      const operation = unmatchedRequestOperation(request.method, pathname);
       const failureLocation = {
         phase: "protocol_ingress",
         step: "resolve_route",
@@ -390,7 +400,7 @@ export async function handleHttpRequest(
         kind: "step_completed",
         stepInstanceId: "p1.resolve_route",
         completion: "failed",
-        operation: "unmatched_request",
+        operation,
         location: failureLocation,
       });
       observeRequestJourney(context, {
@@ -421,7 +431,7 @@ export async function handleHttpRequest(
         kind: "step_completed",
         stepInstanceId: "p6.render_client_error",
         completion: "success",
-        operation: "unmatched_request",
+        operation,
         location: presentationLocation,
       });
       const outcomeLocation = {
@@ -443,7 +453,7 @@ export async function handleHttpRequest(
         kind: "step_completed",
         stepInstanceId: "p7.commit_request_outcome",
         completion: "success",
-        operation: "unmatched_request",
+        operation,
         location: outcomeLocation,
       });
       lifecycle.markDelivered();

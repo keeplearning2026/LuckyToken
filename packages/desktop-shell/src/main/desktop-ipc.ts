@@ -11,7 +11,6 @@ import type {
   ModelsCommand,
   PublicModelsCommand,
   ProviderProfileAuthCommand,
-  RequestArtifactGetInput,
   RequestJourneyGetInput,
   RequestJourneyQuery,
   RequestJourneySummary,
@@ -22,7 +21,11 @@ import type {
 } from "@token/application-control-plane/control-plane";
 
 import type { ControlPlaneSession } from "./control-plane-session.js";
-import type { SaveFileOptions } from "../shared/desktop-api.js";
+import type {
+  DesktopRequestArtifactOpenInput,
+  DesktopRequestArtifactOpenResult,
+  SaveFileOptions,
+} from "../shared/desktop-api.js";
 import { desktopIpcChannels } from "../shared/ipc-channels.js";
 
 export interface DesktopIpcEvent {
@@ -45,6 +48,9 @@ export interface DesktopPlatformOperations {
   setAutoStart(enabled: boolean): Promise<boolean>;
   pickDirectory(): Promise<string | undefined>;
   pickSaveFile(options: SaveFileOptions): Promise<string | undefined>;
+  openRequestArtifact(
+    input: DesktopRequestArtifactOpenInput,
+  ): Promise<DesktopRequestArtifactOpenResult>;
   openExternal(url: string): Promise<void>;
   writeClipboardText(value: string): Promise<void>;
   getDesktopVersion(): Promise<string>;
@@ -207,8 +213,8 @@ export function registerDesktopIpcHandlers(options: {
   register(desktopIpcChannels.requestJourneyGet, (_event, ...args) =>
     session.client().getRequestJourney(first<RequestJourneyGetInput>(args)),
   );
-  register(desktopIpcChannels.requestArtifactGet, (_event, ...args) =>
-    session.client().getRequestArtifact(first<RequestArtifactGetInput>(args)),
+  register(desktopIpcChannels.requestArtifactOpen, (_event, ...args) =>
+    platform.openRequestArtifact(first<DesktopRequestArtifactOpenInput>(args)),
   );
   register(desktopIpcChannels.requestJourneysSubscribe, (event) =>
     requestJourneys.add(event),

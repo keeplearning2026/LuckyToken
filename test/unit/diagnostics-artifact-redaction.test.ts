@@ -13,6 +13,23 @@ function redact(mediaType: string, text: string) {
 }
 
 describe("full-document artifact redaction", () => {
+  it("writes JSON artifacts as readable multi-line documents", () => {
+    const result = redact(
+      "application/json",
+      '{"request":{"model":"safe"},"stream":true}',
+    );
+    expect(result.kind).toBe("sanitized");
+    if (result.kind !== "sanitized") return;
+    expect(new TextDecoder().decode(result.bytes)).toBe([
+      "{",
+      '  "request": {',
+      '    "model": "safe"',
+      "  },",
+      '  "stream": true',
+      "}",
+    ].join("\n"));
+  });
+
   it("redacts every JSONL record", () => {
     const result = redact(
       "application/x-ndjson",

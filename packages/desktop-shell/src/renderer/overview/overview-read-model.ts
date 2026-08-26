@@ -43,7 +43,8 @@ const EMPTY_SNAPSHOT: OverviewReadModelSnapshot = Object.freeze({
 });
 
 function isOverviewRequest(record: RequestJourneySummary): boolean {
-  return record.operation !== "unsupported_transport";
+  return record.operation !== "unsupported_transport" &&
+    record.operation !== "token_counting";
 }
 
 function inputKey(input: OverviewReadModelInput): string {
@@ -75,7 +76,7 @@ async function queryAllRequestJourneys(
       limit: REQUEST_PAGE_SIZE,
       from: input.from,
       to: input.to,
-      excludeOperations: ["unsupported_transport"],
+      excludeOperations: ["unsupported_transport", "token_counting"],
       ...(afterId === undefined ? {} : { afterId }),
     });
     if (response.outcome === "unavailable") return "unavailable";

@@ -248,7 +248,9 @@ describe("Request Journey failure artifact redaction", () => {
         redaction: "not_required",
         truncated: false,
         originalBytes: responseBytes.byteLength,
-        capturedBytes: responseBytes.byteLength,
+        capturedBytes: Buffer.byteLength(
+          JSON.stringify(JSON.parse(responseBytes.toString("utf8")), null, 2),
+        ),
       });
 
       // No more HTTP work may enter the diagnostics queue. The completed

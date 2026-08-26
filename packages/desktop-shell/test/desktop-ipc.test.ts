@@ -103,6 +103,7 @@ function fixture() {
     setAutoStart: vi.fn(async (enabled: boolean) => enabled),
     pickDirectory: vi.fn(async () => "C:/project"),
     pickSaveFile: vi.fn(async () => "C:/export.zip"),
+    openRequestArtifact: vi.fn(async () => ({ outcome: "opened" as const })),
     openExternal: vi.fn(async () => undefined),
     writeClipboardText: vi.fn(async () => undefined),
     getDesktopVersion: vi.fn(async () => "1.0.0"),
@@ -153,16 +154,15 @@ describe("typed Electron desktop IPC", () => {
     expect(client.executeRuntimeCommand).toHaveBeenCalledWith("start");
   });
 
-  it("forwards all unified diagnostics reads without a desktop DTO layer", async () => {
-    const { handlers, client, event } = fixture();
+  it("forwards diagnostics reads and the desktop capture-open workflow through named operations", async () => {
+    const { handlers, client, platform, event } = fixture();
     const trusted = event(7);
     const journeyQuery = { afterId: 4, limit: 20 } as const;
     const journeyInput = { requestId: JOURNEY.requestId } as const;
     const artifactInput = {
       requestId: JOURNEY.requestId,
       artifactId: "client-request-wire",
-      offset: 0,
-      limit: 256,
+      mediaType: "application/json",
     } as const;
     const runtimeQuery = { afterId: 6, limit: 10 } as const;
 
@@ -174,7 +174,7 @@ describe("typed Electron desktop IPC", () => {
       trusted,
       journeyInput,
     );
-    await handlers.get(desktopIpcChannels.requestArtifactGet)?.(
+    await handlers.get(desktopIpcChannels.requestArtifactOpen)?.(
       trusted,
       artifactInput,
     );
@@ -185,7 +185,7 @@ describe("typed Electron desktop IPC", () => {
 
     expect(client.queryRequestJourneys).toHaveBeenCalledWith(journeyQuery);
     expect(client.getRequestJourney).toHaveBeenCalledWith(journeyInput);
-    expect(client.getRequestArtifact).toHaveBeenCalledWith(artifactInput);
+    expect(platform.openRequestArtifact).toHaveBeenCalledWith(artifactInput);
     expect(client.queryRuntimeEvents).toHaveBeenCalledWith(runtimeQuery);
   });
 

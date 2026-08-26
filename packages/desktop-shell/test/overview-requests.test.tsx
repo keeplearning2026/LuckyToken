@@ -36,7 +36,7 @@ function detail(base: RequestJourneySummary): RequestJourneyRecord {
     primaryFailureLocation: location,
     admission: { operationCandidate: "model_generation", transport: "http", method: "POST", path: "/v1/messages", acceptedAt: base.createdAt, cancellation: { caller: "active", shutdown: "active" } },
     timeline: [{ runtimeId: base.runtimeId, requestId: base.requestId, sequence: 1, time: base.createdAt, observation: { kind: "profile_attributed", location, profileId: "profile-1", displayName: "Production" } }],
-    artifacts: [{ artifactId: "response-body", artifactKind: "response_body", state: "captured", redaction: "applied", truncated: false }],
+    artifacts: [{ artifactId: "client_response_wire", artifactKind: "client_response_wire", state: "captured", mediaType: "application/json", capturedBytes: 17, redaction: "applied", truncated: false }],
     incident: { primaryFailureId: "failure-1", failures: [{ kind: "failure_detected", failureId: "failure-1", role: "primary", classification: "provider_timeout", origin: "provider", originPrecision: "external_boundary", safeMessage: "The provider timed out", location }] },
     workOutcome: { outcome: "failed", terminalAuthority: "provider_native_handler", location },
     clientPresentation: { status: 504, mediaType: "application/json", location },
@@ -171,18 +171,8 @@ describe("Overview Request Journeys", () => {
     const failed = summary(10, "failed");
     const listeners = new Set<(record: RequestJourneySummary) => void>();
     const getRequestJourney = vi.fn(async () => ({ outcome: "ok" as const, result: detail(failed) }));
-    const getRequestArtifact = vi.fn(async () => ({
-      outcome: "ok" as const,
-      result: {
-        requestId: failed.requestId,
-        artifactId: "response-body",
-        offset: 0,
-        nextOffset: 17,
-        complete: true,
-        dataBase64: btoa('{"status":"safe"}'),
-      },
-    }));
-    const api = createFakeDesktopApi({ control: { getBackendState: async () => ({ revision: 1, kind: "ready", status }), onBackendState: () => () => undefined, queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [failed], hasMore: false } }), getRequestJourney, getRequestArtifact, onRequestJourneys: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } } });
+    const openRequestArtifact = vi.fn(async () => ({ outcome: "opened" as const }));
+    const api = createFakeDesktopApi({ control: { getBackendState: async () => ({ revision: 1, kind: "ready", status }), onBackendState: () => () => undefined, queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [failed], hasMore: false } }), getRequestJourney, openRequestArtifact, onRequestJourneys: (listener) => { listeners.add(listener); return () => listeners.delete(listener); } } });
     await act(async () => root.render(<App api={api} />));
     await flush();
     expect(container.textContent).toContain("request-10");
@@ -194,25 +184,28 @@ describe("Overview Request Journeys", () => {
     expect(container.textContent).toContain("The provider timed out");
     expect(container.textContent).toContain("Why this request failed");
     expect(container.textContent).toContain("Upstream execution · Send provider request · Provider native · Attempt 2");
-    expect(container.textContent).toContain("Response body");
-    expect(container.textContent).toContain("Captured · Redacted");
+    expect(container.textContent).toContain("Client response body");
+    expect(container.textContent).toContain("client-response-wire.json");
+    expect(container.textContent).toContain("Sensitive values redacted");
     expect(container.textContent).toContain("Production");
     expect(container.textContent).toContain("What happened");
     expect(container.textContent).toContain("These are stored observations in sequence, not inferred causes.");
     const captures = [...container.querySelectorAll("details")].find((entry) =>
       entry.textContent?.includes("Diagnostic captures"),
     );
+    const openButton = captures?.querySelector(
+      'button[aria-label="Open Client response body (client-response-wire.json)"]',
+    ) as HTMLButtonElement;
     await act(async () => {
-      (captures?.querySelector("button") as HTMLButtonElement).click();
+      openButton.click();
     });
     await flush();
-    expect(getRequestArtifact).toHaveBeenCalledWith({
+    expect(openRequestArtifact).toHaveBeenCalledWith({
       requestId: "request-10",
-      artifactId: "response-body",
-      offset: 0,
-      limit: 64 * 1_024,
+      artifactId: "client_response_wire",
+      mediaType: "application/json",
     });
-    expect(captures?.querySelector("pre")?.textContent).toBe('{"status":"safe"}');
+    expect(captures?.querySelector("pre")).toBeNull();
     await act(async () => { for (const listener of listeners) listener(summary(11, "running")); });
     expect(container.textContent).toContain("request-11");
     await act(async () => {
@@ -300,7 +293,7 @@ describe("Overview Request Journeys", () => {
     expect(cells[11]?.textContent).toBe("200");
   });
 
-  it("omits expected unsupported WebSocket upgrade probes from Overview", async () => {
+  it("omits unsupported transport and count_tokens probes from Overview", async () => {
     const probe: RequestJourneySummary = {
       ...summary(14, "failed"),
       operation: "unsupported_transport",
@@ -319,21 +312,31 @@ describe("Overview Request Journeys", () => {
       realModelId: "deepseek/deepseek-v4-flash",
       httpStatus: 200,
     };
+    const tokenCountProbe: RequestJourneySummary = {
+      ...summary(17, "failed"),
+      operation: "token_counting",
+      httpStatus: 404,
+    };
+    const queryRequestJourneys = vi.fn(async () => ({
+      outcome: "ok" as const,
+      result: { records: [probe, tokenCountProbe, request], hasMore: false },
+    }));
     const api = createFakeDesktopApi({ control: {
       getBackendState: async () => ({ revision: 1, kind: "ready", status }),
       onBackendState: () => () => undefined,
-      queryRequestJourneys: async () => ({
-        outcome: "ok",
-        result: { records: [probe, request], hasMore: false },
-      }),
+      queryRequestJourneys,
     } });
 
     await act(async () => root.render(<App api={api} />));
     await flush();
 
     expect(container.querySelector('tr[data-request-id="request-14"]')).toBeNull();
+    expect(container.querySelector('tr[data-request-id="request-17"]')).toBeNull();
     expect(container.querySelector('tr[data-request-id="request-15"]')).not.toBeNull();
     expect(container.textContent).not.toContain("426");
+    expect(queryRequestJourneys).toHaveBeenCalledWith(expect.objectContaining({
+      excludeOperations: ["unsupported_transport", "token_counting"],
+    }));
   });
 
   it("exposes every truncated request value through a native tooltip", async () => {

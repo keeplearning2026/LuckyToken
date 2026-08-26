@@ -111,6 +111,7 @@ const OPERATIONS = new Set<RequestJourneyOperationCandidate>([
   "web_search",
   "image_generation",
   "realtime_session",
+  "token_counting",
   "unmatched_request",
   "unsupported_transport",
 ]);

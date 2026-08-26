@@ -91,7 +91,7 @@ export function createFakeDesktopApi(options: {
     executeAgentIntegrations: unavailable,
     queryRequestJourneys: unavailable,
     getRequestJourney: unavailable,
-    getRequestArtifact: unavailable,
+    openRequestArtifact: unavailable,
     queryRuntimeEvents: unavailable,
     onRequestJourneys: () => () => undefined,
     onRuntimeEvents: () => () => undefined,

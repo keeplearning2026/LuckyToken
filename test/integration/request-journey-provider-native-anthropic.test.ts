@@ -289,8 +289,9 @@ describe("Anthropic Provider Native Request Journey", () => {
           offset: 0,
           limit: 256 * 1_024,
         });
-        expect(Buffer.from(artifact.dataBase64, "base64").toString("utf8"))
-          .toBe(expected);
+        expect(
+          JSON.parse(Buffer.from(artifact.dataBase64, "base64").toString("utf8")),
+        ).toEqual(JSON.parse(expected));
       }
     } finally {
       await Promise.allSettled([
@@ -819,7 +820,9 @@ describe("Anthropic Provider Native Request Journey", () => {
               state: "captured",
               mediaType: "application/json",
               originalBytes: Buffer.byteLength(expectedOutboundBody),
-              capturedBytes: Buffer.byteLength(expectedOutboundBody),
+              capturedBytes: Buffer.byteLength(
+                JSON.stringify(JSON.parse(expectedOutboundBody), null, 2),
+              ),
               truncated: false,
             }),
             expect.objectContaining({
@@ -831,7 +834,11 @@ describe("Anthropic Provider Native Request Journey", () => {
                 requiredAttemptValue(upstreamBodies, attempt),
               ),
               capturedBytes: Buffer.byteLength(
-                requiredAttemptValue(upstreamBodies, attempt),
+                JSON.stringify(
+                  JSON.parse(requiredAttemptValue(upstreamBodies, attempt)),
+                  null,
+                  2,
+                ),
               ),
               truncated: false,
             }),
@@ -853,7 +860,9 @@ describe("Anthropic Provider Native Request Journey", () => {
             state: "captured",
             mediaType: "application/json",
             originalBytes: Buffer.byteLength(responseBody),
-            capturedBytes: Buffer.byteLength(responseBody),
+            capturedBytes: Buffer.byteLength(
+              JSON.stringify(JSON.parse(responseBody), null, 2),
+            ),
             truncated: false,
           }),
           expect.objectContaining({
@@ -872,8 +881,10 @@ describe("Anthropic Provider Native Request Journey", () => {
           limit: 256 * 1_024,
         });
         expect(
-          Buffer.from(outboundArtifact.dataBase64, "base64").toString("utf8"),
-        ).toBe(expectedOutboundBody);
+          JSON.parse(
+            Buffer.from(outboundArtifact.dataBase64, "base64").toString("utf8"),
+          ),
+        ).toEqual(JSON.parse(expectedOutboundBody));
         const upstreamArtifact = await authority.getRequestArtifact({
           requestId: REQUEST_ID,
           artifactId: `provider_native_upstream_response_wire.${attempt}`,
@@ -881,8 +892,10 @@ describe("Anthropic Provider Native Request Journey", () => {
           limit: 256 * 1_024,
         });
         expect(
-          Buffer.from(upstreamArtifact.dataBase64, "base64").toString("utf8"),
-        ).toBe(requiredAttemptValue(upstreamBodies, attempt));
+          JSON.parse(
+            Buffer.from(upstreamArtifact.dataBase64, "base64").toString("utf8"),
+          ),
+        ).toEqual(JSON.parse(requiredAttemptValue(upstreamBodies, attempt)));
       }
 
       const projectedDetail = JSON.stringify(detail);

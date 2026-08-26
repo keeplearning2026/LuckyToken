@@ -195,7 +195,9 @@ describe("Request Journey protocol incidents", () => {
           state: "captured",
           mediaType: "application/json",
           originalBytes: Buffer.byteLength(responseBody),
-          capturedBytes: Buffer.byteLength(responseBody),
+          capturedBytes: Buffer.byteLength(
+            JSON.stringify(JSON.parse(responseBody), null, 2),
+          ),
           truncated: false,
         }),
       ]),
@@ -213,7 +215,10 @@ describe("Request Journey protocol incidents", () => {
       offset: 0,
       complete: true,
     });
-    expect(Buffer.from(responseArtifact.dataBase64, "base64").toString("utf8"))
-      .toBe(responseBody);
+    expect(
+      JSON.parse(
+        Buffer.from(responseArtifact.dataBase64, "base64").toString("utf8"),
+      ),
+    ).toEqual(JSON.parse(responseBody));
   });
 });
