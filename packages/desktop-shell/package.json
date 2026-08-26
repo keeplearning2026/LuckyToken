@@ -7,6 +7,7 @@
     "start": "npm run assemble:backend && electron-forge start",
     "dev": "npm run assemble:backend && electron-forge start",
     "clean:electron": "node -e \"require('node:fs').rmSync('.vite',{recursive:true,force:true})\"",
+    "generate:icons": "node scripts/generate-icon-containers.mjs",
     "assemble:backend": "npm --prefix ../.. run release:assemble-backend",
     "build": "npm run assemble:backend && npm run clean:electron && electron-forge package",
     "package": "npm run assemble:backend && npm run clean:electron && electron-forge package",

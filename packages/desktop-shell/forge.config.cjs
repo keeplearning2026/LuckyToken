@@ -22,8 +22,6 @@ module.exports = {
     extraResource: [
       "backend",
       path.join(iconDirectory, "icon.png"),
-      path.join(iconDirectory, "tray-icon.png"),
-      path.join(iconDirectory, "tray-icon@2x.png"),
     ],
   },
   makers: [

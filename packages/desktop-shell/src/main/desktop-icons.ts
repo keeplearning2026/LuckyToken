@@ -24,6 +24,6 @@ export function resolveDesktopIconPaths(
     : join(options.appPath, "assets");
   return Object.freeze({
     window: join(root, "icon.png"),
-    tray: join(root, "tray-icon.png"),
+    tray: join(root, "icon.png"),
   });
 }

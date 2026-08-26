@@ -322,7 +322,11 @@ function reconcileDesktopLoginItem(): void {
 function createTray(actions: { readonly open: () => void; readonly quit: () => void }): void {
   if (tray !== undefined) return;
   trayActions = actions;
-  const icon = nativeImage.createFromPath(desktopIcons.tray);
+  const icon = nativeImage.createFromPath(desktopIcons.tray).resize({
+    width: 32,
+    height: 32,
+    quality: "best",
+  });
   if (icon.isEmpty()) {
     throw new Error(`Token tray icon is missing or invalid: ${desktopIcons.tray}`);
   }
