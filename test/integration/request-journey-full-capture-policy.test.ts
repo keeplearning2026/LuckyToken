@@ -279,7 +279,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     expect(persisted).not.toContain("ipc-sse-secret");
   });
 
-  it("streams a JSON artifact larger than the Backend IPC window without blocking serving on diagnostics", { timeout: 20_000 }, async () => {
+  it("captures a naturally streamed 64 MiB JSON artifact without awaiting diagnostics acknowledgements", { timeout: 20_000 }, async () => {
     const { authority } = await createHarness({
       snapshot: () => Object.freeze({
         allRequestsEnabled: true,
@@ -378,6 +378,51 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       capturedBytes: 0,
       truncated: true,
     }));
+  });
+
+  it("marks a one-shot JSON value beyond the nonblocking queue unavailable", async () => {
+    const { authority } = await createHarness({
+      snapshot: () => Object.freeze({
+        allRequestsEnabled: true,
+        failedRequestsEnabled: true,
+      }),
+    });
+    const requestId = "71000000-0000-4000-8000-000000000011";
+    const observer = authority.begin({
+      requestId,
+      operationCandidate: "model_generation",
+      transport: "in_process",
+      method: "POST",
+      path: "/v1/responses",
+      acceptedAt: Date.now(),
+      cancellation: { caller: "active", shutdown: "not_bound" },
+    });
+    const source = Buffer.from(
+      JSON.stringify({ payload: "x".repeat(17 * 1_024 * 1_024) }),
+      "utf8",
+    );
+    const recorder = observer.openArtifact!({
+      artifactId: "one_shot_large_json",
+      artifactKind: "client_request_wire",
+      mediaType: "application/json",
+      originalBytes: source.byteLength,
+      location: LOCATION,
+    });
+
+    recorder.append(source);
+    recorder.finish({ originalBytes: source.byteLength, complete: true });
+    observer.close({ outcome: "success" });
+
+    const detail = await authority.getRequestJourney({ requestId });
+    expect(detail.artifacts).toContainEqual(
+      expect.objectContaining({
+        artifactId: "one_shot_large_json",
+        state: "unavailable",
+        reason: "queue_capacity_exhausted",
+        capturedBytes: 0,
+        truncated: true,
+      }),
+    );
   });
 
   it("truthfully rejects one byte beyond the configured JSON boundary", async () => {

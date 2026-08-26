@@ -233,6 +233,31 @@ describe("Application Control Plane public seam", () => {
     await client.close();
   });
 
+  it("keeps the Control Plane available when diagnostics status projection throws", async () => {
+    const server = await startControlPlane({
+      ...hostDependencies,
+      endpoint: endpoint(),
+      application: { id: "Token", version: "test" },
+      initialStatus: {
+        modelDataPlane: "stopped",
+        provider: "unconfigured",
+      },
+      diagnosticsProjection: () => {
+        throw new Error("synthetic diagnostics projection failure");
+      },
+    });
+    servers.push(server);
+    const client = await connectControlPlane(server.endpoint, clientDependencies);
+    await client.hello(controlPlaneVersion);
+
+    await expect(client.getStatus()).resolves.toMatchObject({
+      modelDataPlane: "stopped",
+      provider: "unconfigured",
+    });
+    expect((await client.getStatus()).diagnostics).toBeUndefined();
+    await client.close();
+  });
+
   it("closes a connection accepted concurrently with host shutdown", async () => {
     const pipeServer = new AcceptDuringCloseServer();
     const server = await startControlPlane({

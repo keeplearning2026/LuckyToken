@@ -11,6 +11,11 @@ import type {
   RequestJourneyObservationAuthority,
   RequestJourneyObservationInput,
 } from "../../src/diagnostics/index.js";
+import { createBoundedJsonSnapshot } from "../../src/diagnostics/bounded-json-snapshot.js";
+import type {
+  ArtifactRecorder,
+  ImmutableArtifactMeta,
+} from "../../src/diagnostics/contract.js";
 import type { ExecutionOperation } from "../../src/execution.js";
 import { createCodexDirectCompactLane } from "../../src/integrations/codex/local-compact.js";
 import { createOpenAIResponsesCompactHandler } from "../../src/protocols/openai-responses/compact.js";
@@ -38,6 +43,54 @@ function recordingAuthority(): {
         journeys.push(journey);
         return {
           requestId: admission.requestId,
+          openArtifact(meta: ImmutableArtifactMeta): ArtifactRecorder {
+            let finished = false;
+            let capturedBytes = 0;
+            const chunks: Uint8Array[] = [];
+            const finish: ArtifactRecorder["finish"] = (input) => {
+              if (finished) return;
+              finished = true;
+              const complete =
+                input.complete && input.originalBytes === capturedBytes;
+              journey.observations.push({
+                kind: "artifact_observed",
+                ...meta,
+                state: complete ? "captured" : "unavailable",
+                originalBytes: input.originalBytes,
+                capturedBytes,
+                truncated: !complete,
+                ...(complete
+                  ? { bytes: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))) }
+                  : { reason: input.reason ?? "artifact_capture_incomplete" }),
+              });
+            };
+            return {
+              captureJson(value): void {
+                const snapshot = createBoundedJsonSnapshot(value);
+                if (snapshot.kind === "unavailable") {
+                  finish({
+                    originalBytes: 0,
+                    complete: false,
+                    reason: snapshot.reason,
+                  });
+                  return;
+                }
+                chunks.push(snapshot.bytes);
+                capturedBytes = snapshot.bytes.byteLength;
+                finish({ originalBytes: capturedBytes, complete: true });
+              },
+              append(bytes): void {
+                const copy = new Uint8Array(bytes.byteLength);
+                copy.set(bytes);
+                chunks.push(copy);
+                capturedBytes += copy.byteLength;
+              },
+              finish,
+              abandon(reason): void {
+                finish({ originalBytes: capturedBytes, complete: false, reason });
+              },
+            };
+          },
           observe: (observation) => journey.observations.push(observation),
           close: (input) => {
             journey.close = input;

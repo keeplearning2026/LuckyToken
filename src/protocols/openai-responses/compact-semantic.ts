@@ -2,6 +2,8 @@ import type { Model, Models } from "@earendil-works/pi-ai";
 
 import type { ExecutionOperation } from "../../execution.js";
 import type {
+  ArtifactRecorder,
+  ImmutableArtifactMeta,
   RequestJourneyLocation,
   RequestJourneyObservationInput,
   RequestJourneyObserver,
@@ -66,6 +68,13 @@ function semanticExecutionJourney(
   if (journey === undefined) return undefined;
   return Object.freeze({
     requestId: journey.requestId,
+    ...(journey.openArtifact === undefined
+      ? {}
+      : {
+          openArtifact(meta: ImmutableArtifactMeta): ArtifactRecorder {
+            return journey.openArtifact!(meta);
+          },
+        }),
     observe(observation: RequestJourneyObservationInput): void {
       if (
         observation.kind === "client_response_prepared" ||

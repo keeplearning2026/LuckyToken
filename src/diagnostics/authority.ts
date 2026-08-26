@@ -42,6 +42,7 @@ import {
   type DiagnosticsConfiguration,
 } from "./configuration.js";
 import { DIAGNOSTICS_WORKER_SOURCE } from "./worker-program.js";
+import { createBoundedJsonSnapshot } from "./bounded-json-snapshot.js";
 
 const MAX_OBSERVATIONS_PER_JOURNEY = 512;
 const MAX_OBSERVATION_BYTES = 64 * 1_024;
@@ -821,7 +822,43 @@ export async function createDiagnosticsAuthority(
     commands.clear();
   };
 
-  const startWorker = (): void => {
+  const scheduleWorkerRestart = (
+    session: DiagnosticsWorkerSession,
+    reason: Error,
+    terminate: boolean,
+  ): void => {
+    if (worker !== session) return;
+    worker = undefined;
+    ready = false;
+    // Release callers waiting on the previous generation before installing
+    // the next generation's readiness promise.
+    readyResolve?.();
+    if (closed || permanentlyUnavailable) return;
+    rejectCommands(reason);
+    const delay =
+      RESTART_BACKOFF_MS[
+        Math.min(restartIndex, RESTART_BACKOFF_MS.length - 1)
+      ]!;
+    restartIndex += 1;
+    readyPromise = new Promise<void>((resolve) => {
+      readyResolve = resolve;
+    });
+    restartTimer = setTimeout(startWorker, delay);
+    restartTimer.unref();
+    if (terminate) void session.terminate().catch(() => undefined);
+  };
+
+  const malformedWorkerOutput = (
+    session: DiagnosticsWorkerSession,
+  ): void => {
+    scheduleWorkerRestart(
+      session,
+      new Error("Diagnostics Worker emitted malformed output"),
+      true,
+    );
+  };
+
+  function startWorker(): void {
     if (closed) return;
     ready = false;
     let next: DiagnosticsWorkerSession;
@@ -845,43 +882,70 @@ export async function createDiagnosticsAuthority(
     worker = next;
     next.onMessage((raw: unknown) => {
       try {
+        if (worker !== next) return;
+        if (typeof raw !== "object" || raw === null) {
+          malformedWorkerOutput(next);
+          return;
+        }
         const message = raw as {
-        readonly type: string;
-        readonly commandId?: number;
-        readonly runtimeId?: string;
-        readonly requestId?: string;
-        readonly recordId?: string;
-        readonly sequence?: number;
-        readonly artifactId?: string;
-        readonly chunkIndex?: number;
-        readonly value?: unknown;
-        readonly message?: string;
-        readonly classification?: string;
-        readonly publication?:
-          | Readonly<{
-              kind: "request_journey";
-              record: RequestJourneySummary;
-            }>
-          | Readonly<{
-              kind: "runtime_event";
-              record: RuntimeEventRecord;
-            }>;
-      };
+          readonly type: string;
+          readonly commandId?: number;
+          readonly runtimeId?: string;
+          readonly requestId?: string;
+          readonly recordId?: string;
+          readonly sequence?: number;
+          readonly artifactId?: string;
+          readonly chunkIndex?: number;
+          readonly value?: unknown;
+          readonly message?: string;
+          readonly classification?: string;
+          readonly publication?:
+            | Readonly<{
+                kind: "request_journey";
+                record: RequestJourneySummary;
+              }>
+            | Readonly<{
+                kind: "runtime_event";
+                record: RuntimeEventRecord;
+              }>;
+        };
+        const knownType =
+          message.type === "startup_failure" ||
+          message.type === "ready" ||
+          message.type === "ack" ||
+          message.type === "nack" ||
+          message.type === "result" ||
+          message.type === "closed" ||
+          message.type === "command_error";
+        if (!knownType) {
+          malformedWorkerOutput(next);
+          return;
+        }
         if (message.type === "startup_failure") {
-        becomePermanentlyUnavailable();
-        return;
-      }
-      if (message.type === "ready") {
-        ready = true;
-        readyResolve?.();
-        postPending();
-        return;
-      }
-      if (message.type === "ack" || message.type === "nack") {
-        const key = acknowledgementKey(message);
-        if (key === undefined) return;
-        const entry = pending.get(key);
-        if (entry !== undefined) {
+          becomePermanentlyUnavailable();
+          return;
+        }
+        if (message.type === "ready") {
+          ready = true;
+          readyResolve?.();
+          postPending();
+          return;
+        }
+        if (
+          message.type === "ack" ||
+          message.type === "nack" ||
+          (message.type === "command_error" && message.commandId === undefined)
+        ) {
+          const key = acknowledgementKey(message);
+          if (key === undefined) {
+            malformedWorkerOutput(next);
+            return;
+          }
+          const entry = pending.get(key);
+          if (entry === undefined) {
+            malformedWorkerOutput(next);
+            return;
+          }
           pending.delete(key);
           if (entry.capacity === "ordinary") {
             ordinaryPendingBytes = Math.max(
@@ -900,7 +964,7 @@ export async function createDiagnosticsAuthority(
             );
           }
           if (message.type === "ack") {
-            restartIndex = 0;
+            if (entry.message.type === "append") restartIndex = 0;
             if (
               entry.message.type === "append" &&
               entry.message.messageKind === "close" &&
@@ -937,41 +1001,39 @@ export async function createDiagnosticsAuthority(
               }
             }
           }
+          return;
         }
-        return;
-      }
-        if (message.commandId !== undefined) {
-        const waiter = commands.get(message.commandId);
-        if (waiter === undefined) return;
-        commands.delete(message.commandId);
+        const commandId = message.commandId;
+        if (typeof commandId !== "number" || !Number.isSafeInteger(commandId)) {
+          malformedWorkerOutput(next);
+          return;
+        }
+        const waiter = commands.get(commandId);
+        if (waiter === undefined) {
+          malformedWorkerOutput(next);
+          return;
+        }
+        commands.delete(commandId);
         if (message.type === "command_error") {
           waiter.reject(new Error(message.message ?? "Diagnostics Worker command failed"));
         } else {
           waiter.resolve(message.value);
         }
-        }
       } catch {
-        // Malformed or hostile diagnostics-process output is contained.
+        malformedWorkerOutput(next);
       }
     });
-    next.onError(() => {
-      if (!ready) readyResolve?.();
+    next.onError((error) => {
+      scheduleWorkerRestart(next, error, true);
     });
     next.onExit((code) => {
-      if (worker === next) worker = undefined;
-      ready = false;
-      if (closed) return;
-      if (permanentlyUnavailable) return;
-      rejectCommands(new Error(`Diagnostics Worker exited (${code})`));
-      const delay = RESTART_BACKOFF_MS[Math.min(restartIndex, RESTART_BACKOFF_MS.length - 1)]!;
-      restartIndex += 1;
-      readyPromise = new Promise<void>((resolve) => {
-        readyResolve = resolve;
-      });
-      restartTimer = setTimeout(startWorker, delay);
-      restartTimer.unref();
+      scheduleWorkerRestart(
+        next,
+        new Error(`Diagnostics Worker exited (${code})`),
+        false,
+      );
     });
-  };
+  }
 
   const admit = (message: PendingMessage, state?: JourneyState): boolean => {
     const bytes = messageByteLength(message);
@@ -1052,6 +1114,7 @@ export async function createDiagnosticsAuthority(
   };
 
   const noOpArtifactRecorder: ArtifactRecorder = Object.freeze({
+    captureJson: () => undefined,
     append: () => undefined,
     finish: () => undefined,
     abandon: () => undefined,
@@ -1261,81 +1324,119 @@ export async function createDiagnosticsAuthority(
             }
           };
 
-          return Object.freeze({
-            append(bytes: Uint8Array): void {
-              try {
+          const append = (bytes: Uint8Array): void => {
+            try {
+              if (
+                !accepting ||
+                flight.finished ||
+                state.closed ||
+                !(bytes instanceof Uint8Array)
+              ) {
+                return;
+              }
+              const accepted = Math.min(
+                bytes.byteLength,
+                Math.max(
+                  0,
+                  configuration.maxJsonArtifactBytes - flight.capturedBytes,
+                ),
+                Math.max(
+                  0,
+                  configuration.maxJourneyArtifactBytes - state.artifactBytes,
+                ),
+                Math.max(
+                  0,
+                  configuration.maxJourneyArtifactBytes - flightArtifactBytes,
+                ),
+              );
+              let sourceOffset = 0;
+              while (sourceOffset < accepted) {
+                const end = Math.min(
+                  accepted,
+                  sourceOffset + MAX_ARTIFACT_WRITE_CHUNK_BYTES,
+                );
+                const chunk = new Uint8Array(end - sourceOffset);
+                chunk.set(bytes.subarray(sourceOffset, end));
                 if (
-                  !accepting ||
-                  flight.finished ||
-                  state.closed ||
-                  !(bytes instanceof Uint8Array)
+                  !admit(
+                    {
+                      type: "artifact_chunk",
+                      runtimeId,
+                      requestId: copied.requestId,
+                      artifactId: descriptor.artifactId,
+                      chunkIndex: flight.nextChunkIndex,
+                      offset: flight.capturedBytes,
+                      bytes: chunk,
+                    },
+                    state,
+                  )
                 ) {
+                  accepting = false;
+                  state.degraded = true;
+                  break;
+                }
+                flight.nextChunkIndex += 1;
+                flight.capturedBytes += chunk.byteLength;
+                state.artifactBytes += chunk.byteLength;
+                flightArtifactBytes += chunk.byteLength;
+                sourceOffset = end;
+              }
+              if (sourceOffset < bytes.byteLength) {
+                accepting = false;
+                flight.descriptor = Object.freeze({
+                  ...flight.descriptor,
+                  state: "unavailable",
+                  redaction: "failed",
+                  reason:
+                    accepted < bytes.byteLength
+                      ? "artifact_size_limit_exceeded"
+                      : "queue_capacity_exhausted",
+                });
+              }
+            } catch {
+              accepting = false;
+              state.degraded = true;
+            }
+          };
+
+          return Object.freeze({
+            captureJson(value: unknown): void {
+              try {
+                if (flight.finished || state.closed) return;
+                if (
+                  !state.allRequestsCaptureEnabled &&
+                  !state.failedRequestsCaptureEnabled
+                ) {
+                  finish({
+                    originalBytes: 0,
+                    complete: false,
+                    reason: "capture_policy_disabled",
+                  });
                   return;
                 }
-                const accepted = Math.min(
-                  bytes.byteLength,
-                  Math.max(
-                    0,
-                    configuration.maxJsonArtifactBytes - flight.capturedBytes,
-                  ),
-                  Math.max(
-                    0,
-                    configuration.maxJourneyArtifactBytes - state.artifactBytes,
-                  ),
-                  Math.max(
-                    0,
-                    configuration.maxJourneyArtifactBytes - flightArtifactBytes,
-                  ),
-                );
-                let sourceOffset = 0;
-                while (sourceOffset < accepted) {
-                  const end = Math.min(
-                    accepted,
-                    sourceOffset + MAX_ARTIFACT_WRITE_CHUNK_BYTES,
-                  );
-                  const chunk = new Uint8Array(end - sourceOffset);
-                  chunk.set(bytes.subarray(sourceOffset, end));
-                  if (
-                    !admit(
-                      {
-                        type: "artifact_chunk",
-                        runtimeId,
-                        requestId: copied.requestId,
-                        artifactId: descriptor.artifactId,
-                        chunkIndex: flight.nextChunkIndex,
-                        offset: flight.capturedBytes,
-                        bytes: chunk,
-                      },
-                      state,
-                    )
-                  ) {
-                    accepting = false;
-                    state.degraded = true;
-                    break;
-                  }
-                  flight.nextChunkIndex += 1;
-                  flight.capturedBytes += chunk.byteLength;
-                  state.artifactBytes += chunk.byteLength;
-                  flightArtifactBytes += chunk.byteLength;
-                  sourceOffset = end;
-                }
-                if (sourceOffset < bytes.byteLength) {
-                  accepting = false;
-                  flight.descriptor = Object.freeze({
-                    ...flight.descriptor,
-                    state: "unavailable",
-                    redaction: "failed",
-                    reason:
-                      accepted < bytes.byteLength
-                        ? "artifact_size_limit_exceeded"
-                        : "queue_capacity_exhausted",
+                const snapshot = createBoundedJsonSnapshot(value);
+                if (snapshot.kind === "unavailable") {
+                  finish({
+                    originalBytes: 0,
+                    complete: false,
+                    reason: snapshot.reason,
                   });
+                  return;
                 }
+                append(snapshot.bytes);
+                finish({
+                  originalBytes: snapshot.bytes.byteLength,
+                  complete: true,
+                });
               } catch {
-                accepting = false;
-                state.degraded = true;
+                finish({
+                  originalBytes: 0,
+                  complete: false,
+                  reason: "synchronous_json_snapshot_unsupported",
+                });
               }
             },
+            append,
             finish,
             abandon(reason: string): void {
               finish({
@@ -1622,7 +1723,7 @@ export async function createDiagnosticsAuthority(
   const authority: DiagnosticsManagementAuthority = {
     begin,
     diagnosticsAvailable(): boolean {
-      return !closed && !permanentlyUnavailable;
+      return !closed && !permanentlyUnavailable && ready && worker !== undefined;
     },
     observeRuntime(input: RuntimeEventObservationInput): void {
       try {

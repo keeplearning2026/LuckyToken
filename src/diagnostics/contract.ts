@@ -238,6 +238,12 @@ export interface ImmutableArtifactMeta extends LocatedObservation {
 }
 
 export interface ArtifactRecorder {
+  /**
+   * Synchronously snapshots a JSON-like object under diagnostics-owned work
+   * and size bounds. Implementations must not retain `value` or invoke
+   * getters, toJSON, or other object conversion hooks.
+   */
+  captureJson(value: unknown): void;
   append(bytes: Uint8Array): void;
   finish(input: Readonly<{
     readonly originalBytes: number;

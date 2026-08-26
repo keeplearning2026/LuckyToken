@@ -1,6 +1,6 @@
 # Token Request Journey Diagnostics Specification
 
-- **Status:** TARGET REVISION — full-journey file capture implementation in progress
+- **Status:** CURRENT — full-journey capture and unified Request Journey cutover implemented
 - **Date:** 2026-08-25
 - **Scope:** Data Plane request journey, failure location, investigation artifacts, fail-open observation runtime, and one diagnostics persistence authority
 - **Out of scope:** physical SQL/index tuning, final Desktop layout, and legacy data migration/import (not provided)
@@ -257,8 +257,9 @@ Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_a
 | Local outbound request wire | Direct Mode | yes | n/a | n/a | yes when constructed |
 | Provider Native outbound request wire | Provider Native | n/a | yes | n/a | yes when constructed |
 | Complete protocol-owned invocation/Pi IR | Client Protocol adapter | n/a | n/a | yes | yes when finalized |
-| Final Pi Provider outbound request | selected Pi Provider | n/a | n/a | yes | yes when assembled |
-| Upstream response wire/provider events | lane transport or Pi Provider | yes | yes | yes | yes when observed |
+| Pi Provider request payload at the public `onPayload` seam | owning Client Protocol semantic executor | n/a | n/a | yes | yes when assembled |
+| Upstream response wire | owning native lane transport | yes | yes | n/a | yes when observed |
+| Pi response metadata and decoded response IR | owning Client Protocol semantic executor | n/a | n/a | yes | yes when observed/decoded |
 | Complete Pi terminal IR | owning Client Protocol semantic module | n/a | n/a | yes | yes when any event was observed |
 | Client Response Wire | Client Protocol edge / HTTP transport | yes | yes | yes | yes when constructed |
 | Timeline and attempts | Journey observation | yes | yes | yes | yes |
@@ -375,13 +376,14 @@ interface RequestJourneyObserver {
 }
 
 interface ArtifactRecorder {
+  captureJson(value: unknown): void;
   append(bytes: Uint8Array): void;
   finish(input: ArtifactFinishInput): void;
   abandon(reason: string): void;
 }
 ```
 
-`begin`, `observe`, `openArtifact`, `append`, `finish`, `abandon`, `close`, and `observeRuntime` are synchronous, no-throw operations and never return a `Promise`. `openArtifact` returns only a recorder/no-op recorder, never a serving decision. None of these methods return routing, lane, retry, Profile, cancellation, response, or any other execution decision. They perform only bounded validation/copying, sequencing, and in-memory admission; redaction and persistence run in the independent child process. No caller waits for child-process IPC, directory or file I/O, SQLite, subscription delivery, or persistence acknowledgement. If policy lookup, allocation, validation, redaction, queue admission, child-process, filesystem, or internal observation fails, the Adapter contains that failure, updates operational health when possible, and otherwise behaves as a no-op.
+`begin`, `observe`, `openArtifact`, `captureJson`, `append`, `finish`, `abandon`, `close`, and `observeRuntime` are synchronous, no-throw operations and never return a `Promise`. `openArtifact` returns only a recorder/no-op recorder, never a serving decision. None of these methods return routing, lane, retry, Profile, cancellation, response, or any other execution decision. They perform only bounded validation/copying, sequencing, and in-memory admission; redaction and persistence run in the independent child process. No caller waits for child-process IPC, directory or file I/O, SQLite, subscription delivery, or persistence acknowledgement. If policy lookup, allocation, validation, redaction, queue admission, child-process, filesystem, or internal observation fails, the Adapter contains that failure, updates operational health when possible, and otherwise behaves as a no-op.
 
 `RequestJourneyBeginInput` contains the request-edge `requestId`, operation candidate, transport kind, method/path facts, accepted time, and initial cancellation context. It contains no runtime-generated diagnostics ID. The Node HTTP edge creates the request ID at P0 before routing and passes the same Observer through the Runtime. A direct in-process `TokenRuntime.handle()` call creates its request ID at its own P0 seam and records `transport=in_process`. No handler, lane, capture Adapter, or persistence implementation may mint a second request correlation ID.
 
@@ -422,7 +424,7 @@ type RequestJourneyObservationInput =
 
 Each `step_entered` is emitted immediately before the owned work begins. Each successful or truthfully terminated step emits its matching `step_completed`. A `step_entered` without completion is meaningful evidence of a hang, interruption, timeout, process termination, or unavailable observation. A request owner supplies a request-local opaque `stepInstanceId`; at most one unmatched instance with that ID may exist. The diagnostics reducer pairs the two events and never infers completion from entry into a later step.
 
-Observation inputs contain typed immutable facts only. They must not contain `Request`, `Response`, streams, mutable Pi Context or messages, Provider SDK objects, Profile/AuthResult objects, functions, errors with unbounded object graphs, or a broad `Record<string, unknown>`. When bytes are observed, the Adapter copies the accepted prefix before returning and never retains the caller's buffer reference.
+Ordinary `observe` inputs contain typed immutable facts only. They must not contain `Request`, `Response`, streams, mutable Pi Context or messages, Provider SDK objects, Profile/AuthResult objects, functions, errors with unbounded object graphs, or a broad `Record<string, unknown>`. When bytes are observed, the Adapter copies the accepted prefix before returning and never retains the caller's buffer reference. `ArtifactRecorder.captureJson` is the one mechanism-only exception for a finalized request-local JSON-like value available only as an object at a public Pi ownership seam. It synchronously reads only bounded own data fields, never invokes getters, `toJSON`, or conversion hooks, never retains the input, and either emits a bounded byte snapshot or finishes that artifact as explicitly unavailable.
 
 ### 14.3 Request-local Flight Recorder
 
@@ -430,13 +432,13 @@ Artifacts are copied only where their owning module already has the bytes:
 
 - the Client Protocol edge copies from the body bytes it already reads;
 - a Native lane copies from the outbound envelope or response bytes it already constructs or consumes;
-- the Semantic Conversion path copies its finalized Pi invocation and terminal summaries at their ownership seams;
-- the Semantic Provider request payload is copied only from the value returned by the owning protocol's `onPayload`; response metadata comes only from Pi `onResponse`, and response IR only from the completed Pi `AssistantMessage`;
+- the Semantic Conversion path asks the Flight Recorder for a strictly bounded own-data JSON snapshot of its finalized invocation and terminal message at their ownership seams;
+- the Semantic Provider request payload is observed only from the value returned by the owning protocol's `onPayload`; response metadata comes only from Pi `onResponse`, and response IR only from the completed Pi `AssistantMessage`; the Flight Recorder does not retain any of those objects;
 - P6/P8 copies from the already prepared or materialized Client response bytes.
 
 Diagnostics must not clone or re-read a consumed body, add a second stream consumer, retain a live stream, wrap or replace `fetch`, inject a transport, or reconstruct evidence from a different representation. Capture failure changes only the artifact descriptor.
 
-The request-local Flight Recorder retains only bounded, unacknowledged copied chunks in the Backend process. A dedicated Diagnostics child process owns at most 64 MiB for one complete artifact and 512 MiB across active artifacts, performs complete-document fail-closed redaction after `finish`, and writes only sanitized bytes into an unsealed Journey directory. The outcome is not known until close because work that succeeds at P7 may still fail HTTP handoff at P8. On close:
+The request-local Flight Recorder retains only bounded, unacknowledged copied chunks in the Backend process. Object-only Semantic artifacts have a fixed 1 MiB synchronous snapshot budget and become `unavailable:synchronous_json_snapshot_limit_exceeded` when they exceed it; this prevents an unbounded stringify, getter, or `toJSON` call on the serving thread. A dedicated Diagnostics child process owns at most 64 MiB for one complete naturally streamed wire artifact and 512 MiB across active artifacts, performs complete-document fail-closed redaction after `finish`, and writes only sanitized bytes into an unsealed Journey directory. The outcome is not known until close because work that succeeds at P7 may still fail HTTP handoff at P8. On close:
 
 - a Journey whose P0 all-request snapshot was enabled seals every complete, redacted, in-budget stage artifact for every outcome;
 - otherwise a Journey whose P0 failed-request snapshot was enabled seals bodies only when the outcome is failed, aborted, or interrupted;
@@ -453,6 +455,7 @@ The full-capture revision uses the following independent defaults. Configuration
 | lifecycle observations per Journey | 512 |
 | serialized non-artifact observation | 64 KiB |
 | one artifact chunk accepted by `ArtifactRecorder.append` | 64 KiB |
+| one synchronous JSON-like object snapshot | 1 MiB (1,048,576 bytes) |
 | one JSON/JSONL/SSE artifact | 64 MiB (67,108,864 bytes) |
 | artifact bytes accepted per Journey | 512 MiB |
 | aggregate main-process unacknowledged artifact bytes | 16 MiB |
@@ -471,6 +474,8 @@ When capacity is exhausted, shedding order is deterministic:
 5. ordinary failure timeline events, with the reserved close seal retaining the primary location and explicit completeness degradation.
 
 No capacity condition blocks, throws into, cancels, delays for persistence, or modifies the observed work. If even the reserved seal cannot be admitted, the request still proceeds unchanged and diagnostics exposes only process-level degraded health when possible. The system does not open a secondary request log or persistence fallback.
+
+The 64 MiB artifact limit applies when the owning path already receives or constructs bytes in naturally yielding chunks. Diagnostics never inserts an `await` or yield to wait for acknowledgements. A one-shot artifact larger than the remaining 16 MiB admission window is therefore recorded as `unavailable:queue_capacity_exhausted`; it is not falsely reported as a complete 64 MiB capture.
 
 ### 14.5 Diagnostics child process, acknowledgement, replay, and shutdown
 
@@ -673,9 +678,9 @@ The eventual unified record must be certified against at least these scenarios:
 | model discovery projection failure | P6 `project_model_list` |
 | unmatched route or WebSocket request | P1 routing/transport rejection, no lane |
 
-## 17. Implementation gate
+## 17. Cutover certification gate
 
-Before production cutover, review must confirm:
+The production cutover remains valid only while review confirms:
 
 1. every current Data Plane route maps into this Journey;
 2. every failure-producing seam maps to one primary Phase and Lane Step;

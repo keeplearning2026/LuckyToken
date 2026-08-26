@@ -121,4 +121,25 @@ describe("Token config v2 diagnostics cutover", () => {
       expect(Object.hasOwn(parsed, key)).toBe(false);
     }
   });
+
+  it("keeps the repository example on the current diagnostics contract", async () => {
+    const applicationStateRoot = await mkdtemp(
+      join(tmpdir(), "Token-example-config-v2-"),
+    );
+    directories.push(applicationStateRoot);
+    const configPath = join(applicationStateRoot, "config.json");
+    await writeFile(
+      configPath,
+      await readFile(join(process.cwd(), "token.config.example.json"), "utf8"),
+      "utf8",
+    );
+
+    const loaded = await loadTokenCliConfig(configPath);
+
+    expect(loaded.diagnostics).toMatchObject({
+      maxJsonArtifactBytes: 67_108_864,
+      maxJourneyArtifactBytes: 536_870_912,
+      maxArtifactDiskBytes: 5_368_709_120,
+    });
+  });
 });

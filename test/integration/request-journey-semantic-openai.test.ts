@@ -150,18 +150,33 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
         stopReason: "stop",
         timestamp: 1,
       };
+      const diagnosticSerializationProbe = vi.fn();
+      Object.defineProperty(terminal, "toJSON", {
+        enumerable: false,
+        value() {
+          diagnosticSerializationProbe();
+          return {
+            role: terminal.role,
+            api: terminal.api,
+            provider: terminal.provider,
+            model: terminal.model,
+            content: terminal.content,
+            usage: terminal.usage,
+            stopReason: terminal.stopReason,
+            timestamp: terminal.timestamp,
+          };
+        },
+      });
       const semanticExecution: ExecutionOperation = vi.fn(
         async (_models, selectedModel, context, options) => {
           expect(options.timeoutMs).toBe(456_789);
-          await options.onPayload?.(
-            {
+          const providerPayload = {
               model: selectedModel.id,
               messages: context.messages,
               max_tokens: options.maxTokens,
               stream: true,
-            },
-            selectedModel,
-          );
+            };
+          await options.onPayload?.(providerPayload, selectedModel);
           await options.onResponse?.(
             {
               status: 200,
@@ -206,6 +221,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       });
       expect(response.status).toBe(200);
       expect(await response.text()).toContain("semantic success evidence");
+      expect(diagnosticSerializationProbe).not.toHaveBeenCalled();
 
       await server.close();
       server = undefined;

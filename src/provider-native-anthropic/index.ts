@@ -426,6 +426,39 @@ export function createAnthropicProviderNativeLane(
                 }
                 body = projected.body;
               }
+              const preservationLocation = {
+                phase: "lane_response_processing",
+                lane: "provider_native",
+                step: "preserve_provider_native_response",
+                attempt: profileAttempt,
+              } as const;
+              const preservationStep =
+                `p5.preserve_provider_native_response.${profileAttempt}`;
+              enterAnthropicProviderNativeStep(
+                input.journey,
+                preservationStep,
+                preservationLocation,
+              );
+              observeAnthropicProviderNative(input.journey, {
+                kind: "artifact_observed",
+                artifactId: "provider_native_preserved_response_wire",
+                artifactKind: "provider_native_preserved_response_wire",
+                state: "captured",
+                ...(upstream.headers["content-type"] === undefined
+                  ? {}
+                  : { mediaType: upstream.headers["content-type"] }),
+                bytes: body,
+                originalBytes: body.byteLength,
+                capturedBytes: body.byteLength,
+                truncated: false,
+                location: preservationLocation,
+              });
+              completeAnthropicProviderNativeStep(
+                input.journey,
+                preservationStep,
+                preservationLocation,
+                "success",
+              );
               const terminalUsage = extractAnthropicNativeTerminalUsage(
                 body,
                 upstream.headers["content-type"] ?? "",

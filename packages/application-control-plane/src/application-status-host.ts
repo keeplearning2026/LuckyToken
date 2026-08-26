@@ -223,7 +223,16 @@ export async function startApplicationStatusHost(
     const catalogProjection = options.catalogProjection?.();
     const recoveryProjection = options.recoveryProjection?.();
     const attentionProjection = options.attentionProjection?.(status);
-    const diagnosticsProjection = options.diagnosticsProjection?.();
+    const diagnosticsProjection = (() => {
+      try {
+        return options.diagnosticsProjection?.();
+      } catch {
+        // Diagnostics health projection is observation-only. A broken
+        // diagnostics implementation cannot prevent status publication or
+        // Application Control Plane startup.
+        return undefined;
+      }
+    })();
     return {
       ...status,
       ...(options.ownership === undefined

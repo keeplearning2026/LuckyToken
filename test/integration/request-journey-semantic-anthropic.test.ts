@@ -101,6 +101,15 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
           }),
         },
       });
+      const diagnosticSerializationProbe = vi.fn();
+      const terminalWithProbe: AssistantMessage = { ...terminal };
+      Object.defineProperty(terminalWithProbe, "toJSON", {
+        enumerable: false,
+        value() {
+          diagnosticSerializationProbe();
+          return { ...terminal };
+        },
+      });
       const streamSimple = vi.fn(
         (
           _model: Model<string>,
@@ -132,7 +141,11 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
                 );
                 return {
                   done: false as const,
-                  value: { type: "done", reason: "stop", message: terminal },
+                  value: {
+                    type: "done",
+                    reason: "stop",
+                    message: terminalWithProbe,
+                  },
                 };
               },
             }),
@@ -178,6 +191,7 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
         content: [{ type: "text", text: "anthropic semantic evidence" }],
       });
       expect(streamSimple).toHaveBeenCalledOnce();
+      expect(diagnosticSerializationProbe).not.toHaveBeenCalled();
 
       await server.close();
       server = undefined;

@@ -27,6 +27,7 @@ export function createUnavailableDiagnosticsAuthority(): DiagnosticsManagementAu
       return Object.freeze({
         requestId: input.requestId,
         openArtifact: () => Object.freeze({
+          captureJson: () => undefined,
           append: () => undefined,
           finish: () => undefined,
           abandon: () => undefined,

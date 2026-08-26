@@ -98,21 +98,14 @@ function observeAnthropicJsonArtifact(
   }>,
 ): void {
   try {
-    const serialized = JSON.stringify(input.value);
-    if (serialized === undefined) throw new Error("JSON value is unavailable");
-    const bytes = new TextEncoder().encode(serialized);
-    observeJourney(journey, {
-      kind: "artifact_observed",
+    const recorder = journey?.openArtifact?.({
       artifactId: input.artifactId,
       artifactKind: input.artifactKind,
-      state: "captured",
       mediaType: "application/json",
-      bytes,
-      originalBytes: bytes.byteLength,
-      capturedBytes: bytes.byteLength,
-      truncated: false,
       location: input.location,
     });
+    if (recorder === undefined) return;
+    recorder.captureJson(input.value);
   } catch {
     observeJourney(journey, {
       kind: "artifact_observed",

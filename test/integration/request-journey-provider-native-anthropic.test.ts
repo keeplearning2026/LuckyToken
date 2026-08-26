@@ -136,6 +136,171 @@ function requiredAttemptValue<T>(
 }
 
 describe("Anthropic Provider Native Request Journey", () => {
+  it("persists the complete successful native request and response scene", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "Token-provider-native-success-journey-"),
+    );
+    const requestId = "60000000-0000-4000-8000-000000000003";
+    let authority: DiagnosticsAuthority | undefined;
+    let server: RunningTokenHttpServer | undefined;
+    try {
+      authority = await createDiagnosticsAuthority({
+        configuration: parseDiagnosticsConfiguration(
+          { directory: join(root, "diagnostics") },
+          root,
+        ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
+      });
+      const profile = managedCapture(PROFILE_A, "Provider Profile A");
+      const bindings: Pick<
+        ProviderAuthBindingAuthority,
+        "capture" | "runBound" | "advanceAfterFinal429"
+      > = Object.freeze({
+        capture: async () => profile,
+        runBound: async <T>(
+          _capture: ProviderAuthBindingCapture,
+          operation: () => Promise<T>,
+        ) => operation(),
+        advanceAfterFinal429: async () => {
+          throw new Error("A successful native response must not retry");
+        },
+      });
+      const model = anthropicModel();
+      const models = {
+        getModels: () => [model],
+        getAuth: async () => ({
+          auth: { apiKey: PROVIDER_TOKEN_A },
+          source: "fixture",
+        }),
+      } as unknown as Models;
+      const providerBody = JSON.stringify({
+        id: "msg_provider_native_success",
+        type: "message",
+        role: "assistant",
+        model: model.id,
+        content: [{ type: "text", text: "native response evidence" }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 5, output_tokens: 3 },
+      });
+      let outboundBody = "";
+      const providerFetch: FetchFunction = async (input, init) => {
+        const request = new Request(input, init);
+        outboundBody = await request.text();
+        expect(request.headers.get("authorization")).toBe(
+          `Bearer ${PROVIDER_TOKEN_A}`,
+        );
+        return new Response(providerBody, {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "request-id": "provider-success-request-id",
+          },
+        });
+      };
+      const semanticExecution = vi.fn(async () => {
+        throw new Error("Semantic Conversion must not execute");
+      }) as unknown as ExecutionOperation;
+      const handler = createAnthropicMessagesHandler({
+        models,
+        providerNativeLane: createAnthropicProviderNativeLane({
+          models,
+          bindings,
+          resolveRequestModel: identityRequestModelResolver,
+          fetch: providerFetch,
+        }),
+        executeOperation: semanticExecution,
+        maxRequestBytes: 4_096,
+        createMessageId: () => "unused",
+        now: () => 1_787_500_000_100,
+      });
+      server = await startTokenHttpServer({
+        runtime: createTokenRuntime({ clientProtocols: [handler] }),
+        diagnostics: authority,
+        createRequestId: () => requestId,
+        port: 0,
+      });
+      const clientBody = JSON.stringify({
+        model: "anthropic/claude-test",
+        max_tokens: 32,
+        messages: [{ role: "user", content: "capture native success" }],
+      });
+
+      const response = await fetch(`${server.origin}/v1/messages`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${CLIENT_TOKEN}`,
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+        },
+        body: clientBody,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(providerBody);
+      expect(semanticExecution).not.toHaveBeenCalled();
+
+      await server.close();
+      server = undefined;
+      const detail = await authority.getRequestJourney({ requestId });
+      expect(detail).toMatchObject({
+        protocol: "anthropic-messages",
+        lane: "provider_native",
+        outcome: "success",
+      });
+      expect(detail.artifacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            artifactId: "client_request_wire",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_outbound_request_wire.1",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_upstream_response_wire.1",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_preserved_response_wire",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "client_response_wire",
+            state: "captured",
+          }),
+        ]),
+      );
+      for (const [artifactId, expected] of [
+        ["client_request_wire", clientBody],
+        ["provider_native_outbound_request_wire.1", outboundBody],
+        ["provider_native_upstream_response_wire.1", providerBody],
+        ["provider_native_preserved_response_wire", providerBody],
+        ["client_response_wire", providerBody],
+      ] as const) {
+        const artifact = await authority.getRequestArtifact({
+          requestId,
+          artifactId,
+          offset: 0,
+          limit: 256 * 1_024,
+        });
+        expect(Buffer.from(artifact.dataBase64, "base64").toString("utf8"))
+          .toBe(expected);
+      }
+    } finally {
+      await Promise.allSettled([
+        server?.close() ?? Promise.resolve(),
+        authority?.close() ?? Promise.resolve(),
+      ]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps physical 429s supporting and locates final managed-Profile exhaustion", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "Token-provider-native-journey-"),

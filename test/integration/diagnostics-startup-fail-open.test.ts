@@ -218,4 +218,99 @@ describe("Diagnostics startup fail-open", () => {
     expect(await readFile(databasePath)).toEqual(bytesBefore);
     expect((await stat(databasePath)).mtimeMs).toBe(mtimeBefore);
   });
+
+  it("keeps serving when the configured diagnostics directory cannot be created", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-directory-fault-"));
+    roots.push(root);
+    const blockedDirectory = join(root, "blocked-diagnostics-directory");
+    await writeFile(blockedDirectory, "this path is intentionally a file");
+    const authority = await createDiagnosticsAuthority({
+      configuration: parseDiagnosticsConfiguration(
+        { directory: blockedDirectory },
+        root,
+      ),
+    });
+    authorities.push(authority);
+    const baseline = await startTokenHttpServer({
+      runtime: createRuntime(),
+      createRequestId: () => REQUEST_ID,
+      port: 0,
+    });
+    const degraded = await startTokenHttpServer({
+      runtime: createRuntime(),
+      diagnostics: authority,
+      createRequestId: () => REQUEST_ID,
+      port: 0,
+    });
+    servers.push(baseline, degraded);
+
+    await expect(invoke(degraded)).resolves.toEqual(await invoke(baseline));
+    expect(authority.diagnosticsAvailable()).toBe(false);
+    expect(await readFile(blockedDirectory, "utf8")).toBe(
+      "this path is intentionally a file",
+    );
+  });
+
+  it("keeps serving through a locked diagnostics database and recovers after release", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-locked-"));
+    roots.push(root);
+    const diagnosticsDirectory = join(root, "diagnostics");
+    const configuration = parseDiagnosticsConfiguration(
+      { directory: diagnosticsDirectory },
+      root,
+    );
+    const initializer = await createDiagnosticsAuthority({ configuration });
+    await initializer.queryRequestJourneys({ limit: 1 });
+    await initializer.close();
+
+    const database = new DatabaseSync(
+      join(diagnosticsDirectory, "diagnostics-v3.sqlite3"),
+    );
+    database.exec("BEGIN EXCLUSIVE");
+    try {
+      const authority = await createDiagnosticsAuthority({ configuration });
+      authorities.push(authority);
+      const baseline = await startTokenHttpServer({
+        runtime: createRuntime(),
+        createRequestId: () => REQUEST_ID,
+        port: 0,
+      });
+      const degraded = await startTokenHttpServer({
+        runtime: createRuntime(),
+        diagnostics: authority,
+        createRequestId: () => REQUEST_ID,
+        port: 0,
+      });
+      servers.push(baseline, degraded);
+
+      await expect(invoke(degraded)).resolves.toEqual(await invoke(baseline));
+      database.exec("ROLLBACK");
+      database.close();
+
+      await expect
+        .poll(async () => {
+          try {
+            const page = await authority.queryRequestJourneys({ limit: 10 });
+            return page.records.some(
+              (record) =>
+                record.requestId === REQUEST_ID && record.outcome === "success",
+            );
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+    } finally {
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+        // The normal path already released the lock.
+      }
+      try {
+        database.close();
+      } catch {
+        // The normal path already closed the fixture database.
+      }
+    }
+  });
 });

@@ -176,6 +176,9 @@ describe("Request Journey diagnostics non-interference", () => {
       begin: (input) => ({
         requestId: input.requestId,
         openArtifact: () => ({
+          captureJson: () => {
+            throw new Error(`${DIAGNOSTICS_CANARY}-capture-json`);
+          },
           append: () => {
             recorderAppendReached = true;
             throw new Error(`${DIAGNOSTICS_CANARY}-append`);

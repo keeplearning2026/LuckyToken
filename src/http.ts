@@ -16,6 +16,7 @@ import type {
 } from "./diagnostics/contract.js";
 
 const NOOP_ARTIFACT_RECORDER: ArtifactRecorder = Object.freeze({
+  captureJson: () => undefined,
   append: () => undefined,
   finish: () => undefined,
   abandon: () => undefined,
@@ -23,6 +24,13 @@ const NOOP_ARTIFACT_RECORDER: ArtifactRecorder = Object.freeze({
 
 function containArtifactRecorder(recorder: ArtifactRecorder): ArtifactRecorder {
   return Object.freeze({
+    captureJson(value: unknown): void {
+      try {
+        recorder.captureJson(value);
+      } catch {
+        // Diagnostics recorder failure is observation-only.
+      }
+    },
     append(bytes: Uint8Array): void {
       try {
         recorder.append(bytes);

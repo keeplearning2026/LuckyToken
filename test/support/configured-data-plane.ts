@@ -252,6 +252,7 @@ const NOOP_DIAGNOSTICS: RequestJourneyObservationAuthority = Object.freeze({
     return Object.freeze({
       requestId: input.requestId,
       openArtifact: () => Object.freeze({
+        captureJson: () => undefined,
         append: () => undefined,
         finish: () => undefined,
         abandon: () => undefined,
