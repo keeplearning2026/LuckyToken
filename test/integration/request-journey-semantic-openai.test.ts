@@ -152,6 +152,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       };
       const semanticExecution: ExecutionOperation = vi.fn(
         async (_models, selectedModel, context, options) => {
+          expect(options.timeoutMs).toBe(456_789);
           await options.onPayload?.(
             {
               model: selectedModel.id,
@@ -179,6 +180,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
         executeOperation: semanticExecution,
         stateFile: join(root, "responses-state.json"),
         maxRequestBytes: 8_192,
+        requestTimeoutMs: 456_789,
         createResponseId: () => "resp_semantic_success",
         createSessionId: () => "70000000-0000-4000-8000-000000000004",
         now: () => 1_787_600_000_100,

@@ -91,6 +91,8 @@ export interface OpenAIResponsesHandlerOptions {
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
   readonly maxRequestBytes: number;
+  /** Provider execution timeout. Production passes limits.requestTimeoutMs. */
+  readonly requestTimeoutMs?: number;
   readonly routerDefaults?: RouterOptionDefaults;
   readonly createResponseId?: () => string;
   readonly now?: () => number;
@@ -107,6 +109,7 @@ interface OpenAIResponsesDependencies {
   readonly sessionState: ResponseSessionState;
   readonly publicModels: PublicModelSource | undefined;
   readonly maxRequestBytes: number;
+  readonly requestTimeoutMs: number | undefined;
   readonly routerDefaults: RouterOptionDefaults;
   readonly createResponseId: () => string;
   readonly now: () => number;
@@ -703,6 +706,9 @@ async function handleOpenAIResponses(
       routerDefaults: dependencies.routerDefaults,
       createResponseId: dependencies.createResponseId,
       now: dependencies.now,
+      ...(dependencies.requestTimeoutMs === undefined
+        ? {}
+        : { requestTimeoutMs: dependencies.requestTimeoutMs }),
       executeOperation: dependencies.executeOperation,
       ...(journey === undefined ? {} : { journey }),
     });
@@ -1165,6 +1171,7 @@ export function createOpenAIResponsesHandler(
     sessionState,
     publicModels: options.publicModels,
     maxRequestBytes: options.maxRequestBytes,
+    requestTimeoutMs: options.requestTimeoutMs,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     createResponseId: options.createResponseId ?? (() => `resp_${randomUUID()}`),
     now: options.now ?? Date.now,

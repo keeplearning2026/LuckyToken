@@ -67,17 +67,40 @@ describe("Anthropic-owned Semantic Invocation", () => {
       history: [],
       continuity: [],
     });
-    expect(converted.invocation.supplement).toEqual({
-      outputTokenCeiling: 4_096,
-      sampling: { temperature: 0.4, topP: 0.8, topK: 32 },
-      stopSequences: ["END", "STOP"],
+    const supplement = converted.invocation.supplement;
+    expect(Object.keys(supplement)).toEqual([
+      "controls",
+      "system",
+      "conversation",
+      "content",
+      "tools",
+      "cache",
+    ]);
+    expect(supplement.controls).toMatchObject({
+      outputTokenCeiling: {
+        id: "maxTokens",
+        kind: "output-token-ceiling",
+        writer: "ceiling-verifier",
+        value: 4_096,
+      },
+      temperature: {
+        id: "sampling.temperature",
+        writer: "pi-verifier",
+        value: 0.4,
+      },
+      topP: { id: "sampling.topP", value: 0.8 },
+      topK: { id: "sampling.topK", value: 32 },
+      stopSequences: { id: "stopSequences", value: ["END", "STOP"] },
       toolChoice: {
-        kind: "named",
-        name: "lookup",
-        disableParallelToolUse: true,
+        id: "toolChoice",
+        value: {
+          kind: "named",
+          name: "lookup",
+          disableParallelToolUse: true,
+        },
       },
       outputFormat: {
-        kind: "specified",
+        id: "outputFormat",
         value: {
           kind: "json-schema",
           schema: {
@@ -88,21 +111,39 @@ describe("Anthropic-owned Semantic Invocation", () => {
           },
         },
       },
-      metadataUserId: { kind: "specified", value: "user-123" },
-      serviceTier: { kind: "specified", value: "auto" },
-      inferenceGeo: { kind: "specified", value: "us" },
-      container: { kind: "specified", value: "container-123" },
-      cacheControl: { kind: "specified", value: { ttl: "1h" } },
-      messageFrames: [
-        {
-          sourceMessageIndex: 0,
-          role: "user",
-          entries: [{ sourceContentIndex: 0, ownership: "pi" }],
-        },
-      ],
-      content: [],
-      tools: [],
+      metadataUserId: { id: "metadataUserId", value: "user-123" },
+      serviceTier: { id: "serviceTier", value: "auto" },
+      inferenceGeo: { id: "inferenceGeo", value: "us" },
+      container: { id: "container", value: "container-123" },
     });
+    expect(supplement.cache).toContainEqual(
+      expect.objectContaining({
+        id: "cacheControl",
+        kind: "cache-control",
+        value: { ttl: "1h" },
+      }),
+    );
+    expect(supplement.conversation.messages).toEqual([
+      {
+        sourceMessageIndex: 0,
+        effectiveRole: "user",
+        entries: [{
+          kind: "source-content",
+          sourceContentIndex: 0,
+          piAttachment: {
+            kind: "message-content",
+            messageIndex: 0,
+            contentIndex: 0,
+          },
+          candidateIds: [],
+        }],
+      },
+    ]);
+    expect("messageFrames" in supplement).toBe(false);
+    expect(Object.isFrozen(supplement)).toBe(true);
+    const format = supplement.controls.outputFormat?.value;
+    expect(format?.kind).toBe("json-schema");
+    expect(Object.isFrozen(format === null ? null : format?.schema)).toBe(true);
     expect(converted.invocation.pi.options.samplingParams).toEqual({
       top_p: 0.8,
       top_k: 32,
@@ -161,14 +202,16 @@ describe("Anthropic-owned Semantic Invocation", () => {
       activation: { kind: "disabled" },
       effort: { kind: "explicit-null" },
     });
-    expect(disabled.invocation.supplement).toMatchObject({
-      outputFormat: { kind: "explicit-null" },
-      metadataUserId: { kind: "explicit-null" },
-      serviceTier: { kind: "specified", value: "standard_only" },
-      inferenceGeo: { kind: "explicit-null" },
-      container: { kind: "explicit-null" },
-      cacheControl: { kind: "explicit-null" },
+    expect(disabled.invocation.supplement.controls).toMatchObject({
+      outputFormat: { value: null },
+      metadataUserId: { value: null },
+      serviceTier: { value: "standard_only" },
+      inferenceGeo: { value: null },
+      container: { value: null },
     });
+    expect(disabled.invocation.supplement.cache).toContainEqual(
+      expect.objectContaining({ id: "cacheControl", value: null }),
+    );
     expect(adaptive.invocation.reasoning.activation).toEqual({
       kind: "adaptive",
       display: { kind: "specified", value: "omitted" },
@@ -328,26 +371,72 @@ describe("complete Anthropic protocol-owned supplement", () => {
       1,
     );
 
-    expect(converted.invocation.supplement.system).toEqual({
-      kind: "blocks",
-      blocks: [
+    expect(converted.invocation.supplement.system).toEqual([
+      expect.objectContaining({
+        id: "system[0]",
+        kind: "structured-system-block",
+        value: { type: "text", text: "system" },
+      }),
+    ]);
+    expect(converted.invocation.supplement.cache).toEqual(
+      expect.arrayContaining([
         expect.objectContaining({
-          text: "system",
-          cache_control: { ttl: "1h", type: "ephemeral" },
+          id: "system[0].cacheControl",
+          value: { ttl: "1h" },
         }),
-      ],
-    });
+        expect.objectContaining({
+          id: "content[0:0].cacheControl",
+          value: {},
+        }),
+        expect.objectContaining({
+          id: "tools[0].cacheControl",
+          value: { ttl: "5m" },
+        }),
+      ]),
+    );
     expect(converted.invocation.supplement.content).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "image", piRepresentation: "none" }),
-        expect.objectContaining({ kind: "container_upload", piRepresentation: "none" }),
-        expect.objectContaining({ kind: "server_tool_use", piRepresentation: "none" }),
-        expect.objectContaining({ kind: "web_search_tool_result", piRepresentation: "none" }),
+        expect.objectContaining({ kind: "url-image-source", piRepresentation: "none" }),
+        expect.objectContaining({ kind: "container-upload", piRepresentation: "none" }),
+        expect.objectContaining({ kind: "server-tool-use", piRepresentation: "none" }),
+        expect.objectContaining({ kind: "server-tool-result", piRepresentation: "none" }),
       ]),
     );
     expect(converted.invocation.supplement.tools).toEqual([
-      expect.objectContaining({ name: "lookup", kind: "custom", piRepresentation: "partial" }),
-      expect.objectContaining({ name: "web_search", kind: "server", piRepresentation: "none" }),
+      expect.objectContaining({
+        id: "tools[0].allowedCallers",
+        name: "lookup",
+        kind: "custom-tool-caller-policy",
+        value: ["direct"],
+        piRepresentation: "partial",
+      }),
+      expect.objectContaining({
+        id: "tools[0].deferLoading",
+        name: "lookup",
+        kind: "custom-tool-deferred-loading",
+        value: true,
+        piRepresentation: "partial",
+      }),
+      expect.objectContaining({
+        id: "tools[0].eagerInputStreaming",
+        name: "lookup",
+        kind: "custom-tool-input-streaming",
+        value: false,
+        piRepresentation: "partial",
+      }),
+      expect.objectContaining({
+        id: "tools[0].inputExamples",
+        name: "lookup",
+        kind: "custom-tool-input-examples",
+        value: [{ query: "example" }],
+        piRepresentation: "partial",
+      }),
+      expect.objectContaining({
+        id: "tools[1].serverDefinition",
+        name: "web_search",
+        kind: "server-tool-definition",
+        piRepresentation: "none",
+      }),
     ]);
     expect(JSON.stringify(converted.invocation.pi.context.messages)).not.toContain(
       "[web search result]",

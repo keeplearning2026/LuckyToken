@@ -150,8 +150,8 @@ describe("Anthropic semantic conversion Pi-only execution", () => {
     });
 
     expect(result.outcomes).toEqual(expect.arrayContaining([
-      { control: "toolChoice", outcome: expect.objectContaining({ kind: "omitted" }) },
-      { control: "outputFormat", outcome: expect.objectContaining({ kind: "omitted" }) },
+      { candidateId: "toolChoice", outcome: expect.objectContaining({ kind: "omitted" }) },
+      { candidateId: "outputFormat", outcome: expect.objectContaining({ kind: "omitted" }) },
     ]));
   });
 });

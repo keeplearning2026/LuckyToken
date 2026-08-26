@@ -167,7 +167,7 @@ export function assertAnthropicTargetSchema(
     raw.stop_details !== null ||
     raw.stop_sequence !== null ||
     raw.type !== "message" ||
-    !["end_turn", "max_tokens", "tool_use"].includes(
+    !["end_turn", "max_tokens", "tool_use", "refusal"].includes(
       raw.stop_reason as string,
     ) ||
     !Array.isArray(raw.content)

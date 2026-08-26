@@ -126,9 +126,7 @@ async function fixture(): Promise<{
             conversion: {
               request: {
                 unknownContent: "error",
-                localCacheControl: "ignore",
               },
-              response: { unknownPiContent: "error" },
             },
           },
         },

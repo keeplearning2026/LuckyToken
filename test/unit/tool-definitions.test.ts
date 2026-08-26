@@ -126,13 +126,23 @@ describe("Anthropic tool definitions", () => {
       description: "",
       parameters: { type: "object", properties: {} },
     });
-    expect(invocation.invocation.supplement.tools).toEqual([
-      expect.objectContaining({
-        name: "lookup",
-        piRepresentation: "partial",
-        value: expect.objectContaining(extras),
-      }),
-    ]);
+    if (_name === "cache control") {
+      expect(invocation.invocation.supplement.tools).toEqual([]);
+      expect(invocation.invocation.supplement.cache).toEqual([
+        expect.objectContaining({
+          id: "tools[0].cacheControl",
+          value: {},
+        }),
+      ]);
+    } else {
+      expect(invocation.invocation.supplement.tools).toEqual([
+        expect.objectContaining({
+          name: "lookup",
+          piRepresentation: "partial",
+          value: Object.values(extras)[0],
+        }),
+      ]);
+    }
   });
 
   it("rejects a server tool type on a custom tool", () => {

@@ -87,9 +87,7 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string; 
             conversion: {
               request: {
                 unknownContent: "error",
-                localCacheControl: "ignore",
               },
-              response: { unknownPiContent: "error" },
             },
           },
         },

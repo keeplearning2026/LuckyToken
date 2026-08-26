@@ -92,7 +92,7 @@ describe("Anthropic supplement target disposition", () => {
     const result = await projection.project(candidate, target);
 
     expect(result.payload).toEqual(candidate);
-    const controls = result.outcomes.map((entry) => entry.control);
+    const controls = result.outcomes.map((entry) => entry.candidateId);
     expect(controls).toEqual([
       "maxTokens",
       "sampling.temperature",
@@ -100,7 +100,6 @@ describe("Anthropic supplement target disposition", () => {
       "sampling.topK",
       "stopSequences",
       "toolChoice",
-      "toolChoice.disableParallelToolUse",
       "outputFormat",
       "metadataUserId",
       "serviceTier",
@@ -131,11 +130,11 @@ describe("Anthropic supplement target disposition", () => {
 
     expect(result.payload).toEqual(candidate);
     expect(result.outcomes).toContainEqual({
-      control: "reasoning.activation",
+      candidateId: "reasoning.activation",
       outcome: expect.objectContaining({ kind: "degraded" }),
     });
     expect(result.outcomes).toContainEqual({
-      control: "reasoning.effort",
+      candidateId: "reasoning.effort",
       outcome: expect.objectContaining({ kind: "degraded" }),
     });
   });
@@ -167,7 +166,7 @@ describe("Anthropic supplement target disposition", () => {
 
     const result = await projection.project({ opaque: true }, target);
     expect(result.outcomes).toContainEqual({
-      control: "inferenceGeo",
+      candidateId: "inferenceGeo",
       outcome: expect.objectContaining({ kind: "omitted" }),
     });
   });
@@ -209,15 +208,181 @@ describe("Anthropic supplement target disposition", () => {
       max_tokens: 1_024,
     }, target);
 
-    const controls = result.outcomes.map((entry) => entry.control);
+    const controls = result.outcomes.map((entry) => entry.candidateId);
     expect(controls).toEqual([
       "maxTokens",
-      "system",
-      "system.cacheControl",
-      "content[0:0]",
-      "tools[0]",
+      "system[0]",
+      "tools[0].deferLoading",
+      "system[0].cacheControl",
+      "content[0:0].cacheControl",
     ]);
     expect(new Set(controls).size).toBe(controls.length);
+  });
+
+  it("keeps a repaired unfinished ToolCall associated while restoring later Anthropic content", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      messages: [
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "call-1",
+            name: "lookup",
+            input: { query: "Token" },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "text",
+            text: "continue",
+            cache_control: { type: "ephemeral" },
+          }],
+        },
+      ],
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+    }), 1).invocation;
+    const target = { ...baseModel, api: "anthropic-messages" } as Model<string>;
+    const projection = prepareAnthropicPayloadProjection({ model: target, invocation });
+
+    const result = await projection.project({
+      model: target.id,
+      messages: [
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "call-1",
+            name: "lookup",
+            input: { query: "Token" },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "call-1",
+            is_error: true,
+            content: "No result — the tool call did not complete (interrupted or lost).",
+          }],
+        },
+        { role: "user", content: [{ type: "text", text: "continue" }] },
+      ],
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+      stream: true,
+      max_tokens: 1_024,
+    }, target);
+
+    expect(result.payload).toMatchObject({
+      messages: [
+        {
+          role: "assistant",
+          content: [expect.objectContaining({ type: "tool_use", id: "call-1" })],
+        },
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "call-1",
+              is_error: true,
+            }),
+            expect.objectContaining({
+              type: "text",
+              text: "continue",
+              cache_control: { type: "ephemeral" },
+            }),
+          ],
+        },
+      ],
+    });
+    expect(result.outcomes).toContainEqual({
+      candidateId: "content[1:0].cacheControl",
+      outcome: expect.objectContaining({ kind: "payload-projected" }),
+    });
+  });
+
+  it("omits cache metadata on message-level system text promoted into systemPrompt", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      messages: [
+        {
+          role: "system",
+          content: [{
+            type: "text",
+            text: "system",
+            cache_control: { type: "ephemeral" },
+          }],
+        },
+        { role: "user", content: "hello" },
+      ],
+    }), 1).invocation;
+    const target = { ...baseModel, api: "anthropic-messages" } as Model<string>;
+    const result = await prepareAnthropicPayloadProjection({ model: target, invocation }).project({
+      model: target.id,
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      system: "system",
+      stream: true,
+      max_tokens: 1_024,
+    }, target);
+
+    expect(result.payload).toMatchObject({
+      system: "system",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    });
+    expect(result.outcomes).toContainEqual({
+      candidateId: "content[0:0].cacheControl",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    });
+  });
+
+  it("restores nested cache markers only at their exact Anthropic attachment", async () => {
+    const invocation = parseAnthropicTextInvocation(requestWith({
+      messages: [{
+        role: "user",
+        content: [{
+          type: "search_result",
+          source: "https://example.test",
+          title: "Result",
+          content: [{
+            type: "text",
+            text: "body",
+            cache_control: { type: "ephemeral", ttl: "1h" },
+          }],
+          citations: { enabled: true },
+        }],
+      }],
+    }), 1).invocation;
+    const target = { ...baseModel, api: "anthropic-messages" } as Model<string>;
+
+    const result = await prepareAnthropicPayloadProjection({ model: target, invocation })
+      .project({
+        model: target.id,
+        messages: [{
+          role: "user",
+          content: [{ type: "text", text: "Result\nbody" }],
+        }],
+        stream: true,
+        max_tokens: 1_024,
+      }, target);
+
+    expect(result.payload).toMatchObject({
+      messages: [{
+        role: "user",
+        content: [{
+          type: "search_result",
+          content: [{
+            type: "text",
+            text: "body",
+            cache_control: { type: "ephemeral", ttl: "1h" },
+          }],
+        }],
+      }],
+    });
+    expect(result.outcomes.map((entry) => entry.candidateId)).toEqual([
+      "maxTokens",
+      "content[0:0].searchResult",
+      "content[0:0].content[0].cacheControl",
+    ]);
   });
 
   it("gives every scalar candidate an exact Anthropic-native outcome", async () => {
@@ -262,14 +427,13 @@ describe("Anthropic supplement target disposition", () => {
       metadata: { user_id: "user-123" },
     }, target);
 
-    expect(result.outcomes.map((entry) => entry.control)).toEqual([
+    expect(result.outcomes.map((entry) => entry.candidateId)).toEqual([
       "maxTokens",
       "sampling.temperature",
       "sampling.topP",
       "sampling.topK",
       "stopSequences",
       "toolChoice",
-      "toolChoice.disableParallelToolUse",
       "outputFormat",
       "metadataUserId",
       "serviceTier",
@@ -288,7 +452,7 @@ describe("Anthropic supplement target disposition", () => {
       api: "openai-completions",
     } as Model<string>);
     expect(result.outcomes).toContainEqual({
-      control: "inferenceGeo",
+      candidateId: "inferenceGeo",
       outcome: expect.objectContaining({ kind: "omitted" }),
     });
   });
@@ -306,7 +470,7 @@ describe("Anthropic supplement target disposition", () => {
 
     expect(result.payload).toMatchObject({ temperature: 0.9 });
     expect(result.outcomes).toContainEqual({
-      control: "sampling.temperature",
+      candidateId: "sampling.temperature",
       outcome: expect.objectContaining({ kind: "omitted" }),
     });
   });
@@ -337,7 +501,7 @@ describe("Anthropic supplement target disposition", () => {
       parallel_tool_calls: true,
     }, target);
 
-    expect(result.outcomes.map((entry) => entry.control)).toEqual([
+    expect(result.outcomes.map((entry) => entry.candidateId)).toEqual([
       "maxTokens",
       "toolChoice",
     ]);
@@ -387,7 +551,7 @@ describe("Anthropic supplement target disposition", () => {
       invocation,
     }).project(candidate, target);
     expect(result.outcomes).toContainEqual({
-      control: "reasoning.activation",
+      candidateId: "reasoning.activation",
       outcome: expect.objectContaining({
         kind: "degraded",
         warning: expect.stringMatching(/budget.*ceiling/iu),
@@ -398,7 +562,7 @@ describe("Anthropic supplement target disposition", () => {
   it.each([
     {
       label: "URL document",
-      control: "content[0:0]",
+      candidateId: "content[0:0].source",
       request: requestWith({
         messages: [{
           role: "user",
@@ -411,19 +575,19 @@ describe("Anthropic supplement target disposition", () => {
     },
     {
       label: "typed server tool",
-      control: "tools[0]",
+      candidateId: "tools[0].serverDefinition",
       request: requestWith({
         tools: [{ type: "web_search_20250305", name: "web_search" }],
       }),
     },
-  ])("does not turn $label main-call policy into a Supplement failure", async ({ request, control }) => {
+  ])("does not turn $label main-call policy into a Supplement failure", async ({ request, candidateId }) => {
     const projection = projectionFor(request);
     const result = await projection.project(openAICandidate, {
       ...baseModel,
       api: "openai-completions",
     } as Model<string>);
     expect(result.outcomes).toContainEqual({
-      control,
+      candidateId,
       outcome: expect.objectContaining({ kind: "omitted" }),
     });
   });
@@ -442,10 +606,10 @@ describe("Anthropic supplement target disposition", () => {
       api: "openai-completions",
     } as Model<string>);
     expect(result.outcomes).toContainEqual({
-      control: "tools[0]",
+      candidateId: "tools[0].deferLoading",
       outcome: expect.objectContaining({
         kind: "omitted",
-        warning: expect.stringMatching(/defer_loading/iu),
+        warning: expect.stringMatching(/deferred-loading/iu),
       }),
     });
   });
@@ -468,7 +632,7 @@ describe("Anthropic supplement target disposition", () => {
       ],
     }, target);
     expect(result.outcomes).toContainEqual({
-      control: "finalAssistantPrefill",
+      candidateId: "finalAssistantPrefill",
       outcome: expect.objectContaining({ kind: "degraded" }),
     });
 
@@ -494,15 +658,15 @@ describe("Anthropic supplement target disposition", () => {
     }, { ...baseModel, api: "openai-completions" } as Model<string>);
 
     expect(result.outcomes).toContainEqual({
-      control: "content[0:0]",
+      candidateId: "content[0:0].cacheControl",
       outcome: {
         kind: "omitted",
-        warning: expect.stringContaining("cache_control"),
+        warning: expect.stringContaining("cache-control"),
       },
     });
   });
 
-  it("warns instead of failing for optional citations and redundant custom tool type", async () => {
+  it("warns for optional citations and leaves redundant custom tool type unclaimed", async () => {
     const projection = projectionFor(requestWith({
       messages: [{
         role: "user",
@@ -530,15 +694,12 @@ describe("Anthropic supplement target disposition", () => {
       ...baseModel,
       api: "openai-completions",
     } as Model<string>);
-    expect(result.outcomes).toEqual(expect.arrayContaining([
-      {
-        control: "content[0:0]",
-        outcome: expect.objectContaining({ kind: "omitted" }),
-      },
-      {
-        control: "tools[0]",
-        outcome: expect.objectContaining({ kind: "omitted" }),
-      },
+    expect(result.outcomes).toEqual(expect.arrayContaining([{
+      candidateId: "content[0:0].citations",
+      outcome: expect.objectContaining({ kind: "omitted" }),
+    }]));
+    expect(result.outcomes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ candidateId: expect.stringMatching(/^tools\[0\]/u) }),
     ]));
   });
 
@@ -562,7 +723,7 @@ describe("Anthropic supplement target disposition", () => {
         api,
       } as Model<string>);
       expect(result.outcomes).toContainEqual({
-        control: "stopSequences",
+        candidateId: "stopSequences",
         outcome: expect.objectContaining({ kind: "omitted" }),
       });
     },
@@ -589,11 +750,11 @@ describe("Anthropic supplement target disposition", () => {
       target,
     );
     expect(result.outcomes).toContainEqual({
-      control: "maxTokens",
+      candidateId: "maxTokens",
       outcome: expect.objectContaining({ kind: "omitted" }),
     });
     expect(result.outcomes).toContainEqual({
-      control: "toolChoice.disableParallelToolUse",
+      candidateId: "toolChoice",
       outcome: expect.objectContaining({ kind: "payload-projected" }),
     });
   });
@@ -609,10 +770,10 @@ describe("Anthropic supplement target disposition", () => {
       target,
     );
     expect(result.outcomes).toContainEqual({
-      control: "maxTokens",
+      candidateId: "maxTokens",
       outcome: expect.objectContaining({
         kind: "omitted",
-        warning: expect.stringMatching(/omitted the final output-token ceiling/iu),
+        warning: expect.stringMatching(/omitted output-token-ceiling/iu),
       }),
     });
   });
@@ -654,7 +815,7 @@ describe("Anthropic supplement target disposition", () => {
       inferenceConfig: { maxTokens: 1_024 },
     }, target);
     expect(result.outcomes).toContainEqual({
-      control: "reasoning.activation",
+      candidateId: "reasoning.activation",
       outcome: expect.objectContaining({ kind: "degraded" }),
     });
   });
@@ -695,7 +856,7 @@ describe("Anthropic supplement target disposition", () => {
       },
     });
     expect(result.outcomes).toContainEqual(expect.objectContaining({
-      control: "sampling.topP",
+      candidateId: "sampling.topP",
       outcome: expect.objectContaining({ kind: "omitted" }),
     }));
   });
@@ -739,9 +900,9 @@ describe("Anthropic supplement target disposition", () => {
       },
     });
     expect(result.outcomes).toEqual(expect.arrayContaining([
-      { control: "stopSequences", outcome: expect.objectContaining({ kind: "omitted" }) },
-      { control: "toolChoice", outcome: expect.objectContaining({ kind: "degraded" }) },
-      { control: "outputFormat", outcome: expect.objectContaining({ kind: "degraded" }) },
+      { candidateId: "stopSequences", outcome: expect.objectContaining({ kind: "omitted" }) },
+      { candidateId: "toolChoice", outcome: expect.objectContaining({ kind: "degraded" }) },
+      { candidateId: "outputFormat", outcome: expect.objectContaining({ kind: "degraded" }) },
     ]));
   });
 });

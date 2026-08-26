@@ -35,13 +35,6 @@ const WORK_OUTCOME_LOCATION = {
   lane: "semantic_conversion",
   step: "commit_request_outcome",
 } as const;
-const FAILURE_LOCATION = {
-  phase: "lane_response_processing",
-  lane: "semantic_conversion",
-  direction: "pi_to_client",
-  step: "validate_assistant_message",
-  subject: "message",
-} as const;
 const HANDOFF_LOCATION = {
   phase: "http_handoff",
   step: "write_http_response",
@@ -102,7 +95,7 @@ function streamFrom(events: AssistantMessageEvent[]): AssistantMessageEventStrea
   } as AssistantMessageEventStream;
 }
 
-describe("Request Journey semantic response failures", () => {
+describe("Request Journey semantic response degradation", () => {
   const roots: string[] = [];
   const authorities: DiagnosticsAuthority[] = [];
   const servers: RunningTokenHttpServer[] = [];
@@ -117,7 +110,7 @@ describe("Request Journey semantic response failures", () => {
     );
   });
 
-  it("keeps trusted Pi success when Anthropic client conversion fails", async () => {
+  it("keeps trusted Pi success when one Anthropic response block is omitted", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-journey-render-failure-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
@@ -209,17 +202,16 @@ describe("Request Journey semantic response failures", () => {
 
     expect(streamSimple).toHaveBeenCalledOnce();
     expect(createMessageId).toHaveBeenCalledOnce();
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(response.headers.get("x-token-request-id")).toBe(REQUEST_ID);
-    expect(JSON.parse(responseBody)).toEqual({
-      type: "error",
-      error: { type: "api_error", message: "Internal server error" },
-      request_id: REQUEST_ID,
+    expect(JSON.parse(responseBody)).toMatchObject({
+      type: "message",
+      content: [{ type: "text", text: "must-not-be-written" }],
+      stop_reason: "end_turn",
     });
-    expect(responseBody).not.toContain("must-not-be-written");
     expect(closeInput).toMatchObject({
-      outcome: "failed",
+      outcome: "success",
       lastKnownLocation: HANDOFF_LOCATION,
     });
 
@@ -231,7 +223,7 @@ describe("Request Journey semantic response failures", () => {
       operation: "model_generation",
       protocol: "anthropic-messages",
       lane: "semantic_conversion",
-      outcome: "failed",
+      outcome: "success",
     });
     expect(detail.workOutcome).toEqual({
       outcome: "success",
@@ -250,35 +242,20 @@ describe("Request Journey semantic response failures", () => {
       location: WORK_OUTCOME_LOCATION,
     });
 
-    expect(detail.incident).toBeDefined();
-    const primaryFailureId = detail.incident!.primaryFailureId;
-    const primaryFailureEvent = detail.timeline.find(
-      (event) =>
-        event.observation.kind === "failure_detected" &&
-        event.observation.failureId === primaryFailureId,
-    );
-    expect(primaryFailureEvent?.observation).toMatchObject({
-      kind: "failure_detected",
-      role: "primary",
-      classification: "client_response_conversion_failed",
-      origin: "Token",
-      originPrecision: "exact",
-      location: FAILURE_LOCATION,
-    });
-    expect(detail.incident!.failures).toContainEqual(
-      primaryFailureEvent!.observation,
-    );
-    expect(detail.primaryFailureLocation).toEqual(FAILURE_LOCATION);
-
-    expect(primaryFailureEvent!.sequence).toBeLessThan(workOutcomes[0]!.sequence);
+    expect(detail.incident).toBeUndefined();
+    expect(detail.primaryFailureLocation).toBeUndefined();
     const observations = detail.timeline.map((event) => event.observation);
     expect(observations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "step_completed",
           stepInstanceId: "p5.validate_assistant_message",
-          completion: "failed",
-          location: FAILURE_LOCATION,
+          completion: "success",
+        }),
+        expect.objectContaining({
+          kind: "conversion_notice_observed",
+          code: "anthropic_response_block_omitted",
+          severity: "warning",
         }),
       ]),
     );
@@ -289,7 +266,7 @@ describe("Request Journey semantic response failures", () => {
             observation.kind === "step_completed") &&
           observation.stepInstanceId === "p6.encode_client_response",
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(detail.handoffOutcome).toMatchObject({
       outcome: "finished",
       transport: "http",
@@ -297,13 +274,8 @@ describe("Request Journey semantic response failures", () => {
       location: HANDOFF_LOCATION,
     });
 
-    const responseArtifact = await authority.getRequestArtifact({
-      requestId: REQUEST_ID,
+    expect(detail.artifacts).toContainEqual(expect.objectContaining({
       artifactId: "client_response_wire",
-      offset: 0,
-      limit: 256 * 1_024,
-    });
-    expect(Buffer.from(responseArtifact.dataBase64, "base64").toString("utf8"))
-      .toBe(responseBody);
+    }));
   });
 });

@@ -5,7 +5,10 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadTokenCliConfig } from "../../src/cli-config.js";
-import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
+import {
+  DEFAULT_MAX_REQUEST_BYTES,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from "../../src/data-plane-limits.js";
 
 describe("Token CLI configuration", () => {
   const directories: string[] = [];
@@ -46,15 +49,17 @@ describe("Token CLI configuration", () => {
         "anthropic-messages": {
           adapterConfiguration: {
             conversion: {
-              request: { unknownContent: "error", localCacheControl: "ignore" },
-              response: { unknownPiContent: "error" },
+              request: { unknownContent: "error" },
             },
           },
         },
         "future-client-protocol": {},
       },
       pi: { directory: resolve(directory, "pi") },
-      limits: { maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES, requestTimeoutMs: 120_000 },
+      limits: {
+        maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      },
       diagnostics: {
         directory: resolve(directory, "state", "request-diagnostics"),
         maxJsonArtifactBytes: 67_108_864,

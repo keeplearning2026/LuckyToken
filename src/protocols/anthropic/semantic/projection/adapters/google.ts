@@ -8,16 +8,17 @@ import type {
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
+  AnthropicProjectionOutcomeId,
 } from "../contract.js";
 
 type GoogleApi = "google-generative-ai" | "google-vertex";
 
 function add(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   outcome: AnthropicProjectionDisposition,
 ): void {
-  outcomes.push(Object.freeze({ control, outcome: Object.freeze(outcome) }));
+  outcomes.push(Object.freeze({ candidateId, outcome: Object.freeze(outcome) }));
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -38,16 +39,16 @@ function containsExpectedFields(
 function exact(
   outcomes: AnthropicProjectionOutcome[],
   api: GoogleApi,
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   current: unknown,
   expected: unknown,
   assign: () => void,
 ): void {
   if (same(current, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(outcomes, candidateId, { kind: "pi-native" });
   } else {
     assign();
-    add(outcomes, control, {
+    add(outcomes, candidateId, {
       kind: "payload-projected",
       projector: `anthropic-to-${api}`,
       warning: "pi-native-mapping-repaired",
@@ -145,7 +146,7 @@ function googleThinking(
 function mappedToolChoice(
   invocation: AnthropicSemanticInvocation,
 ): Record<string, unknown> | undefined {
-  const choice = invocation.supplement.toolChoice;
+  const choice = invocation.supplement.controls.toolChoice?.value;
   if (choice === undefined) return undefined;
   if (choice.kind === "none") return { mode: "NONE" };
   if (choice.kind === "auto") return { mode: "AUTO" };
@@ -196,7 +197,7 @@ function projectAnthropicToGoogle(
   const supplement = input.invocation.supplement;
 
   if (phase === "supplement") {
-  const finalMaxTokens = Math.min(config.maxOutputTokens, supplement.outputTokenCeiling);
+  const finalMaxTokens = Math.min(config.maxOutputTokens, supplement.controls.outputTokenCeiling.value);
   exact(
     outcomes,
     input.api,
@@ -208,9 +209,9 @@ function projectAnthropicToGoogle(
     },
   );
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
-    ["sampling.topP", "topP", supplement.sampling.topP],
-    ["sampling.topK", "topK", supplement.sampling.topK],
+    ["sampling.temperature", "temperature", supplement.controls.temperature?.value],
+    ["sampling.topP", "topP", supplement.controls.topP?.value],
+    ["sampling.topK", "topK", supplement.controls.topK?.value],
   ] as const) {
     if (value === undefined) continue;
     if (control === "sampling.temperature") {
@@ -223,15 +224,15 @@ function projectAnthropicToGoogle(
       config[field] = value;
     });
   }
-  if (supplement.stopSequences !== undefined) {
+  if (supplement.controls.stopSequences !== undefined) {
     exact(
       outcomes,
       input.api,
       "stopSequences",
       config.stopSequences,
-      supplement.stopSequences,
+      supplement.controls.stopSequences.value,
       () => {
-        config.stopSequences = [...supplement.stopSequences!];
+        config.stopSequences = [...supplement.controls.stopSequences!.value];
       },
     );
   }
@@ -251,15 +252,15 @@ function projectAnthropicToGoogle(
     );
   }
 
-  const format = supplement.outputFormat;
-  if (format.kind === "specified") {
+  const format = supplement.controls.outputFormat?.value;
+  if (format?.kind === "json-schema") {
     config.responseMimeType = "application/json";
-    config.responseJsonSchema = format.value.schema;
+    config.responseJsonSchema = format.schema;
     add(outcomes, "outputFormat", {
       kind: "payload-projected",
       projector: `anthropic-to-${input.api}`,
     });
-  } else if (format.kind === "explicit-null") {
+  } else if (format === null) {
     delete config.responseMimeType;
     delete config.responseJsonSchema;
     add(outcomes, "outputFormat", { kind: "pi-native" });

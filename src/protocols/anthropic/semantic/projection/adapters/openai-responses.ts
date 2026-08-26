@@ -5,6 +5,7 @@ import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
+  AnthropicProjectionOutcomeId,
 } from "../contract.js";
 
 export type AnthropicResponsesTargetApi =
@@ -14,10 +15,10 @@ export type AnthropicResponsesTargetApi =
 
 function add(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   outcome: AnthropicProjectionDisposition,
 ): void {
-  outcomes.push(Object.freeze({ control, outcome: Object.freeze(outcome) }));
+  outcomes.push(Object.freeze({ candidateId, outcome: Object.freeze(outcome) }));
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -27,17 +28,17 @@ function same(left: unknown, right: unknown): boolean {
 function exact(
   outcomes: AnthropicProjectionOutcome[],
   api: AnthropicResponsesTargetApi,
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   current: unknown,
   expected: unknown,
   assign: () => void,
 ): void {
   if (same(current, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(outcomes, candidateId, { kind: "pi-native" });
     return;
   }
   assign();
-  add(outcomes, control, {
+  add(outcomes, candidateId, {
     kind: "payload-projected",
     projector: `anthropic-to-${api}`,
     warning: "pi-native-mapping-repaired",
@@ -47,7 +48,7 @@ function exact(
 function mappedToolChoice(
   invocation: AnthropicSemanticInvocation,
 ): unknown | undefined {
-  const choice = invocation.supplement.toolChoice;
+  const choice = invocation.supplement.controls.toolChoice?.value;
   if (choice === undefined) return undefined;
   if (choice.kind === "none") return "none";
   if (choice.kind === "auto") return "auto";
@@ -229,7 +230,7 @@ function projectAnthropicToOpenAIResponses(
     }
     const finalMaxTokens = Math.min(
       piMaxTokens,
-      supplement.outputTokenCeiling,
+      supplement.controls.outputTokenCeiling.value,
     );
     exact(
       outcomes,
@@ -243,8 +244,8 @@ function projectAnthropicToOpenAIResponses(
     );
   }
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
-    ["sampling.topP", "top_p", supplement.sampling.topP],
+    ["sampling.temperature", "temperature", supplement.controls.temperature?.value],
+    ["sampling.topP", "top_p", supplement.controls.topP?.value],
   ] as const) {
     if (value === undefined) continue;
     if (control === "sampling.temperature") {
@@ -257,8 +258,8 @@ function projectAnthropicToOpenAIResponses(
       payload[field] = value;
     });
   }
-  const format = supplement.outputFormat;
-  if (format.kind === "specified") {
+  const format = supplement.controls.outputFormat?.value;
+  if (format?.kind === "json-schema") {
     const text =
       typeof payload.text === "object" && payload.text !== null && !Array.isArray(payload.text)
         ? { ...(payload.text as Record<string, unknown>) }
@@ -267,14 +268,14 @@ function projectAnthropicToOpenAIResponses(
       type: "json_schema",
       name: "anthropic_output",
       strict: true,
-      schema: format.value.schema,
+      schema: format.schema,
     };
     payload.text = text;
     add(outcomes, "outputFormat", {
       kind: "payload-projected",
       projector: `anthropic-to-${input.api}`,
     });
-  } else if (format.kind === "explicit-null") {
+  } else if (format === null) {
     if (typeof payload.text === "object" && payload.text !== null && !Array.isArray(payload.text)) {
       const text = { ...(payload.text as Record<string, unknown>) };
       delete text.format;
@@ -285,30 +286,28 @@ function projectAnthropicToOpenAIResponses(
 
   const choice = mappedToolChoice(input.invocation);
   if (choice !== undefined) {
-    exact(outcomes, input.api, "toolChoice", payload.tool_choice, choice, () => {
-      payload.tool_choice = choice;
-    });
-  }
-  const sourceChoice = supplement.toolChoice;
-  if (
-    sourceChoice !== undefined &&
-    sourceChoice.kind !== "none" &&
-    sourceChoice.disableParallelToolUse
-  ) {
-    exact(
+    const sourceChoice = supplement.controls.toolChoice!.value;
+    const needsSerial =
+      sourceChoice.kind !== "none" && sourceChoice.disableParallelToolUse;
+    const choiceExact = same(payload.tool_choice, choice);
+    const serialExact = !needsSerial || same(payload.parallel_tool_calls, false);
+    if (!choiceExact) payload.tool_choice = choice;
+    if (needsSerial && !serialExact) payload.parallel_tool_calls = false;
+    add(
       outcomes,
-      input.api,
-      "toolChoice.disableParallelToolUse",
-      payload.parallel_tool_calls,
-      false,
-      () => {
-        payload.parallel_tool_calls = false;
-      },
+      "toolChoice",
+      choiceExact && serialExact
+        ? { kind: "pi-native" }
+        : {
+            kind: "payload-projected",
+            projector: `anthropic-to-${input.api}`,
+            warning: "pi-native-mapping-repaired",
+          },
     );
   }
 
-  if (supplement.metadataUserId.kind === "specified") {
-    const userId = supplement.metadataUserId.value;
+  if (supplement.controls.metadataUserId?.value !== null && supplement.controls.metadataUserId !== undefined) {
+    const userId = supplement.controls.metadataUserId.value;
     exact(
       outcomes,
       input.api,
@@ -319,11 +318,11 @@ function projectAnthropicToOpenAIResponses(
         payload.user = userId;
       },
     );
-  } else if (supplement.metadataUserId.kind === "explicit-null") {
+  } else if (supplement.controls.metadataUserId?.value === null) {
     delete payload.user;
   }
-  if (supplement.serviceTier.kind === "specified") {
-    const tier = supplement.serviceTier.value === "standard_only" ? "default" : "auto";
+  if (supplement.controls.serviceTier?.value !== null && supplement.controls.serviceTier !== undefined) {
+    const tier = supplement.controls.serviceTier.value === "standard_only" ? "default" : "auto";
     exact(outcomes, input.api, "serviceTier", payload.service_tier, tier, () => {
       payload.service_tier = tier;
     });

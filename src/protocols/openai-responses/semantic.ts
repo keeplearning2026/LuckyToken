@@ -10,6 +10,7 @@ import type {
   UpstreamFailureFact,
 } from "@token/provider-contract/diagnostics";
 import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
+import { DEFAULT_REQUEST_TIMEOUT_MS } from "../../data-plane-limits.js";
 
 import {
   execute,
@@ -69,6 +70,7 @@ export interface SemanticResponsesExecutionOptions {
   readonly routerDefaults: RouterOptionDefaults;
   readonly createResponseId: () => string;
   readonly now: () => number;
+  readonly requestTimeoutMs?: number;
   readonly executeOperation?: ExecutionOperation;
   readonly journey?: RequestJourneyObserver;
 }
@@ -494,6 +496,7 @@ function composeInvocationOptions(
     readonly sessionId: string;
     readonly signal: AbortSignal;
     readonly fetch?: FetchFunction;
+    readonly timeoutMs: number;
   },
   routerDefaults: RouterOptionDefaults,
 ): ModelsSimpleStreamOptions {
@@ -591,6 +594,7 @@ export async function executeSemanticResponses(
         {
           sessionId: options.requestIdentity.effectiveSessionId,
           signal: options.request.signal,
+          timeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         },
         options.routerDefaults,
       );

@@ -44,6 +44,9 @@ const CLIENT_SHARED_SEAMS = new Set([
   // Secret-free request-local Profile attribution facts. This narrow seam
   // exposes no credential values, resolution, storage, or transport authority.
   "credentials/activity.ts",
+  // Immutable request-admission and lifetime defaults; no protocol semantics,
+  // execution object, transport, credential, or mutable state crosses this seam.
+  "data-plane-limits.ts",
   "protocols/options.ts",
   // Public Model resolution is a narrow Pi/core-only data-plane seam shared
   // by both Client Protocols; it does not import Provider implementations or

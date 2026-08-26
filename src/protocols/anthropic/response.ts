@@ -103,10 +103,6 @@ export interface AnthropicResponseRenderState {
   readonly directToolNames?: readonly string[];
 }
 
-export interface AnthropicResponseConversionPolicy {
-  readonly unknownPiContent: "error" | "ignore";
-}
-
 const ASSISTANT_MESSAGE_FIELDS = new Set([
   "role",
   "content",
@@ -139,6 +135,8 @@ export const MISSING_THINKING_SIGNATURE_NOTICE_CODE =
   "anthropic_missing_thinking_signature";
 export const UNKNOWN_PI_CONTENT_IGNORED_NOTICE_CODE =
   "anthropic_unknown_pi_content_ignored";
+export const RESPONSE_BLOCK_OMITTED_NOTICE_CODE =
+  "anthropic_response_block_omitted";
 export const STOP_REASON_NORMALIZED_NOTICE_CODE =
   "anthropic_stop_reason_normalized";
 export const PROVIDER_RESPONSE_FIELD_UNAVAILABLE_NOTICE_CODE =
@@ -413,7 +411,6 @@ function convertContent(
   message: AssistantMessage,
   interpreted: AnthropicInterpretedResponse,
   notices: ConversionNotice[],
-  policy: AnthropicResponseConversionPolicy,
   hideThinking: boolean,
 ): Array<
   | AnthropicTextBlock
@@ -428,13 +425,14 @@ function convertContent(
     | AnthropicToolUseBlock
   > = [];
   message.content.forEach((block, index) => {
+    const path = `$.content[${index}]`;
+    try {
     const raw = block as unknown;
     if (!isRecord(raw) || typeof raw.type !== "string") {
       throw new OutboundResponseFidelityFailure(
         `Pi content[${index}] must be a tagged object`,
       );
     }
-    const path = `$.content[${index}]`;
     const continuity = interpreted.continuityByContentIndex.get(index);
     if (raw.type === "thinking") {
       assertAllowedFields(
@@ -532,6 +530,11 @@ function convertContent(
       return;
     }
     if (raw.type === "toolCall") {
+      if (interpreted.stop.reason === "refusal") {
+        throw new OutboundResponseFidelityFailure(
+          `Pi content[${index}] conflicts with an authoritative refusal terminal`,
+        );
+      }
       assertAllowedFields(
         raw,
         new Set([
@@ -554,11 +557,6 @@ function convertContent(
           `Pi content[${index}] tool identity must be non-empty strings`,
         );
       }
-      if (raw.namespace !== undefined) {
-        throw new OutboundResponseFidelityFailure(
-          `Pi content[${index}].namespace cannot be represented by Anthropic Messages`,
-        );
-      }
       const caller = interpreted.toolCallerByContentIndex.get(index);
       if (caller === undefined) {
         throw new OutboundResponseFidelityFailure(
@@ -575,19 +573,19 @@ function convertContent(
       });
       return;
     }
-    if (policy.unknownPiContent === "ignore") {
-      notices.push(
-        responseNotice(
-          UNKNOWN_PI_CONTENT_IGNORED_NOTICE_CODE,
-          "ignore",
-          `${path}.type`,
-        ),
-      );
-      return;
-    }
-    throw new OutboundResponseFidelityFailure(
-      `Unsupported Pi assistant content: ${String(raw.type)}`,
+    notices.push(
+      responseNotice(
+        UNKNOWN_PI_CONTENT_IGNORED_NOTICE_CODE,
+        "ignore",
+        `${path}.type`,
+      ),
     );
+    } catch (error) {
+      if (!(error instanceof OutboundResponseFidelityFailure)) throw error;
+      notices.push(
+        responseNotice(RESPONSE_BLOCK_OMITTED_NOTICE_CODE, "degrade", path),
+      );
+    }
   });
   return projected;
 }
@@ -656,17 +654,15 @@ export function convertAssistantMessageToAnthropic(
   messageId: string,
   directToolNames: readonly string[] = [],
 ): AnthropicResponseMessage {
-  return convertAssistantMessageToAnthropicWithPolicy(
+  return convertAssistantMessageToAnthropicResponse(
     message,
     { selector: clientModel, createMessageId: () => messageId, directToolNames },
-    { unknownPiContent: "error" },
   ).message;
 }
 
-export function convertAssistantMessageToAnthropicWithPolicy(
+export function convertAssistantMessageToAnthropicResponse(
   message: AssistantMessage,
   renderState: AnthropicResponseRenderState,
-  policy: AnthropicResponseConversionPolicy,
 ): AnthropicResponseConversion {
   const selector = renderState.selector;
   if (typeof selector !== "string" || selector.length === 0) {
@@ -692,11 +688,17 @@ export function convertAssistantMessageToAnthropicWithPolicy(
     message,
     interpreted,
     notices,
-    policy,
     renderState.thinkingDisplay?.kind === "specified" &&
       renderState.thinkingDisplay.value === "omitted",
   );
-  if (interpreted.stop.normalized) {
+  const stopReason = interpreted.stop.reason === "refusal"
+    ? "refusal"
+    : interpreted.stop.reason === "max_tokens"
+      ? "max_tokens"
+      : content.some((block) => block.type === "tool_use")
+        ? "tool_use"
+        : "end_turn";
+  if (interpreted.stop.normalized || stopReason !== interpreted.stop.reason) {
     notices.push(
       responseNotice(
         STOP_REASON_NORMALIZED_NOTICE_CODE,
@@ -722,7 +724,7 @@ export function convertAssistantMessageToAnthropicWithPolicy(
     model: selector,
     role: "assistant",
     stop_details: null,
-    stop_reason: interpreted.stop.reason,
+    stop_reason: stopReason,
     stop_sequence: null,
     type: "message",
     usage,
@@ -742,7 +744,7 @@ export function assertOutboundResponseFidelity(
     message,
     new Set(directToolNames),
   );
-  convertContent(message, interpreted, [], { unknownPiContent: "error" }, false);
+  convertContent(message, interpreted, [], false);
   // Usage is fail-open by design (Ticket 20 additive): malformed usage never
   // discards an otherwise valid response and is not part of this strict
   // fidelity assertion.

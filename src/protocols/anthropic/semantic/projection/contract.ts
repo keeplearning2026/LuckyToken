@@ -1,4 +1,16 @@
 import type { Model } from "@earendil-works/pi-ai";
+import type { AnthropicCandidateId } from "../supplement/contract.js";
+
+export type AnthropicReasoningOutcomeId =
+  | "reasoning.activation"
+  | "reasoning.effort"
+  | "reasoning.encrypted_content"
+  | `reasoning.history[${number}:${number}]`
+  | `reasoning.continuity[${number}:${number}]`;
+
+export type AnthropicProjectionOutcomeId =
+  | AnthropicCandidateId
+  | AnthropicReasoningOutcomeId;
 
 export type AnthropicProjectionDisposition =
   | { readonly kind: "pi-native" }
@@ -11,7 +23,7 @@ export type AnthropicProjectionDisposition =
   | { readonly kind: "omitted"; readonly warning: string };
 
 export interface AnthropicProjectionOutcome {
-  readonly control: string;
+  readonly candidateId: AnthropicProjectionOutcomeId;
   readonly outcome: AnthropicProjectionDisposition;
 }
 

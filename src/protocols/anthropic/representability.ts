@@ -26,18 +26,6 @@ function requiresNativeAnthropicContent(value: unknown): boolean {
     return isRecord(value.source) &&
       (value.source.type === "url" || value.source.type === "base64");
   }
-  if (
-    value.type === "server_tool_use" ||
-    value.type === "web_search_tool_result" ||
-    value.type === "web_fetch_tool_result" ||
-    value.type === "code_execution_tool_result" ||
-    value.type === "bash_code_execution_tool_result" ||
-    value.type === "text_editor_code_execution_tool_result" ||
-    value.type === "tool_search_tool_result" ||
-    value.type === "container_upload"
-  ) {
-    return true;
-  }
   if (value.type !== "tool_result" || !Array.isArray(value.content)) {
     return false;
   }
@@ -56,33 +44,7 @@ export function assertAnthropicModelAwareValidity(
   model: Model<string>,
   policy: AnthropicModelValidityPolicy,
 ): void {
-  const targetCanReconstructAnthropicWire = model.api === "anthropic-messages";
-
-  if (request.maxTokens === 0) {
-    throw new UnsupportedFeature(
-      "Anthropic max_tokens=0 cannot survive Pi's positive output-token ceiling",
-    );
-  }
-
-  if (
-    request.tools?.some((tool) => tool.kind === "server") === true &&
-    !targetCanReconstructAnthropicWire
-  ) {
-    throw new UnsupportedFeature(
-      "The resolved target cannot provide the requested Anthropic server tool",
-    );
-  }
-
-  if (
-    request.inferenceGeo.kind === "specified" &&
-    !targetCanReconstructAnthropicWire
-  ) {
-    throw new UnsupportedFeature(
-      "The resolved target cannot honor the requested inference geography",
-    );
-  }
-
-  if (hasNativeOnlyContent(request) && !targetCanReconstructAnthropicWire) {
+  if (hasNativeOnlyContent(request) && model.api !== "anthropic-messages") {
     throw new UnsupportedFeature(
       "The resolved target has no valid model-visible representation for an Anthropic document, media, or server-tool content block",
     );

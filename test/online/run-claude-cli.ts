@@ -5,18 +5,18 @@
  * current Token code and generates an isolated project settings file.
  */
 import {
-  InMemoryCredentialStore,
   type AuthInteraction,
   type AuthPrompt,
 } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadTokenCliConfig } from "../../src/cli-config.js";
+import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import {
   createOnlinePublicModelAuthority,
@@ -28,6 +28,7 @@ import {
 } from "../support/configured-data-plane.js";
 import type { TokenRuntime } from "../../src/runtime.js";
 import { startTokenHttpServer } from "../../src/server.js";
+import { loginOnlineProvider } from "./provider-login.js";
 
 const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
 const DEFAULT_PROVIDER_ID = "commandcode-private";
@@ -904,7 +905,9 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
   // Real login first: the composition's served catalog owns the provider
   // registration, so login runs through the served Models and persists into
   // the same store the composition will use for request-time auth.
-  const credentials = new InMemoryCredentialStore();
+  const credentialRecordStore = createInMemoryProviderCredentialRecordStore({
+    createRevision: randomUUID,
+  });
   const preLogin = await createConfiguredPiModels({
     piDirectory: config.pi.directory,
     ...(config.pi.modelsJson === undefined
@@ -912,14 +915,18 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
       : { modelsJsonPath: config.pi.modelsJson }),
     providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
-    credentialSeedStore: credentials,
+    credentialRecordStore,
   });
   try {
-    await preLogin.models.login(
+    await loginOnlineProvider({
+      models: preLogin.models,
+      providerAuthBindings: preLogin.providerAuthBindings,
+      credentialManagement: preLogin.credentialManagement,
       providerId,
-      "api_key",
-      keyFileLoginInteraction(apiKey),
-    );
+      authType: "api_key",
+      displayName: "Claude CLI online test",
+      interaction: keyFileLoginInteraction(apiKey),
+    });
   } catch (error) {
     throw new Error(
       `Provider login failed for ${providerId}: ${
@@ -927,13 +934,16 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
       }`,
     );
   }
-  const stored = await credentials.read(providerId);
-  if (stored?.type !== "api_key" || stored.key !== apiKey) {
-    throw new Error(`Provider login did not persist a credential for ${providerId}`);
+  const stored = await preLogin.credentialManagement.query([providerId]);
+  if (
+    stored.providers.find((provider) => provider.providerId === providerId)
+      ?.profiles.length !== 1
+  ) {
+    throw new Error(`Provider login did not persist one Profile for ${providerId}`);
   }
   const composition = await createConfiguredTokenDataPlane({
     config,
-    credentialSeedStore: credentials,
+    credentialRecordStore,
     fetch: globalThis.fetch,
     ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
   });
@@ -952,6 +962,16 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     host: "127.0.0.1",
     port: config.server.port,
   });
+  let originalSettings: Buffer | undefined;
+  try {
+    originalSettings = await readFile(SETTINGS_PATH);
+  } catch (error) {
+    if (
+      typeof error !== "object" ||
+      error === null ||
+      (error as NodeJS.ErrnoException).code !== "ENOENT"
+    ) throw error;
+  }
   try {
     await writeClaudeSettings(server.origin, localSdkCredential, selector);
     const matrix: Array<{
@@ -1140,7 +1160,7 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     }
     process.stdout.write(
       `${JSON.stringify({
-        model: DEFAULT_MODEL,
+        model: selector,
         runRoot,
         batches,
         continuityCarrierCapability,
@@ -1149,8 +1169,16 @@ export async function runClaudeCliOnlineSuite(args: readonly string[]): Promise<
     );
     if (matrix.some((entry) => entry.status === "fail")) process.exitCode = 1;
   } finally {
-    await server.close();
-    await composition.close();
+    try {
+      await server.close();
+      await composition.close();
+    } finally {
+      if (originalSettings === undefined) {
+        await rm(SETTINGS_PATH, { force: true });
+      } else {
+        await writeFile(SETTINGS_PATH, originalSettings);
+      }
+    }
   }
 }
 

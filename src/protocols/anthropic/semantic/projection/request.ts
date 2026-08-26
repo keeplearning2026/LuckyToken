@@ -5,6 +5,9 @@ import type { AnthropicSemanticInvocation } from "../invocation.js";
 import type { AnthropicEffortPlan } from "../reasoning/contract.js";
 import { enumerateAnthropicSupplementCandidates } from "../supplement/candidates.js";
 import type {
+  AnthropicCandidateId,
+} from "../supplement/contract.js";
+import type {
   AnthropicPayloadProjectionOperation,
   AnthropicPayloadProjectionResult,
   AnthropicProjectionOutcome,
@@ -20,7 +23,7 @@ function unresolvedReasoningOutcomes(
   const activation = invocation.reasoning.activation;
   if (activation.kind === "disabled") {
     outcomes.push(Object.freeze({
-      control: "reasoning.activation",
+      candidateId: "reasoning.activation",
       outcome: Object.freeze(
         model.reasoning
           ? {
@@ -33,7 +36,7 @@ function unresolvedReasoningOutcomes(
     }));
   } else if (activation.kind === "enabled" || activation.kind === "adaptive") {
     outcomes.push(Object.freeze({
-      control: "reasoning.activation",
+      candidateId: "reasoning.activation",
       outcome: Object.freeze({
         kind: "degraded" as const,
         warning: model.reasoning
@@ -44,7 +47,7 @@ function unresolvedReasoningOutcomes(
   }
   if (invocation.reasoning.effort.kind === "specified") {
     outcomes.push(Object.freeze({
-      control: "reasoning.effort",
+      candidateId: "reasoning.effort",
       outcome: Object.freeze({
         kind: "degraded" as const,
         warning:
@@ -102,34 +105,38 @@ function finalizeProjection(input: {
   const candidates = enumerateAnthropicSupplementCandidates(
     input.invocation.supplement,
   );
-  const candidateControls = new Set(
-    candidates.map((candidate) => candidate.control),
+  const candidateIds = new Set(
+    candidates.map((candidate) => candidate.id),
   );
-  const outcomeByControl = new Map<string, AnthropicProjectionOutcome>();
+  const outcomeById = new Map<AnthropicProjectionOutcome["candidateId"], AnthropicProjectionOutcome>();
   for (const outcome of input.result.outcomes) {
-    if (outcomeByControl.has(outcome.control)) {
+    if (outcomeById.has(outcome.candidateId)) {
       throw new Error(
-        `Anthropic target Adapter produced duplicate outcome ownership for ${outcome.control}`,
+        `Anthropic target Adapter produced duplicate outcome ownership for ${outcome.candidateId}`,
       );
     }
-    outcomeByControl.set(outcome.control, outcome);
+    outcomeById.set(outcome.candidateId, outcome);
   }
 
   const omitted = assessUnprojectedAnthropicSupplement({
     supplement: input.invocation.supplement,
     target: `${input.model.provider}/${input.model.api}/${input.model.id}`,
-    resolvedControls: new Set(outcomeByControl.keys()),
+    resolvedCandidateIds: new Set(
+      [...outcomeById.keys()].filter(
+        (candidateId) => candidateIds.has(candidateId as never),
+      ) as AnthropicCandidateId[],
+    ),
   });
-  const omittedByControl = new Map(
-    omitted.map((outcome) => [outcome.control, outcome]),
+  const omittedById = new Map(
+    omitted.map((outcome) => [outcome.candidateId, outcome]),
   );
   const outcomes = Object.freeze([
     ...candidates.map((candidate) =>
-      outcomeByControl.get(candidate.control) ??
-      omittedByControl.get(candidate.control)!,
+      outcomeById.get(candidate.id) ??
+      omittedById.get(candidate.id)!,
     ),
     ...input.result.outcomes.filter(
-      (outcome) => !candidateControls.has(outcome.control),
+      (outcome) => !candidateIds.has(outcome.candidateId as never),
     ),
   ]);
   publishAnthropicProjectionWarnings(outcomes, input.factsSink);
@@ -154,9 +161,9 @@ export function prepareAnthropicPayloadProjection(input: {
       const outcomes: AnthropicProjectionOutcome[] = adapter === undefined
         ? [...unresolvedReasoningOutcomes(model, input.invocation)]
         : [];
-      const candidateControls = new Set(
+      const candidateIds = new Set(
         enumerateAnthropicSupplementCandidates(input.invocation.supplement)
-          .map((candidate) => candidate.control),
+          .map((candidate) => candidate.id),
       );
 
       for (const phase of [
@@ -172,11 +179,11 @@ export function prepareAnthropicPayloadProjection(input: {
         });
         for (const outcome of result.outcomes) {
           const valid = phase.kind === "supplement"
-            ? candidateControls.has(outcome.control)
-            : outcome.control.startsWith("reasoning.");
+            ? candidateIds.has(outcome.candidateId as never)
+            : outcome.candidateId.startsWith("reasoning.");
           if (!valid) {
             throw new Error(
-              `Anthropic ${adapter?.id ?? "unknown"} ${phase.kind} projector claimed an unowned control: ${outcome.control}`,
+              `Anthropic ${adapter?.id ?? "unknown"} ${phase.kind} projector claimed an unowned candidate: ${outcome.candidateId}`,
             );
           }
         }

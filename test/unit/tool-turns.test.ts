@@ -246,6 +246,27 @@ describe("Anthropic tool turns", () => {
     ).toThrow(InvalidRequest);
   });
 
+  it("rejects a duplicate tool_use id after the original call was repaired", () => {
+    expect(() =>
+      convertValidatedAnthropicRequest(
+        validateAnthropicSourceRequest(
+          request([
+            {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "same", name: "a", input: {} }],
+            },
+            { role: "user", content: "continue without the result" },
+            {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "same", name: "a", input: {} }],
+            },
+          ]),
+        ),
+        1,
+      ),
+    ).toThrow(/duplicate.*tool_use|tool_use.*duplicate/iu);
+  });
+
   it("rejects orphan and duplicate results as fixed conversion errors", () => {
     expect(() =>
       convertValidatedAnthropicRequest(
@@ -284,8 +305,8 @@ describe("Anthropic tool turns", () => {
     ).toThrow(/Orphan|duplicate/u);
   });
 
-  it("rejects a partially resolved parallel call set without inventing a result", () => {
-    expect(() => convertValidatedAnthropicRequest(
+  it("repairs the unresolved remainder of a partially resolved parallel call set", () => {
+    const conversion = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request([
           { role: "user", content: "run" },
@@ -297,39 +318,45 @@ describe("Anthropic tool turns", () => {
         ]),
       ),
       1,
-    )).toThrow(/Unresolved tool call.*call_b/u);
+    );
+    const results = conversion.invocation.pi.context.messages.filter(
+      (message) => message.role === "toolResult",
+    );
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({
+      toolCallId: "call_a",
+      isError: false,
+    });
+    expect(results[1]).toMatchObject({
+      toolCallId: "call_b",
+      toolName: "beta",
+      isError: true,
+      content: [{
+        type: "text",
+        text: "No result — the tool call did not complete (interrupted or lost).",
+      }],
+    });
   });
 
-  it("allows ordinary user content before results in mixed source order", () => {
-    const conversion = convertValidatedAnthropicRequest(
-      validateAnthropicSourceRequest(
-        request([
-          { role: "user", content: "run" },
-          parallelCalls,
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "before" },
-              { type: "tool_result", tool_use_id: "call_a" },
-              { type: "tool_result", tool_use_id: "call_b" },
-              { type: "text", text: "after" },
-            ],
-          },
-        ]),
+  it("rejects a real ToolResult that arrives after unrelated user content", () => {
+    expect(() =>
+      convertValidatedAnthropicRequest(
+        validateAnthropicSourceRequest(
+          request([
+            { role: "user", content: "run" },
+            parallelCalls,
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "before" },
+                { type: "tool_result", tool_use_id: "call_a" },
+                { type: "tool_result", tool_use_id: "call_b" },
+              ],
+            },
+          ]),
+        ),
+        1,
       ),
-      1,
-    );
-    const roles = conversion.invocation.pi.context.messages.map((m) => m.role);
-    expect(roles).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "toolResult",
-      "toolResult",
-      "user",
-    ]);
-    const users = conversion.invocation.pi.context.messages.filter((m) => m.role === "user");
-    expect(users.at(-2)?.content).toEqual([{ type: "text", text: "before" }]);
-    expect(users.at(-1)?.content).toEqual([{ type: "text", text: "after" }]);
+    ).toThrow(/duplicate.*tool_result|tool_result.*duplicate/iu);
   });
 });

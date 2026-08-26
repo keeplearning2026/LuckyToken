@@ -34,6 +34,7 @@ export interface SemanticCompactOptions {
   readonly executeOperation?: ExecutionOperation;
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
+  readonly requestTimeoutMs?: number;
   readonly journey?: RequestJourneyObserver;
 }
 
@@ -273,6 +274,9 @@ export async function executeSemanticCompact(
     routerDefaults: options.routerDefaults,
     createResponseId: options.createResponseId,
     now: options.now,
+    ...(options.requestTimeoutMs === undefined
+      ? {}
+      : { requestTimeoutMs: options.requestTimeoutMs }),
     ...(executionJourney === undefined ? {} : { journey: executionJourney }),
     ...(options.executeOperation === undefined
       ? {}

@@ -5,14 +5,15 @@ import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
+  AnthropicProjectionOutcomeId,
 } from "../contract.js";
 
 function add(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   outcome: AnthropicProjectionDisposition,
 ): void {
-  outcomes.push(Object.freeze({ control, outcome: Object.freeze(outcome) }));
+  outcomes.push(Object.freeze({ candidateId, outcome: Object.freeze(outcome) }));
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -22,17 +23,17 @@ function same(left: unknown, right: unknown): boolean {
 function exact(
   outcomes: AnthropicProjectionOutcome[],
   family: "claude" | "non-claude",
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   current: unknown,
   expected: unknown,
   assign: () => void,
 ): void {
   if (same(current, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(outcomes, candidateId, { kind: "pi-native" });
     return;
   }
   assign();
-  add(outcomes, control, {
+  add(outcomes, candidateId, {
     kind: "payload-projected",
     projector: `anthropic-to-bedrock-${family}`,
     warning: "pi-native-mapping-repaired",
@@ -79,7 +80,7 @@ export function supportsAnthropicBedrockProjection(
 function mappedToolChoice(
   invocation: AnthropicSemanticInvocation,
 ): Record<string, unknown> | undefined {
-  const choice = invocation.supplement.toolChoice;
+  const choice = invocation.supplement.controls.toolChoice?.value;
   if (choice === undefined || choice.kind === "none") return undefined;
   if (choice.kind === "auto") return { auto: {} };
   if (choice.kind === "any") return { any: {} };
@@ -134,13 +135,13 @@ function projectAnthropicToBedrock(
   }
 
   if (phase === "supplement") {
-    const finalMaxTokens = Math.min(inference.maxTokens, supplement.outputTokenCeiling);
+    const finalMaxTokens = Math.min(inference.maxTokens, supplement.controls.outputTokenCeiling.value);
     exact(outcomes, family, "maxTokens", inference.maxTokens, finalMaxTokens, () => {
       inference.maxTokens = finalMaxTokens;
     });
     for (const [control, field, value] of [
-      ["sampling.temperature", "temperature", supplement.sampling.temperature],
-      ["sampling.topP", "topP", supplement.sampling.topP],
+      ["sampling.temperature", "temperature", supplement.controls.temperature?.value],
+      ["sampling.topP", "topP", supplement.controls.topP?.value],
     ] as const) {
       if (value === undefined) continue;
       if (control === "sampling.temperature") {
@@ -153,22 +154,22 @@ function projectAnthropicToBedrock(
         inference[field] = value;
       });
     }
-    if (supplement.stopSequences !== undefined) {
+    if (supplement.controls.stopSequences !== undefined) {
       exact(
         outcomes,
         family,
         "stopSequences",
         inference.stopSequences,
-        supplement.stopSequences,
+        supplement.controls.stopSequences.value,
         () => {
-          inference.stopSequences = [...supplement.stopSequences!];
+          inference.stopSequences = [...supplement.controls.stopSequences!.value];
         },
       );
     }
   }
   payload.inferenceConfig = inference;
 
-  const choice = supplement.toolChoice;
+  const choice = supplement.controls.toolChoice?.value;
   if (phase === "supplement" && choice?.kind === "none") {
     delete payload.toolConfig;
     add(outcomes, "toolChoice", {
@@ -199,9 +200,9 @@ function projectAnthropicToBedrock(
     !Array.isArray(payload.additionalModelRequestFields)
       ? { ...(payload.additionalModelRequestFields as Record<string, unknown>) }
       : {};
-  if (phase === "supplement" && claude && supplement.sampling.topK !== undefined) {
-    exact(outcomes, family, "sampling.topK", additional.top_k, supplement.sampling.topK, () => {
-      additional.top_k = supplement.sampling.topK;
+  if (phase === "supplement" && claude && supplement.controls.topK !== undefined) {
+    exact(outcomes, family, "sampling.topK", additional.top_k, supplement.controls.topK.value, () => {
+      additional.top_k = supplement.controls.topK!.value;
     });
   }
 
@@ -214,17 +215,17 @@ function projectAnthropicToBedrock(
       ? { ...(additional.output_config as Record<string, unknown>) }
       : {};
   if (phase === "supplement" && claude) {
-    const format = supplement.outputFormat;
-    if (format.kind === "specified") {
+    const format = supplement.controls.outputFormat?.value;
+    if (format?.kind === "json-schema") {
       outputConfig.format = {
         type: "json_schema",
-        schema: format.value.schema,
+        schema: format.schema,
       };
       add(outcomes, "outputFormat", {
         kind: "payload-projected",
         projector: "anthropic-to-bedrock-claude",
       });
-    } else if (format.kind === "explicit-null") {
+    } else if (format === null) {
       delete outputConfig.format;
       add(outcomes, "outputFormat", {
         kind: "payload-projected",

@@ -41,13 +41,6 @@ describe("Anthropic main-call validity", () => {
       message: /output-token ceiling|max_tokens/iu,
     },
     {
-      label: "typed server tool",
-      request: {
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-      },
-      message: /server tool/iu,
-    },
-    {
       label: "URL document without a target representation",
       request: {
         messages: [{
@@ -60,20 +53,11 @@ describe("Anthropic main-call validity", () => {
       },
       message: /document|model-visible/iu,
     },
-    {
-      label: "unavailable inference geography",
-      request: { inference_geo: "us" },
-      message: /inference geography/iu,
-    },
   ])("rejects $label before Provider payload projection", ({ request, message }) => {
     expect(() => assertValidForTarget(request)).toThrow(message);
   });
 
-  it("allows an Anthropic target to reconstruct its native server tool and geography", () => {
-    const anthropicTarget = {
-      ...target,
-      api: "anthropic-messages",
-    } as Model<string>;
+  it("allows server tools and inference geography to reach target disposition", () => {
     const request = validateAnthropicSourceRequest({
       model: "client-selector",
       max_tokens: 1_024,
@@ -84,7 +68,7 @@ describe("Anthropic main-call validity", () => {
 
     expect(() => assertAnthropicModelAwareValidity(
       request,
-      anthropicTarget,
+      target,
       defaultAnthropicModelValidityPolicy,
     )).not.toThrow();
   });

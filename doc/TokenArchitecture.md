@@ -567,6 +567,10 @@ interface ClientProtocolHandler {
 }
 ```
 
+`limits.requestTimeoutMs` 可配置，默认值为 `3600000`（1 小时）。同一值同时用于
+Data Plane HTTP 请求生命周期和 Semantic Conversion 的 Provider 调用，避免后者被
+Pi/SDK 的更短默认超时提前终止；Direct 与 Provider Native 由 HTTP 生命周期约束。
+
 | 项目 | 内容 |
 | --- | --- |
 | 功能 | exact method/path route；合并连接、shutdown、timeout cancellation；保证 response 只交付一次 |
@@ -1329,7 +1333,7 @@ loadTokenCliConfig(path): Promise<TokenCliConfig>
   "pi": { "directory": "pi" },
   "limits": {
     "maxRequestBytes": 268435456,
-    "requestTimeoutMs": 120000
+    "requestTimeoutMs": 3600000
   }
 }
 ```

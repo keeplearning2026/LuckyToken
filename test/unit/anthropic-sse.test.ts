@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
-  convertAssistantMessageToAnthropicWithPolicy,
+  convertAssistantMessageToAnthropicResponse,
   type AnthropicResponseMessage,
 } from "../../src/protocols/anthropic/response.js";
 import {
@@ -128,6 +128,15 @@ function accumulate(events: AnthropicAtomicSseEvent[]): AnthropicResponseMessage
 }
 
 describe("verifiable Anthropic Atomic SSE", () => {
+  it("renders refusal through the same JSON/SSE message contract", () => {
+    const refusal = { ...target(), content: [], stop_reason: "refusal" as const };
+    const events = createAnthropicAtomicSseEvents(refusal);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "message_delta",
+      delta: expect.objectContaining({ stop_reason: "refusal" }),
+    }));
+    expect(accumulate(events).stop_reason).toBe("refusal");
+  });
   it("emits the exact ordered lifecycle and full atomic deltas", () => {
     const message = target();
     const events = createAnthropicAtomicSseEvents(message);
@@ -182,7 +191,7 @@ describe("verifiable Anthropic Atomic SSE", () => {
     // Ticket 20 additive: malformed usage must not discard the response on
     // the streaming seam either. The target carries the all-zero fallback
     // and the stream stays schema-valid while the content is preserved.
-    const converted = convertAssistantMessageToAnthropicWithPolicy(
+    const converted = convertAssistantMessageToAnthropicResponse(
       {
         role: "assistant",
         api: "anthropic-messages",
@@ -201,7 +210,6 @@ describe("verifiable Anthropic Atomic SSE", () => {
         timestamp: 1,
       },
       { selector: "client-selector" },
-      { unknownPiContent: "error" },
     );
     expect(converted.notices.map((notice) => notice.code)).toContain(
       CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,

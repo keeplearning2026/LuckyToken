@@ -21,7 +21,6 @@ function policy(
 ): AnthropicRequestConversionPolicy {
   return {
     unknownContent: "error",
-    localCacheControl: "ignore",
     ...overrides,
   };
 }
@@ -63,51 +62,6 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
     expect(content.map((entry) => entry.text)).toEqual(["after", "another"]);
   });
 
-  it("keeps ordinary text segments before and after each ToolResult in source order", () => {
-    const invocation = parseAnthropicTextInvocation(
-      body([
-        { role: "user", content: "go" },
-        {
-          role: "assistant",
-          content: [
-            { type: "tool_use", id: "t1", name: "alpha", input: {} },
-            { type: "tool_use", id: "t2", name: "beta", input: {} },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "A" },
-            { type: "tool_result", tool_use_id: "t1", content: "X" },
-            { type: "text", text: "B" },
-            { type: "tool_result", tool_use_id: "t2", content: "Y" },
-            { type: "text", text: "C" },
-          ],
-        },
-      ]),
-      1,
-    );
-    const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
-    expect(roles).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "toolResult",
-      "user",
-      "toolResult",
-      "user",
-    ]);
-    const users = invocation.invocation.pi.context.messages.filter((m) => m.role === "user");
-    expect(users[0]?.content).toEqual([{ type: "text", text: "go" }]);
-    expect(users[1]?.content).toEqual([{ type: "text", text: "A" }]);
-    expect(users[2]?.content).toEqual([{ type: "text", text: "B" }]);
-    expect(users[3]?.content).toEqual([{ type: "text", text: "C" }]);
-    const results = invocation.invocation.pi.context.messages.filter(
-      (m) => m.role === "toolResult",
-    );
-    expect(results.map((r) => r.toolCallId)).toEqual(["t1", "t2"]);
-  });
-
   it("does not create synthetic messages for empty ordinary segments", () => {
     const invocation = parseAnthropicTextInvocation(
       body([
@@ -124,13 +78,106 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
     expect(roles).toEqual(["user", "assistant", "toolResult"]);
   });
 
-  it("rejects message-level system roles instead of guessing privilege", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(
-        body([{ role: "system", content: "instruction" }]),
-        1,
+  it("promotes the first message-level system text after top-level system", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body(
+        [
+          { role: "system", content: "message instruction" },
+          { role: "user", content: "hello" },
+        ],
+        { system: "top instruction" },
       ),
-    ).toThrow(/top-level system/u);
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.systemPrompt).toBe(
+      "top instruction\nmessage instruction",
+    );
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+    });
+    expect(invocation.client.notices).toContainEqual({
+      adapter: "anthropic-messages",
+      direction: "request",
+      code: "anthropic_message_system_degraded",
+      jsonPath: "$.messages",
+      action: "degrade",
+    });
+  });
+
+  it("does not emit an empty user turn when a system block array is fully promoted", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "first" },
+            { type: "text", text: "second" },
+          ],
+        },
+      ]),
+      1,
+    );
+
+    expect(invocation.invocation.pi.context).toMatchObject({
+      systemPrompt: "first\nsecond",
+      messages: [],
+    });
+  });
+
+  it("omits empty ordinary fragments from later compatibility system turns", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([
+        { role: "system", content: "system" },
+        { role: "system", content: "" },
+      ]),
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.messages).toEqual([]);
+  });
+
+  it("keeps first-system non-text in user history and degrades later systems to user", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "first" },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "AQ==",
+              },
+            },
+            { type: "text", text: "second" },
+          ],
+        },
+        { role: "user", content: "hello" },
+        { role: "system", content: "later instruction" },
+      ]),
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("first\nsecond");
+    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
+    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "image", mimeType: "image/png" },
+        { type: "text", text: "hello" },
+        { type: "text", text: "later instruction" },
+      ],
+    });
+    expect(
+      invocation.client.notices.filter(
+        (notice) => notice.code === "anthropic_message_system_degraded",
+      ),
+    ).toHaveLength(1);
   });
 
   it("accepts a final assistant prefill as historical content with a notice", () => {
@@ -193,10 +240,16 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
       Promise.resolve().then(() => parseAnthropicTextInvocation(firstBody, 1)),
       Promise.resolve().then(() => parseAnthropicTextInvocation(secondBody, 2)),
     ]);
-    expect(first.status).toBe("rejected");
-    if (first.status === "rejected") {
-      expect(first.reason).toMatchObject({
-        message: expect.stringContaining("Unresolved tool call"),
+    expect(first.status).toBe("fulfilled");
+    if (first.status === "fulfilled") {
+      const firstResults = first.value.invocation.pi.context.messages.filter(
+        (message) => message.role === "toolResult",
+      );
+      expect(firstResults).toHaveLength(1);
+      expect(firstResults[0]).toMatchObject({
+        toolCallId: "t1",
+        toolName: "alpha",
+        isError: true,
       });
     }
     expect(second.status).toBe("fulfilled");
@@ -361,10 +414,9 @@ describe("06: Anthropic tool lifecycle and local missing-result repair", () => {
     expect(() => parseAnthropicTextInvocation(nonObject, 1)).toThrow(/object/u);
   });
 
-  it("rejects unresolved calls without inventing synthetic tool results", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(
-        body([
+  it("repairs unresolved Client calls before later ordinary content", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([
         { role: "user", content: "go" },
         {
           role: "assistant",
@@ -375,10 +427,97 @@ describe("06: Anthropic tool lifecycle and local missing-result repair", () => {
           ],
         },
         { role: "user", content: "next" },
-        ]),
-        1,
+      ]),
+      1,
+    );
+
+    const roles = invocation.invocation.pi.context.messages.map(
+      (message) => message.role,
+    );
+    expect(roles).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    const results = invocation.invocation.pi.context.messages.filter(
+      (message) => message.role === "toolResult",
+    );
+    expect(results).toEqual([
+      expect.objectContaining({
+        toolCallId: "t1",
+        toolName: "alpha",
+        isError: true,
+        content: [{
+          type: "text",
+          text: "No result — the tool call did not complete (interrupted or lost).",
+        }],
+      }),
+      expect.objectContaining({
+        toolCallId: "t2",
+        toolName: "beta",
+        isError: true,
+        content: [{
+          type: "text",
+          text: "No result — the tool call did not complete (interrupted or lost).",
+        }],
+      }),
+    ]);
+    expect(
+      invocation.client.notices.filter(
+        (notice) => notice.code === "anthropic_unresolved_tool_call_repaired",
       ),
-    ).toThrow(/Unresolved/u);
+    ).toHaveLength(2);
+  });
+
+  it("preserves real results and repairs only still-missing calls before text", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([
+        { role: "user", content: "go" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "t1", name: "alpha", input: {} },
+            { type: "tool_use", id: "t2", name: "beta", input: {} },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: "real" },
+            { type: "text", text: "after results" },
+          ],
+        },
+      ]),
+      1,
+    );
+
+    expect(
+      invocation.invocation.pi.context.messages.map((message) => message.role),
+    ).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    const results = invocation.invocation.pi.context.messages.filter(
+      (message) => message.role === "toolResult",
+    );
+    expect(results[0]).toMatchObject({
+      toolCallId: "t1",
+      isError: false,
+      content: [{ type: "text", text: "real" }],
+    });
+    expect(results[1]).toMatchObject({
+      toolCallId: "t2",
+      isError: true,
+      content: [{
+        type: "text",
+        text: "No result — the tool call did not complete (interrupted or lost).",
+      }],
+    });
   });
 
   it("never replaces a real result with the synthetic text", () => {
@@ -472,42 +611,21 @@ describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
     expect(invocation.invocation.pi.options.thinkingBudgets).toBeUndefined();
   });
 
-  it("ignores local cache breakpoints by default and promotes them when configured", () => {
-    const ignored = parseAnthropicTextInvocation(
+  it("never promotes local cache breakpoints into request-wide Pi retention", () => {
+    const converted = parseAnthropicTextInvocation(
       body([{ role: "user", content: "hi" }], {
         cache_control: { type: "ephemeral", ttl: "1h" },
       }),
       1,
     );
-    expect(ignored.invocation.pi.options.cacheRetention).toBeUndefined();
-
-    const validated = validateAnthropicSourceRequest(
-      body([{ role: "user", content: "hi" }], {
-        cache_control: { type: "ephemeral", ttl: "1h" },
+    expect(converted.invocation.pi.options.cacheRetention).toBeUndefined();
+    expect(converted.invocation.supplement.cache).toContainEqual(
+      expect.objectContaining({
+        id: "cacheControl",
+        attachment: { kind: "request" },
+        value: { ttl: "1h" },
       }),
     );
-    const promoted = convertValidatedAnthropicRequestWithPolicy(
-      validated,
-      1,
-      policy({ localCacheControl: "promote" }),
-    );
-    expect(promoted.invocation.pi.options.cacheRetention).toBe("long");
-    expect(
-      promoted.client.notices.some(
-        (notice) => notice.code === "anthropic_local_cache_promoted",
-      ),
-    ).toBe(true);
-
-    const short = convertValidatedAnthropicRequestWithPolicy(
-      validateAnthropicSourceRequest(
-        body([{ role: "user", content: "hi" }], {
-          cache_control: { type: "ephemeral" },
-        }),
-      ),
-      1,
-      policy({ localCacheControl: "promote" }),
-    );
-    expect(short.invocation.pi.options.cacheRetention).toBe("short");
   });
 
   it("rejects invalid numeric bounds as Anthropic Client errors", () => {
@@ -540,11 +658,11 @@ describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
       maxTokens: 64,
       samplingParams: { top_p: 0.5 },
     });
-    expect(invocation.invocation.supplement.container).toEqual({
-      kind: "explicit-null",
+    expect(invocation.invocation.supplement.controls.container).toMatchObject({
+      value: null,
     });
-    expect(invocation.invocation.supplement.inferenceGeo).toEqual({
-      kind: "explicit-null",
+    expect(invocation.invocation.supplement.controls.inferenceGeo).toMatchObject({
+      value: null,
     });
   });
 
@@ -615,12 +733,9 @@ describe("08: Anthropic known content and tools", () => {
       expect.objectContaining({
         sourceMessageIndex: 0,
         sourceContentIndex: 0,
-        kind: "document",
+        kind: "document-source",
         piRepresentation: "none",
-        value: {
-          type: "document",
-          source: { type: "url", url: "https://example.test/doc.pdf" },
-        },
+        value: { type: "url", url: "https://example.test/doc.pdf" },
       }),
     ]);
   });
@@ -643,12 +758,9 @@ describe("08: Anthropic known content and tools", () => {
     expect(converted.invocation.pi.context.messages).toEqual([]);
     expect(converted.invocation.supplement.content).toEqual([
       expect.objectContaining({
-        kind: "image",
+        kind: "url-image-source",
         piRepresentation: "none",
-        value: {
-          type: "image",
-          source: { type: "url", url: "https://example.test/a.png" },
-        },
+        value: { type: "url", url: "https://example.test/a.png" },
       }),
     ]);
     expect(() =>
@@ -716,12 +828,12 @@ describe("08: Anthropic known content and tools", () => {
     expect(invocation.invocation.pi.context.messages.some((m) => m.role === "toolResult")).toBe(false);
     expect(invocation.invocation.supplement.content).toEqual([
       expect.objectContaining({
-        kind: "server_tool_use",
+        kind: "server-tool-use",
         piRepresentation: "none",
         value: expect.objectContaining({ id: "server_1", name: "web_search" }),
       }),
       expect.objectContaining({
-        kind: "web_search_tool_result",
+        kind: "server-tool-result",
         piRepresentation: "none",
         value: expect.objectContaining({ tool_use_id: "server_1" }),
       }),
@@ -860,9 +972,9 @@ describe("08: Anthropic known content and tools", () => {
       expect(converted.invocation.pi.context.messages).toEqual([]);
       expect(converted.invocation.supplement.content).toEqual([
         expect.objectContaining({
-          kind: "document",
+          kind: "document-source",
           piRepresentation: "none",
-          value: { type: "document", source },
+          value: source,
         }),
       ]);
     }

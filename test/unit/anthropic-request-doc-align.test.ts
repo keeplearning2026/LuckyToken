@@ -95,12 +95,13 @@ describe("Anthropic request output_config.effort conversion (doc §6.3)", () => 
 });
 
 describe("Anthropic request max_tokens conversion (doc §6.1)", () => {
-  it("preserves max_tokens=0 as maxTokens=0", () => {
-    const invocation = parseAnthropicTextInvocation(
-      minimalBody({ max_tokens: 0 }),
-      1,
-    );
-    expect(invocation.invocation.pi.options.maxTokens).toBe(0);
+  it("rejects max_tokens=0 as an invalid Client request", () => {
+    expect(() =>
+      parseAnthropicTextInvocation(
+        minimalBody({ max_tokens: 0 }),
+        1,
+      )
+    ).toThrow(/max_tokens must be a positive safe integer/u);
   });
 });
 

@@ -31,12 +31,17 @@ import {
   type AnthropicContinuitySource,
 } from "./semantic/reasoning/continuity.js";
 import type {
+  AnthropicCandidateId,
   AnthropicCacheControl,
+  AnthropicCaller,
   AnthropicOutputFormat,
   AnthropicPresence,
   AnthropicProjectionSupplement,
+  ReadonlyJsonObject,
   AnthropicToolChoice,
 } from "./semantic/supplement/contract.js";
+import { anthropicCandidateId } from "./semantic/supplement/contract.js";
+import { immutableJsonObject } from "./semantic/supplement/immutable-json.js";
 import {
   validateAnthropicSupplementContentBlock,
   validateAnthropicSystemSupplementBlock,
@@ -54,7 +59,6 @@ export type AnthropicRequestConversion = AnthropicConversionResult;
 
 export interface AnthropicRequestConversionPolicy {
   readonly unknownContent: "error" | "ignore";
-  readonly localCacheControl: "ignore" | "promote";
 }
 
 export interface AnthropicRequestConversionInput {
@@ -96,14 +100,19 @@ export const PREFILL_DEGRADED_NOTICE_CODE =
   "anthropic_assistant_prefill_degraded_to_history";
 export const THINKING_SIGNATURE_NOTICE_CODE =
   "anthropic_missing_thinking_signature";
-export const LOCAL_CACHE_PROMOTED_NOTICE_CODE =
-  "anthropic_local_cache_promoted";
 export const UNKNOWN_CONTENT_IGNORED_NOTICE_CODE =
   "anthropic_unknown_content_ignored";
 export const UNCLAIMED_REQUEST_FIELD_NOTICE_CODE =
   "anthropic_unclaimed_request_field";
 export const UNKNOWN_EFFORT_FALLBACK_NOTICE_CODE =
   "anthropic_unknown_effort_fallback";
+export const MESSAGE_SYSTEM_DEGRADED_NOTICE_CODE =
+  "anthropic_message_system_degraded";
+export const UNRESOLVED_TOOL_CALL_REPAIRED_NOTICE_CODE =
+  "anthropic_unresolved_tool_call_repaired";
+
+const INCOMPLETE_TOOL_CALL_RESULT_TEXT =
+  "No result — the tool call did not complete (interrupted or lost).";
 
 const ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS = new Set([
   "model",
@@ -174,11 +183,14 @@ function cloneDemandDrivenValue<T>(
     if (descriptor === undefined) continue;
     Object.defineProperty(clone, key, {
       enumerable: true,
-      configurable: true,
-      get() {
-        const selected = "value" in descriptor
-          ? descriptor.value
-          : descriptor.get?.call(source);
+       configurable: true,
+       get() {
+        if (!("value" in descriptor)) {
+          throw new InvalidRequest(
+            `Consumed request property ${key} must not be an accessor`,
+          );
+        }
+        const selected = descriptor.value;
         const copied = cloneDemandDrivenValue(selected, seen);
         Object.defineProperty(clone, key, {
           value: copied,
@@ -343,7 +355,10 @@ function validateOutputConfig(value: unknown): {
       kind: "specified",
       value: {
         kind: "json-schema",
-        schema: structuredClone(format.schema),
+        schema: immutableJsonObject(
+          structuredClone(format.schema),
+          "$.output_config.format.schema",
+        ),
       },
     };
   }
@@ -511,10 +526,11 @@ function validateMessages(
     if (
       !isRecord(message) ||
       (message.role !== "user" &&
-        message.role !== "assistant")
+        message.role !== "assistant" &&
+        message.role !== "system")
     ) {
       throw new InvalidRequest(
-        "messages require a user or assistant role; use top-level system for system instructions",
+        "messages require a user, assistant, or Token-compatible system role",
       );
     }
     if (typeof message.content === "string") {
@@ -533,7 +549,9 @@ function validateMessages(
           `$.messages[${messageIndex}].content[${contentIndex}]`,
         );
       }
-      const role = message.role as "user" | "assistant";
+      const role = message.role === "system"
+        ? "user"
+        : message.role as "user" | "assistant";
       validateContentBlock(block, facts, role);
       if (isAssistantTurn && isRecord(block) && block.type === "tool_use") {
         const id = block.id as string;
@@ -817,8 +835,8 @@ export function validateAnthropicSourceRequest(
   if (typeof model !== "string" || model.length === 0) {
     throw new InvalidRequest("model must be a non-empty string");
   }
-  if (!Number.isSafeInteger(maxTokens) || (maxTokens as number) < 0) {
-    throw new InvalidRequest("max_tokens must be a non-negative safe integer");
+  if (!Number.isSafeInteger(maxTokens) || (maxTokens as number) < 1) {
+    throw new InvalidRequest("max_tokens must be a positive safe integer");
   }
 
   validateOptionalFieldShapes(request);
@@ -918,6 +936,12 @@ export function extractAnthropicModelSelector(value: unknown): string {
 interface PendingToolCall {
   readonly id: string;
   readonly name: string;
+}
+
+interface ConversationToolRepair {
+  readonly beforeMessageIndex: number;
+  readonly beforeContentIndex?: number;
+  readonly callId: string;
 }
 
 type ConvertedBlock =
@@ -1195,12 +1219,59 @@ function convertHistoricalAssistant(
   };
 }
 
-function withoutContinuity(
+function withoutCandidateOnlyFields(
   value: Record<string, unknown>,
-): Readonly<Record<string, unknown>> {
+  path: string,
+): ReadonlyJsonObject {
   const copied = structuredClone(value);
   delete copied.token_continuity;
-  return Object.freeze(copied);
+  delete copied.cache_control;
+  return immutableJsonObject(copied, path);
+}
+
+const CONTENT_CONTAINER_TYPES = new Set([
+  "search_result",
+  "tool_result",
+  "web_search_tool_result",
+  "web_fetch_tool_result",
+  "code_execution_tool_result",
+  "bash_code_execution_tool_result",
+  "text_editor_code_execution_tool_result",
+  "tool_search_tool_result",
+]);
+
+function visitContentBlocks(
+  block: Record<string, unknown>,
+  visit: (candidate: Record<string, unknown>, nestedPath: readonly (string | number)[]) => void,
+  nestedPath: readonly (string | number)[] = [],
+): void {
+  visit(block, nestedPath);
+  const childArrays: Array<readonly [readonly (string | number)[], unknown[]]> = [];
+  if (CONTENT_CONTAINER_TYPES.has(String(block.type)) && Array.isArray(block.content)) {
+    childArrays.push([[...nestedPath, "content"], block.content]);
+  }
+  if (block.type === "document" && isRecord(block.source) && Array.isArray(block.source.content)) {
+    childArrays.push([[...nestedPath, "source", "content"], block.source.content]);
+  }
+  for (const [parentPath, children] of childArrays) {
+    children.forEach((child, childIndex) => {
+      if (!isRecord(child)) return;
+      visitContentBlocks(child, visit, [...parentPath, childIndex]);
+    });
+  }
+}
+
+function withoutContentCandidateOnlyFields(
+  value: Record<string, unknown>,
+  path: string,
+): ReadonlyJsonObject {
+  const copied = structuredClone(value);
+  if (copied.caller === undefined) delete copied.caller;
+  visitContentBlocks(copied, (candidate) => {
+    delete candidate.token_continuity;
+    delete candidate.cache_control;
+  });
+  return immutableJsonObject(copied, path);
 }
 
 function hasOnlyKeys(
@@ -1305,18 +1376,206 @@ function buildContentSupplement(
     if (!Array.isArray(message.content)) continue;
     for (const [sourceContentIndex, candidate] of message.content.entries()) {
       if (!isRecord(candidate)) continue;
-      const piRepresentation = contentPiRepresentation(candidate);
-      if (piRepresentation === undefined) continue;
-      content.push(
-        Object.freeze({
-          sourceMessageIndex,
-          sourceContentIndex,
-          role: message.role as "user" | "assistant",
-          kind: candidate.type as string,
-          piRepresentation,
-          value: withoutContinuity(candidate),
-        }),
+      const normalized = withoutContentCandidateOnlyFields(
+        candidate,
+        `$.messages[${sourceMessageIndex}].content[${sourceContentIndex}]`,
       );
+      const piRepresentation = contentPiRepresentation(
+        normalized as Record<string, unknown>,
+      );
+      const idPrefix = `content[${sourceMessageIndex}:${sourceContentIndex}]`;
+      const source = Object.freeze({
+        kind: "message-content" as const,
+        messageIndex: sourceMessageIndex,
+        contentIndex: sourceContentIndex,
+      });
+      const messageAttachment = Object.freeze({
+        kind: "message-content" as const,
+        messageIndex: sourceMessageIndex,
+        contentIndex: sourceContentIndex,
+      });
+      const common = {
+        source,
+        sourceMessageIndex,
+        sourceContentIndex,
+        effectiveRole:
+          message.role === "assistant" ? "assistant" as const : "user" as const,
+      };
+      const block = normalized as Record<string, unknown>;
+      switch (block.type) {
+        case "text": {
+          if (!Object.hasOwn(block, "citations")) break;
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.citations`),
+            kind: "text-citations" as const,
+            piRepresentation: "partial" as const,
+            piAttachment: messageAttachment,
+            value: block.citations as readonly ReadonlyJsonObject[] | null,
+          }));
+          break;
+        }
+        case "image": {
+          const imageSource = block.source as ReadonlyJsonObject;
+          if (imageSource.type !== "url") break;
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.source`),
+            kind: "url-image-source" as const,
+            piRepresentation: "none" as const,
+            value: imageSource as { readonly type: "url"; readonly url: string },
+          }));
+          break;
+        }
+        case "document": {
+          const representation = piRepresentation ?? "none";
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.source`),
+            kind: "document-source" as const,
+            piRepresentation: representation,
+            ...(representation === "partial" ? { piAttachment: messageAttachment } : {}),
+            value: block.source as ReadonlyJsonObject,
+          }));
+          if (
+            Object.hasOwn(block, "citations") ||
+            Object.hasOwn(block, "context") ||
+            Object.hasOwn(block, "title")
+          ) {
+            content.push(Object.freeze({
+              ...common,
+              id: anthropicCandidateId(`${idPrefix}.metadata`),
+              kind: "document-metadata" as const,
+              piRepresentation: "none" as const,
+              value: Object.freeze({
+                ...(Object.hasOwn(block, "citations")
+                  ? { citations: block.citations as ReadonlyJsonObject | null }
+                  : {}),
+                ...(Object.hasOwn(block, "context")
+                  ? { context: block.context as string | null }
+                  : {}),
+                ...(Object.hasOwn(block, "title")
+                  ? { title: block.title as string | null }
+                  : {}),
+              }),
+            }));
+          }
+          break;
+        }
+        case "search_result":
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.searchResult`),
+            kind: "search-result" as const,
+            piRepresentation: "partial" as const,
+            piAttachment: messageAttachment,
+            value: normalized,
+          }));
+          break;
+        case "tool_use": {
+          if (!isRecord(block.caller) || block.caller.type === "direct") break;
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.caller`),
+            kind: "client-tool-use-caller" as const,
+            piRepresentation: "partial" as const,
+            piAttachment: Object.freeze({
+              kind: "tool-call" as const,
+              callId: block.id as string,
+            }),
+            value: block.caller as AnthropicCaller,
+          }));
+          break;
+        }
+        case "tool_result": {
+          if (!Array.isArray(block.content)) break;
+          const contentLength = block.content.length;
+          const richBlocks: Array<{
+            readonly contentIndex: number;
+            readonly piContentCount: 0 | 1;
+            readonly value: ReadonlyJsonObject;
+          }> = [];
+          const references: Array<{ readonly contentIndex: number; readonly toolName: string }> = [];
+          for (const [nestedIndex, nested] of block.content.entries()) {
+            if (!isRecord(nested)) continue;
+            if (nested.type === "tool_reference") {
+              references.push(Object.freeze({
+                contentIndex: nestedIndex,
+                toolName: nested.tool_name as string,
+              }));
+            } else if (nested.type !== "text" && nested.type !== "image") {
+              richBlocks.push(Object.freeze({
+                contentIndex: nestedIndex,
+                piContentCount:
+                  contentPiRepresentation(nested) === "partial" ? 1 : 0,
+                value: nested as ReadonlyJsonObject,
+              }));
+            }
+          }
+          const piAttachment = Object.freeze({
+            kind: "tool-result" as const,
+            callId: block.tool_use_id as string,
+          });
+          if (richBlocks.length > 0) {
+            content.push(Object.freeze({
+              ...common,
+              id: anthropicCandidateId(`${idPrefix}.richContent`),
+              kind: "rich-client-tool-result" as const,
+              piRepresentation: "partial" as const,
+              piAttachment,
+              value: Object.freeze({
+                contentLength,
+                blocks: Object.freeze(richBlocks),
+              }),
+            }));
+          }
+          for (const reference of references) {
+            content.push(Object.freeze({
+              ...common,
+              id: anthropicCandidateId(
+                `${idPrefix}.content[${reference.contentIndex}].toolReference`,
+              ),
+              kind: "tool-reference" as const,
+              piRepresentation: "partial" as const,
+              piAttachment,
+              value: Object.freeze({ contentLength, ...reference }),
+            }));
+          }
+          break;
+        }
+        case "server_tool_use":
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.serverUse`),
+            kind: "server-tool-use" as const,
+            piRepresentation: "none" as const,
+            value: normalized,
+          }));
+          break;
+        case "web_search_tool_result":
+        case "web_fetch_tool_result":
+        case "code_execution_tool_result":
+        case "bash_code_execution_tool_result":
+        case "text_editor_code_execution_tool_result":
+        case "tool_search_tool_result":
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.serverResult`),
+            kind: "server-tool-result" as const,
+            piRepresentation: "none" as const,
+            value: normalized,
+          }));
+          break;
+        case "container_upload":
+          content.push(Object.freeze({
+            ...common,
+            id: anthropicCandidateId(`${idPrefix}.fileId`),
+            kind: "container-upload" as const,
+            piRepresentation: "none" as const,
+            value: Object.freeze({ fileId: block.file_id as string }),
+          }));
+          break;
+      }
     }
   }
   return Object.freeze(content);
@@ -1327,64 +1586,330 @@ function buildToolSupplement(
 ): AnthropicProjectionSupplement["tools"] {
   if (tools === undefined) return Object.freeze([]);
   return Object.freeze(
-    tools.flatMap((tool, sourceToolIndex) => {
-      const baseline = [
-        "name",
-        "description",
-        "input_schema",
-        "strict",
-      ];
-      if (
-        tool.kind === "custom" &&
-        hasOnlyKeys(tool.source, baseline)
-      ) {
-        return [];
-      }
-      return [
-        Object.freeze({
+    tools.flatMap<AnthropicProjectionSupplement["tools"][number]>(
+      (tool, sourceToolIndex) => {
+      const source = Object.freeze({
+        kind: "tool-definition" as const,
+        toolIndex: sourceToolIndex,
+      });
+      if (tool.kind === "server") {
+        return [Object.freeze({
+          id: anthropicCandidateId(`tools[${sourceToolIndex}].serverDefinition`),
+          source,
           sourceToolIndex,
           name: tool.name,
-          kind: tool.kind,
-          piRepresentation: tool.kind === "custom" ? "partial" as const : "none" as const,
-          value: Object.freeze(structuredClone(tool.source)),
-        }),
-      ];
-    }),
+          toolKind: "server" as const,
+          kind: "server-tool-definition" as const,
+          piRepresentation: "none" as const,
+          value: withoutCandidateOnlyFields(
+            tool.source,
+            `$.tools[${sourceToolIndex}]`,
+          ),
+        })];
+      }
+
+      const piAttachment = Object.freeze({
+        kind: "tool-definition" as const,
+        toolName: tool.name,
+      });
+      const common = {
+        source,
+        piAttachment,
+        sourceToolIndex,
+        name: tool.name,
+        toolKind: "custom" as const,
+        piRepresentation: "partial" as const,
+      };
+      const candidates: AnthropicProjectionSupplement["tools"][number][] = [];
+      if (tool.source.allowed_callers !== undefined) {
+        candidates.push(Object.freeze({
+          ...common,
+          id: anthropicCandidateId(`tools[${sourceToolIndex}].allowedCallers`),
+          kind: "custom-tool-caller-policy" as const,
+          value: Object.freeze([...(tool.source.allowed_callers as string[])]) as readonly (
+            | "direct"
+            | "code_execution_20250825"
+            | "code_execution_20260120"
+          )[],
+        }));
+      }
+      if (tool.source.defer_loading !== undefined) {
+        candidates.push(Object.freeze({
+          ...common,
+          id: anthropicCandidateId(`tools[${sourceToolIndex}].deferLoading`),
+          kind: "custom-tool-deferred-loading" as const,
+          value: tool.source.defer_loading as boolean,
+        }));
+      }
+      if (tool.source.eager_input_streaming !== undefined) {
+        candidates.push(Object.freeze({
+          ...common,
+          id: anthropicCandidateId(`tools[${sourceToolIndex}].eagerInputStreaming`),
+          kind: "custom-tool-input-streaming" as const,
+          value: tool.source.eager_input_streaming as boolean | null,
+        }));
+      }
+      if (tool.source.input_examples !== undefined) {
+        candidates.push(Object.freeze({
+          ...common,
+          id: anthropicCandidateId(`tools[${sourceToolIndex}].inputExamples`),
+          kind: "custom-tool-input-examples" as const,
+          value: Object.freeze(
+            (tool.source.input_examples as Record<string, unknown>[]).map(
+              (example, exampleIndex) => immutableJsonObject(
+                example,
+                `$.tools[${sourceToolIndex}].input_examples[${exampleIndex}]`,
+              ),
+            ),
+          ),
+        }));
+      }
+        return candidates;
+      },
+    ),
   );
 }
 
-function buildMessageFrames(
-  request: ValidatedAnthropicSourceRequest,
-): AnthropicProjectionSupplement["messageFrames"] {
+function cacheValue(value: unknown): AnthropicCacheControl | null {
+  if (value === null) return null;
+  const source = value as Record<string, unknown>;
   return Object.freeze(
-    request.messages.map((message, sourceMessageIndex) => {
-      const sourceContent = message.content;
-      const entries =
-        typeof sourceContent === "string"
-          ? [Object.freeze({ sourceContentIndex: 0, ownership: "pi" as const })]
-          : (sourceContent as Array<Record<string, unknown>>).map(
-              (block, sourceContentIndex) => {
-                const piRepresentation = contentPiRepresentation(block);
-                return piRepresentation === undefined
-                  ? Object.freeze({
-                      sourceContentIndex,
-                      ownership: "pi" as const,
-                    })
-                  : Object.freeze({
-                      sourceContentIndex,
-                      ownership: "supplement" as const,
-                      consumesPi: piRepresentation === "partial",
-                      value: withoutContinuity(block),
-                    });
-              },
-            );
-      return Object.freeze({
-        sourceMessageIndex,
-        role: message.role as "user" | "assistant",
-        entries: Object.freeze(entries),
-      });
-    }),
+    source.ttl === undefined ? {} : { ttl: source.ttl as "5m" | "1h" },
   );
+}
+
+function cacheCandidateId(
+  messageIndex: number,
+  contentIndex: number,
+  nestedPath: readonly (string | number)[],
+): AnthropicCandidateId {
+  const suffix = nestedPath.map((segment) =>
+    typeof segment === "number" ? `[${segment}]` : `.${segment}`
+  ).join("");
+  return anthropicCandidateId(
+    `content[${messageIndex}:${contentIndex}]${suffix}.cacheControl`,
+  );
+}
+
+function buildCacheSupplement(
+  request: ValidatedAnthropicSourceRequest,
+  ignoredContentBlocks: ReadonlySet<string>,
+): AnthropicProjectionSupplement["cache"] {
+  const cache: AnthropicProjectionSupplement["cache"][number][] = [];
+  if (request.cacheControl.kind !== "omitted") {
+    cache.push(Object.freeze({
+      id: anthropicCandidateId("cacheControl"),
+      kind: "cache-control" as const,
+      source: Object.freeze({ kind: "request" as const, path: "$.cache_control" }),
+      attachment: Object.freeze({ kind: "request" as const }),
+      value: request.cacheControl.kind === "explicit-null"
+        ? null
+        : Object.freeze({ ...request.cacheControl.value }),
+    }));
+  }
+  if (Array.isArray(request.systemSource)) {
+    for (const [blockIndex, block] of request.systemSource.entries()) {
+      if (!Object.hasOwn(block, "cache_control")) continue;
+      cache.push(Object.freeze({
+        id: anthropicCandidateId(`system[${blockIndex}].cacheControl`),
+        kind: "cache-control" as const,
+        source: Object.freeze({ kind: "system-block" as const, blockIndex }),
+        attachment: Object.freeze({ kind: "system-block" as const, blockIndex }),
+        value: cacheValue(block.cache_control),
+      }));
+    }
+  }
+  for (const [messageIndex, message] of request.messages.entries()) {
+    if (!Array.isArray(message.content)) continue;
+    for (const [contentIndex, block] of message.content.entries()) {
+      if (!isRecord(block)) continue;
+      if (ignoredContentBlocks.has(`${messageIndex}:${contentIndex}`)) continue;
+      visitContentBlocks(block, (candidate, nestedPath) => {
+        if (!Object.hasOwn(candidate, "cache_control")) return;
+        cache.push(Object.freeze({
+          id: cacheCandidateId(messageIndex, contentIndex, nestedPath),
+          kind: "cache-control" as const,
+          source: Object.freeze({
+            kind: "message-content" as const,
+            messageIndex,
+            contentIndex,
+            ...(nestedPath.length === 0
+              ? {}
+              : { nestedPath: Object.freeze([...nestedPath]) }),
+          }),
+          attachment: Object.freeze({
+            kind: "message-content" as const,
+            messageIndex,
+            contentIndex,
+            ...(nestedPath.length === 0
+              ? {}
+              : { nestedPath: Object.freeze([...nestedPath]) }),
+          }),
+          value: cacheValue(candidate.cache_control),
+        }));
+      });
+    }
+  }
+  for (const [toolIndex, tool] of (request.tools ?? []).entries()) {
+    if (!Object.hasOwn(tool.source, "cache_control")) continue;
+    cache.push(Object.freeze({
+      id: anthropicCandidateId(`tools[${toolIndex}].cacheControl`),
+      kind: "cache-control" as const,
+      source: Object.freeze({ kind: "tool-definition" as const, toolIndex }),
+      attachment: Object.freeze({ kind: "tool-definition" as const, toolIndex }),
+      value: cacheValue(tool.source.cache_control),
+    }));
+  }
+  return Object.freeze(cache);
+}
+
+function buildSystemSupplement(
+  request: ValidatedAnthropicSourceRequest,
+): AnthropicProjectionSupplement["system"] {
+  if (!Array.isArray(request.systemSource)) return Object.freeze([]);
+  return Object.freeze(request.systemSource.map((block, blockIndex) =>
+    Object.freeze({
+      id: anthropicCandidateId(`system[${blockIndex}]`),
+      kind: "structured-system-block" as const,
+      source: Object.freeze({ kind: "system-block" as const, blockIndex }),
+      blockIndex,
+      value: withoutCandidateOnlyFields(block, `$.system[${blockIndex}]`),
+    })
+  ));
+}
+
+function buildConversationLayout(
+  request: ValidatedAnthropicSourceRequest,
+  content: AnthropicProjectionSupplement["content"],
+  cache: AnthropicProjectionSupplement["cache"],
+  repairs: readonly ConversationToolRepair[],
+  ignoredContentBlocks: ReadonlySet<string>,
+): AnthropicProjectionSupplement["conversation"] {
+  const contentIds = new Map<string, AnthropicCandidateId[]>();
+  for (const candidate of content) {
+    const key = `${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}`;
+    const ids = contentIds.get(key) ?? [];
+    ids.push(candidate.id);
+    contentIds.set(key, ids);
+  }
+  const cacheIds = new Map<string, AnthropicCandidateId[]>();
+  for (const candidate of cache) {
+    if (candidate.attachment.kind !== "message-content") continue;
+    const key = `${candidate.attachment.messageIndex}:${candidate.attachment.contentIndex}`;
+    const ids = cacheIds.get(key) ?? [];
+    ids.push(candidate.id);
+    cacheIds.set(key, ids);
+  }
+  const repairEntries = (
+    beforeMessageIndex: number,
+    beforeContentIndex: number | undefined,
+  ): AnthropicProjectionSupplement["conversation"]["messages"][number]["entries"] =>
+    Object.freeze(
+      repairs
+        .filter((repair) =>
+          repair.beforeMessageIndex === beforeMessageIndex &&
+          repair.beforeContentIndex === beforeContentIndex
+        )
+        .map((repair) => Object.freeze({
+          kind: "synthetic-tool-result" as const,
+          callId: repair.callId,
+          piAttachment: Object.freeze({
+            kind: "tool-result" as const,
+            callId: repair.callId,
+          }),
+          candidateIds: Object.freeze([]) as readonly [],
+        })),
+    );
+  let sawMessageSystem = false;
+  const messages: AnthropicProjectionSupplement["conversation"]["messages"][number][] = [];
+  for (const [sourceMessageIndex, message] of request.messages.entries()) {
+    const repairsBeforeMessage = repairEntries(sourceMessageIndex, undefined);
+    if (repairsBeforeMessage.length > 0) {
+      messages.push(Object.freeze({
+        sourceMessageIndex,
+        effectiveRole: "user" as const,
+        entries: repairsBeforeMessage,
+      }));
+    }
+
+    const firstMessageSystem = message.role === "system" && !sawMessageSystem;
+    if (message.role === "system") sawMessageSystem = true;
+    const sourceContent = message.content;
+    const entries: AnthropicProjectionSupplement["conversation"]["messages"][number]["entries"][number][] = [];
+    if (typeof sourceContent === "string") {
+      entries.push(...repairEntries(sourceMessageIndex, 0));
+      if (
+        !firstMessageSystem &&
+        !(message.role === "system" && sourceContent.length === 0) &&
+        sourceContent.trim().length > 0
+      ) {
+        entries.push(Object.freeze({
+          kind: "source-content" as const,
+          sourceContentIndex: 0,
+          piAttachment: Object.freeze({
+            kind: "message-content" as const,
+            messageIndex: sourceMessageIndex,
+            contentIndex: 0,
+          }),
+          candidateIds: Object.freeze([]) as readonly AnthropicCandidateId[],
+        }));
+      }
+    } else {
+      for (const [sourceContentIndex, block] of (
+        sourceContent as Array<Record<string, unknown>>
+      ).entries()) {
+        const key = `${sourceMessageIndex}:${sourceContentIndex}`;
+        if (ignoredContentBlocks.has(key)) continue;
+        entries.push(...repairEntries(sourceMessageIndex, sourceContentIndex));
+        if (firstMessageSystem && block.type === "text") continue;
+        if (
+          message.role === "system" &&
+          block.type === "text" &&
+          block.text === ""
+        ) continue;
+        const ids = [
+          ...(contentIds.get(key) ?? []),
+          ...(cacheIds.get(key) ?? []),
+        ];
+        const normalized = withoutContentCandidateOnlyFields(
+          block,
+          `$.messages[${sourceMessageIndex}].content[${sourceContentIndex}]`,
+        );
+        const representation = contentPiRepresentation(
+          normalized as Record<string, unknown>,
+        );
+        entries.push(Object.freeze({
+          kind: "source-content" as const,
+          sourceContentIndex,
+          ...(representation === "none"
+            ? {}
+            : {
+                piAttachment: Object.freeze({
+                  kind: "message-content" as const,
+                  messageIndex: sourceMessageIndex,
+                  contentIndex: sourceContentIndex,
+                }),
+              }),
+          candidateIds: Object.freeze(ids),
+        }));
+      }
+    }
+    if (entries.length === 0) continue;
+    messages.push(Object.freeze({
+      sourceMessageIndex,
+      effectiveRole: message.role === "assistant" ? "assistant" : "user",
+      entries: Object.freeze(entries),
+    }));
+  }
+  const repairsAfterHistory = repairEntries(request.messages.length, undefined);
+  if (repairsAfterHistory.length > 0) {
+    messages.push(Object.freeze({
+      sourceMessageIndex: request.messages.length,
+      effectiveRole: "user" as const,
+      entries: repairsAfterHistory,
+    }));
+  }
+  return Object.freeze({ messages: Object.freeze(messages) });
 }
 
 export function convertValidatedAnthropicRequest(
@@ -1393,7 +1918,6 @@ export function convertValidatedAnthropicRequest(
 ): AnthropicRequestConversion {
   return convertValidatedAnthropicRequestWithPolicy(request, receivedAt, {
     unknownContent: "error",
-    localCacheControl: "ignore",
   });
 }
 
@@ -1430,30 +1954,95 @@ export function convertValidatedAnthropicRequestWithPolicy(
       ? undefined
       : new Set(request.tools.map((tool) => tool.name));
   const pendingCalls: PendingToolCall[] = [];
+  const seenClientCallIds = new Set<string>();
+  const conversationRepairs: ConversationToolRepair[] = [];
+  const ignoredContentBlocks = new Set<string>();
 
-  const pushRepairResults = (jsonPath: string): void => {
+  const pushRepairResults = (
+    jsonPath: string,
+    insertion: Omit<ConversationToolRepair, "callId">,
+  ): void => {
     if (pendingCalls.length === 0) return;
-    throw new UnsupportedFeature(
-      `Unresolved tool call at ${jsonPath}: ${pendingCalls[0]?.id ?? "unknown"}`,
-    );
+    for (const call of pendingCalls) {
+      messages.push({
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: call.name,
+        isError: true,
+        content: [{ type: "text", text: INCOMPLETE_TOOL_CALL_RESULT_TEXT }],
+        timestamp: receivedAt,
+      });
+      conversationRepairs.push(Object.freeze({
+        ...insertion,
+        callId: call.id,
+      }));
+      notices.push(
+        requestNotice(
+          UNRESOLVED_TOOL_CALL_REPAIRED_NOTICE_CODE,
+          "degrade",
+          jsonPath,
+        ),
+      );
+    }
+    pendingCalls.length = 0;
   };
 
   const context: Context = { messages };
   if (request.systemPrompt !== undefined) {
     context.systemPrompt = request.systemPrompt;
   }
+  let hasMessageLevelSystem = false;
+
+  const appendSystemPrompt = (text: string): void => {
+    context.systemPrompt = context.systemPrompt === undefined
+      ? text
+      : `${context.systemPrompt}\n${text}`;
+  };
 
   for (const [messageIndex, message] of request.messages.entries()) {
-    const sourceRole = message.role as "user" | "assistant";
-    const role = sourceRole;
+    const sourceRole = message.role as "user" | "assistant" | "system";
     const rawContent = message.content;
+    const isFirstMessageLevelSystem =
+      sourceRole === "system" && !hasMessageLevelSystem;
+    if (isFirstMessageLevelSystem) {
+      hasMessageLevelSystem = true;
+      notices.push(
+        requestNotice(
+          MESSAGE_SYSTEM_DEGRADED_NOTICE_CODE,
+          "degrade",
+          "$.messages",
+        ),
+      );
+      if (typeof rawContent === "string") {
+        appendSystemPrompt(rawContent);
+        continue;
+      }
+    }
+    const role = sourceRole === "assistant" ? "assistant" : "user";
     const blocks: ConvertedBlock[] =
-      typeof rawContent === "string"
+      typeof rawContent === "string" &&
+        !(sourceRole === "system" && rawContent.length === 0)
         ? [{ type: "text", text: rawContent }]
         : [];
-    const blockSourceIndexes: number[] = typeof rawContent === "string" ? [-1] : [];
+    const blockSourceIndexes: number[] = blocks.length === 0 ? [] : [-1];
     if (Array.isArray(rawContent)) {
       for (const [blockIndex, block] of rawContent.entries()) {
+        if (
+          isFirstMessageLevelSystem &&
+          isRecord(block) &&
+          block.type === "text"
+        ) {
+          appendSystemPrompt(block.text as string);
+          continue;
+        }
+        if (
+          sourceRole === "system" &&
+          isRecord(block) &&
+          block.type === "text" &&
+          block.text === ""
+        ) {
+          continue;
+        }
         const converted = convertBlock(
           block as Record<string, unknown>,
           pendingCalls,
@@ -1465,12 +2054,17 @@ export function convertValidatedAnthropicRequestWithPolicy(
         if (converted !== undefined) {
           blocks.push(converted);
           blockSourceIndexes.push(blockIndex);
+        } else {
+          ignoredContentBlocks.add(`${messageIndex}:${blockIndex}`);
         }
       }
     }
 
     if (role === "assistant") {
-      pushRepairResults(`$.messages[${messageIndex}]`);
+      pushRepairResults(
+        `$.messages[${messageIndex}]`,
+        { beforeMessageIndex: messageIndex },
+      );
       const assistant = convertHistoricalAssistant(
         blocks,
         request.selector,
@@ -1546,6 +2140,10 @@ export function convertValidatedAnthropicRequestWithPolicy(
       pendingCalls.length = 0;
       for (const block of blocks) {
         if (block.type === "toolUse") {
+          if (seenClientCallIds.has(block.id)) {
+            throw new InvalidRequest(`Duplicate tool_use id in history: ${block.id}`);
+          }
+          seenClientCallIds.add(block.id);
           pendingCalls.push({ id: block.id, name: block.name });
         }
       }
@@ -1564,6 +2162,15 @@ export function convertValidatedAnthropicRequestWithPolicy(
     const ordinary: Array<TextContent | ImageContent> = [];
     const sourceContentWasEmpty = blocks.length === 0;
     const consumedResultIds = new Set<string>();
+    let repairedMissingCalls = false;
+    const repairCallsMissingFromThisMessage = (sourceContentIndex: number): void => {
+      if (repairedMissingCalls) return;
+      repairedMissingCalls = true;
+      pushRepairResults(
+        `$.messages[${messageIndex}]`,
+        { beforeMessageIndex: messageIndex, beforeContentIndex: sourceContentIndex },
+      );
+    };
     const flushOrdinary = (): void => {
       if (ordinary.length === 0) return;
       const previous = messages.at(-1);
@@ -1580,7 +2187,8 @@ export function convertValidatedAnthropicRequestWithPolicy(
       }
       ordinary.length = 0;
     };
-    for (const block of blocks) {
+    for (const [convertedIndex, block] of blocks.entries()) {
+      const sourceContentIndex = Math.max(0, blockSourceIndexes[convertedIndex] ?? 0);
       if (block.type === "toolResult") {
         flushOrdinary();
         if (consumedResultIds.has(block.toolUseId)) {
@@ -1589,6 +2197,14 @@ export function convertValidatedAnthropicRequestWithPolicy(
           );
         }
         consumedResultIds.add(block.toolUseId);
+        const callIndex = pendingCalls.findIndex(
+          (call) => call.id === block.toolUseId,
+        );
+        if (callIndex < 0) {
+          throw new InvalidRequest(
+            `Orphan or duplicate tool_result id: ${block.toolUseId}`,
+          );
+        }
         const result: ToolResultMessage = {
           role: "toolResult",
           toolCallId: block.toolUseId,
@@ -1601,11 +2217,9 @@ export function convertValidatedAnthropicRequestWithPolicy(
             : { addedToolNames: block.addedToolNames }),
         };
         messages.push(result);
-        const callIndex = pendingCalls.findIndex(
-          (call) => call.id === block.toolUseId,
-        );
-        if (callIndex >= 0) pendingCalls.splice(callIndex, 1);
+        pendingCalls.splice(callIndex, 1);
       } else if (block.type === "transcript") {
+        repairCallsMissingFromThisMessage(sourceContentIndex);
         ordinary.push({ type: "text", text: block.text });
       } else if (block.type === "toolUse") {
         throw new InvalidRequest(
@@ -1615,19 +2229,29 @@ export function convertValidatedAnthropicRequestWithPolicy(
         throw new InvalidRequest(
           "thinking is valid only in an assistant turn",
         );
-      } else if (block.type !== "supplementOnly") {
+      } else if (block.type === "supplementOnly") {
+        repairCallsMissingFromThisMessage(sourceContentIndex);
+      } else {
+        repairCallsMissingFromThisMessage(sourceContentIndex);
         ordinary.push(block);
       }
     }
     flushOrdinary();
     if (sourceContentWasEmpty) {
-      // An explicitly empty source user message is preserved as an empty
-      // UserMessage (frozen grammar boundary).
-      messages.push({ role: "user", content: [], timestamp: receivedAt });
+      repairCallsMissingFromThisMessage(0);
+      if (sourceRole !== "system") {
+        // An explicitly empty source user message is preserved as an empty
+        // UserMessage (frozen grammar boundary). Compatibility system turns
+        // have no ordinary fragment after promotion and therefore disappear.
+        messages.push({ role: "user", content: [], timestamp: receivedAt });
+      }
     }
   }
 
-  pushRepairResults("$.messages");
+  pushRepairResults(
+    "$.messages",
+    { beforeMessageIndex: request.messages.length },
+  );
 
   const tools = convertAnthropicTools(request.tools);
   if (tools !== undefined) context.tools = tools;
@@ -1656,59 +2280,172 @@ export function convertValidatedAnthropicRequestWithPolicy(
     };
     options.thinkingBudgets = Object.freeze(budgets);
   }
-  if (
-    request.cacheControl.kind === "specified" &&
-    policy.localCacheControl === "promote"
-  ) {
-    const retention =
-      request.cacheControl.value.ttl === "1h" ? "long" : "short";
-    options.cacheRetention = retention;
-    notices.push(
-      requestNotice(
-        LOCAL_CACHE_PROMOTED_NOTICE_CODE,
-        "degrade",
-        "$.cache_control",
-      ),
-    );
-  }
   if (request.metadataUserId.kind === "specified") {
     options.metadata = Object.freeze({ user_id: request.metadataUserId.value });
   }
 
-  const sampling: AnthropicProjectionSupplement["sampling"] = Object.freeze({
+  const requestSource = (path: string) =>
+    Object.freeze({ kind: "request" as const, path });
+  const presenceValue = <T>(presence: AnthropicPresence<T>): T | null | undefined =>
+    presence.kind === "omitted"
+      ? undefined
+      : presence.kind === "explicit-null"
+        ? null
+        : presence.value;
+  const contentSupplement = buildContentSupplement(request);
+  const toolSupplement = buildToolSupplement(request.tools);
+  const cacheSupplement = buildCacheSupplement(request, ignoredContentBlocks);
+  const systemSupplement = buildSystemSupplement(request);
+  const outputFormat = presenceValue(request.outputFormat);
+  const metadataUserId = presenceValue(request.metadataUserId);
+  const serviceTier = presenceValue(request.serviceTier);
+  const inferenceGeo = presenceValue(request.inferenceGeo);
+  const container = presenceValue(request.container);
+  const controls: AnthropicProjectionSupplement["controls"] = Object.freeze({
+    outputTokenCeiling: Object.freeze({
+      id: anthropicCandidateId("maxTokens"),
+      kind: "output-token-ceiling" as const,
+      writer: "ceiling-verifier" as const,
+      source: requestSource("$.max_tokens"),
+      value: request.maxTokens,
+    }),
     ...(request.temperature === undefined
       ? {}
-      : { temperature: request.temperature }),
-    ...(request.topP === undefined ? {} : { topP: request.topP }),
-    ...(request.topK === undefined ? {} : { topK: request.topK }),
-  });
-  const supplement: AnthropicProjectionSupplement = Object.freeze({
-    outputTokenCeiling: request.maxTokens,
-    sampling,
-    ...(request.stopSequences === undefined
-      ? {}
-      : { stopSequences: Object.freeze([...request.stopSequences]) }),
-    ...(request.toolChoice === undefined ? {} : { toolChoice: request.toolChoice }),
-    outputFormat: request.outputFormat,
-    metadataUserId: request.metadataUserId,
-    serviceTier: request.serviceTier,
-    inferenceGeo: request.inferenceGeo,
-    container: request.container,
-    cacheControl: request.cacheControl,
-    ...(request.systemSource === undefined || typeof request.systemSource === "string"
-      ? {}
       : {
-          system: Object.freeze({
-            kind: "blocks" as const,
-            blocks: Object.freeze(
-              request.systemSource.map((block) => Object.freeze(structuredClone(block))),
-            ),
+          temperature: Object.freeze({
+            id: anthropicCandidateId("sampling.temperature"),
+            kind: "pi-verification" as const,
+            writer: "pi-verifier" as const,
+            source: requestSource("$.temperature"),
+            value: request.temperature,
           }),
         }),
-    ...(request.finalAssistantPrefill ? { finalAssistantPrefill: true as const } : {}),
-    messageFrames: buildMessageFrames(request),
-    content: buildContentSupplement(request),
-    tools: buildToolSupplement(request.tools),
+    ...(request.topP === undefined
+      ? {}
+      : {
+          topP: Object.freeze({
+            id: anthropicCandidateId("sampling.topP"),
+            kind: "pi-first-projection" as const,
+            writer: "pi-first-projector" as const,
+            source: requestSource("$.top_p"),
+            value: request.topP,
+          }),
+        }),
+    ...(request.topK === undefined
+      ? {}
+      : {
+          topK: Object.freeze({
+            id: anthropicCandidateId("sampling.topK"),
+            kind: "pi-first-projection" as const,
+            writer: "pi-first-projector" as const,
+            source: requestSource("$.top_k"),
+            value: request.topK,
+          }),
+        }),
+    ...(request.stopSequences === undefined
+      ? {}
+      : {
+          stopSequences: Object.freeze({
+            id: anthropicCandidateId("stopSequences"),
+            kind: "target-projection" as const,
+            writer: "target-projector" as const,
+            source: requestSource("$.stop_sequences"),
+            value: Object.freeze([...request.stopSequences]),
+          }),
+        }),
+    ...(request.toolChoice === undefined
+      ? {}
+      : {
+          toolChoice: Object.freeze({
+            id: anthropicCandidateId("toolChoice"),
+            kind: "tool-choice" as const,
+            writer: "target-projector" as const,
+            source: requestSource("$.tool_choice"),
+            value: Object.freeze({ ...request.toolChoice }),
+          }),
+        }),
+    ...(outputFormat === undefined
+      ? {}
+      : {
+          outputFormat: Object.freeze({
+            id: anthropicCandidateId("outputFormat"),
+            kind: "target-projection" as const,
+            writer: "target-projector" as const,
+            source: requestSource("$.output_config.format"),
+            value: outputFormat === null
+              ? null
+              : Object.freeze({ ...outputFormat }),
+          }),
+        }),
+    ...(metadataUserId === undefined
+      ? {}
+      : {
+          metadataUserId: Object.freeze({
+            id: anthropicCandidateId("metadataUserId"),
+            kind: "pi-first-projection" as const,
+            writer: "pi-first-projector" as const,
+            source: requestSource("$.metadata.user_id"),
+            value: metadataUserId,
+          }),
+        }),
+    ...(serviceTier === undefined
+      ? {}
+      : {
+          serviceTier: Object.freeze({
+            id: anthropicCandidateId("serviceTier"),
+            kind: "target-projection" as const,
+            writer: "target-projector" as const,
+            source: requestSource("$.service_tier"),
+            value: serviceTier,
+          }),
+        }),
+    ...(inferenceGeo === undefined
+      ? {}
+      : {
+          inferenceGeo: Object.freeze({
+            id: anthropicCandidateId("inferenceGeo"),
+            kind: "target-projection" as const,
+            writer: "target-projector" as const,
+            source: requestSource("$.inference_geo"),
+            value: inferenceGeo,
+          }),
+        }),
+    ...(container === undefined
+      ? {}
+      : {
+          container: Object.freeze({
+            id: anthropicCandidateId("container"),
+            kind: "target-projection" as const,
+            writer: "target-projector" as const,
+            source: requestSource("$.container"),
+            value: container,
+          }),
+        }),
+    ...(request.finalAssistantPrefill
+      ? {
+          finalAssistantPrefill: Object.freeze({
+            id: anthropicCandidateId("finalAssistantPrefill"),
+            kind: "target-projection" as const,
+            writer: "target-projector" as const,
+            source: requestSource("$.messages"),
+            value: true as const,
+          }),
+        }
+      : {}),
+  });
+  const supplement: AnthropicProjectionSupplement = Object.freeze({
+    controls,
+    system: systemSupplement,
+    conversation: buildConversationLayout(
+      request,
+      contentSupplement,
+      cacheSupplement,
+      conversationRepairs,
+      ignoredContentBlocks,
+    ),
+    content: contentSupplement,
+    tools: toolSupplement,
+    cache: cacheSupplement,
   });
   const reasoning: AnthropicReasoningSemantics = Object.freeze({
     activation: request.reasoning.activation,
@@ -1758,6 +2495,6 @@ export function parseAnthropicTextInvocation(
   return convertValidatedAnthropicRequestWithPolicy(
     validateAnthropicSourceRequest(value),
     receivedAt,
-    { unknownContent: "error", localCacheControl: "ignore" },
+    { unknownContent: "error" },
   );
 }

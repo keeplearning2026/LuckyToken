@@ -107,6 +107,7 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
           _context: unknown,
           options?: ModelsSimpleStreamOptions,
         ) => {
+          expect(options?.timeoutMs).toBe(345_678);
           let emitted = false;
           return {
             [Symbol.asyncIterator]: () => ({
@@ -146,6 +147,7 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
         models,
         modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         maxRequestBytes: 1_000_000,
+        requestTimeoutMs: 345_678,
         routerDefaults: {},
         createMessageId: () => "msg_semantic_evidence",
         now: () => 1_787_600_100_000,

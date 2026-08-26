@@ -1,7 +1,10 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { DEFAULT_MAX_REQUEST_BYTES } from "./data-plane-limits.js";
+import {
+  DEFAULT_MAX_REQUEST_BYTES,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from "./data-plane-limits.js";
 
 const CONFIG_FILE_MODE = 0o600;
 
@@ -24,9 +27,7 @@ function firstRunConfig(): unknown {
         conversion: {
           request: {
             unknownContent: "error",
-            localCacheControl: "ignore",
           },
-          response: { unknownPiContent: "error" },
         },
       },
       "openai-responses": {
@@ -59,7 +60,7 @@ function firstRunConfig(): unknown {
     },
     limits: {
       maxRequestBytes: DEFAULT_MAX_REQUEST_BYTES,
-      requestTimeoutMs: 120000,
+      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
     },
   };
 }

@@ -8,14 +8,15 @@ import type {
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
+  AnthropicProjectionOutcomeId,
 } from "../contract.js";
 
 function add(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   outcome: AnthropicProjectionDisposition,
 ): void {
-  outcomes.push(Object.freeze({ control, outcome: Object.freeze(outcome) }));
+  outcomes.push(Object.freeze({ candidateId, outcome: Object.freeze(outcome) }));
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -24,17 +25,17 @@ function same(left: unknown, right: unknown): boolean {
 
 function exact(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   current: unknown,
   expected: unknown,
   assign: () => void,
 ): void {
   if (same(current, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(outcomes, candidateId, { kind: "pi-native" });
     return;
   }
   assign();
-  add(outcomes, control, {
+  add(outcomes, candidateId, {
     kind: "payload-projected",
     projector: "anthropic-to-mistral-conversations",
     warning: "pi-native-mapping-repaired",
@@ -64,7 +65,7 @@ function clearMistralReasoning(payload: Record<string, unknown>): boolean {
 function mappedToolChoice(
   invocation: AnthropicSemanticInvocation,
 ): unknown | undefined {
-  const choice = invocation.supplement.toolChoice;
+  const choice = invocation.supplement.controls.toolChoice?.value;
   if (choice === undefined) return undefined;
   if (choice.kind === "none") return "none";
   if (choice.kind === "auto") return "auto";
@@ -109,13 +110,13 @@ function projectAnthropicToMistral(
   const supplement = input.invocation.supplement;
 
   if (phase === "supplement") {
-  const finalMaxTokens = Math.min(payload.maxTokens, supplement.outputTokenCeiling);
+  const finalMaxTokens = Math.min(payload.maxTokens, supplement.controls.outputTokenCeiling.value);
   exact(outcomes, "maxTokens", payload.maxTokens, finalMaxTokens, () => {
     payload.maxTokens = finalMaxTokens;
   });
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
-    ["sampling.topP", "topP", supplement.sampling.topP],
+    ["sampling.temperature", "temperature", supplement.controls.temperature?.value],
+    ["sampling.topP", "topP", supplement.controls.topP?.value],
   ] as const) {
     if (value === undefined) continue;
     if (control === "sampling.temperature") {
@@ -128,56 +129,55 @@ function projectAnthropicToMistral(
       payload[field] = value;
     });
   }
-  if (supplement.stopSequences !== undefined) {
+  if (supplement.controls.stopSequences !== undefined) {
     exact(
       outcomes,
       "stopSequences",
       payload.stop,
-      supplement.stopSequences,
+      supplement.controls.stopSequences.value,
       () => {
-        payload.stop = [...supplement.stopSequences!];
+        payload.stop = [...supplement.controls.stopSequences!.value];
       },
     );
   }
 
-  const format = supplement.outputFormat;
-  if (format.kind === "specified") {
+  const format = supplement.controls.outputFormat?.value;
+  if (format?.kind === "json-schema") {
     const expected = {
       type: "json_schema",
       jsonSchema: {
         name: "anthropic_output",
         strict: true,
-        schemaDefinition: format.value.schema,
+        schemaDefinition: format.schema,
       },
     };
     exact(outcomes, "outputFormat", payload.responseFormat, expected, () => {
       payload.responseFormat = expected;
     });
-  } else if (format.kind === "explicit-null") {
+  } else if (format === null) {
     delete payload.responseFormat;
     add(outcomes, "outputFormat", { kind: "pi-native" });
   }
 
   const choice = mappedToolChoice(input.invocation);
   if (choice !== undefined) {
-    exact(outcomes, "toolChoice", payload.toolChoice, choice, () => {
-      payload.toolChoice = choice;
-    });
-  }
-  const sourceChoice = supplement.toolChoice;
-  if (
-    sourceChoice !== undefined &&
-    sourceChoice.kind !== "none" &&
-    sourceChoice.disableParallelToolUse
-  ) {
-    exact(
+    const sourceChoice = supplement.controls.toolChoice!.value;
+    const needsSerial =
+      sourceChoice.kind !== "none" && sourceChoice.disableParallelToolUse;
+    const choiceExact = same(payload.toolChoice, choice);
+    const serialExact = !needsSerial || same(payload.parallelToolCalls, false);
+    if (!choiceExact) payload.toolChoice = choice;
+    if (needsSerial && !serialExact) payload.parallelToolCalls = false;
+    add(
       outcomes,
-      "toolChoice.disableParallelToolUse",
-      payload.parallelToolCalls,
-      false,
-      () => {
-        payload.parallelToolCalls = false;
-      },
+      "toolChoice",
+      choiceExact && serialExact
+        ? { kind: "pi-native" }
+        : {
+            kind: "payload-projected",
+            projector: "anthropic-to-mistral-conversations",
+            warning: "pi-native-mapping-repaired",
+          },
     );
   }
   } else {

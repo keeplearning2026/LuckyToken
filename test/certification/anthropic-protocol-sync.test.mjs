@@ -30,7 +30,7 @@ async function loadAuthorities() {
   };
 }
 
-test("binds the conversion method to the synchronized immutable protocol artifact", async () => {
+test("identifies the synchronized protocol artifacts by their explicit revision headers", async () => {
   const { protocol, conversion } = await loadAuthorities();
 
   assert.match(

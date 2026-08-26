@@ -9,7 +9,10 @@ import { assertProviderPackageSpecifier } from "./providers/package-loader.js";
 import { parseAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
 import { parseOpenAIResponsesConfiguration } from "./protocols/openai-responses/configuration.js";
 import { parseProviderNativeResponsesConfiguration } from "./provider-native-responses/configuration.js";
-import { DEFAULT_MAX_REQUEST_BYTES } from "./data-plane-limits.js";
+import {
+  DEFAULT_MAX_REQUEST_BYTES,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from "./data-plane-limits.js";
 import {
   TOKEN_CONFIG_SCHEMA_VERSION,
   OwnedFileCompatibilityError,
@@ -248,7 +251,7 @@ export async function loadTokenCliConfig(
       ),
       requestTimeoutMs: safeInteger(
         limits.requestTimeoutMs,
-        120_000,
+        DEFAULT_REQUEST_TIMEOUT_MS,
         "limits.requestTimeoutMs",
         1,
         Number.MAX_SAFE_INTEGER,

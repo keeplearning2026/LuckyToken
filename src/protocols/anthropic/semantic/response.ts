@@ -27,16 +27,23 @@ export interface AnthropicInterpretedResponse {
 
 type AnthropicStopReason = "end_turn" | "max_tokens" | "tool_use" | "refusal";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasToolCall(message: AssistantMessage): boolean {
+  return message.content.some((block) =>
+    isRecord(block as unknown) && block.type === "toolCall"
+  );
+}
+
 function fallbackStopReason(message: AssistantMessage): AnthropicStopReason {
   if (message.stopReason === "length") return "max_tokens";
   if (message.stopReason === "toolUse") {
-    if (!message.content.some((block) => block.type === "toolCall")) {
-      throw new Error("Pi toolUse terminal has no tool-call content");
-    }
     return "tool_use";
   }
   if (message.stopReason === "stop") {
-    return message.content.some((block) => block.type === "toolCall")
+    return hasToolCall(message)
       ? "tool_use"
       : "end_turn";
   }
@@ -73,7 +80,9 @@ function mapRawStopReason(message: AssistantMessage): {
         break;
       }
       if (raw === "pause_turn") {
-        throw new Error("Anthropic pause_turn lost its continuation state in Pi IR");
+        reason = fallbackStopReason(message);
+        normalized = true;
+        break;
       }
       if (raw === "refusal") {
         reason = "refusal";
@@ -143,14 +152,9 @@ function mapRawStopReason(message: AssistantMessage): {
       return { reason: fallbackStopReason(message), normalized: true };
   }
 
-  const hasToolCall = message.content.some((block) => block.type === "toolCall");
-  if (reason === "refusal" && hasToolCall) {
-    throw new Error("Anthropic refusal terminal conflicts with Pi tool-call content");
-  }
-  if (reason === "tool_use" && !hasToolCall) {
-    throw new Error("Provider tool terminal has no tool-call content in Pi IR");
-  }
-  if (hasToolCall && reason !== "tool_use") {
+  const containsToolCall = hasToolCall(message);
+  const authoritativeTerminal = reason === "refusal" || reason === "max_tokens";
+  if (containsToolCall && reason !== "tool_use" && !authoritativeTerminal) {
     if (
       message.api === "google-generative-ai" ||
       message.api === "google-vertex" ||
@@ -171,7 +175,7 @@ function mapRawStopReason(message: AssistantMessage): {
       ? "toolUse"
       : "stop";
   if (message.stopReason !== expectedPi) {
-    reason = fallbackStopReason(message);
+    if (!authoritativeTerminal) reason = fallbackStopReason(message);
     normalized = true;
   }
   return {
@@ -256,36 +260,20 @@ const CONTINUITY_CERTIFIED_PI_APIS = new Set([
  * wire can attach a server caller to the same tool-use shape and Pi 0.84.2
  * discards that caller field.
  */
-const DIRECT_TOOL_CALLER_CERTIFIED_PI_APIS = new Set([
-  "commandcode-private",
-  "openai-completions",
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-codex-responses",
-  "mistral-conversations",
-  "google-generative-ai",
-  "google-vertex",
-  "bedrock-converse-stream",
-  "pi-messages",
-]);
-
 function hasCertifiedBedrockContinuity(message: AssistantMessage): boolean {
   return message.api === "bedrock-converse-stream" &&
     message.provider === "amazon-bedrock" &&
     message.model === "us.anthropic.claude-sonnet-4-6";
 }
 
-function assertContinuityAttachmentCertified(
+function continuityAttachmentCertified(
   message: AssistantMessage,
-  contentIndex: number,
-): void {
+): boolean {
   if (
     CONTINUITY_CERTIFIED_PI_APIS.has(message.api) ||
     hasCertifiedBedrockContinuity(message)
-  ) return;
-  throw new Error(
-    `Pi API ${message.api} continuity at content[${contentIndex}] is not certified by a pinned Provider-response parser fixture`,
-  );
+  ) return true;
+  return false;
 }
 
 export function interpretAnthropicAssistantResponse(
@@ -303,11 +291,19 @@ export function interpretAnthropicAssistantResponse(
   >();
   const nativeThinkingIndexes = new Set<number>();
   const toolCallerByContentIndex = new Map<number, { readonly type: "direct" }>();
-  message.content.forEach((block, index) => {
+  message.content.forEach((candidate, index) => {
+    const block = candidate as unknown;
+    if (!isRecord(block) || typeof block.type !== "string") return;
     const attachments: AnthropicContinuityAttachment[] = [];
-    if (block.type === "thinking" && block.thinkingSignature !== undefined) {
-      assertContinuityAttachmentCertified(message, index);
-      if (hasNativeAnthropicThinkingSignature(message)) {
+    if (
+      block.type === "thinking" &&
+      typeof block.thinkingSignature === "string" &&
+      block.thinkingSignature.length > 0
+    ) {
+      if (!continuityAttachmentCertified(message)) {
+        // Uncertified opaque state is target-bound auxiliary data. The visible
+        // block remains portable and the opaque value is intentionally dropped.
+      } else if (hasNativeAnthropicThinkingSignature(message)) {
         nativeThinkingIndexes.add(index);
         attachments.push({
           target: "thinking",
@@ -322,26 +318,32 @@ export function interpretAnthropicAssistantResponse(
           ...(block.redacted === true ? { representation: "redacted" } : {}),
         });
       }
-    } else if (block.type === "text" && block.textSignature !== undefined) {
-      assertContinuityAttachmentCertified(message, index);
-      attachments.push({
-        target: "text",
-        kind: "opaque-signature",
-        value: block.textSignature,
-      });
-    } else if (block.type === "toolCall" && block.thoughtSignature !== undefined) {
-      assertContinuityAttachmentCertified(message, index);
-      attachments.push({
-        target: "toolCall",
-        callId: block.id,
-        kind: "opaque-signature",
-        value: block.thoughtSignature,
-      });
+    } else if (block.type === "text" && typeof block.textSignature === "string") {
+      if (continuityAttachmentCertified(message)) {
+        attachments.push({
+          target: "text",
+          kind: "opaque-signature",
+          value: block.textSignature,
+        });
+      }
+    } else if (
+      block.type === "toolCall" &&
+      typeof block.id === "string" &&
+      typeof block.thoughtSignature === "string"
+    ) {
+      if (continuityAttachmentCertified(message)) {
+        attachments.push({
+          target: "toolCall",
+          callId: block.id,
+          kind: "opaque-signature",
+          value: block.thoughtSignature,
+        });
+      }
     }
     if (
       block.type === "toolCall" &&
-      directToolNames.has(block.name) &&
-      DIRECT_TOOL_CALLER_CERTIFIED_PI_APIS.has(message.api)
+      typeof block.name === "string" &&
+      directToolNames.has(block.name)
     ) {
       toolCallerByContentIndex.set(index, Object.freeze({ type: "direct" as const }));
     }

@@ -11,7 +11,7 @@
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:f6483f43e534d347cc4a391818005d0d19c4ca9e8ed56ddd9e372fc553ddf4ff"
+      "sha256": "sha256:c75a329fe9d32e34a67e7082c95c7f5b1a764803b079b6bc6c71a9c2f0d43cd6"
     },
     {
       "id": "responses-pi-conversion",

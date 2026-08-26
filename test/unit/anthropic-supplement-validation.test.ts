@@ -11,6 +11,111 @@ function request(content: unknown): Record<string, unknown> {
 }
 
 describe("Anthropic supplement validation", () => {
+  it("preserves an own __proto__ key in an arbitrary JSON Schema", () => {
+    const schema = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string"}}}',
+    ) as Record<string, unknown>;
+    const converted = parseAnthropicTextInvocation({
+      ...request("hello"),
+      output_config: { format: { type: "json_schema", schema } },
+    }, 1);
+    const outputFormat = converted.invocation.supplement.controls.outputFormat?.value;
+    expect(outputFormat).not.toBeNull();
+    expect(Object.hasOwn(outputFormat!.schema.properties as object, "__proto__")).toBe(true);
+    expect(JSON.stringify(outputFormat!.schema)).toBe(JSON.stringify(schema));
+  });
+
+  it("rejects an accessor inside a consumed arbitrary JSON Schema", () => {
+    const schema: Record<string, unknown> = {};
+    Object.defineProperty(schema, "type", {
+      enumerable: true,
+      get: () => "object",
+    });
+
+    expect(() => parseAnthropicTextInvocation({
+      ...request("hello"),
+      output_config: { format: { type: "json_schema", schema } },
+    }, 1)).toThrow(/accessor/iu);
+  });
+
+  it("creates one atomic candidate for each independent custom-tool extension", () => {
+    const converted = parseAnthropicTextInvocation({
+      ...request("hello"),
+      tools: [{
+        name: "lookup",
+        input_schema: { type: "object" },
+        allowed_callers: ["direct"],
+        defer_loading: true,
+        eager_input_streaming: null,
+        input_examples: [{ query: "example" }],
+      }],
+    }, 1);
+
+    expect(converted.invocation.supplement.tools).toEqual([
+      expect.objectContaining({
+        id: "tools[0].allowedCallers",
+        kind: "custom-tool-caller-policy",
+        value: ["direct"],
+      }),
+      expect.objectContaining({
+        id: "tools[0].deferLoading",
+        kind: "custom-tool-deferred-loading",
+        value: true,
+      }),
+      expect.objectContaining({
+        id: "tools[0].eagerInputStreaming",
+        kind: "custom-tool-input-streaming",
+        value: null,
+      }),
+      expect.objectContaining({
+        id: "tools[0].inputExamples",
+        kind: "custom-tool-input-examples",
+        value: [{ query: "example" }],
+      }),
+    ]);
+  });
+
+  it("creates atomic content candidates without duplicating Pi-owned visible fields", () => {
+    const citation = {
+      type: "char_location",
+      cited_text: "answer",
+      document_index: 0,
+      document_title: null,
+      start_char_index: 0,
+      end_char_index: 6,
+    };
+    const converted = parseAnthropicTextInvocation(request([
+      { type: "text", text: "answer", citations: [citation] },
+      {
+        type: "document",
+        source: { type: "url", url: "https://example.test/a.pdf" },
+        citations: { enabled: true },
+        title: "A",
+      },
+    ]), 1);
+
+    expect(converted.invocation.supplement.content).toEqual([
+      expect.objectContaining({
+        id: "content[0:0].citations",
+        kind: "text-citations",
+        value: [citation],
+      }),
+      expect.objectContaining({
+        id: "content[0:1].source",
+        kind: "document-source",
+        value: { type: "url", url: "https://example.test/a.pdf" },
+      }),
+      expect.objectContaining({
+        id: "content[0:1].metadata",
+        kind: "document-metadata",
+        value: { citations: { enabled: true }, title: "A" },
+      }),
+    ]);
+    expect(JSON.stringify(converted.invocation.supplement.content[0]?.value)).not.toContain(
+      '"text":"answer"',
+    );
+  });
+
   it("accepts the pinned structured search-result grammar and retains it exactly", () => {
     const block = {
       type: "search_result",
@@ -24,8 +129,30 @@ describe("Anthropic supplement validation", () => {
     expect(converted.invocation.pi.context.messages[0]?.content).toEqual([
       { type: "text", text: "Result\nbody" },
     ]);
+    const contentValue = Object.fromEntries(
+      Object.entries(block).filter(([key]) => key !== "cache_control"),
+    );
     expect(converted.invocation.supplement.content).toContainEqual(
-      expect.objectContaining({ value: block, piRepresentation: "partial" }),
+      expect.objectContaining({
+        value: {
+          ...contentValue,
+          content: [{ type: "text", text: "body" }],
+        },
+        piRepresentation: "partial",
+      }),
+    );
+    expect(converted.invocation.supplement.cache).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "content[0:0].cacheControl",
+          value: { ttl: "1h" },
+        }),
+        expect.objectContaining({
+          id: "content[0:0].content[0].cacheControl",
+          attachment: expect.objectContaining({ nestedPath: ["content", 0] }),
+          value: {},
+        }),
+      ]),
     );
   });
 
@@ -75,7 +202,9 @@ describe("Anthropic supplement validation", () => {
 
     expect(converted.invocation.supplement.content).toContainEqual(
       expect.objectContaining({
-        value: { type: "container_upload", file_id: "f" },
+        id: "content[0:0].fileId",
+        kind: "container-upload",
+        value: { fileId: "f" },
       }),
     );
   });
@@ -177,11 +306,9 @@ describe("Anthropic supplement validation", () => {
 
     expect(converted.invocation.supplement.tools).toContainEqual(
       expect.objectContaining({
-        value: {
-          name: "lookup",
-          input_schema: { type: "object" },
-          defer_loading: true,
-        },
+        id: "tools[0].deferLoading",
+        kind: "custom-tool-deferred-loading",
+        value: true,
       }),
     );
   });

@@ -254,7 +254,7 @@ describe("Anthropic conversation conversion", () => {
       100,
     );
     expect(remote.invocation.supplement.content).toContainEqual(
-      expect.objectContaining({ kind: "image", piRepresentation: "none" }),
+      expect.objectContaining({ kind: "url-image-source", piRepresentation: "none" }),
     );
     expect(() =>
       validateAnthropicSourceRequest({

@@ -137,13 +137,19 @@ describe("Anthropic closed-world body acceptance", () => {
 });
 
 describe("Anthropic message-role validation", () => {
-  it("rejects the non-standard message-level system role", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(
-        minimalBody({ messages: [{ role: "system", content: "runtime hint" }] }),
-        1,
-      ),
-    ).toThrow(/top-level system/u);
+  it("accepts the Token-compatible message-level system role", () => {
+    const invocation = parseAnthropicTextInvocation(
+      minimalBody({ messages: [{ role: "system", content: "runtime hint" }] }),
+      1,
+    );
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("runtime hint");
+    expect(invocation.client.notices).toContainEqual({
+      adapter: "anthropic-messages",
+      direction: "request",
+      code: "anthropic_message_system_degraded",
+      jsonPath: "$.messages",
+      action: "degrade",
+    });
   });
 
   it("rejects unknown role values that are not user/assistant", () => {

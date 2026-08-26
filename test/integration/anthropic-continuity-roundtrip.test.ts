@@ -3,7 +3,7 @@ import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/a
 import { describe, expect, it } from "vitest";
 
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
-import { convertAssistantMessageToAnthropicWithPolicy } from "../../src/protocols/anthropic/response.js";
+import { convertAssistantMessageToAnthropicResponse } from "../../src/protocols/anthropic/response.js";
 import { prepareAnthropicPayloadProjection } from "../../src/protocols/anthropic/semantic/projection/request.js";
 import { prepareAnthropicReasoning } from "../../src/protocols/anthropic/semantic/reasoning/request.js";
 import { captureFinalPiPayload } from "../support/pi-final-payload.js";
@@ -82,10 +82,9 @@ describe("Anthropic foreign continuity full-history round trip", () => {
       expect.objectContaining({ type: "text", text: "visible answer" }),
     ]);
 
-    const clientResponse = convertAssistantMessageToAnthropicWithPolicy(
+    const clientResponse = convertAssistantMessageToAnthropicResponse(
       providerResponse,
       { selector: "client-model", createMessageId: () => "msg-1" },
-      { unknownPiContent: "error" },
     ).message;
     expect(clientResponse.content[0]).toMatchObject({
       type: "thinking",

@@ -141,6 +141,7 @@ export async function createConfiguredTokenDataPlane(
       : { createMessageId: options.createMessageId }),
     publicModels: options.publicModels,
     maxRequestBytes: config.limits.maxRequestBytes,
+    requestTimeoutMs: config.limits.requestTimeoutMs,
     now,
     executeOperation: semanticExecution,
   });
@@ -216,6 +217,7 @@ export async function createConfiguredTokenDataPlane(
         providerNativeLane,
         publicModels: options.publicModels,
         maxRequestBytes: config.limits.maxRequestBytes,
+        requestTimeoutMs: config.limits.requestTimeoutMs,
         now,
         executeOperation: semanticExecution,
         ...(directLane === undefined ? {} : { directLane }),
@@ -233,6 +235,7 @@ export async function createConfiguredTokenDataPlane(
         createSessionId,
         executeOperation: semanticExecution,
         maxRequestBytes: config.limits.maxRequestBytes,
+        requestTimeoutMs: config.limits.requestTimeoutMs,
         now,
       }),
     );

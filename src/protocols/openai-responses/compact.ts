@@ -61,6 +61,8 @@ export interface OpenAIResponsesCompactHandlerOptions {
   readonly routerDefaults?: RouterOptionDefaults;
   readonly now?: () => number;
   readonly maxRequestBytes: number;
+  /** Provider execution timeout. Production passes limits.requestTimeoutMs. */
+  readonly requestTimeoutMs?: number;
 }
 
 function toResponse(prepared: PreparedHttpResponse): Response {
@@ -683,6 +685,9 @@ export function createOpenAIResponsesCompactHandler(
             : { executeOperation: options.executeOperation }),
           routerDefaults,
           now,
+          ...(options.requestTimeoutMs === undefined
+            ? {}
+            : { requestTimeoutMs: options.requestTimeoutMs }),
           ...(journey === undefined ? {} : { journey }),
         });
       } catch (error) {

@@ -7,9 +7,7 @@
     "anthropic-messages": {
       "conversion": {
         "request": {
-          "unknownContent": "error",
-          "unresolvedToolCall": "xrepair",
-          "localCacheControl": "ignore"
+          "unknownContent": "error"
         },
         "response": { "unknownPiContent": "error" }
       }
@@ -43,6 +41,6 @@
   },
   "limits": {
     "maxRequestBytes": 268435456,
-    "requestTimeoutMs": 120000
+    "requestTimeoutMs": 3600000
   }
 }

@@ -8,14 +8,15 @@ import type {
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
+  AnthropicProjectionOutcomeId,
 } from "../contract.js";
 
 function add(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   outcome: AnthropicProjectionDisposition,
 ): void {
-  outcomes.push(Object.freeze({ control, outcome: Object.freeze(outcome) }));
+  outcomes.push(Object.freeze({ candidateId, outcome: Object.freeze(outcome) }));
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -24,17 +25,17 @@ function same(left: unknown, right: unknown): boolean {
 
 function exact(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   current: unknown,
   expected: unknown,
   assign: () => void,
 ): void {
   if (same(current, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(outcomes, candidateId, { kind: "pi-native" });
     return;
   }
   assign();
-  add(outcomes, control, {
+  add(outcomes, candidateId, {
     kind: "payload-projected",
     projector: "anthropic-to-commandcode-private",
     warning: "pi-native-mapping-repaired",
@@ -43,10 +44,10 @@ function exact(
 
 function degraded(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   warning: string,
 ): void {
-  add(outcomes, control, { kind: "degraded", warning });
+  add(outcomes, candidateId, { kind: "degraded", warning });
 }
 
 function expectedReasoningEffort(
@@ -100,16 +101,16 @@ function projectAnthropicToCommandCodePrivate(
   const { reasoning, supplement } = input.invocation;
 
   if (phase === "supplement") {
-    const finalMaxTokens = Math.min(params.max_tokens, supplement.outputTokenCeiling);
+    const finalMaxTokens = Math.min(params.max_tokens, supplement.controls.outputTokenCeiling.value);
     exact(outcomes, "maxTokens", params.max_tokens, finalMaxTokens, () => {
       params.max_tokens = finalMaxTokens;
     });
-    if (supplement.sampling.temperature !== undefined) {
-      if (same(params.temperature, supplement.sampling.temperature)) {
+    if (supplement.controls.temperature !== undefined) {
+      if (same(params.temperature, supplement.controls.temperature.value)) {
         add(outcomes, "sampling.temperature", { kind: "pi-native" });
       }
     }
-    const choice = supplement.toolChoice;
+    const choice = supplement.controls.toolChoice?.value;
     if (choice?.kind === "none") {
       params.tools = [];
       degraded(
@@ -118,7 +119,15 @@ function projectAnthropicToCommandCodePrivate(
         "CommandCode Private removed current-request tools; target-level disablement is not guaranteed",
       );
     } else if (choice?.kind === "auto") {
-      add(outcomes, "toolChoice", { kind: "pi-native" });
+      if (choice.disableParallelToolUse) {
+        degraded(
+          outcomes,
+          "toolChoice",
+          "CommandCode Private used automatic selection but cannot guarantee serial tool execution",
+        );
+      } else {
+        add(outcomes, "toolChoice", { kind: "pi-native" });
+      }
     } else if (choice?.kind === "any") {
       degraded(
         outcomes,
@@ -135,20 +144,8 @@ function projectAnthropicToCommandCodePrivate(
         "CommandCode Private exposed only the named tool but cannot guarantee a tool call",
       );
     }
-    if (
-      choice !== undefined &&
-      choice.kind !== "none" &&
-      choice.disableParallelToolUse
-    ) {
-      degraded(
-        outcomes,
-        "toolChoice.disableParallelToolUse",
-        "CommandCode Private cannot guarantee serial tool execution",
-      );
-    }
-
-    if (supplement.outputFormat.kind === "specified") {
-      const schema = JSON.stringify(supplement.outputFormat.value.schema);
+    if (supplement.controls.outputFormat?.value?.kind === "json-schema") {
+      const schema = JSON.stringify(supplement.controls.outputFormat.value.schema);
       const instruction = `Return one JSON value matching this schema. Conformance is best effort: ${schema}`;
       params.system = typeof params.system === "string" && params.system.length > 0
         ? `${params.system}\n\n${instruction}`

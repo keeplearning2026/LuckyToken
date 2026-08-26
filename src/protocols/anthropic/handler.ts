@@ -2,6 +2,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { randomUUID } from "node:crypto";
 import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
+import { DEFAULT_REQUEST_TIMEOUT_MS } from "../../data-plane-limits.js";
 
 import {
   resolveRequestIdentity,
@@ -56,7 +57,7 @@ import {
   defaultAnthropicModelValidityPolicy,
   type AnthropicModelValidityPolicy,
 } from "./representability.js";
-import { convertAssistantMessageToAnthropicWithPolicy } from "./response.js";
+import { convertAssistantMessageToAnthropicResponse } from "./response.js";
 import { renderAnthropicAtomicSse } from "./sse.js";
 import {
   renderAnthropicError,
@@ -355,6 +356,8 @@ export interface AnthropicMessagesHandlerOptions {
    *  passes `config.limits.maxRequestBytes`; this handler consumes it and
    *  never supplies its own default. */
   readonly maxRequestBytes: number;
+  /** Provider execution timeout. Production passes limits.requestTimeoutMs. */
+  readonly requestTimeoutMs?: number;
   readonly routerDefaults?: RouterOptionDefaults;
   readonly now?: () => number;
   /** Neutral Pi execution operation; terminal usage is observed at Pi IR. */
@@ -370,6 +373,7 @@ interface AnthropicMessagesDependencies {
   readonly createMessageId: () => string;
   readonly publicModels: PublicModelSource | undefined;
   readonly maxRequestBytes: number;
+  readonly requestTimeoutMs: number;
   readonly routerDefaults: RouterOptionDefaults;
   readonly now: () => number;
   readonly executeOperation: ExecutionOperation;
@@ -852,6 +856,7 @@ async function handleAnthropicMessages(
       {
         sessionId: requestIdentity.effectiveSessionId,
         signal: request.signal,
+        timeoutMs: dependencies.requestTimeoutMs,
       },
       dependencies.routerDefaults,
     );
@@ -1130,7 +1135,7 @@ async function handleAnthropicMessages(
       "p5.validate_assistant_message",
       responseProjectionLocation,
     );
-    const responseConversion = convertAssistantMessageToAnthropicWithPolicy(
+    const responseConversion = convertAssistantMessageToAnthropicResponse(
       message,
       {
         selector: invocation.client.renderState.selector,
@@ -1138,7 +1143,6 @@ async function handleAnthropicMessages(
         directToolNames: invocation.client.renderState.directToolNames,
         createMessageId: dependencies.createMessageId,
       },
-      dependencies.configuration.conversion.response,
     );
     for (const notice of responseConversion.notices) {
       observeJourney(journey, {
@@ -1571,6 +1575,7 @@ export function createAnthropicMessagesHandler(
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
     publicModels: options.publicModels,
     maxRequestBytes: options.maxRequestBytes,
+    requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     routerDefaults: Object.freeze({ ...(options.routerDefaults ?? {}) }),
     now: options.now ?? Date.now,
     executeOperation: options.executeOperation ?? execute,

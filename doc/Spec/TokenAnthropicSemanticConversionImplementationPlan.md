@@ -1,527 +1,1159 @@
-# Anthropic Messages Semantic Conversion Implementation Plan
+# Anthropic Messages Semantic Conversion vNext Refactoring Implementation Plan
 
-Status: **IMPLEMENTED — ANTHROPIC-SCOPED LOCAL AND ONLINE GATES PASS**
-Date: **2026-08-24**
-Scope: the Anthropic Messages Client Protocol after the request has committed to the Semantic Conversion lane. This plan does not change Direct Mode, Provider Native Preservation, or OpenAI Responses Semantic Conversion.
+Status: **IMPLEMENTED AND VERIFIED**
 
-## 1. Authority and objective
+Date: **2026-08-25**
 
-Use these sources in precedence order:
+Scope: **Anthropic Messages Client Protocol on the Semantic Conversion lane only**.
 
-1. [Repository instructions](../../AGENTS.md)
-2. [Anthropic Messages Semantic Conversion Architecture Specification](./TokenAnthropicSemanticConversionArchitectureSpec.md)
-3. [Semantic Conversion Architecture Specification](./TokenSemanticConversionArchitectureSpec.md)
-4. the Anthropic Client request/response grammar pinned in this repository and `@anthropic-ai/sdk`
-5. pinned Pi AI 0.84.2 runtime and Pi Agent mirror source
+This plan replaces the previous Anthropic implementation plan. It incorporates the
+latest availability, Supplement, request-repair, response-rendering, and
+specification-authority decisions. It is intentionally implementation-oriented:
+each slice names its production scope, test seam, red evidence, implementation
+work, cleanup, and completion gate.
 
-Create an Anthropic-owned vertical Semantic Conversion module:
+## 1. Outcome
+
+Refactor the Anthropic Messages Semantic Module so that it:
+
+1. accepts the Claude-compatible message-level `role: "system"` extension;
+2. honestly repairs interrupted Client tool histories without weakening invalid
+   relationship checks;
+3. rejects `max_tokens=0` at Client ingress;
+4. uses one fixed, typed, immutable, candidate-only Anthropic Projection
+   Supplement;
+5. treats server-tool and `inference_geo` target unavailability as omission rather
+   than a dispatch-blocking semantic failure;
+6. removes partial cache promotion and projects only exact certified cache
+   semantics;
+7. converts Pi responses through the strongest legal Anthropic representation,
+   with JSON and SSE sharing one converted message;
+8. preserves foreign opaque continuity only through the approved item-local
+   `token_continuity` envelope;
+9. keeps every change local to Anthropic Messages, apart from mechanical removal
+   of Anthropic-only configuration keys from composition defaults and tests; and
+10. proves behavior at the Client Wire, final Provider Wire, Client response, and
+    next complete-history replay endpoints.
+
+Semantic loss, privilege loss, and source timing changes are acceptable when an
+exact conversion is unavailable and the result remains honest, legal, and useful.
+They must be represented as `degraded` or `omitted`; they must never be reported as
+exact application.
+
+## 2. Authority and document synchronization
+
+### 2.1 Authority order
+
+After Slice 0 is complete, authority is:
+
+1. `doc/Spec/TokenAnthropicSemanticConversionArchitectureSpec.md` — the sole
+   Anthropic architecture and policy authority;
+2. `doc/Protocols/Anthropic-Pi AI IR Conversion Method.md` — the concrete mapping
+   method implementing that architecture;
+3. `doc/AnthropicMessagesPiProviderSemanticAudit.md` — version-bound Pi and
+   Provider evidence plus the enabled consumer matrix;
+4. this plan — implementation order and verification gates.
+
+`doc/Spec/TokenSemanticConversionArchitectureSpec.md` remains authoritative only
+for cross-protocol locality. It does not decide Anthropic field dispositions.
+
+Certification must verify behavior. A document title, marker string, content hash,
+or synchronized heading is version identity evidence only; it is not proof of
+conversion correctness.
+
+### 2.2 Contradictions that must be removed before production edits
+
+The current Anthropic documents still contain obsolete decisions. Slice 0 must
+correct all of these together:
+
+- message-level `role: "system"` is rejected or described as optional widening;
+- unresolved ToolCall repair is configurable or prohibited;
+- server-tool target unavailability is terminal;
+- explicit `inference_geo` target unavailability is terminal;
+- local cache `promote` is offered as a supported policy;
+- unknown Pi response content may be configured to fail the whole response;
+- missing ToolCall caller provenance or namespace always fails the whole response;
+- refusal is described as supported while SSE rejects it;
+- response conversion failures are defined before applying the strongest legal
+  block-level representation;
+- the architecture links to a nonexistent ADR as its policy authority.
+
+No production behavior slice begins until the architecture, mapping document, and
+semantic audit agree on the fixed decisions in Section 3.
+
+## 3. Fixed decisions
+
+These are implementation requirements, not configuration choices.
+
+### 3.1 Demand-driven extraction
+
+- The main Anthropic consumer and the Anthropic Supplement consumer are the only
+  request-field authorities.
+- A source field claimed by neither consumer remains unread. Its shape cannot
+  reject the request.
+- A consumer validates only the paths it reads. An unclaimed sibling cannot
+  invalidate a claimed object.
+- The Supplement consumer is the union of facts consumed or verified by at least
+  one currently enabled Anthropic-source target Adapter.
+- Target selection does not change the Supplement Interface. The selected Adapter
+  consumes only its positive subset.
+- Adding a Supplement member requires a declared source path, an enabled target
+  consumer, and a Client Wire to final Provider Wire test.
+- Removing the final target consumer removes the member. Dormant future fields are
+  not retained.
+
+### 3.2 Message-level `role: "system"` extension
+
+Token formally supports `role: "system"` inside `messages[]` as an Anthropic
+compatibility extension:
+
+1. Preserve the existing top-level `system` text first.
+2. Find the first message-level system message in source order.
+3. Append all text blocks from that message, in block order, to `systemPrompt`.
+4. Separate existing top-level system text and the promoted message text with one
+   `\n`; do not trim either source string.
+5. Convert non-text blocks from that first system message as ordinary user content
+   at the source message position. They receive no system privilege.
+6. Convert every later message-level system message entirely as ordinary user
+   content.
+7. Omit empty ordinary fragments rather than producing empty Pi messages.
+8. Publish at most one request-local degradation notice per request.
+
+The original message-level role is not carried in the Supplement because no
+enabled target Adapter consumes it. The timing change caused by promoting the
+first text is accepted.
+
+### 3.3 Interrupted Client ToolCall repair
+
+Repair is fixed and has no end-user switch:
+
+- It applies only to unresolved ordinary Client/BYOT ToolCalls.
+- It does not apply to Provider/server-tool calls or results.
+- Preserve every real ToolResult.
+- Before history crosses from pending calls into unrelated subsequent content,
+  insert one synthetic ToolResult for every still-pending call in original call
+  order.
+- At end of history, append results for every remaining pending Client call.
+- Each synthetic result uses the original ID and name, `isError=true`, and exactly:
+
+  ```text
+  No result — the tool call did not complete (interrupted or lost).
+  ```
+
+- Publish one bounded repair notice per synthetic result.
+- Orphan result, result-before-call, duplicate result, duplicate call identity,
+  empty ID, empty name, and ambiguous Client relationship still fail.
+- A later real result for an already repaired call is a duplicate and fails; the
+  repair must not mask inconsistent history.
+
+This is an honest statement that execution did not complete, not a fabricated tool
+answer.
+
+### 3.4 Output-token ceiling
+
+- `max_tokens` must be a positive integer.
+- `max_tokens=0` fails immediately as an Anthropic invalid request before model
+  resolution-dependent representability checks and before Provider dispatch.
+- The Supplement retains an `outputTokenCeiling` verifier because Pi may add or
+  clamp thinking budgets.
+- The final Provider ceiling must never exceed the Client value.
+- A certified context-safety reduction may lower it.
+- A Provider minimum must not widen it.
+- If a valid source thinking budget becomes incompatible with the final safe
+  ceiling, use the existing named reasoning-disable degradation rather than
+  widening the ceiling.
+
+### 3.5 Server tools and `inference_geo`
+
+Both are fixed candidate-only semantics:
+
+- Retain only the typed fields needed by an enabled exact target Adapter.
+- An Adapter with a certified exact mapping may project them.
+- A target without that mapping leaves the candidates unconsumed.
+- The Anthropic coordinator resolves them to `omitted + warning` and dispatches.
+- Never reclassify a server tool as an ordinary Client tool.
+- Never fabricate server execution, tool results, geography enforcement, or
+  target capability.
+- Preserve visible server-result text or other ordinary model-visible content when
+  it has a legal Pi representation; omit only unsupported server-specific
+  structure.
+
+If all model-visible content is removed and neither Pi nor an Adapter can construct
+a legal final request, the request may fail for final-payload invalidity. That is
+not a server-tool or geography availability failure.
+
+Client-tool IDs, Client tool-result relationships, and actual caller permissions
+remain independently validated. Ignoring server-tool semantics does not weaken
+ordinary Client tool integrity.
+
+### 3.6 Cache control
+
+Remove `localCacheControl: "ignore" | "promote"`.
+
+- Preserve every currently consumed top-level, system-block, message-block, and
+  tool-local cache marker as an attachment-specific Supplement candidate.
+- Project a marker only when the selected Adapter has an exact certified target
+  attachment point and TTL mapping.
+- Otherwise centrally omit it with a warning.
+- Do not convert a local breakpoint into request-wide Pi `cacheRetention`.
+- Do not add a prompt instruction or other model-visible approximation.
+
+Reintroducing promotion would require a new architecture decision, a target-aware
+pre-Pi preparation Interface, mutual exclusion with exact projection, and final-wire
+proof of the degraded request-wide retention. It is outside this plan.
+
+### 3.7 Response conversion: strongest legal representation
+
+For every Pi response fact use this order:
+
+1. exact standard Anthropic representation;
+2. the approved `token_continuity` extension for compatible foreign opaque replay;
+3. visible block-level fallback;
+4. legal omission, null, or target default;
+5. whole-response failure only when no legal response envelope can be constructed
+   or a non-degradable security/relationship contract would be falsified.
+
+Specific fixed behavior:
+
+- Ordinary text survives loss of citations or optional metadata.
+- Foreign Provider thinking signatures never occupy Anthropic native signature
+  fields as if they were Anthropic signatures.
+- Missing ordinary thinking signature may use `signature: ""`, warn, and treat the
+  empty value as absent during replay.
+- Missing redacted opaque data never becomes an invented signature; use a visible
+  fallback when available, otherwise omit that block and warn.
+- A ToolCall with a valid ID, name, JSON-object input, and uniquely provable direct
+  Client tool maps to `tool_use` with `caller: {type: "direct"}`.
+- Namespace may be discarded only when the current request tool catalog uniquely
+  resolves the qualified identity to one declared Client tool. The emitted name is
+  that declared Client tool name.
+- Missing caller provenance, ambiguous namespace, invalid tool identity, or
+  malformed arguments omits that ToolCall block and all of its continuity
+  attachments; it does not fail the whole response.
+- Unknown or future Pi content is omitted with a warning.
+- Optional citations, container, service tier, inference geography, server-tool
+  usage, refusal detail, and usage breakdown loss cannot replace an otherwise legal
+  response with HTTP 500.
+- Recompute `stop_reason` after final block projection:
+  - an authoritative committed refusal becomes `refusal`;
+  - an authoritative length terminal becomes `max_tokens`;
+  - otherwise any retained `tool_use` becomes `tool_use`;
+  - otherwise use `end_turn`.
+- A ToolCall omitted during conversion cannot leave `stop_reason=tool_use`.
+- JSON and SSE consume the same fully converted `AnthropicResponseMessage`.
+- SSE must accept and emit `stop_reason: "refusal"` wherever JSON does.
+- Empty `content: []` is legal; no empty text block is fabricated.
+
+### 3.8 Configuration after refactor
+
+Anthropic configuration retains only request behavior that remains genuinely
+configurable, currently `unknownContent` for a consumed content envelope with an
+unknown discriminator.
+
+Remove:
+
+- `conversion.request.localCacheControl`;
+- `conversion.response.unknownPiContent`;
+- any unresolved ToolCall policy if encountered in obsolete fixtures or docs.
+
+Old keys are rejected by the current closed-world configuration parser. Do not add
+aliases, migrations, dual readers, or deprecated compatibility behavior.
+
+## 4. Scope
+
+### 4.1 Production files in scope
+
+The semantic implementation scope is strictly:
 
 ```text
-Anthropic Client Wire
-→ one demand-driven Anthropic extraction/conversion operation
-→ Anthropic Semantic Invocation { Pi input + reasoning + candidate supplement }
-→ Anthropic-owned Pi payload execution wrapper
-→ Pi Provider builds candidate payload
-→ wrapper-owned onPayload selects one target Adapter
-→ Adapter projects only its proven supplement/reasoning subset
-→ final Provider Wire
-→ Pi AssistantMessage
-→ Anthropic-owned response conversion
+src/protocols/anthropic/**
 ```
 
-The module owns its Pi payload-callback lifecycle and does not import a shared Semantic Conversion kernel. It also does not import OpenAI Responses Invocation, supplement, reasoning, continuity, target projectors, field mappings, expected-wire fixtures, effective-state policy, outcome types, or semantic errors.
-
-### 1.1 Normative policy source
-
-Section 12.1, **Fixed usability decisions**, of `TokenAnthropicSemanticConversionArchitectureSpec.md` is authoritative. This plan implements those decisions and must not introduce a stricter or more permissive alternative in a slice, test fixture, target Adapter, online script, or Advanced Setting. A future policy change updates the Architecture Spec, this plan, `AnthropicMessagesPiProviderSemanticAudit.md`, and the affected tests in one change.
-
-## 2. Implementation baseline and remaining certification
-
-This is a simplification refactor of the existing Anthropic vertical module, not a rewrite. The implementation already has and must preserve:
-
-- `AnthropicConversionResult` and the protocol-owned Invocation;
-- Pi Context/options construction, reasoning/continuity state, render state, and notices;
-- the Anthropic-owned Pi wrapper with exclusive, exactly-once `onPayload`;
-- target Adapters for the currently registered Pi text APIs and their certified mappings;
-- Pi `AssistantMessage` to Anthropic JSON/SSE conversion;
-- the three independent direct-protocol online scripts.
-
-The refactor closes the remaining responsibility problems:
-
-- request validation operates on request-local, demand-driven views; unclaimed top-level fields and nested siblings remain unread and cannot mutate Client input;
-- the candidate Supplement is enumerated once, every present candidate receives exactly one final outcome, and the coordinator alone records unconsumed candidates as `omitted + warning`;
-- the registry returns one Adapter object directly, with separate whole-request reasoning and Supplement operations;
-- ordinary Supplement outcomes cannot represent `failed`, and no generic Pi-only fallback Adapter exists;
-- valid final-assistant content and visible historical thinking use bounded history fallbacks instead of model-capability rejection;
-- Pi-owned `temperature` and concrete effort mappings are verified rather than independently rewritten; target-owned fields remain selectively projected;
-- only malformed consumed input, broken identities/relationships, security or data-residency violations, unavailable server capabilities/model-visible content, and internal payload-contract faults may prevent dispatch.
-
-The Anthropic-scoped unit, integration, final-wire, and three independent online Provider gates pass on 2026-08-24. New target mappings remain demand-driven and do not require editing non-consuming Adapters.
-
-## 3. Target module structure
+Expected primary files:
 
 ```text
-src/protocols/anthropic/
-  request.ts
-  response.ts
-  sse.ts
-  semantic/
-    invocation.ts
-    execution.ts
-    pi-execution.ts
-    response.ts
-    reasoning/
-      contract.ts
-      request.ts
-      continuity.ts
-    supplement/
-      contract.ts
-      candidates.ts
-      validation.ts
-    projection/
-      contract.ts
-      registry.ts
-      supplement-disposition.ts
-      adapters/
+src/protocols/anthropic/configuration.ts
+src/protocols/anthropic/request.ts
+src/protocols/anthropic/representability.ts
+src/protocols/anthropic/response.ts
+src/protocols/anthropic/sse.ts
+src/protocols/anthropic/wire.ts
+src/protocols/anthropic/handler.ts
+src/protocols/anthropic/semantic/invocation.ts
+src/protocols/anthropic/semantic/execution.ts
+src/protocols/anthropic/semantic/pi-execution.ts
+src/protocols/anthropic/semantic/response.ts
+src/protocols/anthropic/semantic/supplement/contract.ts
+src/protocols/anthropic/semantic/supplement/candidates.ts
+src/protocols/anthropic/semantic/supplement/validation.ts
+src/protocols/anthropic/semantic/projection/contract.ts
+src/protocols/anthropic/semantic/projection/request.ts
+src/protocols/anthropic/semantic/projection/registry.ts
+src/protocols/anthropic/semantic/projection/supplement-disposition.ts
+src/protocols/anthropic/semantic/projection/adapters/*.ts
 ```
 
-Keep a file only when it hides meaningful behavior behind a small Interface. Merge shallow files into their owning module. The root Anthropic `response.ts`/`sse.ts` path remains the response Interface; add only narrow internal helpers for Pi-retained provenance or continuity when they hide real behavior. Do not create a parallel per-Provider response registry by default.
+The plan may add a protocol-local Supplement builder or immutable JSON utility only
+if it deepens the Anthropic Module. Such a utility remains Anthropic-owned unless a
+separate future task proves identical mechanism in another protocol.
 
-There is no shared Semantic Conversion dependency. `pi-execution.ts` owns the Anthropic `onPayload` lifecycle and calls only the existing protocol-neutral `ExecutionOperation` capability. Mechanism-only leaf utilities may be shared later only after two protocol implementations prove identical mechanics, and they still may not call Pi, own `onPayload`, carry projection outcomes, or classify semantic failures. Do not move an OpenAI Responses helper into common code merely to call it from Anthropic.
+### 4.2 Mechanical composition files in scope
 
-## 4. Anthropic-owned Invocation
+Only these non-Anthropic locations may change, and only to remove or update an
+Anthropic configuration shape or Anthropic-only assertion:
 
-Keep the three existing cohesive Interfaces; do not replace them with one facade that owns raw request parsing, execution, and response rendering together:
+```text
+src/first-run-config.ts
+test/unit/adapter-configuration.test.ts
+test/unit/cli-config.test.ts
+test/integration/* configuration fixtures containing anthropic-messages
+test/certification/* Anthropic locality or protocol-behavior assertions
+```
+
+No OpenAI Responses value, default, type, parser, or behavior changes in these
+files.
+
+### 4.3 Documentation in scope
+
+```text
+doc/Spec/TokenAnthropicSemanticConversionArchitectureSpec.md
+doc/Spec/TokenAnthropicSemanticConversionImplementationPlan.md
+doc/Protocols/Anthropic-Pi AI IR Conversion Method.md
+doc/AnthropicMessagesPiProviderSemanticAudit.md
+```
+
+### 4.4 Explicitly out of scope
+
+- `src/protocols/openai-responses/**`;
+- OpenAI Responses specifications, audits, projectors, fixtures, and online tests;
+- Provider Native Preservation behavior;
+- Local Native Preservation behavior;
+- Pi AI or `node_modules` modifications;
+- a shared Semantic Conversion Invocation, Supplement, outcome, error, registry, or
+  executor;
+- Provider credentials, transport, retry, cancellation, and diagnostics ownership;
+- server-side continuity storage;
+- response interception below Pi `AssistantMessage`;
+- local Provider-response truncation;
+- Codex CLI as evidence for the Anthropic Client protocol.
+
+## 5. Test seams
+
+Tests use the same three Interfaces as production callers. Internal helper shapes
+are not the long-term test surface.
+
+### Seam A — Anthropic Client Wire to conversion result
+
+Interface:
 
 ```ts
+validateAnthropicSourceRequest(...)
 convertValidatedAnthropicRequestWithPolicy(...)
-  -> AnthropicConversionResult
-
-executeAnthropicSemanticInvocation({
-  models,
-  model,
-  invocation,
-  execution,
-}) -> { message, outcomes }
-
-convertAssistantMessageToAnthropicWithPolicy(...)
-  -> AnthropicResponseConversion
 ```
 
-The protocol-owned Invocation remains:
+Observable evidence:
+
+- Pi Context and options;
+- Anthropic reasoning semantics;
+- immutable Supplement candidates;
+- render state;
+- bounded conversion notices;
+- Anthropic invalid-request failures.
+
+### Seam B — Anthropic semantic execution to final Provider Wire
+
+Interface:
 
 ```ts
-interface AnthropicSemanticInvocation {
-  readonly pi: PiInvocation;
-  readonly reasoning: AnthropicReasoningSemantics;
-  readonly supplement: AnthropicProjectionSupplement;
+executeAnthropicSemanticInvocation(...)
+```
+
+Use the existing injected `ExecutionOperation`/test transport to capture the final
+Provider request after Pi and `onPayload`. Do not call private Adapter helpers as a
+substitute for final-wire evidence.
+
+Observable evidence:
+
+- exact final Provider payload;
+- exactly one projection outcome per Candidate ID;
+- central omission of unconsumed candidates;
+- no Provider dispatch after a terminal source or payload-shape failure;
+- no failure for ordinary target unavailability.
+
+### Seam C — Pi response to Anthropic JSON/SSE and replay
+
+Interfaces:
+
+```ts
+convertAssistantMessageToAnthropicResponse(...)
+createAnthropicAtomicSseEvents(...)
+```
+
+Observable evidence:
+
+- one legal Anthropic message;
+- JSON/SSE semantic equivalence;
+- block-level omissions and notices;
+- final stop reason;
+- continuity envelope attachment;
+- next complete-history final Provider request.
+
+Selected Provider response to Pi parser fixtures remain dependency certification.
+They are not a new runtime seam.
+
+## 6. Target Supplement Interface
+
+### 6.1 Design goals
+
+`AnthropicProjectionSupplement` is a deep, protocol-local candidate carrier. Its
+Interface must make these invariants mechanically visible:
+
+- fixed union, not `kind: string`;
+- one atomic semantic fact per Candidate ID;
+- no raw Anthropic records;
+- no Provider payload indexes or payload fragments;
+- no reasoning or continuity state;
+- no diagnostics, credentials, transport, or mutable lifecycle state;
+- recursive JSON validation and immutability;
+- enough source and Pi association for the consuming Adapter to resolve an exact
+  target attachment;
+- target-independent construction;
+- central settlement of every candidate exactly once.
+
+### 6.2 Core types
+
+The implementation may refine names, but it must preserve this shape and these
+invariants:
+
+```ts
+declare const anthropicCandidateIdBrand: unique symbol;
+
+type AnthropicCandidateId = string & {
+  readonly [anthropicCandidateIdBrand]: true;
+};
+
+type ReadonlyJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ReadonlyJsonValue[]
+  | { readonly [key: string]: ReadonlyJsonValue };
+
+type AnthropicSourceAttachment =
+  | { readonly kind: "request"; readonly path: string }
+  | { readonly kind: "system-block"; readonly blockIndex: number }
+  | {
+      readonly kind: "message-content";
+      readonly messageIndex: number;
+      readonly contentIndex: number;
+    }
+  | { readonly kind: "tool-definition"; readonly toolIndex: number };
+
+type AnthropicPiAttachment =
+  | {
+      readonly kind: "message-content";
+      readonly messageIndex: number;
+      readonly contentIndex: number;
+    }
+  | { readonly kind: "tool-call"; readonly callId: string }
+  | { readonly kind: "tool-result"; readonly callId: string }
+  | { readonly kind: "tool-definition"; readonly toolName: string };
+
+interface AnthropicCandidateBase {
+  readonly id: AnthropicCandidateId;
+  readonly source: AnthropicSourceAttachment;
+  readonly piAttachment?: AnthropicPiAttachment;
 }
+```
 
-interface AnthropicConversionResult {
-  readonly selector: string;
-  readonly invocation: AnthropicSemanticInvocation;
-  readonly client: {
-    readonly renderState: AnthropicResponseRenderState;
-    readonly notices: readonly ConversionNotice[];
-  };
+`AnthropicPiAttachment` describes semantic association with the Pi input. It does
+not describe a Provider array offset. Reasoning preparation must update attachment
+indexes when it changes Pi history. An Adapter resolves the association against its
+audited final payload shape and fails only for an incompatible selected-projector
+shape; ambiguity in an optional candidate leaves it unconsumed for central
+omission.
+
+Do not introduce `piSpan`, `replacesPiSpan`, final-payload ordinal, or a Provider
+JSON path into the Supplement.
+
+### 6.3 Control candidates and writer roles
+
+Controls are statically named and their final-writer roles are explicit:
+
+```ts
+interface AnthropicControlCandidates {
+  readonly outputTokenCeiling: AnthropicCeilingVerificationCandidate;
+  readonly temperature?: AnthropicPiVerificationCandidate<number>;
+  readonly topP?: AnthropicPiFirstProjectionCandidate<number>;
+  readonly topK?: AnthropicPiFirstProjectionCandidate<number>;
+  readonly stopSequences?: AnthropicProjectionCandidate<readonly string[]>;
+  readonly toolChoice?: AnthropicToolChoiceCandidate;
+  readonly outputFormat?: AnthropicOutputFormatCandidate;
+  readonly metadataUserId?: AnthropicPiFirstProjectionCandidate<string | null>;
+  readonly serviceTier?: AnthropicProjectionCandidate<"auto" | "standard_only" | null>;
+  readonly inferenceGeo?: AnthropicProjectionCandidate<string | null>;
+  readonly container?: AnthropicProjectionCandidate<string | null>;
+  readonly finalAssistantPrefill?: AnthropicProjectionCandidate<true>;
 }
 ```
 
-`convertValidatedAnthropicRequestWithPolicy()` remains the one conversion implementation. Deepen it into the sole demand-driven raw-body operation; do not add a second parser for Supplement or reasoning fields.
+The concrete candidate types encode the policy:
 
-Before validation, construct two immutable consumer views from the exact positive declarations in Architecture Section 5.1:
+- `PiVerificationCandidate`: observe only; never restore a value intentionally
+  omitted by Pi;
+- `CeilingVerificationCandidate`: verify or apply only a certified downward repair;
+- `PiFirstProjectionCandidate`: accept exact Pi output, otherwise perform only a
+  certified projection/repair;
+- `ProjectionCandidate`: Adapter-owned exact projection or central omission;
+- `ToolChoiceCandidate`: exact projection or its specifically named bounded
+  fallback.
 
-1. the main Anthropic view for Pi Context/options, reasoning/continuity, render state, and non-degradable main-call checks;
-2. the Anthropic Supplement view for current projection candidates only.
+`temperature` remains Pi-owned. `outputTokenCeiling` is not a second ordinary
+`maxTokens` writer.
 
-Selection must copy only own properties and declared nested paths. Do not pass the complete raw request to either downstream validator. A claimed object validator reads only its declared children; an unclaimed sibling remains unread. Keep the continuity envelope closed-world because the complete envelope is a consumed bounded opaque contract.
+### 6.4 Structured system, content, cache, and tool candidates
 
-Derive bounded top-level unclaimed-field warnings from present own keys minus the union of both positive declarations. This set difference is observation only: do not persist it as an ignored/unsupported/non-projection registry, do not inspect the values, and do not let notice publication affect dispatch.
-
-The conversion order is fixed: select consumer views, validate only their consumed paths, produce the strongest correct Pi Context/tools/options and reasoning/render state, then capture the current projection candidates during the same operation. A Supplement copy may retain a Pi-owned value only for a declared final-wire verifier/repairer; Pi remains authoritative and the copy does not authorize a duplicate Provider write. Candidate completeness describes coverage of the current Supplement consumer, not preservation of every Client field before target selection.
-
-Availability behavior is a fixed Anthropic protocol contract rather than source semantics or user configuration. Do not add an `AnthropicSemanticAvailabilityPolicy`, Advanced Setting, strict-mode flag, or executor argument. Each target capability gap uses the one bounded fallback named by the Architecture Spec, emits `degraded` or `omitted` plus a developer warning, and remains distinct from malformed-source, security/permission, server-tool, relationship, and payload-contract failures.
-
-Each consumed Anthropic request fact has one authoritative owner:
-
-| Fact class | Owner |
-|---|---|
-| messages, system text, images, ordinary tools, tool calls/results | Pi `Context` |
-| target-certified Pi options, including `temperature` and concrete `output_config.effort` | `invocation.pi.options` |
-| thinking activation, exact budget, historical thinking, opaque continuity | Anthropic reasoning |
-| current projection candidates retained for target validation/projection | Anthropic supplement; Pi options and main-call checks remain authoritative for their semantics |
-| stream mode, `thinking.display`, and standard Anthropic response envelope | Anthropic Client render state |
-| Pi `AssistantMessage` facts and their Anthropic mapping | Anthropic response module |
-| conversion/projection notices | Anthropic-owned bounded facts published through fail-open observation |
-| credentials, Profile, transport, retry, cancellation, diagnostics | existing infrastructure |
-
-Unclaimed source fields have no semantic owner. They are neither supported nor invalid, and malformed values in them do not block dispatch.
-
-Do not give a Supplement copy independent final-write ownership over a Pi-owned option. In particular, `temperature` remains Pi-owned when its validated source value is retained for a current final-wire verifier; a projector must not reinsert it when Pi intentionally omitted it. Retain `max_tokens` as `supplement.outputTokenCeiling` only while enabled target projectors verify or repair the Anthropic total generated-token ceiling after Pi thinking preparation. Projectors use that candidate only to lower a certified final Provider ceiling; they never use it as an independent sampling option.
-
-## 5. Anthropic reasoning
-
-Anthropic reasoning remains independent from OpenAI Responses reasoning.
-
-### 5.1 Request-generation grammar
-
-The audit must distinguish at least:
+Use fixed discriminated unions derived from the enabled consumer matrix. The
+initial union must cover only currently consumed families:
 
 ```text
-thinking omitted
-thinking.type = disabled
-thinking.type = enabled + exact budget_tokens + display omitted|null|summarized|omitted
-thinking.type = adaptive + display omitted|null|summarized|omitted
-output_config.effort omitted
-output_config.effort = null
-output_config.effort = low | medium | high | xhigh | max
+System candidates
+  structured-system-block
+  system-cache-marker
+
+Content candidates
+  text-citations
+  content-cache-marker
+  url-image-source
+  document-source
+  document-metadata
+  search-result
+  client-tool-use-caller
+  client-tool-use-cache-marker
+  rich-client-tool-result
+  tool-reference
+  server-tool-use
+  server-tool-result
+  container-upload
+
+Tool candidates
+  custom-tool-cache-marker
+  custom-tool-caller-policy
+  custom-tool-deferred-loading
+  custom-tool-input-streaming
+  custom-tool-input-examples
+  server-tool-definition
 ```
 
-Do not encode `adaptive` as provider default, invent a budget, or treat omission as explicit disable while claiming an exact mapping. Preserve exact budget separately from any coarse Pi thinking level. The fixed nearest-mode or target-default fallback consumes that exact source state only after target resolution and reports `degraded`. Validate `budget_tokens >= 1024` and `budget_tokens < max_tokens`, and ensure neither Pi's budget preparation nor target projection raises the final total output ceiling above Client `max_tokens`. If later context-safe clamping leaves no valid room above the budget, disable reasoning for that request and warn.
+Each member contains only the exact typed fields consumed by a current Adapter.
+Do not store a complete SDK block merely because one nested field is needed.
+Arbitrary JSON is permitted only where the source semantic is itself arbitrary
+JSON, such as a validated JSON Schema or ordinary tool input.
 
-Map a concrete `output_config.effort` once into the audited Pi reasoning option. Pi's Provider Adapter and `model.thinkingLevelMap` own its target representation. Accept a certified Pi compatibility mapping as `pi-native`; when the target has no equivalent effort control, omit only the preference and warn. The Anthropic projector may validate that Pi produced the audited representation, but it must not independently remap the same effort. Store `thinking.display` in `AnthropicResponseRenderState`; it controls Anthropic response rendering and is not a Provider-generation projection.
+If one source block contains independently projectable facts, create multiple
+Candidate IDs. For example, visible text remains Pi-owned while citations and a
+cache marker are two separate candidates. This prevents partial outcomes.
 
-For a target with a proven reasoning mapping, the selected target Adapter decides only:
+`rich-client-tool-result` additionally records, for each retained nested source
+block, whether that block emitted zero or one Pi ToolResult content item. This is
+value-free association metadata, not a duplicate of Pi content. An exact
+Anthropic replay consumes the associated Pi fallback item before restoring the
+retained source block, so no Pi content is left orphaned.
 
-- whether Pi options express the source request exactly;
-- whether `onPayload` must validate or repair the final Provider field;
-- whether Pi emitted the audited effort representation or the unsupported preference must be omitted with a warning;
-- whether explicit disable is proved in the final wire or honestly reported as target-default degradation;
-- which reasoning facts it consumed and their outcomes.
+### 6.5 Conversation layout
 
-Reasoning keeps its own protocol contract and outcomes; it is not reclassified as an ordinary Supplement candidate merely to reuse central omission logic. A target with no proven reasoning mapping does not receive a placeholder reasoning projector and instead uses the explicit reasoning fallback/omission rule defined by the Architecture Spec.
+The exact Anthropic-target reconstruction Adapter may need source ordering, but
+ordering metadata must not duplicate candidate values.
 
-### 5.2 Historical thinking and opaque continuity
+Use a value-free layout:
 
-The module must preserve:
+```ts
+interface AnthropicConversationLayout {
+  readonly messages: readonly {
+    readonly sourceMessageIndex: number;
+    readonly effectiveRole: "user" | "assistant";
+    readonly entries: readonly (
+      | {
+          readonly kind: "source-content";
+          readonly sourceContentIndex: number;
+          readonly piAttachment?: AnthropicPiAttachment;
+          readonly candidateIds: readonly AnthropicCandidateId[];
+        }
+      | {
+          readonly kind: "synthetic-tool-result";
+          readonly callId: string;
+          readonly piAttachment: {
+            readonly kind: "tool-result";
+            readonly callId: string;
+          };
+          readonly candidateIds: readonly [];
+        }
+    )[];
+  }[];
+}
+```
 
-- visible `thinking` text;
-- `thinking.signature` attached to the same thinking block;
-- `redacted_thinking.data` and its redacted representation;
-- any Provider response signature attached to text or a tool call when the Anthropic Client Wire has a validated extension carrier;
-- actual source Provider/API/model provenance from the Pi `AssistantMessage`.
+The layout records association and order only. Synthetic repair entries are
+value-free associations with the actual Pi ToolResult; they do not duplicate its
+honest error text. Candidate values exist once in the fixed candidate collections.
+The target Adapter owns the version-bound resolver that maps this layout and
+Pi-built content to its audited payload.
 
-The Anthropic standard signature field may carry only values valid under the Anthropic wire contract. Foreign Provider metadata must not masquerade as an Anthropic-native signature.
+### 6.6 Top-level Supplement shape
 
-When a Pi thinking block has no non-empty signature, render the standard Anthropic thinking block with `signature: ""`, emit a bounded warning, and treat that empty value as absent when the Client returns the block in later history. This is a lossy placeholder, not exact continuity. Preserve visible thinking and use the target Adapter's valid unsigned-thinking or content fallback on replay. Never substitute an empty value for `redacted_thinking.data`.
+```ts
+interface AnthropicProjectionSupplement {
+  readonly controls: AnthropicControlCandidates;
+  readonly system: readonly AnthropicSystemCandidate[];
+  readonly conversation: AnthropicConversationLayout;
+  readonly content: readonly AnthropicContentCandidate[];
+  readonly tools: readonly AnthropicToolCandidate[];
+  readonly cache: readonly AnthropicCacheCandidate[];
+}
+```
 
-Implement the item-local `token_continuity` v1 codec defined by the Anthropic architecture specification and certify:
+The builder returns a recursively frozen snapshot. It must copy only validated
+plain JSON values, reject cycles/accessors/symbol keys/non-finite values, and never
+freeze a caller-owned raw object in place.
 
-1. the extension has an item-local attachment point for thinking, text, and tool calls;
-2. the Anthropic response encoder retains it;
-3. the request parser validates it as closed-world bounded data;
-4. supported complete-history clients return it without copying opaque data into model-visible text;
-5. malformed, duplicate, incompatible, or unknown-version attachments are ignored individually with warnings;
-6. clients that do not return it preserve visible reasoning through an honest fallback.
+### 6.7 Candidate accounting
 
-Record every tested client as `native-fields-only` or `item-extension-v1`. The direct raw-protocol suite must pass `item-extension-v1`; Claude Code/Claude CLI receives its own capability result. Do not satisfy the continuity gate merely by leaving every foreign attachment form uncertified.
+Change projection outcomes from free-form `control: string` to branded
+`candidateId`:
 
-Do not add server-side continuity storage in this plan.
+```ts
+interface AnthropicProjectionOutcome {
+  readonly candidateId: AnthropicCandidateId;
+  readonly outcome:
+    | { readonly kind: "pi-native" }
+    | { readonly kind: "payload-projected"; readonly projector: string; readonly repaired?: true }
+    | { readonly kind: "degraded"; readonly warning: string }
+    | { readonly kind: "omitted"; readonly warning: string };
+}
+```
 
-## 6. Demand-driven Anthropic request and complete response audit
+The coordinator enforces:
 
-Slice 0 updates `doc/AnthropicMessagesPiProviderSemanticAudit.md` with independent request and response matrices. The request half begins with the two positive consumer declarations from Architecture Section 5.1. It must distinguish:
+- every emitted ID exists in the Supplement;
+- an Adapter cannot emit an ID twice;
+- two semantic owners cannot claim the same final Provider field;
+- an Adapter emits outcomes only for candidates it consumed or verified;
+- every remaining candidate receives one central `omitted` outcome;
+- `degraded` is emitted only after the Adapter constructs or verifies the named
+  fallback in the final Provider payload;
+- a candidate cannot be both omitted and degraded;
+- ordinary Supplement target unavailability cannot construct `failed`.
 
-- main-consumer paths used for Pi Context/options, reasoning/continuity, render state, or a non-degradable main-call check;
-- Supplement-consumer paths used by at least one current enabled target Adapter for projection, verification, repair, or one named bounded fallback;
-- deliberate overlap required for Pi-first final-wire verification or a main-call constraint that also has a certified Provider projection;
-- source fields and nested siblings claimed by neither consumer, which remain unread and are not part of the semantic audit matrix.
+Reasoning outcomes remain Anthropic reasoning outcomes and do not enter the
+Supplement candidate set. Request-conversion repair and system degradation notices
+are conversion notices, not projection outcomes.
 
-The initial positive source-path audit covers only currently consumed forms of:
+## 7. Target Adapter contract
 
-- `max_tokens`;
-- `temperature`, `top_p`, `top_k`, and `stop_sequences`;
-- all `tool_choice` variants and `disable_parallel_tool_use`;
-- `output_config.format`;
-- `metadata.user_id`;
-- `service_tier`;
-- `inference_geo`;
-- `container`;
-- top-level, system-block, content-block, and tool `cache_control` attachment semantics;
-- tool `strict`, `allowed_callers`, `defer_loading`, `eager_input_streaming`, `input_examples`, and typed server-tool controls;
-- thinking fields owned by the reasoning module;
-- stream and response-only fields owned by Client rendering;
-- final-assistant prefill/continuation and unresolved tool-call relationships;
-- standard `user|assistant` message roles and the explicit accept/reject contract for any Token `system`-message extension;
-- text citations/cache, URL images, container uploads, every document source/title/context/citations/cache form, and every search-result source/content/citations/cache form;
-- tool references, tool-use/server-tool caller/cache, tool-result nested content, and every typed server-tool result family;
-- any other tagged content path only when a current enabled Adapter or main-call contract positively consumes it.
+Each target Adapter remains Anthropic-source-owned and positive-only.
 
-For each consumed path, record:
+Small Interface:
+
+```ts
+interface AnthropicTargetProjectionAdapter {
+  project(input: {
+    readonly payload: unknown;
+    readonly model: Model<string>;
+    readonly supplement: AnthropicProjectionSupplement;
+    readonly reasoning: PreparedAnthropicReasoning;
+  }): AnthropicPayloadProjectionResult | Promise<AnthropicPayloadProjectionResult>;
+}
+```
+
+The Adapter implementation may:
+
+- validate its exact pinned Pi payload shape;
+- verify the candidates it declares;
+- return a copied payload with certified exact mappings;
+- perform an explicitly named bounded fallback;
+- return outcomes for the IDs it consumed.
+
+It must not:
+
+- parse raw Anthropic Wire;
+- inspect candidates it does not support merely to return “unsupported”;
+- emit omission outcomes for other Adapters' candidates;
+- mutate an unaudited payload shape;
+- guess from Provider name, URL, or similar-looking field names;
+- write a Pi-owned value a second time;
+- make diagnostics part of dispatch correctness.
+
+Registered implementations remain:
 
 ```text
-source validation
-source requirement strength
-current Pi IR/option behavior
-Pi behavior for every target API
-proven final Provider mapping
-unsupported/fallback/failure rule
-projection outcome and protocol-valid response/notice disposition
-required final-wire test
+commandcode-private
+anthropic-messages
+openai-completions
+openai-responses / azure-openai-responses / openai-codex-responses
+google-generative-ai / google-vertex
+mistral-conversations
+bedrock-converse-stream, with certified model-family splits
+pi-messages
 ```
 
-The Supplement captures only validated projection candidates with a current downstream consumer. A main-consumer fact whose final meaning is not proved by Pi does not automatically enter the Supplement: add it only with an enabled target mapping/verifier or named fallback and a final-wire test. Conversely, security, permission, data-residency, server-tool, minimum-request, and relationship contracts are enforced by request validation or the Pi/main-call contract before the candidate-only Supplement seam. It is an Anthropic type, not a universal request-control model.
+A target with no positive mapping has no no-op Adapter. Pi dispatches normally and
+the coordinator omits every remaining candidate.
 
-For top-level fields outside both declarations, record only the bounded warning behavior and its byte/count limits. Do not add one audit row per unknown field and do not parse its value. For a claimed object, test that malformed declared children fail while malformed or future unclaimed siblings remain unread and non-terminal.
+## 8. Implementation slices
 
-The response half starts from Pi `AssistantMessage`. It may use the message's actual API/Provider/model provenance when a retained Pi field requires it, and records:
+Every slice is a vertical change. Do not create a compatibility Supplement or run
+old and new projection contracts in parallel. A working branch may contain red
+tests, but a completed slice must compile and pass its focused tests.
+
+### Slice 0 — Synchronize authority and freeze behavioral fixtures
+
+Documentation:
+
+1. Update the Anthropic architecture fixed-decision and disposition sections.
+2. Update the conversion method with the exact algorithms from Section 3.
+3. Update the semantic audit request, content/tool, target, response, and failure
+   matrices.
+4. Remove the broken ADR reference or replace it with an existing real authority;
+   do not create a second competing policy source.
+5. Mark this plan as the only current Anthropic implementation plan.
+
+Red behavioral fixtures:
+
+- first and later message-level system roles;
+- mixed text/non-text first system message;
+- unresolved Client ToolCall at message transition and history end;
+- orphan, duplicate, empty-ID, and late duplicate results;
+- `max_tokens=0` ingress failure;
+- unsupported server tool and `inference_geo` dispatch with omission;
+- exact local cache marker projection and unsupported omission;
+- missing ToolCall caller, namespace ambiguity, malformed arguments, and unknown Pi
+  block response omission;
+- refusal JSON/SSE parity;
+- stop-reason recomputation after block omission;
+- foreign thinking continuity and replay;
+- unclaimed malformed fields remaining unread.
+
+Gate:
+
+- every fixed decision has a failing or already-green behavioral test at one of the
+  three Interfaces in Section 5;
+- documents no longer prescribe mutually exclusive behavior;
+- no test claims correctness by checking headings or hashes alone.
+
+### Slice 1 — Ingress validity and message-level system conversion
+
+Production work:
+
+1. Accept `user | assistant | system` only in the Anthropic compatibility parser.
+2. Keep official role widening local; Pi still receives only legal Pi roles.
+3. Implement the first-text promotion and user fallback algorithm exactly once in
+   request conversion.
+4. Ensure structured non-text system blocks pass through their normal content
+   converters and Supplement candidate construction without privilege elevation.
+5. Emit one bounded degradation notice.
+6. Move positive `max_tokens` validation into source request validation and delete
+   the model-aware zero check.
+
+Focused tests:
 
 ```text
-AssistantMessage field and attachment point, if retained
-Anthropic JSON and SSE rendering
-response-only versus next-request replay semantics
-valid null/default, fallback, warning, or critical failure
-Pi AssistantMessage → Anthropic response fixture
-next-history final Provider request fixture when replay-required
+test/unit/anthropic-request-conversion.test.ts
+test/unit/anthropic-request-doc-align.test.ts
+test/unit/anthropic-main-call-validity.test.ts
+test/integration/anthropic-ingress-order.test.ts
 ```
 
-It must explicitly cover every corresponding fact that Pi IR can retain: citations, caller identity, server tools/results, container uploads, container, stop reason/detail/sequence, usage details, and every reasoning signature location listed in the architecture specification. A hard-coded `null` is valid only when the Anthropic target contract defines it for the Pi fact. Facts discarded before Pi IR are unavailable to this response module and receive only a protocol-valid omission/default/fallback; the implementation does not add raw Provider response interception.
+Gate:
 
-Target-bound facts such as a Provider container remain narrowly typed with source provenance and compatibility conditions. They do not become generic semantic fields merely to avoid a protocol-local type.
+- the Claude-generated request that previously failed with “messages require a
+  user or assistant role” produces a valid Pi invocation;
+- no `system` role reaches Pi history;
+- `max_tokens=0` is an Anthropic invalid request before dispatch.
 
-The converter records stable request-local associations from source message/content/tool identities to the Pi blocks it creates. It must not put marker text in Pi IR. A projector may restore a nested field only after resolving an unambiguous target payload attachment.
+### Slice 2 — Fixed interrupted Client ToolCall repair
 
-## 7. Anthropic-owned target projectors
+Production work:
 
-Register a target Adapter only when the Anthropic Semantic Conversion lane has at least one proven supplement or reasoning mapping for that target. The eligible audit families are:
+1. Replace `pushRepairResults()` failure with deterministic synthesis for pending
+   ordinary Client calls.
+2. Track call kind so server-tool calls are never repaired.
+3. Insert synthetic results at the earliest relationship-safe point.
+4. Preserve actual results and the exact order of parallel pending calls.
+5. Keep orphan/duplicate/identity validation unchanged or stronger.
+6. Remove any obsolete repair configuration from docs, types, defaults, and tests.
+
+Focused tests:
 
 ```text
-Anthropic Client → CommandCode Private
-Anthropic Client → Anthropic Messages when not Provider-Native-claimed
-Anthropic Client → OpenAI Completions
-Anthropic Client → OpenAI Responses
-Anthropic Client → Azure OpenAI Responses
-Anthropic Client → OpenAI Codex Responses
-Anthropic Client → Google Generative AI
-Anthropic Client → Google Vertex
-Anthropic Client → Mistral
-Anthropic Client → Bedrock Claude families
-Anthropic Client → Bedrock non-Claude families
-Anthropic Client → Pi Messages
+test/unit/anthropic-request-conversion.test.ts
+test/unit/tool-turns.test.ts
+test/integration/anthropic-ingress-order.test.ts
+test/integration/anthropic-semantic-final-payload.test.ts
 ```
 
-Models claimed by the Anthropic Provider Native lane bypass this module. That does not prove every `anthropic-messages` target is Native-eligible: unclaimed targets use Pi normally and receive an independently audited semantic projector only for supplement fields that need one. Their Pi `AssistantMessage` is rendered by the Anthropic response module. They are not rejected merely because another target with the same API ID used a Native lane.
+Gate:
 
-The list above is an audit backlog, not a requirement to create every Adapter or project every supplement field. Do not add an empty Adapter, an exhaustive field switch, or a placeholder mapping to make the matrix appear complete.
+- an interrupted Claude history becomes usable with an honest error result;
+- no invalid ToolCall/ToolResult relationship becomes accepted;
+- final Provider history contains the repaired relationship in correct order.
 
-Each Adapter receives the Pi-built payload, resolved target facts, immutable candidate Supplement, and prepared reasoning. It returns a copied payload plus consumed facts and outcomes, and owns only:
+### Slice 3 — Atomic typed Supplement migration
 
-- exact payload-shape validation required by its enabled mappings;
-- Pi-native validation relevant to those mappings;
-- proven source-to-target field mappings;
-- minimum compatibility predicates;
-- repair warnings;
-- consumed-field outcomes.
+This is one coherent contract replacement across builder, registry, every registered
+Adapter, coordinator, and tests. Do not merge a state where some Adapters consume
+the old record bags and others consume the new union.
 
-A projector is positive-only. Do not add a branch merely to emit “unsupported,” “ignored,” or “omitted” for a Supplement field. Return outcomes only for facts the Adapter actually projected, validated, repaired, or deliberately degraded through a target-specific fallback. The Anthropic coordinator is the sole owner of `omitted + warning` for every ordinary candidate left unconsumed. Supplement target unavailability never becomes `failed` and never prevents dispatch.
+Production work:
 
-If no projector is certified for the resolved API/model, an ordinary Pi-only request remains usable and every Supplement candidate is omitted with a warning. Non-degradable semantics were already handled by source validation or the Pi/main-call contract; do not encode them as critical Supplement candidates. If a selected projector receives a final payload shape different from its audited contract, fail before dispatch because this indicates Pi dependency drift, a wrong selection, or an incompatible custom Provider and cannot be repaired by guessing.
+1. Replace `kind: string`, `Record<string, unknown>`, duplicated `messageFrames`
+   values, and string control names with Section 6 types.
+2. Build candidates during the single demand-driven conversion operation.
+3. Generate deterministic request-local Candidate IDs from candidate family and
+   source attachment; reject duplicates.
+4. Copy and recursively freeze validated JSON values.
+5. Update reasoning preparation to preserve or remap Pi attachment associations.
+6. Change projection outcomes and central settlement to Candidate IDs.
+7. Migrate every registered Adapter in the same slice.
+8. Delete the old contract and its tests; do not retain aliases or translators.
 
-After the selected Adapter returns, the Anthropic coordinator records each ordinary unconsumed candidate as `omitted + warning`. Target-specific bounded fallbacks exist only in the Adapter that constructs or verifies them: unsupported `any` may use target auto with all reachable tools; unsupported named choice may use target auto after exposing only the named tool; unsupported `none` may remove every controllable current-request tool capability; unsupported serial use may permit target parallel behavior; structured output may use the certified JSON/schema-prompt fallback; reasoning may use its certified target-default/nearest-mode fallback; and prefill may remain visible assistant history. Unsupported `stop_sequences` are simply omitted with a warning—never injected into a prompt or simulated by response truncation. Missing identities, broken relationships, permissions, invalid payloads, unsupported server tools, and other non-degradable constraints fail through the main-call contract before this disposition. Do not duplicate negative disposition branches in every Adapter or generalize them into a shared cross-protocol policy flag.
+Adapter migration order inside the atomic slice:
 
-Projectors do not reuse the OpenAI Responses target projector registry. Similar Provider fields may be implemented twice when the source semantics differ or independence is more valuable than line-count reduction.
+1. `anthropic-messages` — typed exact structured reconstruction and attachment
+   resolver;
+2. `openai-completions` — ceiling, Pi-owned temperature verification, sampling,
+   stop, tool choice, format, identity/tier, and prefill;
+3. `openai-responses` family — separate API compatibility facts retained;
+4. `google` — separate Generative AI and Vertex payload-shape certification;
+5. `bedrock` — certified Claude/non-Claude model-family splits;
+6. `mistral`;
+7. `commandcode-private`;
+8. `pi-messages`.
 
-Even when an implementation helper is shared within the Anthropic module, every enabled mapping has an explicit target compatibility predicate, payload-shape fixture, and final-wire certification. An unaudited target/field pair remains unimplemented rather than receiving a speculative registry row.
-
-## 8. Anthropic-owned response conversion
-
-Deepen the existing response converter as one Anthropic-owned module. It consumes only Pi `AssistantMessage`, Anthropic render state, projection outcomes, and validated request-local continuity associations. It does not receive raw Provider streams, diagnostics payloads, Provider payloads, or OpenAI Responses Client types. Target provenance may select a small internal interpretation rule for a Pi-retained field, but do not require a parallel per-Provider response registry merely because request projectors vary by Provider.
-
-For every Pi response field, implement only dispositions established by the response half of the semantic audit:
-
-1. render exact Pi-retained content, usage, stop, ID, and opaque attachment facts;
-2. interpret target-specific Pi fields only under matching provenance;
-3. use only Anthropic-defined null/default values;
-4. preserve replay metadata through native fields or `token_continuity` v1;
-5. warn on permitted response loss and fail when valid response structure, security, tool relationships, or required replay semantics cannot be constructed.
-
-The response module never uses `onPayload`. If Pi has discarded a Provider response field, the implementation records the audit disposition rather than adding a response interception layer or guessing the value. For `thinking.display: "omitted"`, render empty visible thinking and retain the Pi signature. If the signature is absent, emit `signature: ""` plus a warning and treat it as absent on replay; do not empty `redacted_thinking.data`.
-
-Anthropic responses do not echo request control effectiveness. Successful request outcomes remain internal certification facts; omission/fallback/repair notices go only to the fail-open observation seam.
-
-## 9. Anthropic semantic execution
-
-The Anthropic semantic executor:
-
-1. receives the resolved Pi Model and the already converted `AnthropicSemanticInvocation` after Native lane selection has completed;
-2. prepares reasoning/history/continuity once for that target;
-3. passes the prepared Invocation as one unit to the Anthropic Pi wrapper;
-4. selects at most one target Adapter from the resolved model facts, with no Adapter for a Pi-only target;
-5. creates one Anthropic-owned `PayloadProjectionOperation` that closes over only the immutable reasoning and supplement;
-6. passes Pi input plus that operation to `executeWithAnthropicPi()`;
-7. after Pi builds the candidate payload, lets the selected Adapter consume only its proven subset and centrally records every remaining Supplement candidate as omitted with a warning;
-8. converts the returned Pi `AssistantMessage` and outcomes into an Anthropic response;
-9. returns exact projection outcomes for observation and certification without adding request-control echo fields to the Anthropic response.
-
-The request converter never creates `onPayload`. The Anthropic Pi execution wrapper owns that callback and receives no raw Anthropic request object.
-
-## 10. TDD implementation slices
-
-### Slice 0 — Bidirectional field audit and red end-to-end fixtures
-
-1. Replace the request half of the Anthropic semantic audit with the exact main and Supplement consumer declarations from Architecture Section 5.1; keep the response audit complete for Pi-retained target facts.
-2. Capture current Pi input and final Provider body for each target API using test transports.
-3. Capture Pi `AssistantMessage` fixtures, Anthropic JSON/SSE output, and next-history Provider request for every replay-required fact; retain selected Provider response → Pi fixtures only as Pi dependency certification, not as an input to the Anthropic response module.
-4. Add failing request tests for forced/named/none tool choice, serial-tool constraint, structured output, reasoning disable/exact budget/adaptive mode, assistant prefill, output-ceiling/budget interaction, full-history provenance, unsupported server tools, and selected-projector payload-shape mismatch.
-5. Add red disposition tests proving every unsupported degradable control produces only its documented best-effort fallback, a `degraded` outcome, and a warning without fabricating tool calls, schema-valid output, exact reasoning, or exact prefill continuation. Add separate omission-and-warning tests for unsupported `stop_sequences` and unsupported Pi-owned preferences.
-6. Add Pi IR → Anthropic response tests for display omission, missing thinking signature, caller ambiguity, server tools/results, container, pause continuation, unknown terminal states, complete usage, every opaque attachment location, and SSE deltas; add warning-fallback tests for optional citations, safely representable stop/refusal facts, and other auxiliary loss.
-7. Add red extraction tests proving malformed unclaimed top-level values and claimed-object siblings remain unread and non-terminal, malformed consumed paths still fail, and unclaimed warnings are bounded and fail-open.
-8. Add dependency assertions prohibiting imports from OpenAI Responses semantic modules.
-
-Gate: every request path in a positive consumer has an explicit owner, target disposition, and end-to-end test; every field outside both consumers remains unread; every Pi-retained response fact has an explicit response disposition.
-
-### Slice 1 — Demand-driven Anthropic Invocation and candidate Supplement
-
-1. Deepen the existing conversion result into `AnthropicConversionResult`.
-2. Add one source-selection step that creates the main and Supplement consumer views before validation; downstream validators never receive the complete raw request.
-3. Capture the complete set of currently declared projection candidates in the same conversion operation; remove dormant Supplement fields whose last target consumer is absent.
-4. Narrow the ordinary Supplement outcome type so target unavailability cannot construct `failed`; keep reasoning and main-call terminal outcomes separate.
-5. Preserve current correct Pi messages, tools, options, render state, and notices. Do not preserve invented model-visible repairs: an unresolved tool relationship is retained exactly when validly representable and otherwise fails according to its critical relationship contract.
-6. Emit bounded top-level unclaimed-field notices without inspecting values; keep empty-Supplement Pi input equivalent to the current converter.
-
-Gate: Client Wire → Anthropic Invocation tests cover every consumer-declared path, prove unclaimed paths are non-terminal, and prove every Supplement member has at least one current target consumer without exposing a Provider payload shape to the request converter.
-
-### Slice 2 — Anthropic reasoning request semantics
-
-1. Implement the independent activation/effort/budget contract.
-2. Preserve omission, disabled, enabled-budget, and adaptive distinctly.
-3. Preserve `thinking.display` in Client render state; map concrete `output_config.effort` once to Pi options and test the target's audited Pi mapping.
-4. Enforce exact budget/output-ceiling relationships without Pi widening the Client ceiling.
-5. Extract historical thinking/redacted thinking and attachment identities.
-6. Add target-specific preparation and final-payload validation one target at a time.
-
-Gate: no Anthropic reasoning state is encoded through an OpenAI Responses reasoning type or guessed default.
-
-### Slice 3 — Anthropic response continuity loop
-
-1. Extract actual Provider/API/model provenance from Pi responses.
-2. Render native Anthropic thinking/redacted fields where valid.
-3. Implement and certify the bounded item-local `token_continuity` v1 codec.
-4. Restore compatible attachments in the next complete-history Provider request.
-5. Preserve visible reasoning and discard only incompatible opaque state on model switch.
-
-Gate: native fields and direct-protocol `item-extension-v1` pass Provider response → Anthropic Client response → next Client request → final Provider request; Claude Code/Claude CLI receives an explicit carrier capability result.
-
-### Slice 4 — Anthropic target projectors
-
-Preserve and simplify every currently registered Adapter: CommandCode Private, Anthropic Messages, OpenAI Completions, Responses/Azure/Codex, Google/Vertex, Mistral, certified Bedrock families, and Pi Messages. Registry selection returns the Adapter object directly. Each Adapter may expose one whole-payload reasoning operation and one positive-only Supplement operation; there is no second ID dispatch and no per-message `onPayload` call.
-
-After this baseline, add another Adapter or mapping only when a present Supplement fact, a real target requirement, exact payload evidence, and a final-wire test all exist. Do not scaffold theoretical target/field combinations.
-
-Before enabling the first fallback, add a configuration test proving Anthropic rejects an obsolete or invented `conversion.availability` object. The fixed disposition must not appear in Advanced Settings, OpenAI Responses configuration, or the narrow Anthropic Pi execution input.
-
-For each enabled mapping, begin with a failing Client Wire → final Provider Wire test. Unconsumed candidates receive the single central `omitted + warning` outcome; no projector copies unknown Supplement fields blindly or declares negative cases it does not consume. A pure candidate enumerator plus set subtraction is the complete ordinary disposition algorithm.
-
-Add the Anthropic-only `degraded` projection outcome before enabling availability fallback. The warning publisher must distinguish degradation from omission and exact Pi repair. No effective-state or observation path may claim an exact forced/serial/none/schema/stop/reasoning/prefill control when the final request used a fallback.
-
-Gate: every enabled mapping has a final-wire test, every Supplement candidate has at least one enabled consumer, and every unconsumed candidate has a central omission outcome without preventing dispatch.
-
-### Slice 5 — Pi IR to Anthropic response conversion
-
-1. Deepen the Anthropic-owned response module at the Pi `AssistantMessage` seam; use target provenance only for Pi fields whose retained meaning requires it.
-2. Preserve all Pi-retained response content, signatures, stop facts, usage, IDs, and attachments in valid Anthropic JSON/SSE form.
-3. Implement `thinking.display: "omitted"` as empty visible thinking with retained signature; use `signature: ""` plus a warning only when Pi supplied no signature, and treat it as absent on replay.
-4. Replace hard-coded null/default output only when Pi IR proves a stronger mapping; never fabricate an unavailable Provider fact.
-5. Emit developer notices through the fail-open observation seam and keep them out of Anthropic Wire.
-6. Fail critical response conversions rather than normalizing them into a false successful Anthropic result.
-
-Gate: the response module is fully tested from Pi `AssistantMessage` to Anthropic JSON/SSE, selected Provider response → Pi dependency fixtures cover retained opaque fields, and all replay-required facts continue into the next final Provider request.
-
-### Slice 6 — Anthropic-owned Pi execution integration
-
-1. Route only the Anthropic Semantic Conversion branch through `executeWithAnthropicPi()`.
-2. Keep Provider Native handling unchanged and before semantic conversion.
-3. Preserve request identity, Profile binding, retry, transport, streaming, response parsing, and diagnostics ownership.
-4. Assert that neither the Anthropic converter nor target projector supplies `onPayload` directly to Pi.
-
-Gate: basic requests with all optional projection features omitted produce equivalent Pi input, Provider payload, and Anthropic response.
-
-### Slice 7 — Protocol-valid response and cleanup
-
-1. Keep Anthropic response JSON/SSE within its standard schema plus the approved continuity extension; do not add request-control echo fields.
-2. Publish omission/fallback/repair notices only through fail-open observation.
-3. Remove tests and documentation that call ignored fields supported.
-4. Delete superseded direct-execution semantic paths.
-5. Keep Client response rendering valid when a preference is omitted or visible reasoning falls back.
-
-Gate: no Anthropic response invents Responses-style effective state, and observation claims a control reached the Provider only for `pi-native` or `payload-projected` outcomes.
-
-### Slice 8 — Independent online certification
-
-Add exactly three independently runnable direct Anthropic protocol scripts:
+Focused tests:
 
 ```text
-test/online/run-commandcode-private-anthropic.ts
-  provider: commandcode-private
-  selector: commandcode-private/deepseek/deepseek-v4-flash
-
-test/online/run-opencode-go-anthropic.ts
-  provider: opencode-go
-  selector: opencode-go/deepseek-v4-flash
-
-test/online/run-commandcode-goat-anthropic.ts
-  provider: commandcode-goat
-  selector: commandcode-goat/deepseek/deepseek-v4-flash
+test/unit/anthropic-supplement-validation.test.ts
+test/unit/anthropic-supplement-projection.test.ts
+test/unit/anthropic-semantic-invocation.test.ts
+test/unit/anthropic-pi-execution.test.ts
+test/integration/anthropic-semantic-final-payload.test.ts
+test/integration/pi-payload-shape-certification.test.ts
 ```
 
-Each script fixes and validates its Provider/model/fresh isolated Profile tuple and owns its Anthropic request construction, expected semantics, request/response wire assertions, report, and exit status. They may share only mechanism-level server, capture, timeout, credential-isolation, and report-format utilities. They do not invoke a generic semantic-case runner, the Responses suite, or Request Journey diagnostics.
+Required assertions:
 
-Each script must cover, when the target supports the meaning:
+- no raw source record survives in the Supplement;
+- every nested array/object is frozen;
+- source mutation after conversion cannot alter a candidate;
+- each Candidate ID is unique and settled exactly once;
+- unknown targets omit and dispatch;
+- selected Adapter payload-shape drift fails before dispatch;
+- removing an Adapter consumer makes the now-unused candidate fail the consumer
+  matrix test until the candidate is removed.
 
-- JSON and SSE success;
-- final output-token ceiling;
-- temperature, top-p, top-k, and stop sequences;
-- automatic, required/any, named, none, and serial tool use;
-- structured JSON output;
-- reasoning disabled, enabled budget, adaptive/effort behavior;
-- full-history visible reasoning and opaque continuity replay;
-- unsupported server tool and other hard controls failing before upstream dispatch;
-- captured final Provider body assertions.
+Gate:
 
-For every unsupported degradable control, the script asserts the documented final-wire fallback; there is no strict-policy case. Developer-warning publication is asserted by local execution tests because online scripts do not use diagnostics as an oracle. Unsupported `stop_sequences` must be absent from the final Provider body and the Provider response must not be post-truncated. Structured-output tests must parse but never assume schema conformance; reasoning tests distinguish Pi's certified effort mapping from unsupported exact-budget/adaptive activation and distinguish a genuinely non-reasoning model from a reasoning model whose target cannot disable it; prefill tests prove ordinary-history placement. In particular, CommandCode GOAT `deepseek/deepseek-v4-flash` must independently reproduce both recorded direct-wire results: named/required thinking-mode requests are rejected by the upstream wire while the bounded automatic single-tool fallback remains usable, and an accepted `thinking: {type: "disabled"}` request can still return thinking. The latter is a degraded target-default outcome, not an exact disable guarantee. Preserve the dated wire-evidence comments beside the GOAT compatibility rules; they may be removed only after a replacement online certification updates the source, audit, and this plan.
+- repository search finds no old Supplement record bag, `messageFrames` value
+  duplication, or string-based candidate accounting;
+- all registered target final-wire fixtures pass on the new contract.
 
-Each script also asserts the returned Anthropic JSON/SSE and at least one complete-history replay case supported by that target. A successful HTTP status or plausible model text is not sufficient.
+### Slice 4 — Server-tool, geography, and rich-content availability
 
-CommandCode GOAT retains its exact model compatibility restrictions. Real-agent testing uses only Claude Code/Claude CLI through a separate entry point, report, and exit status; Codex CLI is excluded because it cannot issue Anthropic Messages Client requests.
+Production work:
 
-## 11. Required test commands
+1. Remove server-tool and `inference_geo` hard gates from
+   `representability.ts`.
+2. Preserve their fixed typed candidates only when a current Adapter consumes the
+   exact fields.
+3. Let positive Adapters project exact native representations.
+4. Let the coordinator omit them on all other targets.
+5. Preserve ordinary visible content from rich results when Pi can legally carry
+   it; omit server-specific lifecycle fields.
+6. Keep final-payload minimum validity, ordinary media capability checks, and Client
+   tool relationships separate.
 
-Use guarded commands:
+Focused tests:
+
+```text
+test/unit/anthropic-main-call-validity.test.ts
+test/unit/model-aware-validity.test.ts
+test/unit/anthropic-supplement-projection.test.ts
+test/integration/anthropic-semantic-final-payload.test.ts
+```
+
+Gate:
+
+- unsupported server tools and geography reach Provider dispatch with omitted
+  outcomes and warnings;
+- no target receives a fabricated ordinary client tool or geography field;
+- exact Anthropic-target reconstruction remains exact where certified.
+
+### Slice 5 — Exact-only cache projection and configuration cleanup
+
+Production work:
+
+1. Remove `localCacheControl` from Anthropic configuration and request-conversion
+   policy.
+2. Delete request-wide promotion to Pi `cacheRetention`.
+3. Enumerate all currently consumed marker attachment points.
+4. Project exact markers only in positive target Adapters.
+5. Centrally omit every other marker.
+6. Remove `unknownPiContent` from Anthropic response configuration and make unknown
+   Pi content fixed block-level omission.
+7. Update first-run defaults and all configuration fixtures mechanically.
+
+Focused tests:
+
+```text
+test/unit/adapter-configuration.test.ts
+test/unit/cli-config.test.ts
+test/unit/anthropic-request-conversion.test.ts
+test/unit/anthropic-supplement-projection.test.ts
+test/integration/configured-composition.test.ts
+```
+
+Gate:
+
+- old keys are rejected rather than silently accepted;
+- OpenAI Responses configuration snapshots are byte-for-byte/structurally
+  unchanged in their focused tests;
+- no local marker can set request-wide cache retention.
+
+### Slice 6 — Strongest-legal response conversion
+
+Production work:
+
+1. Convert each Pi content block independently into retained or omitted output.
+2. Replace whole-response ToolCall failures with deterministic direct-tool proof or
+   block omission.
+3. Resolve namespace only through the request-local Client tool catalog.
+4. Remove continuity attachments whenever the owning block is omitted.
+5. Convert unknown/future Pi blocks to fixed omission with warning.
+6. Apply optional-auxiliary null/default/omission behavior.
+7. Recompute stop reason from the final retained blocks and authoritative terminal
+   fact.
+8. Ensure refusal is legal in the common response message and SSE validator.
+9. Keep JSON and SSE downstream of the same conversion result.
+
+Focused tests:
+
+```text
+test/unit/anthropic-response-projection.test.ts
+test/unit/anthropic-response-interpretation.test.ts
+test/unit/anthropic-response-continuity.test.ts
+test/unit/anthropic-response.test.ts
+test/unit/anthropic-sse.test.ts
+test/unit/anthropic-wire.test.ts
+test/integration/anthropic-atomic-sse.test.ts
+test/integration/anthropic-continuity-roundtrip.test.ts
+```
+
+Required paired JSON/SSE cases:
+
+- refusal with unavailable optional details;
+- caller inferred uniquely;
+- caller unavailable and ToolCall omitted;
+- redundant namespace discarded;
+- ambiguous namespace omitted;
+- malformed tool arguments omitted;
+- unknown Pi content omitted;
+- omitted final ToolCall changes stop reason to `end_turn`;
+- retained ToolCall produces `tool_use`;
+- length remains `max_tokens`;
+- empty legal content;
+- native and foreign thinking continuity.
+
+Gate:
+
+- JSON and reconstructed SSE messages are semantically equal for every case;
+- no optional response auxiliary produces HTTP 500;
+- no omitted block leaves orphan continuity or a false tool terminal.
+
+### Slice 7 — Replay and response-parser certification
+
+Production and test work:
+
+1. Retain actual Provider/API/model provenance from Pi `AssistantMessage`.
+2. Keep standard Anthropic native signature/redacted fields native only under
+   certified compatible provenance.
+3. Keep foreign opaque values exclusively in `token_continuity` v1.
+4. Restore the value to its original thinking/text/tool-call attachment only on a
+   compatible next target.
+5. On mismatch, discard opaque state and retain the strongest portable visible
+   meaning.
+6. Treat empty synthetic signature as absent during next-request replay.
+7. Update pinned Provider-response parser fixtures only when Pi actually exposes a
+   fact; do not introduce raw response interception.
+
+Focused tests:
+
+```text
+test/unit/anthropic-continuity-codec.test.ts
+test/unit/anthropic-response-continuity.test.ts
+test/integration/anthropic-continuity-roundtrip.test.ts
+test/integration/anthropic-response-parser-certification*.test.ts
+```
+
+Gate:
+
+- every certified compatible response-to-history round trip restores final
+  Provider attachment, value, and provenance;
+- model/API switch drops opaque state while keeping visible meaning;
+- malformed envelopes remain fail-open and bounded.
+
+### Slice 8 — Anthropic locality and behavioral certification
+
+1. Update Anthropic dependency tests to prohibit imports from OpenAI Responses
+   semantic modules and shared semantic kernels.
+2. Replace title/hash-only protocol synchronization assertions with behavioral
+   certification or explicit version-identity-only naming.
+3. Prove diagnostics disabled, throwing, and saturated states do not change final
+   request or response.
+4. Run guarded unit, integration, certification, type, lint, and complete suites.
+5. Confirm `git diff` contains no OpenAI Responses semantic change.
+
+Gate:
+
+- Anthropic can be added or removed without editing another Client Protocol Module;
+- Provider Native and Local Native lane tests remain unchanged and green;
+- every plan requirement has direct evidence rather than absence-of-failure.
+
+### Slice 9 — Independent online and real-client certification
+
+Run the existing independent Anthropic scripts:
+
+```text
+npm run test:online-anthropic:private
+npm run test:online-anthropic:goat
+npm run test:online-anthropic:opencode-go
+```
+
+Each script must assert:
+
+- Anthropic Client request;
+- captured final Provider request;
+- returned Anthropic JSON or SSE;
+- at least one complete-history replay case supported by that target;
+- fixed omission/fallback behavior for unsupported candidates;
+- no diagnostics side channel as correctness oracle.
+
+Then run Claude Code/Claude CLI through the guarded existing real-client entry point,
+with primary attention to:
+
+```text
+opencode-go/deepseek-v4-flash
+```
+
+The real-client test must prove that a request containing message-level
+`role: "system"` no longer returns the previous 400 error. It must also exercise one
+interrupted tool history if the client can produce or replay that history.
+
+Codex CLI is not used because it cannot certify Anthropic Messages Client behavior.
+
+Online credentials, API keys, real Codex state, and user profiles are never copied
+into fixtures or output. Every script runs under the repository's temporary
+`CODEX_HOME` guard.
+
+Gate:
+
+- the three direct-protocol scripts pass independently;
+- Claude Code/Claude CLI has a separate pass/fail report;
+- captured requests contain no secrets and are retained only according to the
+  existing bounded test policy.
+
+## 9. Test command order
+
+Use guarded commands only:
 
 ```text
 npm run test:unit
 npm run test:integration
 npm run test:certification
-npm run lint
 npm run typecheck
+npm run lint
 npm test
 ```
 
-Online scripts use the repository's temporary `CODEX_HOME` guard and independent Provider credentials. No packaging step is required.
+During a slice, a direct Vitest command is allowed only through the same repository
+temporary-`CODEX_HOME` guard. Tests must not write to the user's real Codex state.
 
-## 12. Fixed constraints
+Online execution comes last and is not a substitute for deterministic final-wire
+tests.
 
-- Do not modify Pi AI or `node_modules`.
-- Do not import OpenAI Responses semantic contracts or projectors.
-- Do not create a global Client Protocol Invocation, supplement, reasoning union, or projector registry.
-- Do not pass raw Anthropic Wire into a target projector.
-- Do not add a compatibility shim or dual execution path.
-- Do not use diagnostics to determine test correctness.
-- Do not use request `onPayload`, a custom transport, or consumed-stream rereading to recover Provider response facts.
-- Do not enter Direct Mode or Provider Native after Semantic lane commitment.
-- Do not add server-owned continuity storage.
-- Do not claim `previous_response_id`; it is not an Anthropic Client capability.
+## 10. Required implementation order and rollback points
 
-## 13. Definition of done
+The intended merge order is:
 
-Anthropic Semantic Conversion is complete when:
+```text
+0. authority + red fixtures
+1. system role + max_tokens ingress
+2. interrupted Client ToolCall repair
+3. atomic Supplement migration
+4. server-tool / inference_geo availability
+5. cache and configuration cleanup
+6. strongest-legal response + refusal parity
+7. continuity replay certification
+8. locality and complete deterministic verification
+9. online and Claude real-client verification
+```
 
-1. it owns an independent Invocation, demand-driven candidate Supplement, reasoning/continuity module, target projector registry, Pi IR → Anthropic response module, and tests;
-2. it owns its Pi payload execution wrapper and shares no Semantic Conversion executor, Invocation, supplement, reasoning, projector, outcome, or error type with another Client Protocol;
-3. every consumer-declared request path has one owner and explicit outcome, every Supplement member has a current target consumer, and unclaimed paths remain unread;
-4. every supported mapping is proved from Anthropic Client Wire to final Provider Wire;
-5. every Pi-retained response fact has a Pi `AssistantMessage` → Anthropic JSON/SSE disposition and fixture, with Provider response → Pi dependency fixtures only where retained opaque fields require certification;
-6. native and `item-extension-v1` full-history reasoning continuity is restored with correct provenance and attachment for every certified client capability;
-7. unsupported non-degradable controls fail through source validation or the Pi/main-call contract before Supplement projection, fixed availability fallbacks degrade honestly without a strict-mode switch, unconsumed candidates warn without blocking dispatch, and critical response conversion fails rather than fabricating success;
-8. the three fixed-target independent online Provider scripts pass, and Claude Code/Claude CLI has a separate real-agent result;
-9. OpenAI Responses and both Native lanes remain behaviorally unchanged.
+Rollback is by whole completed slice. Do not restore an obsolete configuration key
+or old Supplement translator to make a partial migration pass. If Slice 3 cannot be
+completed atomically, keep the branch before Slice 3 and split the implementation
+work internally without merging a dual-contract state.
+
+## 11. Completion evidence matrix
+
+| Requirement | Required evidence |
+|---|---|
+| message-level system extension | Client Wire conversion tests plus Claude real-client run |
+| honest interrupted ToolCall repair | conversion and final Provider history tests |
+| invalid `max_tokens=0` | ingress invalid-request test proving no dispatch |
+| fixed typed Supplement | compile-time fixed union, immutability tests, no raw record search |
+| fixed Provider union | consumer matrix plus at least one final-wire test per enabled mapping |
+| server-tool omission | unsupported-target final-wire dispatch and omitted outcome |
+| `inference_geo` omission | unsupported-target final-wire dispatch and omitted outcome |
+| exact-only cache | exact target fixture, unsupported omission fixture, no promotion search |
+| strongest legal response | block-level fallback tests and no optional-auxiliary 500 |
+| ToolCall caller/namespace handling | unique/default and ambiguous/omitted response cases |
+| refusal JSON/SSE parity | paired JSON and reconstructed SSE equality test |
+| foreign continuity | response → Client history → next final Provider replay test |
+| no config half-policy | closed-world rejection of removed keys |
+| Anthropic locality | dependency certification and diff audit |
+| no Native lane regression | existing Native preservation suites |
+| online Provider behavior | three independently runnable reports |
+| real Claude behavior | separate Claude Code/CLI report for the original failure |
+
+## 12. Definition of done
+
+The refactor is complete only when all of the following are true:
+
+1. The Anthropic architecture, mapping document, audit, implementation, and tests
+   contain one consistent decision for every item in Section 3.
+2. The external Anthropic request, execution, and response Interfaces remain small;
+   projection complexity stays behind protocol-local internal seams.
+3. Message-level system input is usable under the fixed privilege-degradation
+   algorithm.
+4. Interrupted Client ToolCalls receive the fixed honest repair while orphan,
+   duplicate, empty-ID, and ambiguous relationships still fail.
+5. `max_tokens=0` fails at Client ingress.
+6. The old broad Supplement and string control accounting no longer exist.
+7. Every Supplement member belongs to the fixed current Provider-consumer union,
+   is recursively immutable, and is settled exactly once.
+8. No target Adapter imports another Client Protocol, guesses a mapping, or owns
+   central omission.
+9. Unsupported server tools, `inference_geo`, local cache markers, and other
+   candidate-only semantics omit honestly without blocking an otherwise valid
+   request.
+10. Response conversion uses the strongest legal block-level representation,
+    recomputes stop reason, and keeps refusal behavior identical in JSON and SSE.
+11. Compatible opaque continuity restores the exact next-request attachment and
+    incompatible opaque state is discarded without losing portable visible meaning.
+12. Removed configuration fields have no aliases, shims, or dual behavior.
+13. All deterministic guarded test commands pass.
+14. All three direct Anthropic online scripts pass independently.
+15. Claude Code/Claude CLI separately proves the original OpenCode GO system-role
+    failure is resolved.
+16. OpenAI Responses and both Native Preservation lanes remain behaviorally
+    unchanged.

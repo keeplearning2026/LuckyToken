@@ -199,7 +199,7 @@ describe("atomic HTTP failure delivery", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
-  it("classifies an unrepresentable Anthropic server tool as a client semantic error", async () => {
+  it("omits an unsupported Anthropic server tool without blocking dispatch", async () => {
     const execute = vi.fn(() =>
       streamFrom([{ type: "done", reason: "stop", message: message() }]),
     );
@@ -215,10 +215,12 @@ describe("atomic HTTP failure delivery", () => {
       ),
     );
 
-    const body = await expectError(response, 400, "invalid_request_error");
-    expect(body).toMatchObject({
-      error: { message: expect.stringMatching(/server tool/iu) },
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: "message",
+      content: [{ type: "text", text: "complete" }],
     });
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("keeps transport and model-resolution classifications", async () => {
@@ -362,7 +364,7 @@ describe("atomic HTTP failure delivery", () => {
     expect(JSON.stringify(runtimeBody)).not.toContain(runtimeDiagnostic);
   });
 
-  it("turns a post-commit late-block rendering failure into only a server error", async () => {
+  it("omits a malformed late block while retaining the legal committed response", async () => {
     const committed = message({
       content: [
         { type: "text", text: "must-not-be-written" },
@@ -385,9 +387,13 @@ describe("atomic HTTP failure delivery", () => {
       request(),
     );
 
-    const body = await expectError(response, 500, "api_error");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      type: "message",
+      content: [{ type: "text", text: "must-not-be-written" }],
+      stop_reason: "end_turn",
+    });
     expect(createMessageId).toHaveBeenCalledOnce();
-    expect(JSON.stringify(body)).not.toContain("must-not-be-written");
   });
 
   it("treats disconnect after commit as delivery-only and returns no response", async () => {

@@ -2,9 +2,7 @@ export interface AnthropicConfiguration {
   readonly conversion: {
     readonly request: {
       readonly unknownContent: "error" | "ignore";
-      readonly localCacheControl: "ignore" | "promote";
     };
-    readonly response: { readonly unknownPiContent: "error" | "ignore" };
   };
 }
 
@@ -24,15 +22,12 @@ function choice<T extends string>(value: unknown, fallback: T, allowed: readonly
 }
 export function parseAnthropicConfiguration(value: unknown = {}, path = "clientProtocols.anthropic-messages"): AnthropicConfiguration {
   const root = record(value, path); keys(root, ["conversion"], path);
-  const conversion = record(root.conversion === undefined ? {} : root.conversion, `${path}.conversion`); keys(conversion, ["request", "response"], `${path}.conversion`);
-  const request = record(conversion.request === undefined ? {} : conversion.request, `${path}.conversion.request`); keys(request, ["unknownContent", "localCacheControl"], `${path}.conversion.request`);
-  const response = record(conversion.response === undefined ? {} : conversion.response, `${path}.conversion.response`); keys(response, ["unknownPiContent"], `${path}.conversion.response`);
+  const conversion = record(root.conversion === undefined ? {} : root.conversion, `${path}.conversion`); keys(conversion, ["request"], `${path}.conversion`);
+  const request = record(conversion.request === undefined ? {} : conversion.request, `${path}.conversion.request`); keys(request, ["unknownContent"], `${path}.conversion.request`);
   const snapshot = Object.freeze({ conversion: Object.freeze({
     request: Object.freeze({
       unknownContent: choice(request.unknownContent, "error", ["error", "ignore"], `${path}.conversion.request.unknownContent`),
-      localCacheControl: choice(request.localCacheControl, "ignore", ["ignore", "promote"], `${path}.conversion.request.localCacheControl`),
     }),
-    response: Object.freeze({ unknownPiContent: choice(response.unknownPiContent, "error", ["error", "ignore"], `${path}.conversion.response.unknownPiContent`) }),
   }) });
   snapshots.add(snapshot);
   return snapshot;

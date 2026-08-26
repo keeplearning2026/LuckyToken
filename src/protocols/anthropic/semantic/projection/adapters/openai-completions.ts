@@ -5,6 +5,7 @@ import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
+  AnthropicProjectionOutcomeId,
 } from "../contract.js";
 
 export interface AnthropicOpenAICompletionsProjectionResult {
@@ -41,25 +42,25 @@ function same(left: unknown, right: unknown): boolean {
 
 function add(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   outcome: AnthropicProjectionDisposition,
 ): void {
-  outcomes.push(Object.freeze({ control, outcome: Object.freeze(outcome) }));
+  outcomes.push(Object.freeze({ candidateId, outcome: Object.freeze(outcome) }));
 }
 
 function exact(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   current: unknown,
   expected: unknown,
   assign: () => void,
 ): void {
   if (same(current, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(outcomes, candidateId, { kind: "pi-native" });
     return;
   }
   assign();
-  add(outcomes, control, {
+  add(outcomes, candidateId, {
     kind: "payload-projected",
     projector: "anthropic-to-openai-completions",
     warning: "pi-native-mapping-repaired",
@@ -68,10 +69,10 @@ function exact(
 
 function degraded(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   warning: string,
 ): void {
-  add(outcomes, control, { kind: "degraded", warning });
+  add(outcomes, candidateId, { kind: "degraded", warning });
 }
 
 function filterNamedOpenAITool(
@@ -109,7 +110,7 @@ function forcedToolChoiceFailure(
   model: Model<string>,
   invocation: AnthropicSemanticInvocation,
 ): string | undefined {
-  const choice = invocation.supplement.toolChoice;
+  const choice = invocation.supplement.controls.toolChoice?.value;
   if (choice?.kind !== "any" && choice?.kind !== "named") return undefined;
   if (
     model.provider === "commandcode-goat" &&
@@ -538,7 +539,7 @@ function projectAnthropicToOpenAICompletions(
       "openai-completions payload has no audited output-token field",
     );
   }
-  const finalMaxTokens = Math.min(payload[maxField], supplement.outputTokenCeiling);
+  const finalMaxTokens = Math.min(payload[maxField], supplement.controls.outputTokenCeiling.value);
   exact(
     outcomes,
     "maxTokens",
@@ -550,8 +551,8 @@ function projectAnthropicToOpenAICompletions(
   );
 
   for (const [control, field, value] of [
-    ["sampling.temperature", "temperature", supplement.sampling.temperature],
-    ["sampling.topP", "top_p", supplement.sampling.topP],
+    ["sampling.temperature", "temperature", supplement.controls.temperature?.value],
+    ["sampling.topP", "top_p", supplement.controls.topP?.value],
   ] as const) {
     if (value === undefined) continue;
     if (control === "sampling.temperature") {
@@ -564,43 +565,45 @@ function projectAnthropicToOpenAICompletions(
       payload[field] = value;
     });
   }
-  if (supplement.sampling.topK !== undefined) {
+  if (supplement.controls.topK !== undefined) {
     if (TOP_K_CERTIFIED_PROVIDERS.has(input.model.provider)) {
       exact(
         outcomes,
         "sampling.topK",
         payload.top_k,
-        supplement.sampling.topK,
+        supplement.controls.topK.value,
         () => {
-          payload.top_k = supplement.sampling.topK;
+          payload.top_k = supplement.controls.topK!.value;
         },
       );
     }
   }
 
-  if (supplement.stopSequences !== undefined) {
+  if (supplement.controls.stopSequences !== undefined) {
     exact(
       outcomes,
       "stopSequences",
       payload.stop,
-      supplement.stopSequences,
+      supplement.controls.stopSequences.value,
       () => {
-        payload.stop = [...supplement.stopSequences!];
+        payload.stop = [...supplement.controls.stopSequences!.value];
       },
     );
   }
 
-  const choice = supplement.toolChoice;
+  const choice = supplement.controls.toolChoice?.value;
   if (choice !== undefined) {
     const forcedUnsupported = forcedToolChoiceFailure(
       input.model,
       input.invocation,
     ) !== undefined;
+    const needsSerial = choice.kind !== "none" && choice.disableParallelToolUse;
     if (
       forcedUnsupported &&
       (choice.kind === "any" || choice.kind === "named")
     ) {
       payload.tool_choice = "auto";
+      if (needsSerial) payload.parallel_tool_calls = false;
       if (choice.kind === "named") {
         payload.tools = filterNamedOpenAITool(payload.tools, choice.name);
       }
@@ -616,60 +619,61 @@ function projectAnthropicToOpenAICompletions(
           : choice.kind === "any"
             ? "required"
             : choice.kind;
-      exact(outcomes, "toolChoice", payload.tool_choice, mapped, () => {
-        payload.tool_choice = mapped;
-      });
-    }
-    if (choice.kind !== "none" && choice.disableParallelToolUse) {
-      exact(
+      const choiceExact = same(payload.tool_choice, mapped);
+      const serialExact = !needsSerial || same(payload.parallel_tool_calls, false);
+      if (!choiceExact) payload.tool_choice = mapped;
+      if (needsSerial && !serialExact) payload.parallel_tool_calls = false;
+      add(
         outcomes,
-        "toolChoice.disableParallelToolUse",
-        payload.parallel_tool_calls,
-        false,
-        () => {
-          payload.parallel_tool_calls = false;
-        },
+        "toolChoice",
+        choiceExact && serialExact
+          ? { kind: "pi-native" }
+          : {
+              kind: "payload-projected",
+              projector: "anthropic-to-openai-completions",
+              warning: "pi-native-mapping-repaired",
+            },
       );
     }
   }
 
-  const format = supplement.outputFormat;
-  if (format.kind === "specified") {
+  const format = supplement.controls.outputFormat?.value;
+  if (format?.kind === "json-schema") {
     const mapped = {
       type: "json_schema",
       json_schema: {
         name: "anthropic_output",
         strict: true,
-        schema: format.value.schema,
+        schema: format.schema,
       },
     };
     exact(outcomes, "outputFormat", payload.response_format, mapped, () => {
       payload.response_format = mapped;
     });
-  } else if (format.kind === "explicit-null") {
+  } else if (format === null) {
     delete payload.response_format;
     add(outcomes, "outputFormat", { kind: "pi-native" });
   }
 
-  const userId = supplement.metadataUserId;
-  if (userId.kind === "specified") {
-    exact(outcomes, "metadataUserId", payload.user, userId.value, () => {
-      payload.user = userId.value;
+  const userId = supplement.controls.metadataUserId?.value;
+  if (typeof userId === "string") {
+    exact(outcomes, "metadataUserId", payload.user, userId, () => {
+      payload.user = userId;
     });
-  } else if (userId.kind === "explicit-null") {
+  } else if (userId === null) {
     delete payload.user;
     add(outcomes, "metadataUserId", { kind: "pi-native" });
   }
 
-  const tier = supplement.serviceTier;
-  if (tier.kind === "specified") {
-    const mapped = tier.value === "standard_only" ? "default" : "auto";
+  const tier = supplement.controls.serviceTier?.value;
+  if (tier !== undefined && tier !== null) {
+    const mapped = tier === "standard_only" ? "default" : "auto";
     exact(outcomes, "serviceTier", payload.service_tier, mapped, () => {
       payload.service_tier = mapped;
     });
   }
 
-  if (supplement.finalAssistantPrefill === true) {
+  if (supplement.controls.finalAssistantPrefill?.value === true) {
     const finalMessage = (payload.messages as unknown[]).at(-1);
     if (
       typeof finalMessage !== "object" ||

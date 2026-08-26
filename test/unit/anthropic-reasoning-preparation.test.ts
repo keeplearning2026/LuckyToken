@@ -176,7 +176,7 @@ describe("Anthropic reasoning history preparation", () => {
       { type: "text", text: "visible answer" },
     ]);
     expect(prepared.outcomes).toContainEqual({
-      control: "reasoning.history[0:0]",
+      candidateId: "reasoning.history[0:0]",
       outcome: expect.objectContaining({ kind: "degraded" }),
     });
   });

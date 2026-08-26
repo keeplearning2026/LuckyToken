@@ -139,7 +139,7 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
       delete block.redacted;
       outcomes.push(
         Object.freeze({
-          control: `reasoning.history[${history.sourceMessageIndex}:${history.sourceContentIndex}]`,
+          candidateId: `reasoning.history[${history.sourceMessageIndex}:${history.sourceContentIndex}]`,
           outcome: Object.freeze(
             visibleThinking.length > 0
               ? {
@@ -171,7 +171,7 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
       if (block.redacted === true) delete block.redacted;
       outcomes.push(
         Object.freeze({
-          control: `reasoning.history[${history.sourceMessageIndex}:${history.sourceContentIndex}]`,
+          candidateId: `reasoning.history[${history.sourceMessageIndex}:${history.sourceContentIndex}]`,
           outcome: Object.freeze({
             kind: "omitted" as const,
             warning: "opaque native thinking state is incompatible with the resolved target",
@@ -192,7 +192,7 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
     if (!sourceMatches(candidate, input.model)) {
       outcomes.push(
         Object.freeze({
-          control: `reasoning.continuity[${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}]`,
+          candidateId: `reasoning.continuity[${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}]`,
           outcome: Object.freeze({
             kind: "omitted" as const,
             warning: "opaque continuity provenance is incompatible with the resolved target",
@@ -214,7 +214,7 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
     } else {
       outcomes.push(
         Object.freeze({
-          control: `reasoning.continuity[${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}]`,
+          candidateId: `reasoning.continuity[${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}]`,
           outcome: Object.freeze({
             kind: "omitted" as const,
             warning: "opaque continuity attachment no longer resolves to its Pi block",
@@ -225,7 +225,7 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
     }
     outcomes.push(
       Object.freeze({
-        control: `reasoning.continuity[${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}]`,
+        candidateId: `reasoning.continuity[${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}]`,
         outcome: Object.freeze({ kind: "pi-native" as const }),
       }),
     );

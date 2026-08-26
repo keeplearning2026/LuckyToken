@@ -12,7 +12,11 @@ import { describe, expect, it } from "vitest";
 
 import { createCommandCodePrivateProvider } from "../../packages/provider-commandcode-private/src/provider.js";
 
-import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
+import {
+  convertValidatedAnthropicRequestWithPolicy,
+  parseAnthropicTextInvocation,
+  validateAnthropicSourceRequest,
+} from "../../src/protocols/anthropic/request.js";
 import type { AnthropicSemanticInvocation } from "../../src/protocols/anthropic/semantic/invocation.js";
 import { prepareAnthropicPayloadProjection } from "../../src/protocols/anthropic/semantic/projection/request.js";
 import { prepareAnthropicReasoning } from "../../src/protocols/anthropic/semantic/reasoning/request.js";
@@ -227,7 +231,7 @@ describe("Anthropic Client Wire to final CommandCode Private payload", () => {
     expect(pipeline.pi.options).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("params.reasoning_effort");
     expect(outcomes).toContainEqual({
-      control: "reasoning.effort",
+      candidateId: "reasoning.effort",
       outcome: {
         kind: "degraded",
         warning: expect.stringMatching(
@@ -400,7 +404,7 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
         async onPayload(basePayload) {
           const projected = await projection.project(basePayload, target);
           effortOutcome = projected.outcomes.find(
-            (entry) => entry.control === "reasoning.effort",
+            (entry) => entry.candidateId === "reasoning.effort",
           )?.outcome.kind;
           return capture(projected.payload);
         },
@@ -531,7 +535,7 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
     );
     const pipeline = prepareAnthropicFinalPipeline(target, converted.invocation);
     const projection = pipeline.projection;
-    let projectedOutcomes: readonly { readonly control: string; readonly outcome: { readonly kind: string } }[] = [];
+    let projectedOutcomes: readonly { readonly candidateId: string; readonly outcome: { readonly kind: string } }[] = [];
     const payload = await captureFinalPiPayload((capture) =>
       streamOpenAICompletions(target, pipeline.pi.context, {
         ...pipeline.pi.options,
@@ -545,7 +549,7 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
     );
 
     expect(payload).toMatchObject(expected);
-    expect(projectedOutcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+    expect(projectedOutcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
       .toBe(effortOutcome);
     for (const field of forbidden) expect(payload).not.toHaveProperty(field);
   });
@@ -705,7 +709,7 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
 
     expect(result.payload).not.toHaveProperty("thinking");
     expect(result.outcomes).toContainEqual({
-      control: "reasoning.activation",
+      candidateId: "reasoning.activation",
       outcome: {
         kind: "degraded",
         warning: expect.stringMatching(/OpenCode Go.*does not guarantee reasoning disable/iu),
@@ -741,7 +745,7 @@ describe("Anthropic Client Wire to final OpenAI Completions payload", () => {
 
     expect(result.payload).not.toHaveProperty("thinking");
     expect(result.outcomes).toContainEqual({
-      control: "reasoning.activation",
+      candidateId: "reasoning.activation",
       outcome: {
         kind: "degraded",
         warning: expect.stringMatching(/CommandCode GOAT.*does not guarantee reasoning disable/iu),
@@ -923,7 +927,7 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
       tool_choice: { type: "any", disable_parallel_tool_use: true },
     });
     expect(outcomes).toContainEqual({
-      control: "reasoning.effort",
+      candidateId: "reasoning.effort",
       outcome: expect.objectContaining({ kind: "payload-projected" }),
     });
   });
@@ -1016,6 +1020,240 @@ describe("Anthropic Client Wire to final Anthropic Messages payload", () => {
       ],
     });
     expect(JSON.stringify(payload)).not.toContain("[web search result]");
+  });
+
+  it("dispatches an honest synthetic ToolResult for an interrupted historical call", async () => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: "call-1",
+            name: "lookup",
+            input: { query: "Token" },
+          }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "text",
+            text: "continue",
+            cache_control: { type: "ephemeral" },
+          }],
+        },
+      ],
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+    }, 1);
+    const pipeline = prepareAnthropicFinalPipeline(anthropicModel, converted.invocation);
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamAnthropicMessages(anthropicModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await pipeline.projection.project(basePayload, anthropicModel);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      messages: [
+        {
+          role: "assistant",
+          content: [expect.objectContaining({ type: "tool_use", id: "call-1" })],
+        },
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "call-1",
+              is_error: true,
+              content: "No result — the tool call did not complete (interrupted or lost).",
+            }),
+            expect.objectContaining({
+              type: "text",
+              text: "continue",
+              cache_control: { type: "ephemeral" },
+            }),
+          ],
+        },
+      ],
+    });
+  });
+
+  it("restores a rich nested document ToolResult without leaving Pi content unassociated", async () => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-1", name: "lookup", input: {} }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "call-1",
+            content: [{
+              type: "document",
+              source: {
+                type: "content",
+                content: [{ type: "text", text: "document text" }],
+              },
+            }],
+          }],
+        },
+      ],
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+    }, 1);
+    const pipeline = prepareAnthropicFinalPipeline(anthropicModel, converted.invocation);
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamAnthropicMessages(anthropicModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await pipeline.projection.project(basePayload, anthropicModel);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      messages: [
+        {
+          role: "assistant",
+          content: [expect.objectContaining({ type: "tool_use", id: "call-1" })],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "call-1",
+            content: [{
+              type: "document",
+              source: {
+                type: "content",
+                content: [{ type: "text", text: "document text" }],
+              },
+            }],
+          }],
+        },
+      ],
+    });
+  });
+
+  it("places an honest synthetic ToolResult before later supplement-only content", async () => {
+    const converted = parseAnthropicTextInvocation({
+      model: "client-selector",
+      max_tokens: 2_048,
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-1", name: "lookup", input: {} }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "document",
+            source: { type: "url", url: "https://example.test/document.pdf" },
+          }],
+        },
+      ],
+      tools: [{ name: "lookup", input_schema: { type: "object" } }],
+    }, 1);
+    const pipeline = prepareAnthropicFinalPipeline(anthropicModel, converted.invocation);
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamAnthropicMessages(anthropicModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await pipeline.projection.project(basePayload, anthropicModel);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(payload).toMatchObject({
+      messages: [
+        {
+          role: "assistant",
+          content: [expect.objectContaining({ type: "tool_use", id: "call-1" })],
+        },
+        {
+          role: "user",
+          content: [
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "call-1",
+              is_error: true,
+            }),
+            {
+              type: "document",
+              source: { type: "url", url: "https://example.test/document.pdf" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps unknownContent=ignore dispatchable when later content triggers reconstruction", async () => {
+    const converted = convertValidatedAnthropicRequestWithPolicy(
+      validateAnthropicSourceRequest({
+        model: "client-selector",
+        max_tokens: 2_048,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "future_unknown", payload: "ignored" },
+            {
+              type: "text",
+              text: "kept",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        }],
+      }),
+      1,
+      { unknownContent: "ignore" },
+    );
+    const pipeline = prepareAnthropicFinalPipeline(anthropicModel, converted.invocation);
+
+    const payload = await captureFinalPiPayload((capture) =>
+      streamAnthropicMessages(anthropicModel, pipeline.pi.context, {
+        ...pipeline.pi.options,
+        apiKey: "test-only-key",
+        async onPayload(basePayload) {
+          const projected = await pipeline.projection.project(basePayload, anthropicModel);
+          return capture(projected.payload);
+        },
+      }),
+    );
+
+    expect(converted.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "anthropic_unknown_content_ignored",
+        action: "ignore",
+      }),
+    );
+    expect(payload).toMatchObject({
+      messages: [{
+        role: "user",
+        content: [{
+          type: "text",
+          text: "kept",
+          cache_control: { type: "ephemeral" },
+        }],
+      }],
+    });
   });
 });
 
@@ -1116,7 +1354,7 @@ describe("Anthropic Client Wire to final Google payloads", () => {
     const googlePayload = requireRecord(payload, "Google payload");
     const googleConfig = requireRecord(googlePayload.config, "Google payload.config");
     expect(googleConfig.thinkingConfig).toHaveProperty("includeThoughts", true);
-    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+    expect(outcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
       .not.toBe("omitted");
   });
 
@@ -1153,7 +1391,7 @@ describe("Anthropic Client Wire to final Google payloads", () => {
     const googlePayload = requireRecord(payload, "Google payload");
     const googleConfig = requireRecord(googlePayload.config, "Google payload.config");
     expect(googleConfig.thinkingConfig).toBeUndefined();
-    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+    expect(outcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
       .toBe("degraded");
   });
 
@@ -1373,7 +1611,7 @@ describe("Anthropic Client Wire to final Mistral payload", () => {
       expect(payload).not.toHaveProperty("reasoningEffort");
       expect(payload).not.toHaveProperty("promptMode");
     }
-    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+    expect(outcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
       .toBe(outcome);
   });
 
@@ -1532,7 +1770,7 @@ describe.each([
 
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("include");
-    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+    expect(outcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
       .toBe("degraded");
   });
 });
@@ -1667,12 +1905,12 @@ describe("Anthropic Client Wire to final Bedrock payloads", () => {
     if (expectEffort) {
       expect(additional?.thinking).toMatchObject({ type: "adaptive" });
       expect(outputConfig?.effort).toBe("high");
-      expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      expect(outcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
         .not.toBe("omitted");
     } else {
       expect(additional?.thinking).toBeUndefined();
       expect(outputConfig?.effort).toBeUndefined();
-      expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+      expect(outcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
         .toBe("degraded");
     }
   });
@@ -1789,7 +2027,7 @@ describe("Anthropic Client Wire to final Pi Messages payload", () => {
     );
 
     expect(payload).not.toHaveProperty("options.reasoning");
-    expect(outcomes.find((entry) => entry.control === "reasoning.effort")?.outcome.kind)
+    expect(outcomes.find((entry) => entry.candidateId === "reasoning.effort")?.outcome.kind)
       .toBe("degraded");
   });
 });

@@ -4,7 +4,7 @@ import { streamSimple as streamGoogleGenerativeAI } from "@earendil-works/pi-ai/
 import { streamSimple as streamGoogleVertex } from "@earendil-works/pi-ai/api/google-vertex";
 import type { Context, Model } from "@earendil-works/pi-ai";
 
-import { convertAssistantMessageToAnthropicWithPolicy } from "../../src/protocols/anthropic/response.js";
+import { convertAssistantMessageToAnthropicResponse } from "../../src/protocols/anthropic/response.js";
 import { captureAnthropicContinuityReplay } from "../support/anthropic-continuity-replay.js";
 
 const context: Context = {
@@ -73,14 +73,13 @@ describe("Anthropic Google response-parser certification", () => {
       },
     }).result();
     expect(parsed.stopReason, parsed.errorMessage).not.toBe("error");
-    const converted = convertAssistantMessageToAnthropicWithPolicy(
+    const converted = convertAssistantMessageToAnthropicResponse(
       parsed,
       {
         selector: "client-model",
         createMessageId: () => "msg-google-certified",
         directToolNames: ["lookup"],
       },
-      { unknownPiContent: "error" },
     );
 
     expect(parsed.content).toEqual([

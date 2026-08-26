@@ -47,7 +47,7 @@ const terminal: AssistantMessage = {
 };
 
 const projectedOutcome = Object.freeze({
-  control: "outputTokenCeiling",
+  candidateId: "maxTokens" as const,
   outcome: Object.freeze({
     kind: "payload-projected" as const,
     projector: "anthropic-test",

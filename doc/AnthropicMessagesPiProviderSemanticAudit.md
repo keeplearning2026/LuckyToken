@@ -16,7 +16,7 @@ The most important release blockers are:
 
 1. `stop_sequences`, every `tool_choice` form, `disable_parallel_tool_use`, and `output_config.format` are validated incompletely or dropped before final Provider construction.
 2. `thinking.disabled`, `thinking.adaptive`, display omission/null/value, and effort omission/null/value collapse. Enabled thinking also lacks the required `budget_tokens < max_tokens` validation, while Pi may increase an Anthropic/Bedrock reasoning request's final output ceiling.
-3. final-assistant prefill is changed into ordinary history, and unresolved tool calls may receive the invented text `No result — the tool call did not complete (interrupted or lost).` Both violate hard model-visible semantics.
+3. final-assistant prefill is changed into ordinary history, and unresolved ordinary Client tool calls currently fail instead of receiving the fixed honest interruption result. Both require the explicit degraded behavior below.
 4. URL images, binary/URL documents, rich search results, server-tool calls/results, caller identity, citations, cache attachment points, and tool-specific controls are rejected, flattened, omitted, or replaced by placeholders.
 5. the response renderer hard-codes citations, container, stop details/sequence, inference geography, service tier, and server-tool usage to `null`; this is not evidence that the upstream Provider omitted those facts.
 
@@ -41,7 +41,7 @@ The audit uses these dispositions:
 | Anthropic source fact | Validation baseline | Current Pi behavior | Requirement | Authoritative owner | Required disposition |
 |---|---|---|---|---|---|
 | `model` | non-empty string | selector is resolved outside conversion | hard | runtime model resolution | resolved target model replaces selector only at the Provider boundary |
-| `messages` roles | accepts `user`, `assistant`, and non-standard `system` | Pi messages; first message-level system text is promoted | hard | Pi context plus Anthropic supplement for exact source associations | standard grammar is `user|assistant`; reject message-level `system` in the current contract rather than silently widening privilege |
+| `messages` roles | currently rejects non-standard `system` | no current Pi representation for rejected request | compatibility extension | Pi context and conversion notice | promote text from the first message-level system to `systemPrompt`; convert its non-text and all later system content as ordinary user content; emit one degradation notice |
 | top-level `system` string | string | Pi `systemPrompt` | hard | Pi context | validate final target representation; Project only when Pi loses structure |
 | top-level `system` blocks | currently accepts text but drops block cache controls | joined into one string | cache preference plus hard text | Pi context + supplement | preserve text; retain each cache attachment separately; project or warn per target |
 | `max_tokens` | non-negative integer; zero currently accepted | Pi `maxTokens`, plus source total ceiling retained as `supplement.outputTokenCeiling` | hard ceiling | Pi option + narrow ceiling fact | final Provider output ceiling must be `<=` Client value; fail when zero cannot produce a valid Provider request; if later context clamping leaves no room for an otherwise valid thinking budget, disable reasoning and warn |
@@ -52,9 +52,9 @@ The audit uses these dispositions:
 | `stream` | boolean | response render state only | client response contract | Anthropic client state | JSON/SSE renderer; never project as Provider response semantics beyond Pi's required streaming transport |
 | `metadata.user_id` | string/null/absence partially distinguished | Pi metadata reaches only some APIs | preference/abuse identity | supplement with Pi option candidate | validate exact final identity field or omit with warning; never map to unrelated billing metadata |
 | `service_tier` | string/null shape only | dropped | preference | supplement | Project only to a certified capacity-tier field; otherwise omit/warn |
-| `inference_geo` | string/null shape only | dropped | hard data-residency control when explicitly set | supplement | Project exact compatible geography or Fail |
+| `inference_geo` | string/null shape only | dropped | candidate-only preference | supplement | Project an exact compatible geography when certified; otherwise omit and warn without blocking dispatch |
 | `container` | string/null shape only | dropped | target-bound continuation | supplement with provenance | restore only to a compatible target; otherwise discard opaque identity and warn while preserving visible content |
-| top-level `cache_control` | ephemeral/ttl partly validated | optionally promoted to coarse Pi cache retention | preference | supplement | retain exact attachment/ttl; Pi-native only if final target is equivalent, else project or warn |
+| top-level `cache_control` | ephemeral/ttl partly validated | currently may promote to coarse Pi cache retention | preference | supplement | retain exact attachment/ttl; project only at the exact certified attachment, otherwise omit and warn; remove promotion |
 | `tool_choice.auto` | object shape only | dropped | exact auto; serial sub-control is degradable | supplement | map target auto exactly; unsupported serial allows target parallel behavior and warns |
 | `tool_choice.any` | object shape only | dropped | degradable orchestration | supplement | map to target required/any when exact; otherwise target auto with all reachable tools plus warning |
 | `tool_choice.tool` | object shape only | dropped | degradable orchestration, but tool identity is hard | supplement | map named restriction when exact; otherwise expose only the named tool with target auto plus warning; missing name fails |
@@ -68,7 +68,7 @@ The audit uses these dispositions:
 | historical `redacted_thinking.data` | string required | Pi redacted thinking/signature, synthetic provenance | replay-required | Anthropic reasoning/continuity | same attachment and validated provenance required |
 | `token_continuity` v1 | absent in baseline | absent | replay-required extension | Anthropic continuity codec | closed-world bounded item-local decode/encode; malformed attachments warn individually |
 | final assistant prefill | detected | degraded to ordinary history with notice | degradable continuation constraint | supplement plus Pi association | validate exact target continuation semantics; otherwise history fallback with warning |
-| unresolved tool call | baseline can synthesize a tool result | invented model-visible repair | hard relationship | Pi context conversion | remove repair; preserve exact legal history or Fail |
+| unresolved ordinary Client tool call | currently fails before later history | no usable Pi history | fixed honest interruption repair | Pi context conversion | insert an `isError=true` ToolResult with the original ID/name and fixed incomplete-call text; orphan, duplicate, empty-ID, ambiguous, and server-tool relationships still fail |
 
 ## Content and tool audit
 
@@ -85,18 +85,18 @@ The audit uses these dispositions:
 | document title/context/citations/cache | dropped | supplement association; Project or explicit loss disposition |
 | search result source/title/content/citations/cache | baseline expects wrong string `content` and flattens it | preserve official structured block in supplement; Project or honest visible fallback with warning when safe |
 | client `tool_use` id/name/input | Pi tool call | Pi context plus association; exact relationship is hard |
-| tool-use caller/cache | dropped | supplement association; infer `direct` only for an unambiguous ordinary Client tool, omit optional cache with warning, and Fail on ambiguous permission provenance |
+| tool-use caller/cache | dropped | supplement association; infer `direct` only for an unambiguous ordinary Client tool and omit optional cache with warning; response-side ambiguity omits the ToolCall block, while malformed request-side Client relationships still fail |
 | client `tool_result` nested content | text/image subset reaches Pi; structured facts flatten/drop | Pi tool relationship plus supplement associations; exact tool ID relationship is hard; nested content follows its own family rule |
 | `tool_reference` | becomes Pi `addedToolNames` | Pi-native only for audited targets; otherwise supplement Project or Fail if the reference changes available tools |
-| server-tool use | placeholder transcript | placeholder is prohibited; preserve typed block for compatible target or Fail |
-| web search/fetch result | placeholder transcript | preserve typed result for compatible target or Fail/fallback only when complete visible result can be retained honestly |
-| code/bash/text-editor/tool-search result | placeholder transcript | placeholder is prohibited; typed Project or Fail |
+| server-tool use | placeholder transcript | placeholder is prohibited; preserve typed fields for a compatible target, otherwise omit server-specific semantics and warn without reclassifying them as a Client tool |
+| web search/fetch result | placeholder transcript | preserve independently representable visible content; project compatible typed facts and omit remaining server-specific facts with a warning |
+| code/bash/text-editor/tool-search result | placeholder transcript | preserve independently representable visible content; project compatible typed facts and omit remaining server-specific facts with a warning |
 | ordinary client tool name/description/schema | Pi tool | Pi context; final target validation required |
 | tool `strict` | Pi constrained sampling | Pi context plus supplement validation | Pi-native where exact; repair/project or Fail when source requires strictness |
 | tool cache/callers/defer/eager/examples/type | validated shallowly then dropped | supplement per tool identity; redundant `type: custom`, nullable fields, cache, loading, streaming, and examples may warn/omit when the ordinary tool remains intact; ambiguous caller permissions still Fail |
-| typed Anthropic server tools | treated as ordinary tool shapes or narrowed | supplement retains discriminated source contract; only project to a proven equivalent server-hosted tool |
+| typed Anthropic server tools | treated as ordinary tool shapes or narrowed | supplement retains only the discriminated fields consumed by a current Adapter; exact-project or centrally omit, never expose as a Client tool |
 
-No placeholder string may stand in for a server tool, server result, unresolved client tool result, document, citation, or opaque continuity value.
+No placeholder string may stand in for server execution, a server result, document, citation, or opaque continuity value. The fixed unresolved ordinary Client ToolCall repair is different: it is an honest `isError=true` statement that execution did not complete and never claims a tool answer.
 
 ## Target request matrix
 
@@ -104,18 +104,18 @@ Legend: **P** = Pi-native or exact Project available after payload-shape certifi
 
 | Target Pi API | max ceiling | sampling | stop | tool choice | serial tools | JSON schema | reasoning | identity/tier/geo | rich Anthropic blocks |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| CommandCode Private (`commandcode-private` custom payload) | P | M | D | D | D | D | M/D | O/F geo | M |
+| CommandCode Private (`commandcode-private` custom payload) | P | M | D | D | D | D | M/D | O | M |
 | unclaimed `anthropic-messages` | P | M | P | P | P | P | M | P | P where exact source wire is retained |
-| `openai-completions` | P | M | P | M/D | M/D | M/D | M/D | M/F geo | M |
-| `openai-responses` | P | M | D | P | P | P | M/D | M/F geo | M |
-| `azure-openai-responses` | P | M | D | P | P | P | M/D | M/F geo | M |
-| `openai-codex-responses` | M | M | D | M/D | D | M/D | M/D | M/F geo | M |
-| `google-generative-ai` | P | P | P | P | D | P | M | O/F geo | M |
-| `google-vertex` | P | P | P | P | D | P | M | O/F geo | M |
-| `mistral-conversations` | P | M | P | P | P | P | M | O/F geo | M |
-| Bedrock Claude family | P | M | P | P | D | M/D | M/D | O/F geo | M |
-| Bedrock non-Claude family | P | M | P | P | D | M/D | M/D | O/F geo | M |
-| `pi-messages` | P | O | D | P | D | D | M/D | O/F geo | M |
+| `openai-completions` | P | M | P | M/D | M/D | M/D | M/D | M/O | M |
+| `openai-responses` | P | M | D | P | P | P | M/D | M/O | M |
+| `azure-openai-responses` | P | M | D | P | P | P | M/D | M/O | M |
+| `openai-codex-responses` | M | M | D | M/D | D | M/D | M/D | M/O | M |
+| `google-generative-ai` | P | P | P | P | D | P | M | O | M |
+| `google-vertex` | P | P | P | P | D | P | M | O | M |
+| `mistral-conversations` | P | M | P | P | P | P | M | O | M |
+| Bedrock Claude family | P | M | P | P | D | M/D | M/D | O | M |
+| Bedrock non-Claude family | P | M | P | P | D | M/D | M/D | O | M |
+| `pi-messages` | P | O | D | P | D | D | M/D | O | M |
 
 Every **P**, **M**, or **D** cell requires its own Anthropic Client Wire → Pi → final Provider payload fixture. A Provider/API row is not enabled merely because another API uses a similar JSON key. `samplingParams` is evidence only for builders that actually merge it; it is never the semantic owner.
 
@@ -158,7 +158,7 @@ This inventory reviews the failure families currently present in Anthropic valid
 | Direction/stage | Current failure family | Representative current sites | Required behavior | Configurable? |
 |---|---|---|---|---|
 | Request: Client parsing | invalid source object, enum, numeric relationship, schema, duplicate identity, or orphan tool result | request/tool/supplement validation | Fail as an invalid request before upstream dispatch | no |
-| Request or response, independently | unknown Client content or unknown Pi response content | existing Anthropic conversion policy | Keep the existing independent `error|ignore` policies | already exists |
+| Request or response, independently | unknown Client content or unknown Pi response content | existing Anthropic conversion policy | Keep request `unknownContent`; response unknown Pi content is fixed block omission plus warning | request only |
 | Request: Provider projection | unsupported forced `any` or named choice | CommandCode Private and GOAT compatibility guards | Bounded auto fallback plus `degraded` warning | no |
 | Request: Provider projection | unsupported serial-tool guarantee | CommandCode Private, Codex Responses, Google, Bedrock, Pi Messages | Allow target parallel behavior plus `degraded` warning | no |
 | Request: Client parsing/projection | missing named tool or tool filtering that breaks history | source validation and all tool projectors | Fail; do not invent a tool or corrupt history | no |
@@ -166,7 +166,7 @@ This inventory reviews the failure families currently present in Anthropic valid
 | Request: Provider projection | unsupported `stop_sequences` | any target without an exact stop control | Omit the field and warn; do not inject a prompt instruction or truncate the response | no |
 | Request: Provider projection | unsupported structured output | CommandCode Private, Pi Messages, selected Bedrock/model families | JSON-object/schema-prompt fallback plus warning | no |
 | Request: Provider projection | absent or malformed final output-token field | all target payload validators | Fail before dispatch; never exceed the Client ceiling | no |
-| Request: Provider projection | explicit inference geography without an exact target control | all non-native projectors | Fail before dispatch as a data-residency constraint | no |
+| Request: Provider projection | explicit inference geography without an exact target control | all non-native projectors | Omit the candidate and warn without blocking dispatch | no |
 | Request: Provider projection | explicit reasoning disable on a non-reasoning model | target reasoning initial checks | Exact success when no reasoning-enabling field remains | no |
 | Request: Provider projection | unsupported reasoning disable on a reasoning model | target reasoning initial checks | Remove enabling controls, accept target default, and warn | no |
 | Request: Provider projection | unsupported exact thinking budget or adaptive mode | target reasoning initial checks | Use the strongest certified target reasoning mode or ordinary generation and warn | no |
@@ -175,17 +175,18 @@ This inventory reviews the failure families currently present in Anthropic valid
 | Request: Provider projection | sampling, cache, tier, identity, and other preferences without an equivalent | target projectors | Omit only the preference and warn | no |
 | Request: Provider projection | final assistant prefill without certified continuation | supplement disposition/model validity | Preserve ordinary visible assistant history and warn | no |
 | Request: Provider projection | optional citations/cache annotations, redundant custom type, nullable tool metadata, loading/streaming/examples | supplement disposition | Preserve ordinary visible content/tool, omit only the auxiliary fact, warn | no |
-| Request: Provider projection | ambiguous `allowed_callers`, caller permission, `tool_reference`, or any unsupported server-tool capability/relationship | supplement disposition | Fail before dispatch because permissions, execution ownership, or relationships would be guessed | no |
+| Request: Provider projection | unsupported server-tool capability or relationship | supplement disposition | Omit the server-specific candidate and warn; do not fabricate execution or a Client tool | no |
+| Request: Client parsing/projection | ambiguous ordinary Client `allowed_callers`, caller permission, `tool_reference`, or tool relationship | source validation/main-call contract | Fail before dispatch because a Client identity, permission, or relationship would be guessed | no |
 | Request: Provider projection | URL/binary document or media, visible server result, or other model-visible content with no target representation | supplement disposition | Fail before dispatch; do not silently remove model input | no |
 | Request: Provider projection | unknown API/model family with only optional supplement facts | projector registry | Leave Pi payload unchanged, omit those facts, and warn | no |
-| Request: Provider projection | unknown API/model family with a critical supplement fact | projector registry | Fail before dispatch | no |
+| Request: Provider projection | unknown API/model family with server-tool, geography, or other ordinary Supplement candidates | projector registry | Leave Pi payload unchanged, omit those candidates, warn, and dispatch | no |
 | Request: Provider projection | selected projector receives an unaudited Pi payload shape | payload validation | Fail before dispatch; this is an internal compatibility fault | no |
 | Response: Client rendering | missing optional citation, usage, container, tier, or refusal auxiliary detail | Anthropic response module | Emit strongest legal Anthropic response and warn | no |
 | Response: Client rendering | known stop/refusal terminal with retained visible response but lost optional detail | Anthropic response module | Map legal terminal/fallback and warn | no |
-| Response + next-request replay | `pause_turn` or replay/server-tool state lost from Pi | Anthropic response module | Fail when valid continuation cannot be reconstructed | no |
+| Response + next-request replay | optional `pause_turn` or replay/server-tool state lost from Pi | Anthropic response module | Preserve portable visible meaning, omit target-bound state, normalize to the strongest legal terminal, and warn | no |
 | Next-request replay | malformed, incompatible, or model-switched opaque continuity | continuity codec/reasoning replay | Drop only opaque state, keep visible history, warn | no |
 
-Every row marked `yes` receives its own Anthropic Advanced Setting and defaults to the documented best-effort behavior. These settings do not weaken malformed-source validation, output ceilings, geography, caller permissions, tool relationships, or payload-shape checks.
+Availability dispositions are fixed Anthropic behavior rather than Advanced Settings. Only request `unknownContent` remains configurable. These decisions do not weaken malformed consumed-source validation, output ceilings, ordinary Client caller permissions, Client tool relationships, or payload-shape checks.
 
 ## Response audit
 
@@ -202,12 +203,12 @@ The Anthropic response module starts at Pi `AssistantMessage`; it does not recei
 | Responses/Azure/Codex reasoning state | retained in Pi signature-like fields/identity | incompletely rendered | item-local foreign continuity envelope; never `thinking.signature` | yes |
 | Chat-Completions reasoning details | provider/model-dependent on thinking/tool calls | incompletely rendered | target-aware certified carrier or visible fallback | yes when replay contract requires |
 | client tool call | retained | exact id/name/input; caller forced direct | exact tool call; caller disposition separate | yes |
-| caller identity | generally discarded | forced `{type:"direct"}` | direct is valid only when proved; otherwise unavailable and critical where caller changes permissions/relationships | yes when required by server-tool relationship |
-| server-tool calls/results and container uploads | not representable in Pi content union | unsupported or normalized | unavailable; fail if Pi retained evidence of a critical non-client-tool relationship, otherwise bounded loss per target audit | usually yes for continuation |
+| caller identity | generally discarded | forced `{type:"direct"}` | infer direct only from a unique current Client tool; otherwise omit the ToolCall block and its continuity attachment, warn, and recompute stop reason | only for retained Client ToolCalls |
+| server-tool calls/results and container uploads | not representable in Pi content union | unsupported or normalized | preserve portable visible meaning and omit unavailable target-bound structure with a warning | replay only when a compatible retained carrier exists |
 | container | discarded | `null` | null only when target response contract proves absence; otherwise unavailable notice | target-bound replay when retained through a certified future Pi field only |
 | ordinary end/max/tool stop | retained as normalized `stopReason`; raw value often retained | `end_turn|max_tokens|tool_use` | target-aware exact mapping | response-only except tool relationship |
 | `stop_sequence` + matched sequence | raw reason retained; matched sequence discarded | normalized `end_turn`, sequence null | when exact Anthropic `stop_sequence` cannot be constructed, preserve the already-stopped visible content, normalize to the legal `end_turn`/null fallback, and warn rather than fail the response | response-only |
-| `pause_turn` | Anthropic parser maps to stop and retains raw reason | normalized `end_turn` | render `pause_turn` only with a valid continuation contract; otherwise critical failure | yes |
+| `pause_turn` | Anthropic parser maps to stop and retains raw reason | normalized `end_turn` | continuation state is unavailable in Pi IR, so retain portable visible content, normalize to the strongest legal Pi terminal, and warn | no opaque pause-state replay |
 | `refusal` + details | Anthropic parser usually turns it into an upstream error; a committed Pi message may retain raw refusal with visible content but lose details | ordinary success renderer does not currently accept it | preserve the upstream error when no committed message exists; otherwise render Anthropic `refusal`, use nullable `stop_details` when details are unavailable, and warn rather than relabel it as ordinary success | no ordinary history |
 | input/output usage | retained | exact or atomic fail-open zero fallback | exact retained counts; malformed usage may use documented atomic observability fallback | response-only |
 | cache read/write/1h | retained partly | mapped | exact retained split only | response-only |
@@ -248,7 +249,7 @@ The first failing request fixtures cover:
 - every current placeholder/flattening path listed above;
 - dependency isolation from OpenAI Responses semantic modules.
 
-The first response fixtures start at Pi `AssistantMessage` and cover `thinking.display: "omitted"`, missing-signature `""` fallback, warning fallbacks for citations and safely representable stop/refusal loss, and failing cases for caller ambiguity, server tools/results, container continuation, `pause_turn`, unknown terminal states, and replay-required loss. They also cover complete usage, all signature attachment points, JSON rendering, SSE deltas, and next-history replay.
+The first response fixtures start at Pi `AssistantMessage` and cover `thinking.display: "omitted"`, missing-signature `""` fallback, warning fallbacks for citations and safely representable stop/refusal loss, block omission for caller/namespace/tool-input ambiguity and unknown Pi content, visible fallback or omission for server/container continuation, strongest-legal `pause_turn` normalization, complete usage, all signature attachment points, JSON/SSE parity, stop recomputation, and next-history replay.
 
 ## Online certification boundary
 

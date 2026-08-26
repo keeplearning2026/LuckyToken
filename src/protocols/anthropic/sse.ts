@@ -294,7 +294,7 @@ function assertAtomicSseEvent(event: AnthropicAtomicSseEvent): void {
     if (
       event.delta.container !== null ||
       event.delta.stop_details !== null ||
-      !["end_turn", "max_tokens", "tool_use"].includes(event.delta.stop_reason) ||
+      !["end_turn", "max_tokens", "tool_use", "refusal"].includes(event.delta.stop_reason) ||
       event.delta.stop_sequence !== null
     ) {
       fail("Anthropic message_delta.delta is malformed");

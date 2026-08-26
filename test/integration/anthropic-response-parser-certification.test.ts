@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { createCommandCodePrivateProvider } from "../../packages/provider-commandcode-private/src/provider.js";
 import {
-  convertAssistantMessageToAnthropicWithPolicy,
+  convertAssistantMessageToAnthropicResponse,
 } from "../../src/protocols/anthropic/response.js";
 import { captureAnthropicContinuityReplay } from "../support/anthropic-continuity-replay.js";
 
@@ -25,14 +25,13 @@ const CODEX_TEST_TOKEN = `e30.${Buffer.from(JSON.stringify({
 })).toString("base64url")}.signature`;
 
 function render(message: Awaited<ReturnType<ReturnType<typeof streamOpenAICompletions>["result"]>>) {
-  return convertAssistantMessageToAnthropicWithPolicy(
+  return convertAssistantMessageToAnthropicResponse(
     message,
     {
       selector: "client-model",
       createMessageId: () => "msg-certified",
       directToolNames: ["lookup"],
     },
-    { unknownPiContent: "error" },
   );
 }
 
@@ -896,6 +895,15 @@ describe("Anthropic response interpretation parser certification", () => {
     expect(parsed.content).toEqual([
       expect.objectContaining({ type: "toolCall", id: "call-1", name: "lookup" }),
     ]);
-    expect(() => render(parsed)).toThrow(/caller provenance is unavailable/iu);
+    const converted = render(parsed);
+    expect(converted.message.content).toEqual([
+      expect.objectContaining({
+        type: "tool_use",
+        id: "call-1",
+        name: "lookup",
+        caller: { type: "direct" },
+      }),
+    ]);
+    expect(converted.message.stop_reason).toBe("tool_use");
   });
 });

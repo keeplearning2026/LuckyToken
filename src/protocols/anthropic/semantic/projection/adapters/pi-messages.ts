@@ -5,14 +5,15 @@ import type { AnthropicEffortPlan } from "../../reasoning/contract.js";
 import type {
   AnthropicProjectionDisposition,
   AnthropicProjectionOutcome,
+  AnthropicProjectionOutcomeId,
 } from "../contract.js";
 
 function add(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   outcome: AnthropicProjectionDisposition,
 ): void {
-  outcomes.push(Object.freeze({ control, outcome: Object.freeze(outcome) }));
+  outcomes.push(Object.freeze({ candidateId, outcome: Object.freeze(outcome) }));
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -21,17 +22,17 @@ function same(left: unknown, right: unknown): boolean {
 
 function exact(
   outcomes: AnthropicProjectionOutcome[],
-  control: string,
+  candidateId: AnthropicProjectionOutcomeId,
   current: unknown,
   expected: unknown,
   assign: () => void,
 ): void {
   if (same(current, expected)) {
-    add(outcomes, control, { kind: "pi-native" });
+    add(outcomes, candidateId, { kind: "pi-native" });
     return;
   }
   assign();
-  add(outcomes, control, {
+  add(outcomes, candidateId, {
     kind: "payload-projected",
     projector: "anthropic-to-pi-messages",
     warning: "pi-native-mapping-repaired",
@@ -41,7 +42,7 @@ function exact(
 function mappedToolChoice(
   invocation: AnthropicSemanticInvocation,
 ): unknown | undefined {
-  const choice = invocation.supplement.toolChoice;
+  const choice = invocation.supplement.controls.toolChoice?.value;
   if (choice === undefined) return undefined;
   if (choice.kind === "none") return "none";
   if (choice.kind === "auto") return "auto";
@@ -93,12 +94,12 @@ function projectAnthropicToPiMessages(
   const supplement = input.invocation.supplement;
 
   if (phase === "supplement") {
-  const finalMaxTokens = Math.min(options.maxTokens, supplement.outputTokenCeiling);
+  const finalMaxTokens = Math.min(options.maxTokens, supplement.controls.outputTokenCeiling.value);
   exact(outcomes, "maxTokens", options.maxTokens, finalMaxTokens, () => {
     options.maxTokens = finalMaxTokens;
   });
-  if (supplement.sampling.temperature !== undefined) {
-    if (same(options.temperature, supplement.sampling.temperature)) {
+  if (supplement.controls.temperature !== undefined) {
+    if (same(options.temperature, supplement.controls.temperature.value)) {
       add(outcomes, "sampling.temperature", { kind: "pi-native" });
     }
   }
@@ -109,8 +110,8 @@ function projectAnthropicToPiMessages(
       ? { ...(options.samplingParams as Record<string, unknown>) }
       : {};
   for (const [control, field, value] of [
-    ["sampling.topP", "top_p", supplement.sampling.topP],
-    ["sampling.topK", "top_k", supplement.sampling.topK],
+    ["sampling.topP", "top_p", supplement.controls.topP?.value],
+    ["sampling.topK", "top_k", supplement.controls.topK?.value],
   ] as const) {
     if (value === undefined) continue;
     exact(outcomes, control, samplingParams[field], value, () => {

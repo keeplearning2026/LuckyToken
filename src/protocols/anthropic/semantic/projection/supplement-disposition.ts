@@ -1,10 +1,16 @@
 import { enumerateAnthropicSupplementCandidates } from "../supplement/candidates.js";
-import type { AnthropicProjectionSupplement } from "../supplement/contract.js";
+import type {
+  AnthropicCandidateId,
+  AnthropicProjectionSupplement,
+} from "../supplement/contract.js";
 import type { AnthropicProjectionOutcome } from "./contract.js";
 
-function omitted(control: string, warning: string): AnthropicProjectionOutcome {
+function omitted(
+  candidateId: AnthropicCandidateId,
+  warning: string,
+): AnthropicProjectionOutcome {
   return Object.freeze({
-    control,
+    candidateId,
     outcome: Object.freeze({ kind: "omitted" as const, warning }),
   });
 }
@@ -13,14 +19,14 @@ function omitted(control: string, warning: string): AnthropicProjectionOutcome {
 export function assessUnprojectedAnthropicSupplement(input: {
   readonly supplement: AnthropicProjectionSupplement;
   readonly target: string;
-  readonly resolvedControls?: ReadonlySet<string>;
+  readonly resolvedCandidateIds?: ReadonlySet<AnthropicCandidateId>;
 }): readonly AnthropicProjectionOutcome[] {
-  const resolved = input.resolvedControls ?? new Set<string>();
+  const resolved = input.resolvedCandidateIds ?? new Set<AnthropicCandidateId>();
   return Object.freeze(
     enumerateAnthropicSupplementCandidates(input.supplement)
-      .filter((candidate) => !resolved.has(candidate.control))
+      .filter((candidate) => !resolved.has(candidate.id))
       .map((candidate) => omitted(
-        candidate.control,
+        candidate.id,
         `${input.target} omitted ${candidate.description}`,
       )),
   );

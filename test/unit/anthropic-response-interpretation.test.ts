@@ -2,8 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
-  convertAssistantMessageToAnthropicWithPolicy,
-  OutboundResponseFidelityFailure,
+  convertAssistantMessageToAnthropicResponse,
 } from "../../src/protocols/anthropic/response.js";
 
 function message(input: {
@@ -49,14 +48,13 @@ function message(input: {
 }
 
 function convert(value: AssistantMessage) {
-  return convertAssistantMessageToAnthropicWithPolicy(
+  return convertAssistantMessageToAnthropicResponse(
     value,
     {
       selector: "client-model",
       createMessageId: () => "msg-1",
       directToolNames: ["lookup"],
     },
-    { unknownPiContent: "error" },
   );
 }
 
@@ -89,11 +87,15 @@ describe("target-aware Anthropic response interpretation", () => {
       stopReason: "toolUse",
       tool: true,
     })).message.stop_reason).toBe("tool_use");
-    expect(() => convert(message({
+    const withoutTool = convert(message({
       api: "openai-completions",
       rawStopReason: "tool_calls",
       stopReason: "toolUse",
-    }))).toThrow(OutboundResponseFidelityFailure);
+    }));
+    expect(withoutTool.message.stop_reason).toBe("end_turn");
+    expect(withoutTool.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_stop_reason_normalized",
+    }));
   });
 
   it("falls back from native Anthropic stop_sequence when Pi discarded only the optional matched sequence", () => {
@@ -108,12 +110,34 @@ describe("target-aware Anthropic response interpretation", () => {
     }));
   });
 
-  it("still fails pause_turn because the next-turn continuation state is critical", () => {
-    expect(() => convert(message({
+  it("normalizes pause_turn to the strongest retained Pi terminal and warns", () => {
+    const converted = convert(message({
       api: "anthropic-messages",
       rawStopReason: "pause_turn",
       stopReason: "stop",
-    }))).toThrow(OutboundResponseFidelityFailure);
+    }));
+    expect(converted.message.stop_reason).toBe("end_turn");
+    expect(converted.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_stop_reason_normalized",
+      jsonPath: "$.stop_reason",
+    }));
+  });
+
+  it("omits a malformed runtime block without losing later valid content", () => {
+    const source = message({ api: "anthropic-messages" });
+    source.content = [
+      null,
+      { type: "text", text: "answer" },
+    ] as unknown as AssistantMessage["content"];
+
+    const converted = convert(source);
+    expect(converted.message.content).toEqual([
+      { citations: null, text: "answer", type: "text" },
+    ]);
+    expect(converted.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_response_block_omitted",
+      jsonPath: "$.content[0]",
+    }));
   });
 
   it("uses the retained Pi terminal for an unknown optional raw terminal and warns", () => {

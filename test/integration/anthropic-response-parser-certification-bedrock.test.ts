@@ -3,7 +3,7 @@ import type { Context, Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/bedrock-converse-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { convertAssistantMessageToAnthropicWithPolicy } from "../../src/protocols/anthropic/response.js";
+import { convertAssistantMessageToAnthropicResponse } from "../../src/protocols/anthropic/response.js";
 import { captureAnthropicContinuityReplay } from "../support/anthropic-continuity-replay.js";
 
 const context: Context = {
@@ -76,10 +76,9 @@ describe("Anthropic Bedrock response-parser certification", () => {
       expect.objectContaining({ type: "text", text: "answer" }),
     ]);
 
-    const converted = convertAssistantMessageToAnthropicWithPolicy(
+    const converted = convertAssistantMessageToAnthropicResponse(
       parsed,
       { selector: "client-model", createMessageId: () => "msg-bedrock-certified" },
-      { unknownPiContent: "error" },
     );
     expect(converted.message.content[0]).toMatchObject({
       type: "thinking",

@@ -8,7 +8,8 @@ import {
   CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
   CLIENT_USAGE_UNKNOWN_FIELDS_NOTICE_CODE,
   convertAssistantMessageToAnthropic,
-  convertAssistantMessageToAnthropicWithPolicy,
+  convertAssistantMessageToAnthropicResponse,
+  MISSING_THINKING_SIGNATURE_NOTICE_CODE,
 } from "../../src/protocols/anthropic/response.js";
 
 function usage(overrides: Partial<Usage> = {}): Usage {
@@ -140,9 +141,8 @@ describe("schema-complete Anthropic JSON response", () => {
       "unknown thinking state",
       { type: "thinking", thinking: "reasoning", futureState: true },
     ],
-  ])("rejects malformed Pi thinking: %s", (_name, block) => {
-    expect(() =>
-      convertAssistantMessageToAnthropic(
+  ])("omits malformed Pi thinking: %s", (_name, block) => {
+    const target = convertAssistantMessageToAnthropic(
         message({
           content: [
             block as unknown as AssistantMessage["content"][number],
@@ -150,11 +150,12 @@ describe("schema-complete Anthropic JSON response", () => {
         }),
         "client-selector",
         "opaque-id",
-      ),
-    ).toThrow();
+      );
+    expect(target.content).toEqual([]);
+    expect(target.stop_reason).toBe("end_turn");
   });
 
-  it("rejects non-object roots and every non-JSON nested semantic", () => {
+  it("omits tool calls with non-object or non-JSON nested input", () => {
     const invalid: unknown[] = [
       null,
       [],
@@ -175,8 +176,7 @@ describe("schema-complete Anthropic JSON response", () => {
     invalid.push(cyclic);
 
     for (const argumentsValue of invalid) {
-      expect(() =>
-        convertAssistantMessageToAnthropic(
+      const target = convertAssistantMessageToAnthropic(
           message({
             content: [
               {
@@ -190,8 +190,9 @@ describe("schema-complete Anthropic JSON response", () => {
           }),
           "client-selector",
           "opaque-id",
-        ),
-      ).toThrow();
+        );
+      expect(target.content).toEqual([]);
+      expect(target.stop_reason).toBe("end_turn");
     }
   });
 
@@ -249,10 +250,9 @@ describe("schema-complete Anthropic JSON response", () => {
     ["reasoning subset", { output: 1, reasoning: 2 }],
     ["cache one-hour subset", { cacheWrite: 1, cacheWrite1h: 2 }],
   ])("does not discard a valid response for malformed usage: %s", (_name, overrides) => {
-    const converted = convertAssistantMessageToAnthropicWithPolicy(
+    const converted = convertAssistantMessageToAnthropicResponse(
       message({ usage: usage(overrides) }),
       { selector: "client-selector", createMessageId: () => "opaque-id" },
-      { unknownPiContent: "error" },
     );
     expect(converted.message.type).toBe("message");
     expect(converted.message.content).toEqual([
@@ -269,10 +269,9 @@ describe("schema-complete Anthropic JSON response", () => {
   ])(
     "falls back to the atomic all-zero usage for an invalid required component (%s)",
     (_name, overrides) => {
-      const converted = convertAssistantMessageToAnthropicWithPolicy(
+      const converted = convertAssistantMessageToAnthropicResponse(
         message({ usage: usage(overrides) }),
         { selector: "client-selector", createMessageId: () => "opaque-id" },
-        { unknownPiContent: "error" },
       );
       expect(converted.message.usage).toEqual({
         cache_creation: null,
@@ -298,12 +297,11 @@ describe("schema-complete Anthropic JSON response", () => {
   );
 
   it("fallbacks for a missing required component and for a non-object usage object", () => {
-    const missing = convertAssistantMessageToAnthropicWithPolicy(
+    const missing = convertAssistantMessageToAnthropicResponse(
       message({
         usage: { ...usage(), cacheRead: undefined } as unknown as Usage,
       }),
       { selector: "client-selector" },
-      { unknownPiContent: "error" },
     );
     expect(missing.message.usage).toEqual({
       cache_creation: null,
@@ -320,10 +318,9 @@ describe("schema-complete Anthropic JSON response", () => {
       CLIENT_USAGE_UNAVAILABLE_NOTICE_CODE,
     );
 
-    const nonObject = convertAssistantMessageToAnthropicWithPolicy(
+    const nonObject = convertAssistantMessageToAnthropicResponse(
       message({ usage: null as unknown as Usage }),
       { selector: "client-selector" },
-      { unknownPiContent: "error" },
     );
     expect(nonObject.message.usage).toEqual({
       cache_creation: null,
@@ -348,12 +345,11 @@ describe("schema-complete Anthropic JSON response", () => {
   ])(
     "omits invalid optional reasoning and keeps valid required components (%s)",
     (_name, overrides, expectedOutput) => {
-      const converted = convertAssistantMessageToAnthropicWithPolicy(
+      const converted = convertAssistantMessageToAnthropicResponse(
         message({
           usage: usage({ input: 4, output: 8, ...(overrides as Partial<Usage>) }),
         }),
         { selector: "client-selector" },
-        { unknownPiContent: "error" },
       );
       expect(converted.message.usage.output_tokens_details).toBeNull();
       expect(converted.message.usage.input_tokens).toBe(4);
@@ -373,10 +369,9 @@ describe("schema-complete Anthropic JSON response", () => {
   ])(
     "drops only the invalid 1h/5m split and retains total cache write (%s)",
     (_name, overrides, expectedWrite) => {
-      const converted = convertAssistantMessageToAnthropicWithPolicy(
+      const converted = convertAssistantMessageToAnthropicResponse(
         message({ usage: usage(overrides as Partial<Usage>) }),
         { selector: "client-selector" },
-        { unknownPiContent: "error" },
       );
       expect(converted.message.usage.cache_creation).toBeNull();
       expect(converted.message.usage.cache_creation_input_tokens).toBe(
@@ -395,10 +390,9 @@ describe("schema-complete Anthropic JSON response", () => {
       providerNativeUsage?: unknown;
     };
     hostile.providerNativeUsage = { inputTokens: -5, secret: "nope" };
-    const converted = convertAssistantMessageToAnthropicWithPolicy(
+    const converted = convertAssistantMessageToAnthropicResponse(
       message({ usage: hostile }),
       { selector: "client-selector" },
-      { unknownPiContent: "error" },
     );
     expect(converted.message.usage.input_tokens).toBe(4);
     expect(converted.message.usage.output_tokens).toBe(8);
@@ -414,12 +408,11 @@ describe("schema-complete Anthropic JSON response", () => {
   });
 
   it("keeps totalTokens out of the Anthropic wire without a warning (no target total exists)", () => {
-    const converted = convertAssistantMessageToAnthropicWithPolicy(
+    const converted = convertAssistantMessageToAnthropicResponse(
       message({
         usage: usage({ input: 1, output: 2, totalTokens: -7 }),
       }),
       { selector: "client-selector" },
-      { unknownPiContent: "error" },
     );
     expect(converted.message.usage).not.toHaveProperty("totalTokens");
     expect(converted.message.usage.input_tokens).toBe(1);
@@ -460,11 +453,12 @@ describe("schema-complete Anthropic JSON response", () => {
     );
     expect(target.stop_reason).toBe("tool_use");
 
-    expect(() => convertAssistantMessageToAnthropic(
+    const missing = convertAssistantMessageToAnthropic(
       message({ stopReason: "toolUse" }),
       "client-selector",
       "opaque-id",
-    )).toThrow(/no tool-call content/u);
+    );
+    expect(missing.stop_reason).toBe("end_turn");
   });
 
   it("echoes only client identity and includes all required Message fields", () => {
@@ -542,9 +536,8 @@ describe("schema-complete Anthropic JSON response", () => {
     expect(JSON.parse(wire)).toEqual(target);
   });
 
-  it("rejects a Pi 0.84.2 ToolCall namespace that Anthropic cannot represent", () => {
-    expect(() =>
-      convertAssistantMessageToAnthropic(
+  it("omits a ToolCall namespace that cannot resolve to a direct Client tool", () => {
+    const target = convertAssistantMessageToAnthropic(
         message({
           stopReason: "toolUse",
           content: [
@@ -559,8 +552,9 @@ describe("schema-complete Anthropic JSON response", () => {
         }),
         "client-selector",
         "client-owned-id",
-      ),
-    ).toThrow(/namespace/i);
+      );
+    expect(target.content).toEqual([]);
+    expect(target.stop_reason).toBe("end_turn");
   });
 
   it("projects redacted thinking as redacted_thinking in content order", () => {
@@ -585,6 +579,34 @@ describe("schema-complete Anthropic JSON response", () => {
       { data: "redacted-payload", type: "redacted_thinking" },
       { citations: null, text: "B", type: "text" },
     ]);
+  });
+
+  it("treats an empty native thinking signature as missing", () => {
+    const conversion = convertAssistantMessageToAnthropicResponse(
+      message({
+        content: [{
+          type: "thinking",
+          thinking: "visible thought",
+          thinkingSignature: "",
+        }],
+      }),
+      {
+        selector: "client-selector",
+        createMessageId: () => "opaque-id",
+      },
+    );
+
+    expect(conversion.message.content).toEqual([{
+      signature: "",
+      thinking: "visible thought",
+      type: "thinking",
+    }]);
+    expect(conversion.notices).toContainEqual(
+      expect.objectContaining({
+        code: MISSING_THINKING_SIGNATURE_NOTICE_CODE,
+        action: "degrade",
+      }),
+    );
   });
 
   it("succeeds for a redacted-only projected message", () => {

@@ -32,16 +32,13 @@ describe("adapter-owned configuration", () => {
       conversion: {
         request: {
           unknownContent: "error",
-          localCacheControl: "ignore",
         },
-        response: { unknownPiContent: "error" },
       },
     });
     expectFrozen([
       anthropic,
       anthropic.conversion,
       anthropic.conversion.request,
-      anthropic.conversion.response,
     ]);
 
     const responses = parseOpenAIResponsesConfiguration();
@@ -106,11 +103,6 @@ describe("adapter-owned configuration", () => {
         }).conversion.request.unknownContent,
       ).toBe(value);
       expect(
-        parseAnthropicConfiguration({
-          conversion: { response: { unknownPiContent: value } },
-        }).conversion.response.unknownPiContent,
-      ).toBe(value);
-      expect(
         parseOpenAIResponsesConfiguration({
           conversion: { request: { unknownInputItem: value } },
         }).conversion.request.unknownInputItem,
@@ -136,13 +128,6 @@ describe("adapter-owned configuration", () => {
         parseOpenAIResponsesConfiguration({
           conversion: { request: { unresolvedToolCall: value } },
         }).conversion.request.unresolvedToolCall,
-      ).toBe(value);
-    }
-    for (const value of ["ignore", "promote"] as const) {
-      expect(
-        parseAnthropicConfiguration({
-          conversion: { request: { localCacheControl: value } },
-        }).conversion.request.localCacheControl,
       ).toBe(value);
     }
     for (const value of ["full", "first", "user"] as const) {
@@ -225,7 +210,7 @@ describe("adapter-owned configuration", () => {
         parseAnthropicConfiguration({
           conversion: { response: { extra: true } },
         }),
-      "clientProtocols.anthropic-messages.conversion.response.extra",
+      "clientProtocols.anthropic-messages.conversion.response",
     ],
     [
       () =>
@@ -385,16 +370,16 @@ describe("adapter-owned configuration", () => {
     [
       () =>
         parseAnthropicConfiguration({
-          conversion: { request: { localCacheControl: "cache" } },
+          conversion: { request: { localCacheControl: "promote" } },
         }),
       "clientProtocols.anthropic-messages.conversion.request.localCacheControl",
     ],
     [
       () =>
         parseAnthropicConfiguration({
-          conversion: { response: { unknownPiContent: false } },
+          conversion: { response: { unknownPiContent: "error" } },
         }),
-      "clientProtocols.anthropic-messages.conversion.response.unknownPiContent",
+      "clientProtocols.anthropic-messages.conversion.response",
     ],
     [
       () =>
@@ -706,9 +691,7 @@ describe("adapter-owned configuration", () => {
               conversion: {
                 request: {
                   unknownContent: "ignore",
-                  localCacheControl: "promote",
                 },
-                response: { unknownPiContent: "ignore" },
               },
             },
             "openai-responses": {
@@ -792,9 +775,7 @@ describe("adapter-owned configuration", () => {
         conversion: {
           request: {
             unknownContent: "ignore",
-            localCacheControl: "promote",
           },
-          response: { unknownPiContent: "ignore" },
         },
       });
       expect(

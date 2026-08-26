@@ -46,12 +46,7 @@ Suggested immutable configuration:
     "anthropic-messages": {
       "conversion": {
         "request": {
-          "unknownContent": "error",
-          "unresolvedToolCall": "xrepair",
-          "localCacheControl": "ignore"
-        },
-        "response": {
-          "unknownPiContent": "error"
+          "unknownContent": "error"
         }
       }
     }
@@ -62,11 +57,8 @@ Suggested immutable configuration:
 Allowed values:
 
 - `unknownContent`: `error | ignore`, default `error`.
-- `unresolvedToolCall`: `error | xrepair`, default `xrepair`.
-- `localCacheControl`: `ignore | promote`, default `ignore`.
-- `unknownPiContent`: `error | ignore`, default `error`.
 
-Protocol invariants such as duplicate ToolResult rejection, required IDs, redacted mapping, SSE order, and malformed JSON handling are not configurable.
+Interrupted ordinary Client ToolCall repair, exact-only cache projection, unknown Pi response-block omission, duplicate ToolResult rejection, required IDs, redacted mapping, SSE order, and malformed JSON handling are fixed protocol behavior and are not configurable.
 
 ## 3. Request envelope
 
@@ -84,10 +76,10 @@ Protocol invariants such as duplicate ToolResult rejection, required IDs, redact
 | `thinking` | `options.reasoning` + `thinkingBudgets` | Use §4. |
 | `output_config.effort` | `options.reasoning` | Use §4. |
 | `output_config.format` | none | Drop and document. Do not borrow Tool.constrainedSampling. |
-| `cache_control` | `options.cacheRetention` | Use §8. |
+| `cache_control` | Anthropic Supplement | Preserve exact consumed attachment/TTL candidates and use §8. Never promote a local marker to request-wide Pi cache retention. |
 | `stop_sequences` | none | Drop; no generic Pi option. |
 | `tool_choice` | none | Drop. It MUST NOT cause tools or messages to be fabricated. |
-| `container`, `inference_geo`, `service_tier` | none | Drop. `null` is treated as absence. |
+| `container`, `inference_geo`, `service_tier` | Anthropic Supplement | Preserve only current typed projection candidates. An unsupported target omits them with a warning and still dispatches. `null` remains distinct only where a current Adapter consumes that distinction. |
 | `stream` | render state | `true` selects atomic Anthropic SSE; otherwise JSON. |
 | unknown property on known request | none | Ignore unless it violates a security/authority closed-world boundary. |
 
@@ -150,10 +142,12 @@ Empty ordinary fragments are not emitted. Adjacent Pi messages of the same role 
 
 Although the installed Anthropic SDK places system content at the top level, Token supports a compatibility extension in `messages[]`:
 
-1. Find message-level `role="system"` entries in source order.
-2. Append only the first one's text to `Context.systemPrompt`, separated from the existing top-level system string by `\n`.
-3. Convert every later message-level system entry as a Pi user message.
-4. Non-text content in a message-level system entry follows its normal content mapping but is not granted system privilege.
+1. Preserve existing top-level system text first.
+2. Find message-level `role="system"` entries in source order.
+3. Append every text block from the first such message to `Context.systemPrompt` in block order, separated from existing top-level system text by one `\n`; do not trim source text.
+4. Convert non-text content from that first system message as ordinary Pi user content at the source message position.
+5. Convert every later message-level system entry entirely as Pi user content.
+6. No non-text block receives system privilege, empty ordinary fragments are omitted, and Token emits at most one request-local degradation notice.
 
 This is a deliberate availability-oriented semantic degradation.
 
@@ -210,6 +204,11 @@ Content mapping:
 - nested document/search result → representable ordered text/image degradation;
 - cache markers affect §8 only.
 
+When an exact Anthropic target restores a retained nested document/search-result
+block, it must also consume the Pi fallback content emitted for that same source
+block. Restoring the rich block may replace the fallback value, but cannot leave
+the fallback unassociated or change the surrounding ToolResult relationship.
+
 ### 6.2 Invalid states
 
 - orphan ToolResult: fixed conversion error;
@@ -221,10 +220,7 @@ Content mapping:
 
 ### 6.3 Missing result repair
 
-At a point where the source history moves beyond unresolved calls, apply `unresolvedToolCall`:
-
-- `error`: reject conversion;
-- `xrepair` (default): insert one synthetic ToolResult per unresolved call in call order.
+At the first point where source history moves beyond unresolved ordinary Client calls, insert one synthetic ToolResult per still-pending call in original call order. At end of history, append results for any remaining pending ordinary Client calls. This repair is fixed and not configurable.
 
 Synthetic result:
 
@@ -236,6 +232,8 @@ content = "No result — the tool call did not complete (interrupted or lost)."
 ```
 
 Emit a notice for each inserted result. Never modify a real result.
+
+The repair applies only to Client/BYOT ToolCalls. It never repairs Provider/server-tool lifecycle. Orphan, result-before-call, duplicate call/result, empty ID/name, ambiguous relationship, and a real result that arrives after a synthetic result remain conversion errors.
 
 ## 7. Tools and execution ownership
 
@@ -259,8 +257,9 @@ Other source fields with no Pi tool slot, including cache marker position, allow
 Bash/code execution/web search/web fetch/editor/tool search/container/server tools are classified by execution ownership, not by a concrete Provider name.
 
 - If execution belongs to the server/provider and Pi has no execution owner, do not advertise it as a Pi client tool.
-- Preserve returned representable content in order or create a deterministic labeled transcript.
-- Drop pure lifecycle metadata.
+- Preserve independently representable returned text/image content in order without claiming server execution.
+- Preserve only typed fields consumed by a current exact target Adapter; every other server-specific candidate is omitted with a warning.
+- Drop pure lifecycle metadata. Do not invent a placeholder transcript merely to stand in for unavailable execution.
 - If source tool_choice requires a tool that was not included in the executable Pi catalog, drop the unsupported control under the auxiliary-control rule; do not fabricate capability.
 
 ### 7.3 defer_loading and tool_reference
@@ -271,21 +270,13 @@ An unknown referenced tool name or malformed reference is a conversion error.
 
 ## 8. Cache controls
 
-Pi exposes only request-wide `cacheRetention`; Anthropic block-local cache breakpoints cannot be represented exactly.
+Pi exposes only request-wide `cacheRetention`; Anthropic block-local cache breakpoints cannot be represented by that option without changing scope.
 
-Default `localCacheControl="ignore"`:
-
-- ignore block/system/message/tool-local breakpoint placement;
-- do not expand its scope to the whole request;
-- document the fixed drop without per-request notice.
-
-Optional `promote`:
-
-- any `ttl="1h"` → `cacheRetention="long"`;
-- otherwise any 5m/default marker → `cacheRetention="short"`;
-- emit a notice because local scope became request-wide.
-
-An explicitly request-wide retention control, when the Anthropic profile provides one, maps directly to short/long.
+- Preserve each currently consumed top-level, system-block, message-block, and tool-local marker as its own typed Supplement candidate.
+- A selected Adapter projects a marker only when it has an exact certified target attachment point and TTL representation.
+- Every unconsumed marker is centrally omitted with a warning.
+- Never use a local marker to set request-wide `cacheRetention`.
+- Never simulate cache control through model-visible instructions.
 
 ## 9. Pi AssistantMessage → Anthropic response
 
@@ -311,11 +302,11 @@ An explicitly request-wide retention control, when the Anthropic profile provide
 |---|---|---|
 | TextContent | text block | Preserve text; citations default null/empty. |
 | ordinary ThinkingContent | thinking block | Preserve text. Use thinkingSignature; if absent, synthesize empty string and emit notice. |
-| redacted ThinkingContent | redacted_thinking | Preserve opaque thinkingSignature as `data`. Missing usable opaque data is a conversion failure. |
-| ToolCall without namespace | tool_use | Preserve ID/name; arguments must be a lossless JSON object. |
-| ToolCall with Pi 0.84.2 `namespace` | none | Conversion failure: Anthropic Messages has no namespace slot, and silently dropping a tool-identity qualifier is not fidelity-safe. |
+| redacted ThinkingContent | redacted_thinking or omission | Preserve compatible opaque thinkingSignature as `data`; otherwise retain a legal visible fallback when present, or omit the block and warn. Never invent opaque data. |
+| ToolCall with uniquely proved direct Client identity | tool_use | Preserve ID and declared Client tool name; arguments must be a lossless JSON object. A namespace may be discarded only when the request-local Client tool catalog uniquely resolves it. |
+| ToolCall with unavailable caller, ambiguous namespace, invalid identity, or malformed input | none | Omit that block and its continuity attachments, warn, and continue. |
 | known Pi auxiliary content with no target | none | Drop and document. |
-| future Pi content | policy | `unknownPiContent`, default error. Ignore emits notice. |
+| future Pi content | none | Omit the block and emit a warning. This is fixed response behavior. |
 
 The empty-string thinking signature is a deterministic compatibility degradation, not an Anthropic default and not a continuity guarantee. If the actual upstream/client rejects it, return the normal protocol failure; never fabricate a cryptographic signature.
 
@@ -323,12 +314,13 @@ Projected `content: []` is allowed. Do not invent an empty text block.
 
 ### 9.3 Stop reason normalization
 
-1. Pi `length` → Anthropic `max_tokens` even if content contains a ToolCall; truncation is authoritative.
-2. Otherwise, if projected content contains any tool_use → `tool_use`.
-3. Otherwise → `end_turn`.
-4. If this differs from Pi stopReason, preserve the mismatch only in a non-model-visible diagnostic.
-5. `pending`, `error`, `aborted`, and `deferred` are not committed success responses. They are handled by execution/error boundaries.
-6. A future unknown stop reason is an error; `unknownPiContent=ignore` cannot fabricate a successful terminal.
+1. An authoritative committed refusal → Anthropic `refusal`; omit any conflicting unavailable ToolCall block.
+2. Pi `length` → Anthropic `max_tokens`; truncation is authoritative.
+3. Otherwise, if final projected content contains any retained tool_use → `tool_use`.
+4. Otherwise → `end_turn`.
+5. If this differs from Pi stopReason, preserve the mismatch only in a non-model-visible diagnostic.
+6. `pending`, `error`, `aborted`, and `deferred` are not committed success responses. They are handled by execution/error boundaries.
+7. A future unknown terminal uses the strongest legal terminal derivable from committed content and emits a warning; it cannot create a false tool relationship.
 
 ### 9.4 Usage
 

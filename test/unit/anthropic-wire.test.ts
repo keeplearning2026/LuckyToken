@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   convertAssistantMessageToAnthropic,
-  OutboundResponseFidelityFailure,
+  convertAssistantMessageToAnthropicResponse,
 } from "../../src/protocols/anthropic/response.js";
 import {
   renderAnthropicError,
@@ -100,9 +100,19 @@ describe("Anthropic atomic wire rendering", () => {
       stopReason: "toolUse",
       timestamp: 1,
     };
-    expect(() =>
-      convertAssistantMessageToAnthropic(source, "client-model", "msg_client"),
-    ).toThrow(OutboundResponseFidelityFailure);
+    const converted = convertAssistantMessageToAnthropicResponse(
+      source,
+      {
+        selector: "client-model",
+        createMessageId: () => "msg_client",
+        directToolNames: ["tool"],
+      },
+    );
+    expect(converted.message.content).toEqual([]);
+    expect(converted.message.stop_reason).toBe("end_turn");
+    expect(converted.notices).toContainEqual(expect.objectContaining({
+      code: "anthropic_response_block_omitted",
+    }));
   });
 
   it("renders documented error families as complete UTF-8 JSON", () => {

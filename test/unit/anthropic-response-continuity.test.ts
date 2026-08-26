@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import { convertAssistantMessageToAnthropicWithPolicy } from "../../src/protocols/anthropic/response.js";
+import { convertAssistantMessageToAnthropicResponse } from "../../src/protocols/anthropic/response.js";
 
 function message(
   api: string,
@@ -60,14 +60,13 @@ function message(
 }
 
 function convert(value: AssistantMessage) {
-  return convertAssistantMessageToAnthropicWithPolicy(
+  return convertAssistantMessageToAnthropicResponse(
     value,
     {
       selector: "client-model",
       createMessageId: () => "msg-1",
       directToolNames: ["lookup"],
     },
-    { unknownPiContent: "error" },
   );
 }
 
@@ -158,14 +157,22 @@ describe("Anthropic response continuity rendering", () => {
   it.each([
     "commandcode-private",
     "mistral-conversations",
-  ])("rejects %s continuity claims until its pinned Pi parser is certified", (api) => {
-    expect(() => convert(message(api))).toThrow(/not certified/iu);
+  ])("drops uncertified %s opaque state while retaining visible blocks", (api) => {
+    const converted = convert(message(api));
+    expect(converted.message.content).toEqual([
+      expect.objectContaining({ type: "thinking", thinking: "summary", signature: "" }),
+      expect.objectContaining({ type: "text", text: "answer" }),
+      expect.objectContaining({ type: "tool_use", id: "call-1" }),
+    ]);
+    expect(JSON.stringify(converted.message.content)).not.toContain("token_continuity");
   });
 
-  it("rejects Bedrock continuity for an uncertified model family", () => {
-    expect(() => convert(message("bedrock-converse-stream", {
+  it("drops Bedrock opaque state for an uncertified model family", () => {
+    const converted = convert(message("bedrock-converse-stream", {
       provider: "amazon-bedrock",
       model: "amazon.nova-pro-v1:0",
-    }))).toThrow(/not certified/iu);
+    }));
+    expect(JSON.stringify(converted.message.content)).not.toContain("token_continuity");
+    expect(converted.message.stop_reason).toBe("tool_use");
   });
 });
