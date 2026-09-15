@@ -30,7 +30,7 @@ import type { TokenRuntime } from "../../src/runtime.js";
 import { startTokenHttpServer } from "../../src/server.js";
 import { loginOnlineProvider } from "./provider-login.js";
 
-const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
+const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4.1-flash";
 const DEFAULT_PROVIDER_ID = "commandcode-private";
 const DEFAULT_API_KEY_FILE = "CommandcodeAPIKey.txt";
 const REQUEST_TIMEOUT_MS = 240_000;
@@ -85,7 +85,7 @@ function keyFileLoginInteraction(apiKey: string): AuthInteraction {
 /**
  * The alias registry target for one online run. The user mapping file
  * accepts `{ provider, model }` object form (the only form that can name a
- * model id containing "/", e.g. CommandCode's `deepseek/deepseek-v4-flash`);
+ * model id containing "/", e.g. CommandCode's `deepseek/deepseek-v4.1-flash`);
  * the string form rejects model ids with a separator. `model` may be the
  * full `provider/model` selector (the DEFAULT_MODEL shape) or a bare model
  * id; either way the provider comes from the explicit `--provider` flag.

@@ -304,9 +304,9 @@ npm start -- login commandcode-goat --config .Token/config.json
 
 Each key is saved under its own Provider ID in `.Token/pi/auth.json`. No
 `models.json` configuration is required. Both Providers expose the canonical
-model `deepseek/deepseek-v4-flash`; their default external names are
-`commandcode-private/deepseek-v4-flash` and
-`commandcode-goat/deepseek-v4-flash`.
+model `deepseek/deepseek-v4.1-flash`; their default external names are
+`commandcode-private/deepseek-v4.1-flash` and
+`commandcode-goat/deepseek-v4.1-flash`.
 
 Start the local Backend:
 
@@ -439,7 +439,7 @@ npm run test:online
 ```
 
 The online harness defaults to the internal canonical selector
-`commandcode-private/deepseek/deepseek-v4-flash`; this harness exercises a
+`commandcode-private/deepseek/deepseek-v4.1-flash`; this harness exercises a
 direct composition test seam rather than the product's alias-only client
 identity. Override only the model id explicitly when needed:
 

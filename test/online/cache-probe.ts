@@ -13,7 +13,7 @@ import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
 import { createConfiguredTokenDataPlane } from "../support/configured-data-plane.js";
 import { startTokenHttpServer } from "../../src/server.js";
 
-const MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
+const MODEL = "commandcode-private/deepseek/deepseek-v4.1-flash";
 const REQUEST_TIMEOUT_MS = 180_000;
 
 function words(count: number, prefix: string): string {

@@ -9,7 +9,7 @@ function openAICompletion(text: string): Response {
       id: "chatcmpl-commandcode-goat",
       object: "chat.completion.chunk",
       created: 1,
-      model: "deepseek/deepseek-v4-flash",
+      model: "deepseek/deepseek-v4.1-flash",
       choices: [
         {
           index: 0,
@@ -22,7 +22,7 @@ function openAICompletion(text: string): Response {
       id: "chatcmpl-commandcode-goat",
       object: "chat.completion.chunk",
       created: 1,
-      model: "deepseek/deepseek-v4-flash",
+      model: "deepseek/deepseek-v4.1-flash",
       choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
       usage: {
         prompt_tokens: 4,
@@ -95,7 +95,7 @@ describe("CommandCode Goat Provider Package", () => {
     });
     const model = provider
       .getModels()
-      .find((entry) => entry.id === "deepseek/deepseek-v4-flash");
+      .find((entry) => entry.id === "deepseek/deepseek-v4.1-flash");
     expect(model).toBeDefined();
 
     const result = await provider
@@ -130,7 +130,7 @@ describe("CommandCode Goat Provider Package", () => {
       "Bearer goat-secret",
     );
     await expect(requests[0]?.json()).resolves.toMatchObject({
-      model: "deepseek/deepseek-v4-flash",
+      model: "deepseek/deepseek-v4.1-flash",
       stream: true,
     });
   });
@@ -156,7 +156,7 @@ describe("CommandCode Goat Provider Package", () => {
     };
     const deepSeek = provider
       .getModels()
-      .find((entry) => entry.id === "deepseek/deepseek-v4-flash");
+      .find((entry) => entry.id === "deepseek/deepseek-v4.1-flash");
     const kimi = provider
       .getModels()
       .find((entry) => entry.id === "moonshotai/Kimi-K3");
@@ -215,7 +215,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch: async () =>
           new Response(
-            'data: {"id":"chatcmpl-truncated","object":"chat.completion.chunk","created":1,"model":"deepseek/deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n',
+            'data: {"id":"chatcmpl-truncated","object":"chat.completion.chunk","created":1,"model":"deepseek/deepseek-v4.1-flash","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n',
             { status: 200, headers: { "content-type": "text/event-stream" } },
           ),
         now: () => 1,
@@ -224,7 +224,7 @@ describe("CommandCode Goat Provider Package", () => {
     });
     const model = provider
       .getModels()
-      .find((entry) => entry.id === "deepseek/deepseek-v4-flash");
+      .find((entry) => entry.id === "deepseek/deepseek-v4.1-flash");
     expect(model).toBeDefined();
 
     const events = [];

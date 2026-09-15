@@ -148,7 +148,7 @@ async function runCase(
 async function run(): Promise<void> {
   const harness = await createAnthropicOnlineHarness({
     providerId: "commandcode-private",
-    model: "commandcode-private/deepseek/deepseek-v4-flash",
+    model: "commandcode-private/deepseek/deepseek-v4.1-flash",
     apiKeyFile: "CommandcodeAPIKey.txt",
   });
   const results: CaseResult[] = [];

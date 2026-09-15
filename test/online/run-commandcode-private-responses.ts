@@ -5,7 +5,7 @@ void runOpenAIResponsesOnlineSuite(
     "--provider",
     "commandcode-private",
     "--model",
-    "commandcode-private/deepseek/deepseek-v4-flash",
+    "commandcode-private/deepseek/deepseek-v4.1-flash",
     "--api-key-file",
     "CommandcodeAPIKey.txt",
   ],

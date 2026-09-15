@@ -297,7 +297,7 @@ describe("CommandCode generation control mapping", () => {
   });
 
   it("does not reclamp an unsupported key inside the CommandCode transport", () => {
-    const catalogModel = findCommandCodeModel("deepseek/deepseek-v4-flash");
+    const catalogModel = findCommandCodeModel("deepseek/deepseek-v4.1-flash");
     expect(catalogModel).toBeDefined();
 
     const low = buildCommandCodeBody(

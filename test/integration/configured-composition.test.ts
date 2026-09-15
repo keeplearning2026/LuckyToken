@@ -240,7 +240,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          model: "commandcode-private/deepseek/deepseek-v4.1-flash",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),
@@ -250,7 +250,7 @@ describe("configured serving composition", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       id: "msg_configured",
-      model: "commandcode-private/deepseek/deepseek-v4-flash",
+      model: "commandcode-private/deepseek/deepseek-v4.1-flash",
       content: [{ type: "text", text: "configured through Pi" }],
     });
     expect(upstreamRequests).toHaveLength(1);
@@ -332,7 +332,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          model: "commandcode-private/deepseek/deepseek-v4.1-flash",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),
@@ -473,7 +473,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          model: "commandcode-private/deepseek/deepseek-v4.1-flash",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),
@@ -487,7 +487,7 @@ describe("configured serving composition", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          model: "commandcode-private/deepseek/deepseek-v4.1-flash",
           input: "hello",
         }),
       }),
@@ -505,7 +505,7 @@ describe("configured serving composition", () => {
     const modelsJson = await modelsResponse.json();
     expect(modelsJson.object).toBe("list");
     expect(modelsJson.data.map((entry: { id: string }) => entry.id)).toContain(
-      "commandcode-private/deepseek/deepseek-v4-flash",
+      "commandcode-private/deepseek/deepseek-v4.1-flash",
     );
 
     await Promise.all([
@@ -532,7 +532,7 @@ describe("configured serving composition", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "commandcode-private/deepseek/deepseek-v4-flash",
+          model: "commandcode-private/deepseek/deepseek-v4.1-flash",
           input: "continue",
           previous_response_id: responsesJson.id,
         }),

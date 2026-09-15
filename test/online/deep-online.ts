@@ -16,7 +16,7 @@ import { createConfiguredTokenDataPlane } from "../support/configured-data-plane
  * tool calls, long outputs, streaming, and error paths.
  */
 
-const MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
+const MODEL = "commandcode-private/deepseek/deepseek-v4.1-flash";
 
 interface CaseResult {
   readonly name: string;

@@ -19,7 +19,7 @@ describe("CommandCode built-in default model", () => {
     expect(model.api).toBe("commandcode-private");
     expect(model.provider).toBe("commandcode-private");
     expect(model.reasoning).toBe(true);
-    expect(model.input).toEqual(["text"]);
+    expect(model.input).toEqual(["text", "image"]);
     expect(model.contextWindow).toBe(1_000_000);
     expect(model.maxTokens).toBe(64_000);
   });

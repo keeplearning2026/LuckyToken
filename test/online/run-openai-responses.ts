@@ -44,7 +44,7 @@ import {
   requireOnlineReasoningReplay,
 } from "./provider-wire.js";
 
-const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
+const DEFAULT_MODEL = "commandcode-private/deepseek/deepseek-v4.1-flash";
 const DEFAULT_CONCURRENCY = 5;
 const SUCCESS_MAX_TOKENS = 512;
 const REQUEST_TIMEOUT_MS = 120_000;

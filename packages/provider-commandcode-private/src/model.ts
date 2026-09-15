@@ -16,7 +16,7 @@ export { COMMANDCODE_BASE_URL, COMMANDCODE_PROVIDER_ID, COMMANDCODE_API_ID } fro
  * Built-in default model selected from the shared CommandCode capability
  * catalog.
  */
-export const COMMANDCODE_DEFAULT_MODEL_ID = "deepseek/deepseek-v4-flash";
+export const COMMANDCODE_DEFAULT_MODEL_ID = "deepseek/deepseek-v4.1-flash";
 
 export function createCommandCodeDefaultModel(
 ): Model<string> {

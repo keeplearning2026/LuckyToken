@@ -37,7 +37,7 @@ import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/
  *  - usage and terminal consistency
  */
 
-const MODEL_ID = "deepseek/deepseek-v4-flash";
+const MODEL_ID = "deepseek/deepseek-v4.1-flash";
 const REQUEST_TIMEOUT_MS = 180_000;
 const SUITE_TIMEOUT_MS = 30 * 60_000;
 

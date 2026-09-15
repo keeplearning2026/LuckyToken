@@ -21,7 +21,7 @@ import { startTokenHttpServer } from "../../src/server.js";
  * abort/error/tool-result are failure/edge events; their absence is fine.
  */
 
-const MODEL = "commandcode-private/deepseek/deepseek-v4-flash";
+const MODEL = "commandcode-private/deepseek/deepseek-v4.1-flash";
 
 const REQUIRED_EVENTS = new Set([
   "start",

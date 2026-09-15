@@ -23,11 +23,11 @@ describe("configured Provider Package runtime", () => {
     await expect(catalog.checkAuth("commandcode-goat")).resolves.toBeUndefined();
     const model = models.getModel(
       "commandcode-private",
-      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4.1-flash",
     );
     expect(model).toBeDefined();
     expect(
-      models.getModel("commandcode-goat", "deepseek/deepseek-v4-flash"),
+      models.getModel("commandcode-goat", "deepseek/deepseek-v4.1-flash"),
     ).toBeDefined();
 
     const eventTypes: string[] = [];

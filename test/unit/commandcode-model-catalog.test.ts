@@ -30,7 +30,7 @@ describe("CommandCode model catalog", () => {
       "gpt-5.3-codex",
       "gpt-5.4-mini",
       "deepseek/deepseek-v4-pro",
-      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4.1-flash",
       "deepseek/deepseek-v4-flash-vision-exp",
       "moonshotai/Kimi-K3",
       "moonshotai/Kimi-K2.7-Code",
@@ -76,7 +76,7 @@ describe("CommandCode model catalog", () => {
     ]);
   });
 
-  it("matches the corrected command-code 1.32.1 source-fact fingerprint", () => {
+  it("matches the current CommandCode source-fact fingerprint", () => {
     const sourceShape = COMMANDCODE_MODEL_FACTS.map((facts) => ({
       id: facts.id,
       name: facts.name,
@@ -96,7 +96,7 @@ describe("CommandCode model catalog", () => {
       .digest("hex");
 
     expect(fingerprint).toBe(
-      "889ab41999b02b2fd7a1a17f147818fa27a192d8e450375dc714cdb94e91b6b3",
+      "e5759d5a7d6a7e2ce18edff872e61d3757b06199d0f9d36b18f2bd4ecb4d27c4",
     );
   });
 
@@ -227,7 +227,7 @@ describe("CommandCode model catalog", () => {
       xhigh: null,
       max: null,
     });
-    expect(project("deepseek/deepseek-v4-flash").thinkingLevelMap).toEqual({
+    expect(project("deepseek/deepseek-v4.1-flash").thinkingLevelMap).toEqual({
       off: null,
       minimal: null,
       low: null,
@@ -239,10 +239,10 @@ describe("CommandCode model catalog", () => {
   });
 
   it("keeps the built-in default model present with its known id", () => {
-    const model = findCommandCodeModel("deepseek/deepseek-v4-flash");
+    const model = findCommandCodeModel("deepseek/deepseek-v4.1-flash");
     expect(model).toBeDefined();
     expect(model?.reasoning).toBe(true);
-    expect(model?.input).toEqual(["text"]);
+    expect(model?.input).toEqual(["text", "image"]);
     expect(model?.maxTokens).toBe(64_000);
   });
 
@@ -306,7 +306,7 @@ describe("CommandCode model catalog", () => {
       "gpt-5.6-sol",
       "gpt-5.6-luna",
       "deepseek/deepseek-v4-pro",
-      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4.1-flash",
       "deepseek/deepseek-v4-flash-vision-exp",
       "moonshotai/Kimi-K3",
       "moonshotai/Kimi-K2.7-Code",

@@ -403,7 +403,7 @@ test(
         .locator("li[data-model-id]")
         .filter({
           has: page.getByText(
-            "Original model: deepseek/deepseek-v4-flash",
+            "Original model: deepseek/deepseek-v4.1-flash",
             { exact: true },
           ),
         });
@@ -420,7 +420,7 @@ test(
       );
       assert.equal(await page.getByText("model-aliases.json").count(), 0);
       const modelNameInput = modelNameEditor.locator('input[type="text"]');
-      assert.equal(await modelNameInput.inputValue(), "deepseek-v4-flash");
+      assert.equal(await modelNameInput.inputValue(), "deepseek-v4.1-flash");
       await modelNameInput.fill(COMMANDCODE_CUSTOM_MODEL_NAME);
       await modelNameEditor.getByRole("button", { name: "Save" }).click();
       const renamedCommandCodeRow = commandCodeModels
@@ -505,7 +505,7 @@ test(
           COMMANDCODE_CUSTOM_ALIAS
         ],
         {
-          target: "deepseek/deepseek-v4-flash",
+          target: "deepseek/deepseek-v4.1-flash",
           enabled: true,
           favorite: true,
         },

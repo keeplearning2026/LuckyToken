@@ -157,7 +157,7 @@ async function runCase(
 async function run(): Promise<void> {
   const harness = await createAnthropicOnlineHarness({
     providerId: "commandcode-goat",
-    model: "commandcode-goat/deepseek/deepseek-v4-flash",
+    model: "commandcode-goat/deepseek/deepseek-v4.1-flash",
     apiKeyFile: "CommandcodeAPIKey.txt",
   });
   const results: CaseResult[] = [];
