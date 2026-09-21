@@ -14,7 +14,6 @@ import {
   nativeContinuity,
   omitContinuity,
 } from "./continuity-decisions.js";
-import { projectOpenAICompletionsPayload } from "./payload.js";
 
 const REASONING_FIELD_SELECTORS = new Set([
   "reasoning_content",
@@ -26,7 +25,6 @@ export const responsesToOpenAICompletionsReasoningAdapter: ResponsesReasoningAda
   Object.freeze({
     id: "openai-completions",
     api: "openai-completions",
-    projectPayload: projectOpenAICompletionsPayload,
     prepareHistory(input: ResponsesReasoningHistoryPreparationInput) {
       const compat = (input.model as Model<"openai-completions">).compat as
         | OpenAICompletionsCompat

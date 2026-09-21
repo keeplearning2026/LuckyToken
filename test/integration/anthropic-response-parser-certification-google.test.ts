@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { streamSimple as streamGoogleGenerativeAI } from "@earendil-works/pi-ai/api/google-generative-ai";
 import { streamSimple as streamGoogleVertex } from "@earendil-works/pi-ai/api/google-vertex";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import { normalizeContext, type Model } from "@earendil-works/pi-ai";
 
 import { convertAssistantMessageToAnthropicResponse } from "../../src/protocols/anthropic/response.js";
 import { captureAnthropicContinuityReplay } from "../support/anthropic-continuity-replay.js";
 
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "Use lookup.", timestamp: 1 }],
-};
+});
 
 describe("Anthropic Google response-parser certification", () => {
   afterEach(() => {

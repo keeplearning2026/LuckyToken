@@ -14,11 +14,11 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import {
-  createCommandCodePrivateProvider,
   providerPackage,
 } from "@token/provider-commandcode-private";
 import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { COMMANDCODE_MODELS } from "../../packages/provider-commandcode-private/src/models.js";
+import { createCommandCodePrivateProvider } from "../../packages/provider-commandcode-private/src/provider.js";
 
 /**
  * Direct Pi AI IR <-> CommandCode private provider online probe.
@@ -835,7 +835,7 @@ async function main(): Promise<void> {
                   type: "toolCall",
                   id: "bad_1",
                   name: "ir_seeded",
-                  arguments: "not-an-object" as unknown as Record<string, unknown>,
+                  arguments: "not-an-object" as never,
                 },
               ],
               usage: zeroUsage(),

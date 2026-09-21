@@ -90,13 +90,20 @@ export interface ResponsesReasoningSemantics {
   readonly continuity: readonly ResponsesReasoningContinuityAttachment[];
 }
 
-import type { ResponsesProjectionOutcome } from "../projection/outcome.js";
-export type { ResponsesProjectionOutcome } from "../projection/outcome.js";
+export type ResponsesReasoningDisposition =
+  | { readonly kind: "pi-native" }
+  | { readonly kind: "content-fallback"; readonly reason: string }
+  | { readonly kind: "omitted"; readonly warning: string }
+  | {
+      readonly kind: "degraded";
+      readonly fallback: string;
+      readonly warning: string;
+    };
 
 export interface ResponsesReasoningOutcome {
   readonly subject: "history" | "effort" | "summary";
   readonly attachment?: ResponsesReasoningContinuityAttachmentPoint;
-  readonly outcome: ResponsesProjectionOutcome;
+  readonly outcome: ResponsesReasoningDisposition;
 }
 
 export interface PreparedResponsesReasoning {
@@ -106,11 +113,6 @@ export interface PreparedResponsesReasoning {
   readonly effortPlan: ResponsesEffortPlan;
   readonly outcomes: readonly ResponsesReasoningOutcome[];
   readonly adapterId?: string;
-}
-
-export interface ResponsesReasoningProjectionResult {
-  readonly payload: unknown;
-  readonly outcomes: readonly ResponsesReasoningOutcome[];
 }
 import type {
   Context,

@@ -1,7 +1,7 @@
 import {
   createModels,
+  normalizeContext,
   type AssistantMessage,
-  type Context,
   type FetchFunction,
   type Model,
   type SimpleStreamOptions,
@@ -19,9 +19,9 @@ import { parseCommandCodeConfiguration } from "../../packages/provider-commandco
 import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 const sessionId = "00000000-0000-4000-8000-000000000100";
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
-};
+});
 
 function model(): Model<typeof commandCodePrivateApiId> {
   return {

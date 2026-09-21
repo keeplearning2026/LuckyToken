@@ -144,8 +144,8 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
         "utf8",
       ),
     );
-    assert.equal(installedPrivateProvider.version, "1.0.1");
-    assert.equal(installedGoatProvider.version, "1.0.1");
+    assert.equal(installedPrivateProvider.version, "1.0.3");
+    assert.equal(installedGoatProvider.version, "1.0.3");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

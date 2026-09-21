@@ -1,14 +1,14 @@
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import { normalizeContext, type Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/bedrock-converse-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { convertAssistantMessageToAnthropicResponse } from "../../src/protocols/anthropic/response.js";
 import { captureAnthropicContinuityReplay } from "../support/anthropic-continuity-replay.js";
 
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "Think, then answer.", timestamp: 1 }],
-};
+});
 
 async function* responseEvents() {
   yield { messageStart: { role: "assistant" } };

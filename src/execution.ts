@@ -53,11 +53,18 @@ export type ExecutionOperation = (
   context: Context,
   options: ModelsSimpleStreamOptions,
   factsSink?: ExecutionFactsSink,
+  observation?: ExecutionObservation,
 ) => Promise<AssistantMessage>;
 
+/** Fail-open infrastructure observation of Pi's public request/response seams. */
+export interface ExecutionObservation {
+  readonly providerRequest?: (payload: unknown) => void;
+  readonly providerResponse?: (response: unknown) => void;
+}
+
 export function createExecutionOperation(): ExecutionOperation {
-  return (models, model, context, options, factsSink) =>
-    execute(models, model, context, options, factsSink);
+  return (models, model, context, options, factsSink, observation) =>
+    execute(models, model, context, options, factsSink, observation);
 }
 
 export async function execute(
@@ -66,8 +73,42 @@ export async function execute(
   context: Context,
   options: ModelsSimpleStreamOptions,
   factsSink?: ExecutionFactsSink,
+  observation?: ExecutionObservation,
 ): Promise<AssistantMessage> {
-  const signal = options.signal;
+  if (options.onPayload !== undefined || options.onResponse !== undefined) {
+    throw new TypeError(
+      "Semantic execution options must not supply Provider callbacks",
+    );
+  }
+  const executionOptions: ModelsSimpleStreamOptions = {
+    ...options,
+    ...(observation?.providerRequest === undefined
+      ? {}
+      : {
+          onPayload(payload) {
+            try {
+              const snapshot = structuredClone(payload);
+              deepFreezeInvocationData(snapshot);
+              observation.providerRequest?.(snapshot);
+            } catch {
+              // Observation is fail-open and never changes Provider payload.
+            }
+            return payload;
+          },
+        }),
+    ...(observation?.providerResponse === undefined
+      ? {}
+      : {
+          onResponse(response) {
+            try {
+              observation.providerResponse?.(response);
+            } catch {
+              // Observation is fail-open and never changes Provider handling.
+            }
+          },
+        }),
+  };
+  const signal = executionOptions.signal;
   throwIfExecutionAborted(signal);
   /** Capture Pi's terminal AssistantMessage usage as a fail-open observation. */
   const observeTerminal = (
@@ -79,7 +120,7 @@ export async function execute(
   };
   let iterator: AsyncIterator<AssistantMessageEvent>;
   try {
-    const stream = models.streamSimple(model, context, options);
+    const stream = models.streamSimple(model, context, executionOptions);
     iterator = stream[Symbol.asyncIterator]();
   } catch (error) {
     throwIfExecutionAborted(signal);

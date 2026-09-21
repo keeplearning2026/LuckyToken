@@ -58,13 +58,12 @@ function visibleText(result: AnthropicResult): string {
     .join("");
 }
 
-function reasoningSummary(result: AnthropicResult): string {
+function reasoningSummary(result: AnthropicResult): string | undefined {
   const summary = result.content
     .filter((block) => block.type === "thinking")
     .map((block) => block.thinking ?? "")
     .join("\n");
-  if (summary.length === 0) throw new Error("online_private_thinking_missing");
-  return summary;
+  return summary.length === 0 ? undefined : summary;
 }
 
 function assertMarker(result: AnthropicResult, marker: string): void {
@@ -170,7 +169,6 @@ async function run(): Promise<void> {
         output_config: { effort: "high" },
       }));
       assertMarker(firstTurn, basicMarker);
-      reasoningSummary(firstTurn);
       assertBasicFinalWire(providerPayload(exchangeFor(harness, basicMarker)));
     });
 
@@ -196,14 +194,28 @@ async function run(): Promise<void> {
 
     await runCase(results, "complete-history-reasoning-replay", async () => {
       if (firstTurn === undefined) throw new Error("online_private_first_turn_unavailable");
-      const summary = reasoningSummary(firstTurn);
+      let historyTurn = firstTurn;
+      let summary = reasoningSummary(historyTurn);
+      for (let attempt = 1; attempt < 5 && summary === undefined; attempt += 1) {
+        historyTurn = parseSuccess(await harness.postJson({
+          model: harness.selector,
+          max_tokens: MAX_TOKENS,
+          messages: [{ role: "user", content: promptFor(basicMarker) }],
+          output_config: { effort: "high" },
+        }));
+        assertMarker(historyTurn, basicMarker);
+        summary = reasoningSummary(historyTurn);
+      }
+      if (summary === undefined) {
+        throw new Error("online_private_thinking_missing_after_retries");
+      }
       const marker = "LT_ANTHROPIC_PRIVATE_HISTORY_02";
       parseSuccess(await harness.postJson({
         model: harness.selector,
         max_tokens: MAX_TOKENS,
         messages: [
           { role: "user", content: promptFor(basicMarker) },
-          { role: "assistant", content: firstTurn.content },
+          { role: "assistant", content: historyTurn.content },
           { role: "user", content: promptFor(marker) },
         ],
         output_config: { effort: "high" },
@@ -253,7 +265,7 @@ async function run(): Promise<void> {
       }
     });
 
-    await runCase(results, "tool-choice-degraded-fallbacks", async () => {
+    await runCase(results, "tool-choice-provider-owned-omission", async () => {
       for (const [label, toolChoice] of [
         ["any", { type: "any" }],
         ["named", { type: "tool", name: tool.name }],
@@ -267,17 +279,20 @@ async function run(): Promise<void> {
           tools: [tool],
           tool_choice: toolChoice,
         }));
-        const projected = providerPayload(exchangeFor(harness, marker));
-        if (!isOnlineRecord(projected.params) || !Array.isArray(projected.params.tools)) {
-          throw new Error(`online_private_tool_${label}_wire_missing`);
-        }
-        if (label === "named" && projected.params.tools.length !== 1) {
-          throw new Error("online_private_named_tool_fallback_mismatch");
+        const payload = providerPayload(exchangeFor(harness, marker));
+        if (
+          !isOnlineRecord(payload.params) ||
+          !Array.isArray(payload.params.tools) ||
+          payload.params.tools.length !== 1 ||
+          Object.hasOwn(payload.params, "tool_choice") ||
+          Object.hasOwn(payload.params, "parallel_tool_calls")
+        ) {
+          throw new Error(`online_private_tool_${label}_wire_mismatch`);
         }
       }
     });
 
-    await runCase(results, "structured-output-guidance-fallback", async () => {
+    await runCase(results, "structured-output-omitted", async () => {
       const marker = "LT_ANTHROPIC_PRIVATE_SCHEMA_01";
       parseSuccess(await harness.postJson({
         model: harness.selector,
@@ -295,13 +310,15 @@ async function run(): Promise<void> {
           },
         },
       }));
-      const projected = providerPayload(exchangeFor(harness, marker));
+      const providerRequest = providerPayload(exchangeFor(harness, marker));
       if (
-        !isOnlineRecord(projected.params) ||
-        typeof projected.params.system !== "string" ||
-        !projected.params.system.includes("Conformance is best effort")
+        !isOnlineRecord(providerRequest.params) ||
+        Object.hasOwn(providerRequest.params, "response_format") ||
+        Object.hasOwn(providerRequest.params, "output_config") ||
+        (typeof providerRequest.params.system === "string" &&
+          providerRequest.params.system.includes("Conformance is best effort"))
       ) {
-        throw new Error("online_private_schema_guidance_missing");
+        throw new Error("online_private_schema_control_leaked");
       }
     });
 

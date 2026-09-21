@@ -337,6 +337,44 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     ).toBe(true);
   });
 
+  it("maps a named unpaired function_call_output to user transcript content", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "function_call_output",
+            name: "create_thread",
+            namespace: "codex_app",
+            output: "child thread started",
+          },
+        ],
+      },
+      1,
+      policy(),
+    );
+
+    expect(invocation.invocation.pi.context.messages).toMatchObject([
+      {
+        role: "user",
+        content: [{ type: "text", text: "child thread started" }],
+      },
+    ]);
+  });
+
+  it("keeps a nameless unpaired function_call_output malformed", () => {
+    expect(() =>
+      convertResponsesRequest(
+        {
+          model: "m",
+          input: [{ type: "function_call_output", output: "missing identity" }],
+        },
+        1,
+        policy(),
+      ),
+    ).toThrow(/function_call_output\.call_id/u);
+  });
+
   it("errors on foreign encrypted compaction instead of fabricating text", () => {
     // Frozen: compaction with foreign encrypted-only content is an error; the
     // adapter never fabricates byte-length text.
@@ -682,7 +720,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     ).toEqual(["u1", "late-system", "late-dev", "u2"]);
   });
 
-  it("maps max_output_tokens, temperature, and top_p into Pi options", () => {
+  it("maps Pi-native output controls and warns for unrepresented top_p", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -696,7 +734,10 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     );
     expect(invocation.invocation.pi.options.maxTokens).toBe(512);
     expect(invocation.invocation.pi.options.temperature).toBe(0.4);
-    expect(invocation.invocation.pi.options.samplingParams).toEqual({ top_p: 0.9 });
+    expect(invocation.invocation.pi.options.samplingParams).toBeUndefined();
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.top_p", action: "ignore" }),
+    );
   });
 
   it("maps prompt_cache_retention to Pi cacheRetention", () => {
@@ -720,28 +761,34 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(none.invocation.pi.options.cacheRetention).toBeUndefined();
   });
 
-  it("maps safety_identifier with a user fallback into Pi metadata", () => {
+  it("does not smuggle identity controls through Pi metadata", () => {
     const fromSafety = convertResponsesRequest(
       { model: "m", input: "x", safety_identifier: "sid-1" },
       1,
       policy(),
     );
-    expect(fromSafety.invocation.pi.options.metadata).toEqual({ user_id: "sid-1" });
+    expect(fromSafety.invocation.pi.options.metadata).toBeUndefined();
+    expect(fromSafety.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.safety_identifier", action: "ignore" }),
+    );
     const fromUser = convertResponsesRequest(
       { model: "m", input: "x", user: "uid-2" },
       1,
       policy(),
     );
-    expect(fromUser.invocation.pi.options.metadata).toEqual({ user_id: "uid-2" });
+    expect(fromUser.invocation.pi.options.metadata).toBeUndefined();
+    expect(fromUser.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.user", action: "ignore" }),
+    );
     const safetyWins = convertResponsesRequest(
       { model: "m", input: "x", safety_identifier: "sid-3", user: "uid-4" },
       1,
       policy(),
     );
-    expect(safetyWins.invocation.pi.options.metadata).toEqual({ user_id: "sid-3" });
+    expect(safetyWins.invocation.pi.options.metadata).toBeUndefined();
   });
 
-  it("captures validated auxiliary controls in the complete supplement", () => {
+  it("preserves common parallel-tool intent and warns for private auxiliary controls", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -762,22 +809,21 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(invocation.client.renderState.stream).toBe(true);
     expect(invocation.invocation.pi.options.samplingParams).toBeUndefined();
     expect(invocation.invocation.pi.options.cacheRetention).toBeUndefined();
+    expect(invocation.invocation.pi.options.parallelToolCalls).toBe(false);
+    expect(invocation.client.renderState.parallelToolCalls).toBe(false);
     expect(invocation.invocation.pi.context.tools).toBeUndefined();
-    expect(invocation.invocation.supplement).toMatchObject({
-      output: {
-        format: { value: { type: "text" } },
-        verbosity: { value: "low" },
-        include: { value: ["reasoning.encrypted_content"] },
-      },
-      tools: {
-        parallelCalls: { value: false },
-      },
-      cache: { key: { value: "cache-key" } },
-      lifecycle: {
-        serviceTier: { value: "priority" },
-        truncation: { value: "auto" },
-      },
-    });
+    expect(invocation.invocation).not.toHaveProperty("supplement");
+    for (const jsonPath of [
+      "$.service_tier",
+      "$.prompt_cache_key",
+      "$.truncation",
+      "$.text",
+      "$.include",
+    ]) {
+      expect(invocation.client.notices).toContainEqual(
+        expect.objectContaining({ jsonPath, action: "ignore" }),
+      );
+    }
     expect(invocation.client.notices).toContainEqual({
       adapter: "openai-responses",
       direction: "request",
@@ -796,7 +842,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       policy(),
     );
 
-    expect(invocation.invocation.supplement.output).toBeUndefined();
+    expect(invocation.invocation).not.toHaveProperty("supplement");
     expect(invocation.client.notices).toContainEqual({
       adapter: "openai-responses",
       direction: "request",
@@ -904,7 +950,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     ).toThrow(/reasoning\.effort is not a known thinking level/);
   });
 
-  it("filters the executable catalog for tool_choice none/auto/allowed", () => {
+  it("preserves the catalog for none/auto and filters only allowed_tools", () => {
     const tools = [
       { type: "function", name: "a", parameters: { type: "object" } },
       { type: "function", name: "b", parameters: { type: "object" } },
@@ -914,7 +960,8 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(none.invocation.pi.context.tools).toBeUndefined();
+    expect(none.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
+    expect(none.invocation.pi.options.toolChoice).toBe("none");
     const auto = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: "auto" },
       1,
@@ -938,7 +985,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(allowed.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["b"]);
   });
 
-  it("preserves a named tool_choice for target projection", () => {
+  it("preserves a named tool_choice in the Pi common contract", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -949,8 +996,11 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a"]);
-    expect(invocation.client.renderState.toolChoice).toBe("required");
+    expect(invocation.invocation.pi.options.toolChoice).toEqual({
+      type: "tool",
+      name: "a",
+    });
+    expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual(["a"]);
   });
 
   it("errors on a forced tool_choice requiring a tool absent from the catalog", () => {
@@ -965,7 +1015,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
         1,
         policy(),
       ),
-    ).toThrow(/tool_choice requires/);
+    ).toThrow(/undeclared tool/u);
   });
 
   it("keeps unconsumed background out of Provider projection", () => {
@@ -974,7 +1024,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(background.invocation.supplement.lifecycle).toBeUndefined();
+    expect(background.invocation).not.toHaveProperty("supplement");
     expect(background.client.notices).toContainEqual({
       adapter: "openai-responses",
       direction: "request",
@@ -1378,8 +1428,8 @@ describe("13 recheck: resolver receives explicit limits", () => {
   });
 });
 
-describe("13 recheck: tool_choice is retained for target projection", () => {
-  it("retains a named choice without a premature degradation notice", () => {
+describe("13 recheck: tool_choice uses only the Pi common contract", () => {
+  it("preserves a named choice without projecting Provider wire", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -1390,10 +1440,8 @@ describe("13 recheck: tool_choice is retained for target projection", () => {
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a"]);
-    expect(invocation.invocation.supplement.tools?.choice?.value).toEqual({
-      kind: "named",
-      toolType: "function",
+    expect(invocation.invocation.pi.options.toolChoice).toEqual({
+      type: "tool",
       name: "a",
     });
     expect(invocation.client.notices).toEqual([]);
@@ -1532,20 +1580,21 @@ describe("13 recheck: temperature range is validated", () => {
     ).toThrow(/temperature/);
   });
 
-  it("validates top_p within 0..1", () => {
-    expect(() =>
-      convertResponsesRequest(
-        { model: "m", input: "x", top_p: 1.5 },
-        1,
-        policy(),
-      ),
-    ).toThrow(/top_p/);
+  it("leaves top_p unread and warns regardless of its shape", () => {
+    const invalid = convertResponsesRequest(
+      { model: "m", input: "x", top_p: 1.5 },
+      1,
+      policy(),
+    );
+    expect(invalid.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.top_p", action: "ignore" }),
+    );
     const valid = convertResponsesRequest(
       { model: "m", input: "x", top_p: 0.5 },
       1,
       policy(),
     );
-    expect(valid.invocation.pi.options.samplingParams).toEqual({ top_p: 0.5 });
+    expect(valid.invocation.pi.options.samplingParams).toBeUndefined();
   });
 });
 
@@ -1821,13 +1870,18 @@ describe("13 recheck: tool_choice full combination matrix", () => {
     { type: "custom", name: "apply_patch" },
   ];
 
-  it("none clears the catalog regardless of tools", () => {
+  it("none preserves the catalog and carries an explicit Pi disable", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: "none" },
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.context.tools).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+    expect(invocation.invocation.pi.options.toolChoice).toBe("none");
     expect(invocation.client.renderState.toolChoice).toBe("none");
     expect(invocation.client.notices).toEqual([]);
   });
@@ -1889,9 +1943,16 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       policy(),
     );
     expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
-    // The SDK has no bare "allowed" tool_choice string; the filter is
-    // auto-mode filtering, so the effective echo is "auto".
-    expect(invocation.client.renderState.toolChoice).toBe("auto");
+    // Provider execution uses neutral Pi auto plus the filtered catalog;
+    // the Responses-owned response state retains the equivalent Client echo.
+    expect(invocation.client.renderState.toolChoice).toEqual({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [
+        { type: "function", name: "a" },
+        { type: "function", name: "b" },
+      ],
+    });
   });
 
   it("allowed with an unknown name filters it out", () => {
@@ -1930,19 +1991,16 @@ describe("13 recheck: tool_choice full combination matrix", () => {
     ).toThrow(/non-empty array/u);
   });
 
-  it("named choice with an available tool is retained", () => {
+  it("named choice with an available tool is preserved in Pi", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: { type: "function", name: "a" } },
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
-      "a",
-      "b",
-      "apply_patch",
-    ]);
-    expect(invocation.client.renderState.toolChoice).toBe("required");
-    expect(invocation.client.notices).toEqual([]);
+    expect(invocation.invocation.pi.options.toolChoice).toEqual({
+      type: "tool",
+      name: "a",
+    });
   });
 
   it("forced with an unavailable tool errors", () => {
@@ -1952,22 +2010,16 @@ describe("13 recheck: tool_choice full combination matrix", () => {
         1,
         policy(),
       ),
-    ).toThrow(/tool_choice requires an unavailable tool/);
+    ).toThrow(/undeclared tool/u);
   });
 
-  it("required string is retained for target projection", () => {
+  it("required string is preserved in Pi", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: "required" },
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual([
-      "a",
-      "b",
-      "apply_patch",
-    ]);
-    expect(invocation.client.renderState.toolChoice).toBe("required");
-    expect(invocation.client.notices).toEqual([]);
+    expect(invocation.invocation.pi.options.toolChoice).toBe("required");
   });
 });
 

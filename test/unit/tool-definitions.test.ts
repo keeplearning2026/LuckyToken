@@ -114,7 +114,7 @@ describe("Anthropic tool definitions", () => {
     ["deferred loading", { defer_loading: true }],
     ["eager input", { eager_input_streaming: true }],
     ["input examples", { input_examples: [{}] }],
-  ])("retains non-Pi tool control in the supplement: %s", (_name, extras) => {
+  ])("omits non-Pi tool control with a warning: %s", (_name, extras) => {
     const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request([tool({ type: "object", properties: {} }, extras)]),
@@ -126,23 +126,13 @@ describe("Anthropic tool definitions", () => {
       description: "",
       parameters: { type: "object", properties: {} },
     });
-    if (_name === "cache control") {
-      expect(invocation.invocation.supplement.tools).toEqual([]);
-      expect(invocation.invocation.supplement.cache).toEqual([
-        expect.objectContaining({
-          id: "tools[0].cacheControl",
-          value: {},
-        }),
-      ]);
-    } else {
-      expect(invocation.invocation.supplement.tools).toEqual([
-        expect.objectContaining({
-          name: "lookup",
-          piRepresentation: "partial",
-          value: Object.values(extras)[0],
-        }),
-      ]);
-    }
+    expect(invocation.invocation).not.toHaveProperty("supplement");
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        jsonPath: `$.tools[0].${Object.keys(extras)[0]}`,
+        action: "ignore",
+      }),
+    );
   });
 
   it("rejects a server tool type on a custom tool", () => {
@@ -173,7 +163,7 @@ describe("Anthropic tool definitions", () => {
       description: "",
       parameters: { type: "object", properties: {} },
     });
-    expect(invocation.invocation.supplement.tools).toEqual([]);
+    expect(invocation.invocation).not.toHaveProperty("supplement");
   });
 
   it("passes malformed-shape schemas through for non-strict tools", () => {

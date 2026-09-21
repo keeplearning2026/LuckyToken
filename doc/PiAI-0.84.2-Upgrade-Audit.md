@@ -4,12 +4,15 @@
 **Token baseline:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
 **Vendored Pi baseline:** `pi-agent@914cf1472e715297caa30db4b9535d534a9eb718` (`v0.84.2`)
 **Upgrade under review:** `@earendil-works/pi-ai` `0.84.1` → `0.84.2`
+**Status:** **SUPERSEDED historical upgrade audit.** Token's runtime dependency is now `@earendil-works/pi-ai@0.86.1`, and the checked-in `pi-agent/` tree (reference material only, not the runtime dependency) has since been updated to the `0.86.1` snapshot. Keep this document's 0.84.2 actions, versions, and measurements scoped to this historical upgrade. The compatibility baseline constant for Token's extracted `models.json`/effective catalog still records the `pi-coding-agent` 0.84.2 reference identity; treat that constant, not this audit, as the schema/composition identity authority. Current Semantic Conversion authority is `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md` and `doc/Spec/TokenSemanticConversionArchitectureSpec.md`; the current boundary deletes projector and Supplement architecture and prohibits Client Protocol/execution ownership of `onPayload`.
 
 ## 1. Conclusion
 
+The "required synchronization" and action items in this historical audit describe the 0.84.2 upgrade baseline only; they are not current runtime instructions.
+
 This is not only a package-version bump, but it also does not require every adjacent SDK or data-plane lane to be rewritten.
 
-The required synchronization falls into four groups:
+At that historical baseline, the required synchronization fell into four groups:
 
 1. **Dependency and compatibility identity:** bump the root Pi package, Token provider peer dependencies, lockfile, certification pins, and the Token Pi compatibility baseline.
 2. **Pi model-config schema:** add Pi 0.84.2's new `OpenAIResponsesCompat.supportsAdditionalTools` field to Token's extracted `models.json` schema and bump the schema/baseline identity to 0.84.2.
@@ -101,7 +104,7 @@ Source:
 
 ## 4. Impact matrix
 
-| Area | 0.84.2 change | Current Token state | Verdict | Required action |
+| Area | 0.84.2 change | Historical Token state | Historical verdict | Historical required action |
 |---|---|---|---|---|
 | Root Pi dependency | Pi package version | Root still pins 0.84.1 | **Must update** | `package.json` + lockfile → 0.84.2 |
 | Provider package peers | Pi type/provider contract version | both provider packages peer-pin exact 0.84.1 | **Must update** | bump both peer dependencies to 0.84.2 |
@@ -200,7 +203,7 @@ Current Token Core v1 intentionally rejects:
 - `tool_search_call` / `tool_search_output` lifecycle conversion;
 - `defer_loading=true` that requires deferred discovery.
 
-The Pi package upgrade alone does not require changing that product contract. What **is** required is allowing `supportsAdditionalTools` through Token's Pi-compatible `models.json` schema so a valid Pi 0.84.2 model configuration is not rejected or stripped.
+The Pi package upgrade alone did not require changing that product contract. At that historical baseline, what was required was allowing `supportsAdditionalTools` through Token's Pi-compatible `models.json` schema so a valid Pi 0.84.2 model configuration was not rejected or stripped.
 
 ## 7. Strict tool schemas: provider behavior changed, but do not duplicate it in client adapters
 
@@ -374,7 +377,7 @@ Other active version references to re-check include:
 - `doc/TokenArchitecture.md`
 - `doc/HANDOFF.md`
 
-## 14. Recommended implementation sequence
+## 14. Historical recommended implementation sequence (completed for 0.84.2)
 
 1. **Dependency red gate**
    - update expected versions/peers/certification to 0.84.2;
@@ -454,7 +457,7 @@ The upgrade was implemented without changing Token's three-lane architecture. Pr
 
 ### Dependency result
 
-- `@earendil-works/pi-ai` is pinned to `0.84.2` at the root and in both Token Provider peer contracts.
+- At the 2026-08-20 upgrade outcome, `@earendil-works/pi-ai` was pinned to `0.84.2` at the root and in both Token Provider peer contracts. The current runtime dependency is `@earendil-works/pi-ai@0.86.1`.
 - Pi-owned transitive dependencies resolve to `@earendil-works/pi-telemetry@0.84.2` and `openai@6.40.0`.
 - `@anthropic-ai/sdk` remains `0.91.1`.
 - `@mistralai/mistralai` is no longer present in Token's resolved dependency tree.
@@ -474,7 +477,7 @@ The final Responses rule is more precise than a blanket “copy namespace into P
 ### Configuration and evidence result
 
 - the extracted Pi `models.json` schema now accepts `supportsAdditionalTools`;
-- the effective catalog/control-plane compatibility baseline is `0.84.2`;
+- the effective catalog/control-plane compatibility baseline constant still records the vendored `pi-coding-agent` 0.84.2 reference identity; this is separate from the current `@earendil-works/pi-ai@0.86.1` runtime dependency;
 - configured `pi-models-json` backup metadata follows that baseline;
 - `pi-auth-json` backup metadata intentionally remains `0.84.1` because the Pi credential types/auth-storage format did not change between 0.84.1 and 0.84.2;
 - usage declarations were re-audited against upstream `v0.84.2` (`914cf1472`); Mistral changed transport from generated SDK to native HTTP but retained the same canonical prompt/cache/output usage partition.

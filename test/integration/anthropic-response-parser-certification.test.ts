@@ -6,7 +6,7 @@ import { streamSimple as streamOpenAICodexResponses } from "@earendil-works/pi-a
 import { streamSimple as streamPiMessages } from "@earendil-works/pi-ai/api/pi-messages";
 import { streamSimple as streamMistral } from "@earendil-works/pi-ai/api/mistral-conversations";
 import { processResponsesStream } from "@earendil-works/pi-ai/api/openai-responses-shared";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import { normalizeContext, type Model } from "@earendil-works/pi-ai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 
@@ -16,9 +16,9 @@ import {
 } from "../../src/protocols/anthropic/response.js";
 import { captureAnthropicContinuityReplay } from "../support/anthropic-continuity-replay.js";
 
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "Use lookup.", timestamp: 1 }],
-};
+});
 
 const CODEX_TEST_TOKEN = `e30.${Buffer.from(JSON.stringify({
   "https://api.openai.com/auth": { chatgpt_account_id: "test-account" },
@@ -406,17 +406,16 @@ describe("Anthropic response interpretation parser certification", () => {
       expect.objectContaining({
         type: "thinking",
         thinking: "plan",
-        thinkingSignature: "reasoning_content",
+        thinkingSignature: JSON.stringify([{
+          type: "reasoning.encrypted",
+          id: "call-1",
+          data: "opaque-tool-state",
+        }]),
       }),
       expect.objectContaining({
         type: "toolCall",
         id: "call-1",
         name: "lookup",
-        thoughtSignature: JSON.stringify({
-          type: "reasoning.encrypted",
-          id: "call-1",
-          data: "opaque-tool-state",
-        }),
       }),
     ]));
     expect(converted.message.stop_reason).toBe("tool_use");
@@ -426,7 +425,11 @@ describe("Anthropic response interpretation parser certification", () => {
         token_continuity: expect.objectContaining({
           attachments: [expect.objectContaining({
             target: "thinking",
-            value: "reasoning_content",
+            value: JSON.stringify([{
+              type: "reasoning.encrypted",
+              id: "call-1",
+              data: "opaque-tool-state",
+            }]),
           })],
         }),
       }),
@@ -434,12 +437,6 @@ describe("Anthropic response interpretation parser certification", () => {
         type: "tool_use",
         id: "call-1",
         caller: { type: "direct" },
-        token_continuity: expect.objectContaining({
-          attachments: [expect.objectContaining({
-            target: "toolCall",
-            callId: "call-1",
-          })],
-        }),
       }),
     ]));
 
@@ -456,7 +453,7 @@ describe("Anthropic response interpretation parser certification", () => {
       messages: expect.arrayContaining([
         expect.objectContaining({
           role: "assistant",
-          reasoning_content: "plan",
+          content: null,
           tool_calls: [
             expect.objectContaining({
               id: "call-1",

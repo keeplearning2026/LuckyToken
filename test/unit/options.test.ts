@@ -80,7 +80,7 @@ describe("closed-world Pi option composition", () => {
     ).toThrow(InvocationCompositionFailure);
   });
 
-  it.each(["minimal", "low", "medium", "high", "xhigh", "max"] as const)(
+  it.each(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)(
     "preserves Pi thinking level %s",
     (reasoning) => {
       const signal = new AbortController().signal;
@@ -89,6 +89,34 @@ describe("closed-world Pi option composition", () => {
       ).toMatchObject({ reasoning, sessionId, signal });
     },
   );
+
+  it.each(["auto", "none", "required"] as const)(
+    "preserves neutral Pi tool choice %s",
+    (toolChoice) => {
+      const signal = new AbortController().signal;
+      expect(
+        composeOptions({ toolChoice }, { sessionId, signal }),
+      ).toMatchObject({ toolChoice, sessionId, signal });
+    },
+  );
+
+  it("preserves and snapshots named tool choice plus parallel execution intent", () => {
+    const signal = new AbortController().signal;
+    const toolChoice = { type: "tool" as const, name: "lookup" };
+    const effective = composeOptions(
+      { toolChoice, parallelToolCalls: false },
+      { sessionId, signal },
+    );
+
+    toolChoice.name = "mutated";
+    expect(effective).toMatchObject({
+      toolChoice: { type: "tool", name: "lookup" },
+      parallelToolCalls: false,
+      sessionId,
+      signal,
+    });
+    expect(Object.isFrozen(effective.toolChoice)).toBe(true);
+  });
 
   it("preserves all public semantic option families without inventing absence", () => {
     const signal = new AbortController().signal;
@@ -252,6 +280,9 @@ describe("closed-world Pi option composition", () => {
     ["null reasoning", { reasoning: null }],
     ["null cache", { cacheRetention: null }],
     ["null budgets", { thinkingBudgets: null }],
+    ["invalid tool choice", { toolChoice: "any" }],
+    ["empty named tool choice", { toolChoice: { type: "tool", name: "" } }],
+    ["invalid parallel tool calls", { parallelToolCalls: "false" }],
     ["undefined sampling value", { samplingParams: { top_p: undefined } }],
   ])("rejects invalid Pi semantic option: %s", (_name, protocol) => {
     expect(() =>

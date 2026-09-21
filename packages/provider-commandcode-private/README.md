@@ -24,10 +24,10 @@ The model catalog is package-owned; no `models.json` entry is required. A missin
 
 Token loads the bundled package through its fixed `providerPackage` root export, validates the versioned Provider Package contract, creates one standard Pi `Provider`, and registers it through Pi `Models`. Core and Client Protocol modules do not import or special-case the CommandCode implementation.
 
-The package root exports:
-
-- `providerPackage`, for Token bundled Provider composition;
-- `createCommandCodePrivateProvider` and its option/policy types, for direct Pi integration and characterization tests.
+The package root exports only `providerPackage`, for Token bundled Provider
+composition. The concrete factory and its option/policy types remain internal;
+white-box Provider tests import their source module directly. Runtime callers
+must resolve and invoke this Provider through Pi `Models`.
 
 Current request construction does **not** derive project/workspace state from Pi metadata. `project.ts` supplies the fixed empty `ServerConfig` required by the current upstream compatibility contract; there is no current `projectDir → project snapshot/x-project-slug` flow.
 

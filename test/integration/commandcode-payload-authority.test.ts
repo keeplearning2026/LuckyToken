@@ -1,6 +1,6 @@
 import {
   createModels,
-  type Context,
+  normalizeContext,
   type FetchFunction,
   type Model,
 } from "@earendil-works/pi-ai";
@@ -69,9 +69,9 @@ function model(): Model<typeof commandCodePrivateApiId> {
   };
 }
 
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
-};
+});
 const sessionId = "00000000-0000-4000-8000-000000000090";
 
 describe("CommandCode payload authority", () => {

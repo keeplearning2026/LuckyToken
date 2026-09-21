@@ -21,7 +21,6 @@ import {
   executeOpenAIResponsesSemanticInvocation,
   type ResponsesSemanticExecutionResult,
 } from "./semantic/execution.js";
-import { ResponsesProjectionRejected } from "./semantic/pi-execution.js";
 import type {
   RequestJourneyLocation,
   RequestJourneyObservationInput,
@@ -48,11 +47,9 @@ import {
   renderResponsesErrorResponse,
   type PreparedHttpResponse,
   type ResponsesEchoTool,
-  type ResponsesEchoToolChoice,
   type ResponsesRenderState,
   type ResponsesResponseObject,
 } from "./response.js";
-import type { ResponsesToolChoice } from "./semantic/supplement/contract.js";
 import {
   ResponseStateConversionFailure,
   type ResponseSessionState,
@@ -353,7 +350,6 @@ function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
 
 function buildRenderState(
   invocation: ResponsesInvocation,
-  projection: ResponsesSemanticExecutionResult,
   unknownPiContent: "error" | "ignore",
   notice: (notice: {
     readonly adapter: string;
@@ -367,38 +363,11 @@ function buildRenderState(
   const tools = buildEchoTools(invocation);
   const freeformNames = state.freeformToolNames;
   const namespaceReverse = state.namespaceReverse;
-  const applied = (control: string): boolean =>
-    projection.supplementOutcomes.some(
-      (entry) =>
-        entry.control === control &&
-        (entry.outcome.kind === "pi-native" ||
-          entry.outcome.kind === "payload-projected"),
-    );
-  const temperatureControl = invocation.invocation.supplement.sampling?.temperature;
-  const topPControl = invocation.invocation.supplement.sampling?.topP;
-  const parallelControl = invocation.invocation.supplement.tools?.parallelCalls;
-  const choiceControl = invocation.invocation.supplement.tools?.choice;
-  const temperature =
-    temperatureControl !== undefined && applied("sampling.temperature")
-      ? temperatureControl.value
-      : undefined;
-  const topP =
-    topPControl !== undefined && applied("sampling.topP")
-      ? topPControl.value
-      : undefined;
-  const parallelToolCalls =
-    parallelControl !== undefined && applied("tools.parallelCalls")
-      ? parallelControl.value
-      : true;
-  const toolChoice =
-    choiceControl !== undefined && applied("tools.choice")
-      ? toResponsesEchoToolChoice(choiceControl.value)
-      : undefined;
   return Object.freeze({
     clientModel: state.clientModel,
     stream: state.stream,
-    ...(toolChoice === undefined ? {} : { toolChoice }),
-    parallelToolCalls,
+    ...(state.toolChoice === undefined ? {} : { toolChoice: state.toolChoice }),
+    parallelToolCalls: state.parallelToolCalls ?? true,
     ...(freeformNames === undefined || freeformNames.size === 0
       ? {}
       : { freeformToolNames: freeformNames }),
@@ -406,61 +375,11 @@ function buildRenderState(
       ? {}
       : { namespaceReverse }),
     ...(state.metadataEcho === undefined ? {} : { metadataEcho: state.metadataEcho }),
-    ...(temperature === undefined ? {} : { temperature }),
-    ...(topP === undefined ? {} : { topP }),
     ...(tools.length === 0 ? {} : { tools }),
+    ...(state.temperature === undefined ? {} : { temperature: state.temperature }),
     unknownPiContent,
     notices: { push: notice },
   });
-}
-
-function toResponsesEchoToolChoice(
-  choice: ResponsesToolChoice,
-): ResponsesEchoToolChoice {
-  if (
-    choice.kind === "auto" ||
-    choice.kind === "none" ||
-    choice.kind === "required"
-  ) {
-    return choice.kind;
-  }
-  if (choice.kind === "named") {
-    return Object.freeze({
-      type: choice.toolType,
-      name: choice.name,
-    });
-  }
-  if (choice.kind === "allowed") {
-    return Object.freeze({
-      type: "allowed_tools",
-      mode: choice.mode,
-      tools: Object.freeze(
-        choice.tools.map((tool) =>
-          Object.freeze(
-            tool.toolType === "function" || tool.toolType === "custom"
-              ? { type: tool.toolType, name: tool.name }
-              : tool.toolType === "mcp"
-                ? {
-                    type: "mcp",
-                    server_label: tool.serverLabel,
-                    ...(tool.name === undefined ? {} : { name: tool.name }),
-                  }
-                : { type: tool.toolType },
-          ),
-        ),
-      ),
-    });
-  }
-  if (choice.kind !== "hosted") return "auto";
-  return Object.freeze(
-    choice.toolType === "mcp"
-      ? {
-          type: "mcp",
-          server_label: choice.serverLabel,
-          ...(choice.name === undefined ? {} : { name: choice.name }),
-        }
-      : { type: choice.toolType },
-  );
 }
 
 function assertProviderRepresentableHistory(
@@ -604,12 +523,13 @@ export async function executeSemanticResponses(
               api: options.model.api,
             },
             reasoning: invocation.invocation.reasoning,
-            supplement: invocation.invocation.supplement,
             context: invocation.invocation.pi.context,
             options: {
               maxTokens: piOptions.maxTokens,
               temperature: piOptions.temperature,
               reasoning: piOptions.reasoning,
+              toolChoice: piOptions.toolChoice,
+              parallelToolCalls: piOptions.parallelToolCalls,
               samplingParams: piOptions.samplingParams,
               cacheRetention: piOptions.cacheRetention,
               thinkingBudgets: piOptions.thinkingBudgets,
@@ -871,7 +791,6 @@ export async function executeSemanticResponses(
     );
     const renderState = buildRenderState(
       invocation,
-      semanticResult,
       options.configuration.conversion.response.unknownPiContent,
       (notice) => {
         observeClientConversionNotice(options.journey, notice);
@@ -974,8 +893,7 @@ export async function executeSemanticResponses(
     }
     if (
       error instanceof InvalidRequest ||
-      error instanceof ResponseStateConversionFailure ||
-      error instanceof ResponsesProjectionRejected
+      error instanceof ResponseStateConversionFailure
     ) {
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),

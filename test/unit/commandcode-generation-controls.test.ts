@@ -1,4 +1,4 @@
-import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { normalizeContext, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -21,9 +21,9 @@ const model: Model<typeof commandCodePrivateApiId> = {
   contextWindow: 100_000,
   maxTokens: 100,
 };
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
-};
+});
 const sessionId = "00000000-0000-4000-8000-000000000082";
 
 function params(options: SimpleStreamOptions): Record<string, unknown> {

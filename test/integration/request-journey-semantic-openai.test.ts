@@ -106,7 +106,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
     }
   });
 
-  it("captures the required Pi 0.84.2 request payload, response metadata, response IR, and Client response on success", async () => {
+  it("captures the Pi 0.86.1 request payload, response metadata, response IR, and Client response on success", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "Token-semantic-openai-success-journey-"),
     );
@@ -168,7 +168,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
         },
       });
       const semanticExecution: ExecutionOperation = vi.fn(
-        async (_models, selectedModel, context, options) => {
+        async (_models, selectedModel, context, options, _factsSink, observation) => {
           expect(options.timeoutMs).toBe(456_789);
           const providerPayload = {
               model: selectedModel.id,
@@ -176,14 +176,11 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
               max_tokens: options.maxTokens,
               stream: true,
             };
-          await options.onPayload?.(providerPayload, selectedModel);
-          await options.onResponse?.(
-            {
-              status: 200,
-              headers: { "request-id": "openai-provider-success" },
-            },
-            selectedModel,
-          );
+          observation?.providerRequest?.(providerPayload);
+          observation?.providerResponse?.({
+            status: 200,
+            headers: { "request-id": "openai-provider-success" },
+          });
           return terminal;
         },
       );
@@ -352,7 +349,14 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       });
       const executionInputs: string[] = [];
       const semanticExecution: ExecutionOperation = vi.fn(
-        async (_models, selectedModel, context, options, factsSink) => {
+        async (
+          _models,
+          selectedModel,
+          context,
+          options,
+          factsSink,
+          observation,
+        ) => {
           executionInputs.push(
             JSON.stringify({
               model: {
@@ -366,15 +370,12 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
               },
             }),
           );
-          await options.onPayload?.(
-            {
-              model: selectedModel.id,
-              messages: context.messages,
-              max_tokens: options.maxTokens,
-              stream: true,
-            },
-            selectedModel,
-          );
+          observation?.providerRequest?.({
+            model: selectedModel.id,
+            messages: context.messages,
+            max_tokens: options.maxTokens,
+            stream: true,
+          });
           for (const attempt of trustedAttempts) factsSink?.attempt(attempt);
           throw new ExecutionFailure(
             "Pi execution failed with a trusted Provider fact",
@@ -548,7 +549,6 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
       expect(() => JSON.parse(invocationJson)).not.toThrow();
       expect(JSON.parse(invocationJson)).toEqual(expect.objectContaining({
         reasoning: expect.any(Object),
-        supplement: expect.any(Object),
         context: expect.any(Object),
         options: expect.any(Object),
         client: expect.any(Object),

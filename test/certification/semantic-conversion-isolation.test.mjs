@@ -108,8 +108,8 @@ test("Anthropic online certification has independent Provider-owned policies and
     }
     assert.doesNotMatch(entry, /runOpenAIResponsesOnlineSuite|runClaudeCliOnlineSuite/u);
   }
-  assert.match(entries.get("commandcode-private"), /tool-choice-degraded-fallbacks/u);
-  assert.match(entries.get("commandcode-private"), /structured-output-guidance-fallback/u);
+  assert.match(entries.get("commandcode-private"), /tool-choice-provider-owned-omission/u);
+  assert.match(entries.get("commandcode-private"), /structured-output-omitted/u);
   assert.match(entries.get("commandcode-private"), /reasoning-activation-degraded-fallbacks/u);
   assert.match(entries.get("commandcode-private"), /stop-sequence-omitted/u);
 

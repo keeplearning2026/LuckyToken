@@ -1,6 +1,6 @@
 import {
+  normalizeContext,
   type AssistantMessageEvent,
-  type Context,
   type FetchFunction,
   type Model,
 } from "@earendil-works/pi-ai";
@@ -29,9 +29,9 @@ function lifecycleModel(): Model<typeof commandCodePrivateApiId> {
   };
 }
 
-const lifecycleContext: Context = {
+const lifecycleContext = normalizeContext({
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
-};
+});
 
 function jsonl(events: readonly Record<string, unknown>[]): Response {
   return new Response(events.map((event) => JSON.stringify(event)).join("\n"));
@@ -50,9 +50,9 @@ it("converts and replays a committed mixed CommandCode response in order", async
     contextWindow: 100_000,
     maxTokens: 100,
   };
-  const context: Context = {
+  const context = normalizeContext({
     messages: [{ role: "user", content: "hello", timestamp: 1 }],
-  };
+  });
   const fetch: FetchFunction = async () =>
     new Response(
       [
@@ -220,7 +220,7 @@ it("carries Provider-local missing-result notices on the Pi terminal", async () 
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
-  const context: Context = {
+  const context = normalizeContext({
     messages: [
       {
         role: "assistant",
@@ -233,7 +233,7 @@ it("carries Provider-local missing-result notices on the Pi terminal", async () 
         timestamp: 1,
       },
     ],
-  };
+  });
   let requestBody: unknown;
   const fetch: FetchFunction = async (request) => {
     requestBody = JSON.parse(await new Request(request).text());

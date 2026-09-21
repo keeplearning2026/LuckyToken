@@ -372,7 +372,7 @@ describe("atomic HTTP failure delivery", () => {
           type: "toolCall",
           id: "call",
           name: "tool",
-          arguments: { invalid: BigInt(1) },
+          arguments: { invalid: BigInt(1) } as never,
         },
       ],
       stopReason: "toolUse",

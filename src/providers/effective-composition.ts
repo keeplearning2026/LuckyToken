@@ -27,9 +27,10 @@ import type {
  * Ticket 09 effective composition — the single owner of how valid
  * models.json configuration applies over the Pi built-in base catalog.
  *
- * The semantics mirror the repository-pinned Pi implementation
- * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts` in
- * `@earendil-works/pi-coding-agent` 0.84.2):
+ * The semantics mirror the vendored `pi-agent/` reference tree
+ * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts`, whose
+ * reference identity is `@earendil-works/pi-coding-agent` 0.84.2), not the
+ * runtime `@earendil-works/pi-ai@0.86.1` Provider execution dependency:
  *
  * - a custom Provider is created with the pinned required fields and
  *   defaults (`modelFromJson`): name falls back to id, reasoning to false,

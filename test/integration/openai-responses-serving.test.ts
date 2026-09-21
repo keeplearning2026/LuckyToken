@@ -992,9 +992,13 @@ describe("OpenAI Responses serving", () => {
     );
     expect(response.status).toBe(200);
     const json = (await response.json()) as Record<string, unknown>;
-    // tool_choice none removed the catalog entirely; no tool is echoed.
+    // Pi retains the neutral catalog while the explicit choice disables tool use.
+    // The hosted declaration is still omitted because Pi has no hosted-tool semantic.
     expect(json.tool_choice).toBe("none");
-    expect(json.tools).toEqual([]);
+    expect(json.tools).toEqual([
+      expect.objectContaining({ type: "function", name: "lookup" }),
+      expect.objectContaining({ type: "custom", name: "apply_patch" }),
+    ]);
   });
 
   it("echoes custom tools in the SDK CustomTool shape, never inventing input_schema", async () => {

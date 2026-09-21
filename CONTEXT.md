@@ -42,15 +42,15 @@ _Avoid_: Generic native passthrough
 The lane that translates Client Wire through Pi AI IR and a Pi Provider when model-visible semantics must cross different wire contracts.
 _Avoid_: Pi passthrough, protocol repair
 
-## Semantic Projection
+## Pi Semantic Boundary
 
-**Projection Candidate Fact**:
-A validated Client Protocol fact carried to final target selection without claiming that Pi or the target Provider has applied it. Its presence requires an explicit projection outcome, not an unconditional payload mutation.
-_Avoid_: Payload patch, mandatory override
+**Pi Common Intent**:
+A validated Client Protocol fact represented through public Pi `Context`, common options, or content fields without assuming how a selected Provider encodes or supports it.
+_Avoid_: Projection candidate, Provider payload hint
 
-**Projection Outcome**:
-The authoritative request-local disposition of one Projection Candidate Fact: already effective, target-projected, degraded, omitted, or failed.
-_Avoid_: Mutation result, warning flag
+**Provider Capability Disposition**:
+The selected Pi Provider's decision to apply, safely omit with a bounded notice, or reject a Pi common intent according to its real capabilities and validity constraints.
+_Avoid_: Client-side payload repair, target projection outcome
 
 ## Investigation
 

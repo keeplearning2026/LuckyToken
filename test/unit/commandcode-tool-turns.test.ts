@@ -1,4 +1,11 @@
-import type { Context, Model, ToolCall, Usage } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type Context,
+  type JsonObject,
+  type Model,
+  type ToolCall,
+  type Usage,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -30,7 +37,7 @@ const usage: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function toolCall(id: string, name: string, args: Record<string, unknown>): ToolCall {
+function toolCall(id: string, name: string, args: JsonObject): ToolCall {
   return { type: "toolCall", id, name, arguments: args };
 }
 
@@ -40,7 +47,7 @@ function requestMessages(
 ): unknown[] {
   const body = buildCommandCodeBody(
     model,
-    context,
+    normalizeContext(context),
     {},
     createEmptyServerConfig(),
     "00000000-0000-4000-8000-000000000021",
@@ -235,7 +242,11 @@ describe("CommandCode Pi tool-turn conversion", () => {
         ],
       });
 
-    expect(convertCall(toolCall("bad", "tool", { value: undefined }))).toThrow(
+    expect(
+      convertCall(
+        toolCall("bad", "tool", { value: undefined } as unknown as JsonObject),
+      ),
+    ).toThrow(
       "non-JSON value",
     );
     expect(
@@ -373,7 +384,7 @@ describe("CommandCode Pi tool-turn conversion", () => {
 
   it("uses the Provider request policy for synthetic result output type", () => {
     const messages = requestMessages(
-      {
+      normalizeContext({
         messages: [
           {
             role: "assistant",
@@ -386,7 +397,7 @@ describe("CommandCode Pi tool-turn conversion", () => {
             timestamp: 1,
           },
         ],
-      },
+      }),
       "error-text",
     );
 
@@ -409,7 +420,7 @@ describe("CommandCode Pi tool-turn conversion", () => {
   it("records missing-result repair as a non-model-visible Provider notice", () => {
     const built = buildCommandCodeBody(
       model,
-      {
+      normalizeContext({
         messages: [
           {
             role: "assistant",
@@ -422,7 +433,7 @@ describe("CommandCode Pi tool-turn conversion", () => {
             timestamp: 1,
           },
         ],
-      },
+      }),
       {},
       createEmptyServerConfig(),
       "00000000-0000-4000-8000-000000000021",

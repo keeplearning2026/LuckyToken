@@ -1,5 +1,5 @@
 import { providerPackage } from "@token/provider-commandcode-goat";
-import type { FetchFunction } from "@earendil-works/pi-ai";
+import { normalizeContext, type FetchFunction } from "@earendil-works/pi-ai";
 import { findUpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { describe, expect, it } from "vitest";
 
@@ -101,7 +101,7 @@ describe("CommandCode Goat Provider Package", () => {
     const result = await provider
       .streamSimple(
         model!,
-        {
+        normalizeContext({
           messages: [
             {
               role: "user",
@@ -109,7 +109,7 @@ describe("CommandCode Goat Provider Package", () => {
               timestamp: 1,
             },
           ],
-        },
+        }),
         { apiKey: "goat-secret", maxTokens: 32 },
       )
       .result();
@@ -151,9 +151,9 @@ describe("CommandCode Goat Provider Package", () => {
         createUuid: () => "00000000-0000-4000-8000-000000000104",
       },
     });
-    const context = {
+    const context = normalizeContext({
       messages: [{ role: "user" as const, content: "hello", timestamp: 1 }],
-    };
+    });
     const deepSeek = provider
       .getModels()
       .find((entry) => entry.id === "deepseek/deepseek-v4.1-flash");
@@ -230,7 +230,9 @@ describe("CommandCode Goat Provider Package", () => {
     const events = [];
     for await (const event of provider.streamSimple(
       model!,
-      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      normalizeContext({
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      }),
       { apiKey: "goat-secret", maxTokens: 32 },
     )) {
       events.push(event);

@@ -7,11 +7,6 @@ import { parseCommandCodeConfiguration } from "./configuration.js";
 import { COMMANDCODE_MODELS } from "./models.js";
 import { createCommandCodePrivateProvider } from "./provider.js";
 
-export { createCommandCodePrivateProvider } from "./provider.js";
-export type {
-  CommandCodeCompatibilityPolicy,
-  CommandCodePrivateProviderOptions,
-} from "./provider.js";
 export const providerPackage = Object.freeze({
   contractVersion: PROVIDER_PACKAGE_CONTRACT_VERSION,
   createProvider(input) {

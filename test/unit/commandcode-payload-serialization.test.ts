@@ -1,4 +1,9 @@
-import type { Context, FetchFunction, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type FetchFunction,
+  type Model,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -32,9 +37,9 @@ function model(): Model<typeof commandCodePrivateApiId> {
   };
 }
 
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
-};
+});
 const fetch: FetchFunction = async () => {
   throw new Error("preparation tests must not fetch");
 };

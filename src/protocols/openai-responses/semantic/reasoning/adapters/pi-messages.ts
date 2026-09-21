@@ -12,12 +12,10 @@ import {
   omitContinuity,
   sourceMatchesTarget,
 } from "./continuity-decisions.js";
-import { projectPiMessagesPayload } from "./payload.js";
 
 export const responsesToPiMessagesReasoningAdapter: ResponsesReasoningAdapter = Object.freeze({
   id: "pi-messages",
   api: "pi-messages",
-  projectPayload: projectPiMessagesPayload,
   prepareHistory(input: ResponsesReasoningHistoryPreparationInput) {
     if (!input.model.reasoning) {
       return fallback("target does not support reasoning");

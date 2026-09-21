@@ -86,7 +86,7 @@ describe("Anthropic atomic wire rendering", () => {
           type: "toolCall",
           id: "call",
           name: "tool",
-          arguments: { unsafe },
+          arguments: { unsafe } as never,
         },
       ],
       usage: {

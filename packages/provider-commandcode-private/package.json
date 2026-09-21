@@ -1,9 +1,11 @@
 {
   "name": "@token/provider-commandcode-private",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -15,8 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "0.84.2",
-    "@token/commandcode-model-catalog": "1.0.1",
-    "@token/provider-contract": "1.0.1"
+    "@earendil-works/pi-ai": "0.86.1",
+    "@token/commandcode-model-catalog": "1.0.3",
+    "@token/provider-contract": "1.0.3"
   }
 }

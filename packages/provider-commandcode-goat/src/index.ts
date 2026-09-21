@@ -16,8 +16,6 @@ function assertEmptyConfiguration(value: unknown, path: string): void {
   }
 }
 
-export { createCommandCodeGoatProvider } from "./provider.js";
-export type { CommandCodeGoatProviderOptions } from "./provider.js";
 export const providerPackage = Object.freeze({
   contractVersion: PROVIDER_PACKAGE_CONTRACT_VERSION,
   createProvider(input) {

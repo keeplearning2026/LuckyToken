@@ -8,9 +8,7 @@ import type {
 import type {
   ResponsesHistoricalReasoning,
   ResponsesReasoningContinuityAttachment,
-  ResponsesProjectionOutcome,
-  PreparedResponsesReasoning,
-  ResponsesReasoningProjectionResult,
+  ResponsesReasoningDisposition,
 } from "../contract.js";
 
 export interface ResponsesReasoningHistoryPreparationInput {
@@ -26,12 +24,12 @@ export type ResponsesReasoningHistoryPreparationDecision =
       readonly thinkingSignature?: string;
       readonly redacted?: true;
       readonly rebindAssistant: boolean;
-      readonly outcome: ResponsesProjectionOutcome;
+      readonly outcome: ResponsesReasoningDisposition;
     }
   | {
       readonly kind: "content-fallback";
       readonly reason: string;
-      readonly outcome: ResponsesProjectionOutcome;
+      readonly outcome: ResponsesReasoningDisposition;
     };
 
 export interface ResponsesReasoningContinuityPreparationInput {
@@ -46,11 +44,11 @@ export type ResponsesReasoningContinuityPreparationDecision =
       readonly field: "textSignature" | "thoughtSignature";
       readonly value: string;
       readonly rebindAssistant: boolean;
-      readonly outcome: ResponsesProjectionOutcome;
+      readonly outcome: ResponsesReasoningDisposition;
     }
   | {
       readonly kind: "omit";
-      readonly outcome: ResponsesProjectionOutcome;
+      readonly outcome: ResponsesReasoningDisposition;
     };
 
 export interface ResponsesReasoningAdapter {
@@ -62,9 +60,4 @@ export interface ResponsesReasoningAdapter {
   prepareContinuity?(
     input: ResponsesReasoningContinuityPreparationInput,
   ): ResponsesReasoningContinuityPreparationDecision;
-  projectPayload(input: {
-    readonly model: Model<string>;
-    readonly prepared: PreparedResponsesReasoning;
-    readonly payload: unknown;
-  }): ResponsesReasoningProjectionResult;
 }

@@ -6,7 +6,6 @@ import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 
 import type { AnthropicRequestRenderState } from "../request.js";
 import type { AnthropicReasoningSemantics } from "./reasoning/contract.js";
-import type { AnthropicProjectionSupplement } from "./supplement/contract.js";
 
 export interface AnthropicSemanticInvocation {
   readonly pi: {
@@ -14,7 +13,6 @@ export interface AnthropicSemanticInvocation {
     readonly options: ModelsSimpleStreamOptions;
   };
   readonly reasoning: AnthropicReasoningSemantics;
-  readonly supplement: AnthropicProjectionSupplement;
 }
 
 export interface AnthropicConversionResult {

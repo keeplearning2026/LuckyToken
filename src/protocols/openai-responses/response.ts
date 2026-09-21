@@ -1,4 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { ResponsesEchoToolChoice } from "./semantic/tool-choice.js";
+export type { ResponsesEchoToolChoice } from "./semantic/tool-choice.js";
 
 import {
   extractResponsesReasoning,
@@ -176,21 +178,6 @@ export interface ResponsesEchoCustomTool {
 export type ResponsesEchoTool =
   | ResponsesEchoFunctionTool
   | ResponsesEchoCustomTool;
-
-export type ResponsesEchoToolChoice =
-  | "auto"
-  | "none"
-  | "required"
-  | {
-      readonly type: "function" | "custom";
-      readonly name: string;
-    }
-  | {
-      readonly type: "allowed_tools";
-      readonly mode: "auto" | "required";
-      readonly tools: readonly Readonly<Record<string, unknown>>[];
-    }
-  | Readonly<Record<string, unknown>>;
 
 /**
  * Immutable Responses-owned render facts, frozen at request conversion and
@@ -615,7 +602,7 @@ function convertOutput(
       );
     }
     // A namespace-flattened declaration reverses to the SDK child identity.
-    // Pi 0.84.2 can also carry a namespace directly on ToolCall. When both
+    // Pi 0.86.1 can also carry a namespace directly on ToolCall. When both
     // authorities are present they must agree; choosing one would silently
     // rewrite tool identity.
     const reverse = namespaceReverse[name];

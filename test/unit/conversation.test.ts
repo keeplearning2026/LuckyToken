@@ -253,8 +253,12 @@ describe("Anthropic conversation conversion", () => {
       }),
       100,
     );
-    expect(remote.invocation.supplement.content).toContainEqual(
-      expect.objectContaining({ kind: "url-image-source", piRepresentation: "none" }),
+    expect(remote.invocation).not.toHaveProperty("supplement");
+    expect(remote.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "anthropic_unrepresentable_content_omitted",
+        action: "ignore",
+      }),
     );
     expect(() =>
       validateAnthropicSourceRequest({

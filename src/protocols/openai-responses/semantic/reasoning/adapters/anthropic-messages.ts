@@ -13,13 +13,11 @@ import {
   native,
   sourceMatchesTarget,
 } from "./continuity-decisions.js";
-import { projectAnthropicPayload } from "./payload.js";
 
 export const responsesToAnthropicMessagesReasoningAdapter: ResponsesReasoningAdapter =
   Object.freeze({
     id: "anthropic-messages",
     api: "anthropic-messages",
-    projectPayload: projectAnthropicPayload,
     prepareHistory(input: ResponsesReasoningHistoryPreparationInput) {
       if (!input.model.reasoning) {
         return fallback("target does not support reasoning");

@@ -1,7 +1,7 @@
-import type {
-  AssistantMessageEventStream,
-  Context,
-  Model,
+import {
+  normalizeContext,
+  type AssistantMessageEventStream,
+  type Model,
 } from "@earendil-works/pi-ai";
 import { streamSimple as streamAnthropicMessages } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as streamAzureOpenAIResponses } from "@earendil-works/pi-ai/api/azure-openai-responses";
@@ -17,9 +17,18 @@ import { describe, expect, it } from "vitest";
 
 import { captureFinalPiPayload } from "../support/pi-final-payload.js";
 
-const context: Context = {
+const context = normalizeContext({
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
-};
+});
+
+const toolContext = normalizeContext({
+  messages: [{ role: "user", content: "hello", timestamp: 1 }],
+  tools: [{
+    name: "lookup",
+    description: "Lookup",
+    parameters: { type: "object", properties: {} },
+  }],
+});
 
 function model<TApi extends string>(
   api: TApi,
@@ -180,6 +189,184 @@ const cases: readonly PayloadShapeCase[] = [
 
 describe("pinned Pi payload-shape certification", () => {
   it.each(cases)("certifies $api at the public onPayload seam", async (entry) => {
+    const payload = await captureFinalPiPayload(entry.start);
+
+    expect(payload).toMatchObject(entry.expected);
+  });
+
+  it.each([
+    {
+      api: "anthropic-messages rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamAnthropicMessages(model("anthropic-messages"), toolContext, {
+          apiKey: "test-only-key",
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+          onPayload,
+        }),
+      expected: {
+        tool_choice: {
+          type: "tool",
+          name: "lookup",
+          disable_parallel_tool_use: true,
+        },
+      },
+    },
+    {
+      api: "openai-completions rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamOpenAICompletions(model("openai-completions"), toolContext, {
+          apiKey: "test-only-key",
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+          onPayload,
+        }),
+      expected: {
+        tool_choice: { type: "function", function: { name: "lookup" } },
+        parallel_tool_calls: false,
+      },
+    },
+    {
+      api: "openai-responses rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamOpenAIResponses(model("openai-responses"), toolContext, {
+          apiKey: "test-only-key",
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+          onPayload,
+        }),
+      expected: {
+        tool_choice: { type: "function", name: "lookup" },
+        parallel_tool_calls: false,
+      },
+    },
+    {
+      api: "azure-openai-responses rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamAzureOpenAIResponses(
+          model("azure-openai-responses", "https://resource.openai.azure.com/openai"),
+          toolContext,
+          {
+            apiKey: "test-only-key",
+            toolChoice: { type: "tool", name: "lookup" },
+            parallelToolCalls: false,
+            onPayload,
+          },
+        ),
+      expected: {
+        tool_choice: { type: "function", name: "lookup" },
+        parallel_tool_calls: false,
+      },
+    },
+    {
+      api: "openai-codex-responses rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamOpenAICodexResponses(
+          model("openai-codex-responses", "https://chatgpt.com/backend-api/codex"),
+          toolContext,
+          {
+            apiKey: codexToken,
+            toolChoice: { type: "tool", name: "lookup" },
+            parallelToolCalls: false,
+            onPayload,
+          },
+        ),
+      expected: {
+        tool_choice: { type: "function", name: "lookup" },
+        parallel_tool_calls: false,
+      },
+    },
+    {
+      api: "google-generative-ai rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamGoogleGenerativeAI(model("google-generative-ai"), toolContext, {
+          apiKey: "test-only-key",
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+          onPayload,
+        }),
+      expected: {
+        config: {
+          toolConfig: {
+            functionCallingConfig: {
+              mode: "ANY",
+              allowedFunctionNames: ["lookup"],
+            },
+          },
+        },
+      },
+    },
+    {
+      api: "google-vertex rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamGoogleVertex(model("google-vertex"), toolContext, {
+          apiKey: "test-only-key",
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+          onPayload,
+        }),
+      expected: {
+        config: {
+          toolConfig: {
+            functionCallingConfig: {
+              mode: "ANY",
+              allowedFunctionNames: ["lookup"],
+            },
+          },
+        },
+      },
+    },
+    {
+      api: "mistral-conversations rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamMistralConversations(model("mistral-conversations"), toolContext, {
+          apiKey: "test-only-key",
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+          onPayload,
+        }),
+      expected: {
+        toolChoice: { type: "function", function: { name: "lookup" } },
+        parallelToolCalls: false,
+      },
+    },
+    {
+      api: "bedrock-converse-stream rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamBedrockConverse(
+          model(
+            "bedrock-converse-stream",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+          ),
+          toolContext,
+          {
+            env: { AWS_BEDROCK_SKIP_AUTH: "1", AWS_REGION: "us-east-1" },
+            toolChoice: { type: "tool", name: "lookup" },
+            parallelToolCalls: false,
+            onPayload,
+          },
+        ),
+      expected: {
+        toolConfig: { toolChoice: { tool: { name: "lookup" } } },
+      },
+    },
+    {
+      api: "pi-messages rich tool controls",
+      start: (onPayload: (payload: unknown) => never) =>
+        streamPiMessages(model("pi-messages"), toolContext, {
+          apiKey: "test-only-key",
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+          onPayload,
+        }),
+      expected: {
+        options: {
+          toolChoice: { type: "tool", name: "lookup" },
+          parallelToolCalls: false,
+        },
+      },
+    },
+  ])("maps $api inside the Pi Provider adapter", async (entry) => {
     const payload = await captureFinalPiPayload(entry.start);
 
     expect(payload).toMatchObject(entry.expected);

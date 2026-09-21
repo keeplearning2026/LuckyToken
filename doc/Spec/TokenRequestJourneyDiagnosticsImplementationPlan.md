@@ -119,10 +119,11 @@ For each lane, publish step entry immediately before owned work and step complet
 
 #### Semantic Conversion
 
-- Client Wire to Pi AI IR conversion and tool/resource lifecycle validation;
-- Pi invocation and trusted Pi Provider observations for Pi IR to Provider Wire;
-- Provider events to Pi IR terminal construction;
-- Pi IR to Client Wire projection and response encoding;
+- Client Wire to Pi `Context`/`ModelsSimpleStreamOptions` conversion and tool/resource lifecycle validation;
+- neutral execution invocation of `Models.streamSimple()` from the resolved Model, Pi `Context`, and Pi options;
+- Pi `Context` normalization to `TranscriptContext`, followed by the selected Pi Provider/API adapter's Provider request construction, transport, and response conversion;
+- Provider response to Pi `AssistantMessage` terminal construction;
+- Pi `AssistantMessage` to Client Wire response conversion and encoding;
 - distinct model work, client presentation, and P8 handoff outcomes.
 
 **Green gate:** a failure in one lane produces zero execution observations for the other two lanes, and diagnostics does not introduce a shared lane execution abstraction.

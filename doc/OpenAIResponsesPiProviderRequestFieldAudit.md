@@ -2,9 +2,11 @@
 
 Date: 2026-08-23
 
-Status: historical source/target evidence baseline captured before commit `3fdd8d2`; current ownership target is defined by the OpenAI Responses protocol specification and decoupling plan.
+Status: **SUPERSEDED historical source/target evidence baseline** captured before commit `3fdd8d2`. Current authority is `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md` and `doc/Spec/TokenOpenAIResponsesSemanticConversionArchitectureSpec.md`.
 
-Current correction: Semantic Conversion now uses demand-driven extraction. Historical target-capability evidence below remains useful, but a source field with no declared Responses consumer is not read or validated merely because it appears in the official request schema.
+Current boundary banner: the projector and Supplement architecture described below was the historical baseline. The current Pi 0.86.1 boundary deletes that architecture. The Responses converter maps consumed semantics only into Pi `Context` and neutral Pi common options; the selected Pi Provider/API adapter alone decides apply, omit-with-bounded-notice, or reject. The baseline prescriptions below are evidence, not current implementation instructions, and do not authorize a protocol-owned projector, registry, Supplement, source-protocol × target-API matrix, payload seam, or `onPayload`.
+
+Current correction: Semantic Conversion now uses demand-driven extraction. Historical target-capability evidence below remains useful, but a source field with no declared Responses consumer is not read or validated merely because it appears in the official request schema. The neutral common options now also include `toolChoice` and `parallelToolCalls`; statements below that call those fields absent from the common contract describe the audit baseline only.
 
 Scope: the pinned `pi-agent/packages/ai/src` implementation and the Token Semantic Conversion request path at the time of the audit. Re-audit final wire behavior after every Pi dependency upgrade.
 
@@ -12,31 +14,31 @@ Primary protocol source: the pinned official OpenAI TypeScript SDK 6.40.0.
 
 ## Conclusion
 
-At the audit baseline, Token had three correctness gaps that required high-priority correction:
+At the audit baseline, Token had three correctness gaps that required high-priority correction at that time:
 
 1. `text.format`, `parallel_tool_calls`, and `tool_choice: "required"` are silently lost on the Semantic Conversion path. `tool_choice` for a named function is also discarded, although a notice is emitted. The final Provider request therefore does not preserve the client's control semantics.
 2. Most target Providers already have a corresponding native request control for required/named tool choice. The main blocker is Pi's generic `SimpleStreamOptions → streamSimple()` contract, not universal Provider incapability.
-3. `top_p` currently reaches only the three OpenAI-compatible builders that apply `samplingParams`. `service_tier`, `truncation`, `text.*`, `parallel_tool_calls`, and most identity/cache controls have no typed generic projection. Blindly putting them in `samplingParams` works only in those builders and is not a cross-Provider solution.
+3. At the audit baseline, `top_p` reached only the three OpenAI-compatible builders that apply `samplingParams`. `service_tier`, `truncation`, `text.*`, `parallel_tool_calls`, and most identity/cache controls had no typed generic projection. Blindly putting them in `samplingParams` worked only in those builders and was not a cross-Provider solution.
 
 The baseline also had confirmed protocol-contract bugs at the Responses edge itself: the parser implemented an obsolete `tool_choice` allowed-list shape, accepted the wrong `prompt_cache_retention` spelling, rejected legal `null` values for `conversation`/`prompt`, collapsed absent reasoning and explicit `reasoning.effort:"none"`, and rendered requested/default controls rather than the controls that reached the final Provider request.
 
-Correctness must be evaluated at the final Provider request. A field parsed into a Token object or placed in `SimpleStreamOptions` is not supported unless the selected Pi adapter's final builder emits an equivalent Provider-wire control.
+At the audit baseline, correctness was evaluated at the final Provider request. A field parsed into a Token object or placed in `SimpleStreamOptions` was not supported unless the selected Pi adapter's final builder emitted an equivalent Provider-wire control. In the current boundary, the Client Protocol maps a consumed fact onto the neutral Pi contract and the Provider/API adapter owns final apply/omit/reject behavior.
 
 ## Sources and method
 
 The pinned OpenAI SDK defines `text`, `parallel_tool_calls`, `tool_choice`, `max_output_tokens`, `reasoning`, `service_tier`, `store`, `top_p`, and `truncation` as separate Responses request controls ([responses.d.ts:6129](../node_modules/openai/resources/responses/responses.d.ts#L6129), [responses.d.ts:6191](../node_modules/openai/resources/responses/responses.d.ts#L6191), [responses.d.ts:6213](../node_modules/openai/resources/responses/responses.d.ts#L6213), [responses.d.ts:6250](../node_modules/openai/resources/responses/responses.d.ts#L6250), [responses.d.ts:6267](../node_modules/openai/resources/responses/responses.d.ts#L6267), [responses.d.ts:6285](../node_modules/openai/resources/responses/responses.d.ts#L6285), [responses.d.ts:6302](../node_modules/openai/resources/responses/responses.d.ts#L6302), [responses.d.ts:6309](../node_modules/openai/resources/responses/responses.d.ts#L6309), [responses.d.ts:6317](../node_modules/openai/resources/responses/responses.d.ts#L6317), [responses.d.ts:6351](../node_modules/openai/resources/responses/responses.d.ts#L6351), [responses.d.ts:6359](../node_modules/openai/resources/responses/responses.d.ts#L6359)). In particular, `text.format.json_schema` is a required-output contract rather than a presentation hint ([responses.d.ts:2151](../node_modules/openai/resources/responses/responses.d.ts#L2151), [responses.d.ts:4925](../node_modules/openai/resources/responses/responses.d.ts#L4925)).
 
-Pi has ten built-in chat APIs ([types.ts:17](../pi-agent/packages/ai/src/types.ts#L17)). Token invokes them through `models.streamSimple()` ([execution.ts:119](../src/execution.ts#L119)), so the effective common contract is `SimpleStreamOptions`, not each adapter's richer direct `stream()` option type. The common contract contains `temperature`, `samplingParams`, `maxTokens`, cache retention/session ID, metadata, and reasoning/deferred controls, but no response format, parallel-tool flag, typed tool choice, top-p field, service tier, truncation, store, or background field ([types.ts:175](../pi-agent/packages/ai/src/types.ts#L175), [types.ts:303](../pi-agent/packages/ai/src/types.ts#L303)). `buildBaseOptions()` forwards only that named subset ([simple-options.ts:21](../pi-agent/packages/ai/src/api/simple-options.ts#L21)).
+Pi has ten built-in chat APIs ([types.ts:17](../pi-agent/packages/ai/src/types.ts#L17)). Token invokes them through `models.streamSimple()` ([execution.ts:119](../src/execution.ts#L119)), so the effective common contract is `SimpleStreamOptions`, not each adapter's richer direct `stream()` option type. At the audit baseline, the common contract contained `temperature`, `samplingParams`, `maxTokens`, cache retention/session ID, metadata, and reasoning/deferred controls, but no response format, parallel-tool flag, typed tool choice, top-p field, service tier, truncation, store, or background field ([types.ts:175](../pi-agent/packages/ai/src/types.ts#L175), [types.ts:303](../pi-agent/packages/ai/src/types.ts#L303)); the current Pi 0.86.1 contract adds neutral `toolChoice` and `parallelToolCalls`. `buildBaseOptions()` forwards only that named subset ([simple-options.ts:21](../pi-agent/packages/ai/src/api/simple-options.ts#L21)).
 
 `samplingParams` is intentionally applied only by OpenAI-compatible Completions, Responses, and Azure Responses adapters ([types.ts:181](../pi-agent/packages/ai/src/types.ts#L181)). It is an untyped body escape hatch, so this audit marks mappings that depend on it as **partial**, even when the final JSON key can be emitted.
 
-An `onPayload` callback is not counted as adapter support: it can replace any payload after construction and would merely move Provider-wire construction into the caller.
+At the audit baseline, an `onPayload` callback was not counted as adapter support: it could replace any payload after construction and would merely move Provider-wire construction into the caller. The current boundary forbids Client Protocol ownership of `onPayload`; the public hook remains available only for Provider tests, bounded diagnostics, and explicit low-level observation.
 
 Legend:
 
 - **T**: the typed `SimpleStreamOptions` path expresses the semantic and the final builder emits an equivalent target control.
 - **P**: partial: builder support is model-dependent/coarser, requires an adapter-specific direct option, or relies on the untyped `samplingParams` escape hatch.
-- **N**: no normal Pi option-to-builder mapping. Serializer-only support or a possible `onPayload` mutation does not qualify.
+- **N** (historical): no normal Pi option-to-builder mapping. Serializer-only support or a possible `onPayload` mutation did not qualify.
 
 ## Reference comparison: OpenCodex
 
@@ -50,9 +52,9 @@ For the same Responses request routed to an OpenAI Chat Completions wire, OpenCo
 
 It also demonstrates real non-OpenAI mappings that the current Pi generic path cannot reach: Responses required/named tool choice maps to Anthropic `any`/named `tool`, JSON Schema maps to Anthropic `output_config.format`, and a named Google choice maps to `ANY + allowedFunctionNames` ([anthropic.ts](../reference/opencodex/src/adapters/anthropic.ts#L967), [google.ts](../reference/opencodex/src/adapters/google.ts#L353)).
 
-OpenCodex is evidence, not a drop-in contract. It still degrades controls according to its own target capability tables, and some parser paths ignore malformed/unsupported format shapes. The applicable lesson is its information flow: retain a typed semantic control until the physical target is known, then let the Responses target adapter either emit an equivalent wire field, apply one named bounded degradation, or record an omission warning. Supplement unavailability is not itself a dispatch failure.
+OpenCodex is evidence, not a drop-in contract. It still degrades controls according to its own target capability tables, and some parser paths ignore malformed/unsupported format shapes. The applicable lesson is its information flow: retain a typed semantic control until the physical target is known, then let the target adapter either emit an equivalent wire field, apply one named bounded degradation, or record an omission warning. At the audit baseline, Supplement unavailability was not itself a dispatch failure; in the current boundary, the Pi Provider/API adapter owns that disposition and no Responses Supplement exists.
 
-## Matrix A: model-output and tool controls
+## Historical Matrix A: model-output and tool controls
 
 | Pi API | `text.format` | `parallel_tool_calls` | tool required | named function | `max_output_tokens` | `temperature` | `top_p` | reasoning effort | reasoning summary |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -67,16 +69,16 @@ OpenCodex is evidence, not a drop-in contract. It still degrades controls accord
 | `bedrock-converse-stream` | N | N | P | P | P | T | N | P | P |
 | `pi-messages` | N | N | P | P | T | T | N | T | N |
 
-### Matrix A limitations
+### Historical Matrix A limitations (superseded baseline)
 
 - `max_output_tokens → maxTokens` is not uniformly equivalent. `buildBaseOptions()` may lower the cap against Pi's context estimate, which still respects the caller's upper bound, but OpenAI Responses/Azure raise values below 16 instead of rejecting them ([simple-options.ts:12](../pi-agent/packages/ai/src/api/simple-options.ts#L12), [openai-responses.ts:296](../pi-agent/packages/ai/src/api/openai-responses.ts#L296), [azure-openai-responses.ts:292](../pi-agent/packages/ai/src/api/azure-openai-responses.ts#L292)). More seriously, the Anthropic and Bedrock `streamSimple()` paths treat `maxTokens` as visible-answer capacity and add a thinking budget, whereas Responses defines `max_output_tokens` as the combined reasoning-plus-visible ceiling ([simple-options.ts:61](../pi-agent/packages/ai/src/api/simple-options.ts#L61), [anthropic-messages.ts:840](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L840), [bedrock-converse-stream.ts:481](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L481)). Those mappings are partial when reasoning is enabled.
 - Anthropic drops `temperature` whenever extended thinking is enabled and for models whose compat says temperature is unsupported ([anthropic-messages.ts:1020](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L1020)).
 - Reasoning effort is intentionally approximate on token-budget and coarse-level Providers. Mistral collapses the generic levels to its model-specific prompt mode or `none|high` effort ([mistral-conversations.ts:190](../pi-agent/packages/ai/src/api/mistral-conversations.ts#L190), [mistral-conversations.ts:896](../pi-agent/packages/ai/src/api/mistral-conversations.ts#L896)); Google maps them to model-specific levels or budgets ([google-generative-ai.ts:311](../pi-agent/packages/ai/src/api/google-generative-ai.ts#L311)); Anthropic and Bedrock choose adaptive effort or budget thinking by model ([anthropic-messages.ts:828](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L828), [bedrock-converse-stream.ts:471](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L471)).
-- Bedrock's final reasoning builder currently emits `additionalModelRequestFields` only for Anthropic Claude model IDs; it returns `undefined` for other Bedrock models even when the generic reasoning option is present ([bedrock-converse-stream.ts:1111](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L1111), [bedrock-converse-stream.ts:1155](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L1155)).
+- Bedrock's final reasoning builder emitted `additionalModelRequestFields` only for Anthropic Claude model IDs at the audit baseline; it returned `undefined` for other Bedrock models even when the generic reasoning option was present ([bedrock-converse-stream.ts:1111](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L1111), [bedrock-converse-stream.ts:1155](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L1155)).
 - `reasoning.summary` has no common Pi request option. OpenAI Responses, Azure Responses, and Codex have direct `reasoningSummary` options, while Anthropic/Bedrock expose only the coarser `summarized|omitted` thinking display control ([openai-responses.ts:91](../pi-agent/packages/ai/src/api/openai-responses.ts#L91), [azure-openai-responses.ts:55](../pi-agent/packages/ai/src/api/azure-openai-responses.ts#L55), [openai-codex-responses.ts:72](../pi-agent/packages/ai/src/api/openai-codex-responses.ts#L72), [anthropic-messages.ts:230](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L230), [bedrock-converse-stream.ts:78](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L78)).
-- Responses reasoning has two distinct states that the current Pi invocation collapses: omitted reasoning means "use the selected model/API default", while `effort:"none"` is an explicit off request. Token converts both to absent `SimpleStreamOptions.reasoning`; `streamSimple()` then interprets absence differently by API, including explicitly disabling thinking for Anthropic and Google ([request.ts:674](../src/protocols/openai-responses/request.ts#L674), [anthropic-messages.ts:816](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L816), [google-generative-ai.ts:296](../pi-agent/packages/ai/src/api/google-generative-ai.ts#L296), [google-vertex.ts:313](../pi-agent/packages/ai/src/api/google-vertex.ts#L313)). This distinction needs a typed tri-state rather than omission plus a notice.
+- Responses reasoning has two distinct states that the audit-time Pi invocation collapsed: omitted reasoning means "use the selected model/API default", while `effort:"none"` is an explicit off request. Token converted both to absent `SimpleStreamOptions.reasoning`; `streamSimple()` then interpreted absence differently by API, including explicitly disabling thinking for Anthropic and Google ([request.ts:674](../src/protocols/openai-responses/request.ts#L674), [anthropic-messages.ts:816](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L816), [google-generative-ai.ts:296](../pi-agent/packages/ai/src/api/google-generative-ai.ts#L296), [google-vertex.ts:313](../pi-agent/packages/ai/src/api/google-vertex.ts#L313)). This distinction required a typed tri-state rather than omission plus a notice.
 
-## Matrix B: lifecycle, routing, cache, and identity controls
+## Historical Matrix B: lifecycle, routing, cache, and identity controls
 
 | Pi API | `truncation` | `service_tier` | prompt cache | Responses `metadata` | `user` / `safety_identifier` | `background` | `store` | `include` / `top_logprobs` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -91,24 +93,24 @@ OpenCodex is evidence, not a drop-in contract. It still degrades controls accord
 | `bedrock-converse-stream` | N | N | P | N | N | N | N | N |
 | `pi-messages` | N | N | P | N | N | N | N | N |
 
-### Matrix B limitations
+### Historical Matrix B limitations (superseded baseline)
 
 - The **P** entries for OpenAI Responses/Azure lifecycle controls mean only that `samplingParams` is merged into the final body. Pi does not expose Responses background/deferred lifecycle through those adapters, so emitting `background:true` is not a complete implementation. The generic `deferred` option is declared but no built-in API request builder consumes it ([types.ts:303](../pi-agent/packages/ai/src/types.ts#L303)).
 - Pi's prompt-cache abstraction is `cacheRetention + sessionId`; it is not an exact representation of `prompt_cache_key + prompt_cache_retention`. Anthropic/Bedrock add content cache markers; Mistral sends a prompt cache key and affinity header; OpenAI-family adapters derive the key from `sessionId` ([anthropic-messages.ts:963](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L963), [bedrock-converse-stream.ts:770](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L770), [mistral-conversations.ts:327](../pi-agent/packages/ai/src/api/mistral-conversations.ts#L327), [openai-responses.ts:284](../pi-agent/packages/ai/src/api/openai-responses.ts#L284)). Google builders ignore both common cache fields.
-- Retention duration is also not portable: Responses `"24h"` becomes Pi `"long"`, but Anthropic and Bedrock currently project `long` to one-hour cache markers. That may be a useful best effort, but it is not an exact 24-hour round trip and must be reported as a degradation rather than described as preserved.
+- Retention duration is also not portable: Responses `"24h"` becomes Pi `"long"`, but Anthropic and Bedrock projected `long` to one-hour cache markers at the audit baseline. That may be a useful best effort, but it is not an exact 24-hour round trip and must be reported as a degradation rather than described as preserved.
 - Responses `metadata` is response-object annotation/storage metadata. Token can echo it without sending it to the model Provider. It is not semantically interchangeable with Bedrock `requestMetadata`, which the Pi source defines as AWS cost-allocation tags ([bedrock-converse-stream.ts:90](../pi-agent/packages/ai/src/api/bedrock-converse-stream.ts#L90)).
 - `user`/`safety_identifier` is a stable end-user abuse/caching identity. Pi's only typed common carrier is `metadata`; Anthropic alone extracts `metadata.user_id` into its Provider request ([anthropic-messages.ts:1076](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L1076)). OpenAI-compatible builders can receive native identity keys only through `samplingParams`.
 - `include` and `top_logprobs` request response data that Pi IR and Token's Responses renderer do not generally represent. Merely injecting their request keys would not preserve the requested response contract, so they remain **N** except for wire-only OpenAI Responses/Azure partials.
 
-## Per-adapter evidence
+## Historical per-adapter evidence (superseded baseline)
 
 ### `anthropic-messages`
 
-The direct adapter supports `toolChoice: auto|any|none|{type:"tool",name}` ([anthropic-messages.ts:252](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L252)) and emits it as Anthropic `tool_choice` ([anthropic-messages.ts:1083](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L1083)). Thus Responses `required` can map to Anthropic `any`, and a named function can map to `{type:"tool",name}`. However, `streamSimple()` calls `buildBaseOptions()` and does not copy any tool choice, so Token's actual generic path cannot currently reach those fields ([anthropic-messages.ts:816](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L816)).
+The direct adapter supports `toolChoice: auto|any|none|{type:"tool",name}` ([anthropic-messages.ts:252](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L252)) and emits it as Anthropic `tool_choice` ([anthropic-messages.ts:1083](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L1083)). Thus Responses `required` can map to Anthropic `any`, and a named function can map to `{type:"tool",name}`. At the audit baseline, however, `streamSimple()` called `buildBaseOptions()` and did not copy any tool choice, so Token's generic path could not reach those fields ([anthropic-messages.ts:816](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L816)).
 
 Anthropic's pinned SDK supports `disable_parallel_tool_use` on `auto`, `any`, and named-tool choices ([messages.d.ts:1119](../node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts#L1119)), but Pi's option and builder never expose it. This is a demonstrated Pi adapter gap for `parallel_tool_calls:false`.
 
-The pinned Anthropic SDK also supports `output_config.format`, but Pi only writes `output_config.effort` for adaptive thinking and has no format option ([messages.d.ts:1908](../node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts#L1908), [anthropic-messages.ts:1045](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L1045)). Therefore structured text output is not currently mapped even though the upstream protocol can express it.
+The pinned Anthropic SDK also supports `output_config.format`, but the audit-time Pi adapter only wrote `output_config.effort` for adaptive thinking and had no format option ([messages.d.ts:1908](../node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts#L1908), [anthropic-messages.ts:1045](../pi-agent/packages/ai/src/api/anthropic-messages.ts#L1045)). Therefore structured text output was not mapped at that baseline even though the upstream protocol can express it.
 
 ### `openai-completions`
 
@@ -132,7 +134,7 @@ Azure maps max tokens, temperature, tools, reasoning, and prompt-cache key but h
 
 ### `openai-codex-responses`
 
-The direct adapter exposes reasoning effort/summary, service tier, text verbosity, and `auto|none|required` tool choice, but not named-tool choice ([openai-codex-responses.ts:72](../pi-agent/packages/ai/src/api/openai-codex-responses.ts#L72)). The builder hard-codes `store:false`, `parallel_tool_calls:true`, default `tool_choice:"auto"`, and `text.verbosity`, then conditionally emits temperature, service tier, and reasoning ([openai-codex-responses.ts:516](../pi-agent/packages/ai/src/api/openai-codex-responses.ts#L516)). It ignores `samplingParams` and, critically, never emits the `maxTokens` carried by `buildBaseOptions()`. Thus `max_output_tokens` is currently lost on this API.
+The direct adapter exposes reasoning effort/summary, service tier, text verbosity, and `auto|none|required` tool choice, but not named-tool choice ([openai-codex-responses.ts:72](../pi-agent/packages/ai/src/api/openai-codex-responses.ts#L72)). The builder hard-codes `store:false`, `parallel_tool_calls:true`, default `tool_choice:"auto"`, and `text.verbosity`, then conditionally emits temperature, service tier, and reasoning ([openai-codex-responses.ts:516](../pi-agent/packages/ai/src/api/openai-codex-responses.ts#L516)). It ignores `samplingParams` and, critically, never emitted the `maxTokens` carried by `buildBaseOptions()`. Thus `max_output_tokens` was lost on this API at the audit baseline.
 
 ChatGPT Codex explicitly rejects `store:true` ([openai-codex-responses.ts:1477](../pi-agent/packages/ai/src/api/openai-codex-responses.ts#L1477)). `parallel_tool_calls:false`, named tool choice, and `text.format` cannot be preserved by this builder.
 
@@ -158,13 +160,13 @@ The final command emits max tokens and temperature, model-specific reasoning fie
 
 The Pi Messages wire explicitly carries temperature, max tokens, reasoning, cache retention, session ID, and `auto|none|required|named-function` tool choice ([pi-messages.ts:31](../pi-agent/packages/ai/src/api/pi-messages.ts#L31), [pi-messages.ts:365](../pi-agent/packages/ai/src/api/pi-messages.ts#L365)). Its `streamSimple()` explicitly reads a runtime direct `toolChoice`, so this is achievable without changing that builder, but the property is still absent from the common TypeScript contract ([pi-messages.ts:421](../pi-agent/packages/ai/src/api/pi-messages.ts#L421)). No other audited Responses control is included in the Pi Messages request payload.
 
-## Token behavior and concrete losses
+## Historical Token behavior and concrete losses (superseded baseline)
 
-Token validates and constructs `ModelsSimpleStreamOptions` in the Responses client adapter ([request.ts:775](../src/protocols/openai-responses/request.ts#L775), [request.ts:2161](../src/protocols/openai-responses/request.ts#L2161)). The current behavior is:
+Token validates and constructs `ModelsSimpleStreamOptions` in the Responses client adapter ([request.ts:775](../src/protocols/openai-responses/request.ts#L775), [request.ts:2161](../src/protocols/openai-responses/request.ts#L2161)). The audit-time behavior was:
 
-| Responses field | Current Semantic Conversion behavior | Correctness assessment |
+| Responses field | Historical Semantic Conversion behavior | Historical correctness assessment |
 |---|---|---|
-| `text.format` | Never parsed or projected. | Silent loss of a required output-schema contract; the Responses module must carry it, project it when certified, and otherwise omit it with an explicit warning rather than silently losing it. |
+| `text.format` | Never parsed or projected. | Historical baseline expected the Responses module to carry it and project it when certified, otherwise omit it with an explicit warning. The current boundary deletes projection; the neutral semantic is preserved only where Pi can represent it and the Provider adapter owns apply/omit/reject. |
 | `parallel_tool_calls` | Never parsed; rendered response always says `true`. | Incorrect for client `false`; final Provider request and response echo both lose it ([response.ts:706](../src/protocols/openai-responses/response.ts#L706)). |
 | `tool_choice:"required"` | Parsed as `"required"`, but `applyToolChoiceFilter()` has no required branch, so it is silently omitted. | Critical semantic loss ([request.ts:726](../src/protocols/openai-responses/request.ts#L726), [request.ts:2099](../src/protocols/openai-responses/request.ts#L2099)). |
 | named `tool_choice` | Parsed as `forced`, then deliberately dropped with a degradation notice. | Avoidable loss for OpenAI Completions/Responses, Anthropic, Mistral, Bedrock, and Pi Messages targets, all of whose direct builders support a named tool. |
@@ -178,47 +180,47 @@ Token validates and constructs `ModelsSimpleStreamOptions` in the Responses clie
 | `prompt_cache_retention` | Maps `"in-memory"` and `"24h"` to Pi short/long. | Bug: pinned official SDK spells the first value `"in_memory"`; current code rejects the valid spelling and accepts the wrong one ([request.ts:864](../src/protocols/openai-responses/request.ts#L864), [responses.d.ts:6236](../node_modules/openai/resources/responses/responses.d.ts#L6236)). |
 | `metadata` | String entries are retained for local response echo. | Correct as response annotation, but not Provider metadata. Do not conflate it with model-visible semantics ([request.ts:2256](../src/protocols/openai-responses/request.ts#L2256)). |
 | `user` / `safety_identifier` | Mapped to `options.metadata.user_id`. | Reaches Anthropic only; silently ignored by other adapters ([request.ts:875](../src/protocols/openai-responses/request.ts#L875), [request.ts:2229](../src/protocols/openai-responses/request.ts#L2229)). |
-| `background` | Claimed by neither Responses request consumer. | The value remains unread, is excluded from the Supplement, and receives the bounded generic unconsumed-field warning; it does not block Provider dispatch. |
+| `background` | Claimed by neither Responses request consumer. | At the baseline, the value remained unread, was excluded from the now-deleted Supplement, and received the bounded generic unconsumed-field warning; it did not block Provider dispatch. |
 | `store` | Type-checked; Responses-owned session state applies local persistence policy rather than forwarding it to the model Provider. | Correct layer ownership for semantic conversion; this is not a Pi model request option ([session-state.ts:484](../src/protocols/openai-responses/session-state.ts#L484)). |
 | `conversation` / `prompt` | Claimed by neither Responses request consumer. | Their values remain unread and receive generic unconsumed-field warnings. A request containing only `prompt` still fails because the minimum consumed Pi input is missing, not because `prompt` is classified as unsupported. |
-| `include`, `text.verbosity` | Validated and retained as projection candidates because certified target mappings exist. | Correct Supplement ownership; an Adapter consumes only a proven target mapping and central disposition warns for an unconsumed candidate. |
+| `include`, `text.verbosity` | Validated and retained as projection candidates because certified target mappings exist. | Historical baseline only: this was Supplement ownership. The current boundary deletes the Supplement and projection candidates; unsupported optional facts are omitted with a bounded notice. |
 | `top_logprobs`, `context_management`, `stream_options` | Claimed by neither Responses request consumer. | Their values and nested shapes remain unread; each present top-level key receives the bounded generic unconsumed-field warning and cannot prevent dispatch by itself. |
 | hosted tools (`web_search`, `file_search`, `computer`, MCP, shell, etc.) | Most are skipped because Pi `Tool` represents caller-executed function/schema/grammar tools only. | Intentional capability degradation must be reported; a hosted Provider tool cannot be advertised as a locally executable Pi tool ([types.ts:480](../pi-agent/packages/ai/src/types.ts#L480), [request.ts:661](../src/protocols/openai-responses/request.ts#L661)). |
 
 The boundary correctly rejects malformed `max_output_tokens:0`. For a valid positive ceiling, certified target fields are preserved or repaired to no more than the Client value. Targets such as Codex that have no certified ceiling field retain availability by omitting the control with a warning; they are not rejected solely for that loss.
 
-## Confirmed Responses edge contract drift
+## Historical confirmed Responses edge contract drift
 
-These failures occur before Provider capability mapping and therefore need independent fixes:
+These failures occurred before Provider capability mapping and therefore needed independent fixes:
 
 - The official allowed-list choice is `{type:"allowed_tools", mode:"auto"|"required", tools:[...]}`. Token instead recognizes `{type:"allowed", allowed_tools:string[]}` and rejects the current SDK shape ([responses.d.ts:5866](../node_modules/openai/resources/responses/responses.d.ts#L5866), [request.ts:726](../src/protocols/openai-responses/request.ts#L726), [request.ts:806](../src/protocols/openai-responses/request.ts#L806)). It also cannot preserve `mode:"required"`.
-- The SDK permits omitted `input`; this is meaningful for an instructions-only request (and for stateful request forms). Token currently requires a string or array unconditionally ([responses.d.ts:6169](../node_modules/openai/resources/responses/responses.d.ts#L6169), [request.ts:786](../src/protocols/openai-responses/request.ts#L786)). If Token intends to require self-contained requests, it should still allow an explicit empty input or instructions-only form under a documented local contract rather than misreporting the SDK shape.
+- The SDK permits omitted `input`; this is meaningful for an instructions-only request (and for stateful request forms). At the audit baseline, Token required a string or array unconditionally ([responses.d.ts:6169](../node_modules/openai/resources/responses/responses.d.ts#L6169), [request.ts:786](../src/protocols/openai-responses/request.ts#L786)). If Token intends to require self-contained requests, it should still allow an explicit empty input or instructions-only form under a documented local contract rather than misreporting the SDK shape.
 - `metadata` must contain string values with the SDK's count/length bounds. Token silently removes non-string entries and does not enforce those bounds, converting an invalid request into a different valid response annotation instead of rejecting it ([shared.d.ts:134](../node_modules/openai/resources/shared.d.ts#L134), [request.ts:2257](../src/protocols/openai-responses/request.ts#L2257)).
-- The valid cache-retention value is `"in_memory"`; current tests enshrine the wrong `"in-memory"` spelling. This is a test/spec drift, not merely a missing feature.
+- The valid cache-retention value is `"in_memory"`; the audit-time tests enshrined the wrong `"in-memory"` spelling. This is a test/spec drift, not merely a missing feature.
 
 `ResponseCreateParamsBase` is the HTTP create surface audited here. Fields that exist only on a different Responses client-event/WebSocket shape must not be silently added to this contract.
 
-## Response-side fidelity
+## Historical response-side fidelity (superseded baseline)
 
-The endpoint's response currently cannot honestly report which controls took effect:
+At the audit baseline, the endpoint's response could not honestly report which controls took effect:
 
 - `parallel_tool_calls` is always rendered as `true`, including after a client requested `false` and the field was dropped ([response.ts:717](../src/protocols/openai-responses/response.ts#L717)).
 - `tool_choice` is narrowed to the three string choices and every object choice is normalized to `"auto"`, although the SDK Response union allows allowed-list and specified-tool objects ([responses.d.ts:778](../node_modules/openai/resources/responses/responses.d.ts#L778), [response.ts:159](../src/protocols/openai-responses/response.ts#L159), [response.ts:676](../src/protocols/openai-responses/response.ts#L676)).
 - `instructions` is always `null`; the converted top-level instruction is not echoed ([response.ts:713](../src/protocols/openai-responses/response.ts#L713)).
 - `temperature` and `top_p` are echoed from request-local render state even when the selected adapter removes or ignores them. For example, non-OpenAI adapters ignore `top_p`, but the Responses response can still claim it took effect.
-- `include` is not retained in render state, so the renderer cannot honor the requested optional-output projection. In particular, verified `reasoning.encrypted_content` is emitted whenever it is available, independently of whether the client requested that include ([response.ts:454](../src/protocols/openai-responses/response.ts#L454)).
+- `include` is not retained in render state, so the renderer cannot honor the requested optional-output selection. In particular, verified `reasoning.encrypted_content` is emitted whenever it is available, independently of whether the client requested that include ([response.ts:454](../src/protocols/openai-responses/response.ts#L454)).
 
-The response should be built from a small request-local record of the **effective final Provider controls**, not directly from raw client intent and hard-coded defaults. If a target has no equivalent and the conversion degrades with a warning, the response must not echo the dropped value as effective.
+At the audit baseline, the proposed response fix used a small request-local record of effective final Provider controls. The current boundary does not let the Responses protocol inspect the Provider payload; rendering must not claim a semantic that the Provider adapter reports as omitted or degraded.
 
-## Design implications
+## Historical design implications (superseded baseline)
 
-The coherent fix belongs to the OpenAI Responses vertical Semantic Conversion module, not to a global all-protocol semantic contract and not to a Provider-name switch inside the request parser.
+The proposal below belongs to the superseded baseline. The current coherent boundary keeps Responses semantics in the Responses converter as neutral Pi `Context`/options, delegates Provider capability disposal to Pi adapters, and does not create a second Provider-wire owner.
 
 1. Preserve typed Responses tool choice, parallel-tool, structured-output, sampling, reasoning, cache, identity, lifecycle, and response-contract facts in the Responses-owned Invocation.
 2. Keep Responses reasoning omission, explicit disable, enabled effort, summary preference, historical summary text, and opaque item continuity distinct.
-3. Let Responses-owned source-to-target projectors validate Pi-native mappings and project only certified final Provider fields through the Responses-owned payload seam.
-4. Keep operational and Client lifecycle facts under their actual Responses owners; do not force them into Pi IR or another Client Protocol's supplement.
+3. The superseded baseline proposed Responses-owned source-to-target projectors and a payload seam. The current boundary deletes both.
+4. Keep operational and Client lifecycle facts under their actual Responses owners; the current boundary does not carry them through a protocol Supplement or another Client Protocol's contract.
 5. Prove every enabled mapping with Client Responses Wire → final Provider Wire tests and full-history Provider response → Responses history → next Provider request tests.
-6. Keep the Responses Pi execution wrapper limited to payload-callback lifecycle mechanics; Responses field and target mapping policy remain in its sibling reasoning and projection modules.
+6. Keep the Responses execution path limited to neutral model invocation; it does not own payload-callback lifecycle mechanics or target mapping.
 
-Placing explicitly converted, allow-listed keys into `samplingParams` remains a narrow Pi path only for builders that demonstrably merge it. Never copy the whole Client body: the last-step merge can overwrite authoritative fields such as `model`, `input/messages`, `stream`, and `store`. No behavior in this audit is evidence that another Client Protocol should share Responses semantic contracts or projectors.
+At the baseline, placing explicitly converted, allow-listed keys into `samplingParams` was considered a narrow Pi path only for builders that demonstrably merge it. The current boundary does not hide neutral semantics in `samplingParams`, `metadata`, diagnostics, or untyped bags. No behavior in this audit is evidence that another Client Protocol should share Responses semantic contracts, projectors, or Supplements.

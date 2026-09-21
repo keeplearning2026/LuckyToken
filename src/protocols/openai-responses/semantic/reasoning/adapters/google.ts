@@ -12,13 +12,11 @@ import {
   omitContinuity,
   sourceMatchesTarget,
 } from "./continuity-decisions.js";
-import { projectGooglePayload } from "./payload.js";
 
 function adapter(api: "google-generative-ai" | "google-vertex"): ResponsesReasoningAdapter {
   return Object.freeze({
     id: api,
     api,
-    projectPayload: projectGooglePayload,
     prepareHistory(input: ResponsesReasoningHistoryPreparationInput) {
       if (!input.model.reasoning) {
         return fallback("target does not support reasoning");

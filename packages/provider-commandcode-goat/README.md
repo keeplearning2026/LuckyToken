@@ -10,3 +10,7 @@ register Anthropic Messages or OpenAI Responses adapters.
 The Provider owns an independent Pi credential slot. It does not import or
 reuse CommandCode Private request conversion, credentials, transport, or
 response handling.
+
+The package root exports only the versioned `providerPackage` registration
+contract. Its concrete Provider factory stays internal, and runtime callers use
+the registered Provider exclusively through Pi `Models`.

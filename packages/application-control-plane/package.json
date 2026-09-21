@@ -1,16 +1,22 @@
 {
   "name": "@token/application-control-plane",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
   "files": [
     "dist"
   ],
   "exports": {
-    "./control-plane": { "types": "./dist/control-plane.d.ts", "import": "./dist/control-plane.js" }
+    "./control-plane": {
+      "types": "./dist/control-plane.d.ts",
+      "import": "./dist/control-plane.js"
+    }
   },
   "dependencies": {
-    "@token/provider-contract": "1.0.1"
+    "@token/provider-contract": "1.0.3"
   },
-  "scripts": { "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json", "typecheck": "tsc -p tsconfig.json --noEmit" }
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
 }

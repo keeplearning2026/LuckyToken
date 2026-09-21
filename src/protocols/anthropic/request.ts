@@ -2,6 +2,7 @@ import type {
   AssistantMessage,
   Context,
   ImageContent,
+  JsonObject,
   Message,
   ModelsSimpleStreamOptions,
   TextContent,
@@ -31,21 +32,13 @@ import {
   type AnthropicContinuitySource,
 } from "./semantic/reasoning/continuity.js";
 import type {
-  AnthropicCandidateId,
-  AnthropicCacheControl,
-  AnthropicCaller,
-  AnthropicOutputFormat,
-  AnthropicPresence,
-  AnthropicProjectionSupplement,
-  ReadonlyJsonObject,
   AnthropicToolChoice,
-} from "./semantic/supplement/contract.js";
-import { anthropicCandidateId } from "./semantic/supplement/contract.js";
-import { immutableJsonObject } from "./semantic/supplement/immutable-json.js";
+} from "./semantic/source-semantics.js";
+import { immutableJsonObject } from "./semantic/immutable-json.js";
 import {
-  validateAnthropicSupplementContentBlock,
-  validateAnthropicSystemSupplementBlock,
-} from "./semantic/supplement/validation.js";
+  validateAnthropicSourceContentBlock,
+  validateAnthropicSystemSourceBlock,
+} from "./semantic/source-validation.js";
 
 export interface AnthropicRequestRenderState {
   readonly selector: string;
@@ -77,20 +70,10 @@ export interface ValidatedAnthropicSourceRequest {
   finalAssistantPrefill: boolean;
   stream: boolean;
   temperature?: number;
-  topP?: number;
-  topK?: number;
-  stopSequences?: string[];
   toolChoice?: AnthropicToolChoice;
-  outputFormat: AnthropicPresence<AnthropicOutputFormat>;
-  metadataUserId: AnthropicPresence<string>;
-  serviceTier: AnthropicPresence<"auto" | "standard_only">;
-  inferenceGeo: AnthropicPresence<string>;
-  container: AnthropicPresence<string>;
   systemPrompt?: string;
-  systemSource?: string | Array<Record<string, unknown>>;
   tools?: ValidatedAnthropicTool[];
-  cacheControl: AnthropicPresence<AnthropicCacheControl>;
-  unclaimedTopLevelKeys: readonly string[];
+  unclaimedJsonPaths: readonly string[];
 }
 
 export const SYNTHETIC_CLIENT_HISTORY_API = "Token-client-history";
@@ -110,6 +93,10 @@ export const MESSAGE_SYSTEM_DEGRADED_NOTICE_CODE =
   "anthropic_message_system_degraded";
 export const UNRESOLVED_TOOL_CALL_REPAIRED_NOTICE_CODE =
   "anthropic_unresolved_tool_call_repaired";
+export const UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE =
+  "anthropic_unrepresentable_content_omitted";
+export const CONTENT_METADATA_OMITTED_NOTICE_CODE =
+  "anthropic_content_metadata_omitted";
 
 const INCOMPLETE_TOOL_CALL_RESULT_TEXT =
   "No result — the tool call did not complete (interrupted or lost).";
@@ -121,18 +108,10 @@ const ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS = new Set([
   "system",
   "stream",
   "temperature",
-  "top_p",
-  "top_k",
   "tools",
   "tool_choice",
-  "stop_sequences",
   "thinking",
   "output_config",
-  "metadata",
-  "cache_control",
-  "inference_geo",
-  "service_tier",
-  "container",
 ]);
 const MAX_UNCLAIMED_REQUEST_FIELD_NOTICES = 8;
 
@@ -228,7 +207,7 @@ function requestNotice(
 }
 
 function validateOptionalFieldShapes(value: Record<string, unknown>): void {
-  const arrayFields = ["tools", "stop_sequences"] as const;
+  const arrayFields = ["tools"] as const;
   for (const name of arrayFields) {
     if (value[name] !== undefined && !Array.isArray(value[name])) {
       throw new InvalidRequest(`${name} must be an array when present`);
@@ -238,21 +217,13 @@ function validateOptionalFieldShapes(value: Record<string, unknown>): void {
     "tool_choice",
     "thinking",
     "output_config",
-    "metadata",
   ] as const;
   for (const name of objectFields) {
     if (value[name] !== undefined && !isRecord(value[name])) {
       throw new InvalidRequest(`${name} must be an object when present`);
     }
   }
-  if (
-    value.cache_control !== undefined &&
-    value.cache_control !== null &&
-    !isRecord(value.cache_control)
-  ) {
-    throw new InvalidRequest("cache_control must be an object or null when present");
-  }
-  const numericFields = ["temperature", "top_p"] as const;
+  const numericFields = ["temperature"] as const;
   for (const name of numericFields) {
     if (
       value[name] !== undefined &&
@@ -261,23 +232,8 @@ function validateOptionalFieldShapes(value: Record<string, unknown>): void {
       throw new InvalidRequest(`${name} must be a finite number when present`);
     }
   }
-  if (
-    value.top_k !== undefined &&
-    (!Number.isSafeInteger(value.top_k) || (value.top_k as number) < 0)
-  ) {
-    throw new InvalidRequest("top_k must be a non-negative safe integer");
-  }
   if (value.stream !== undefined && typeof value.stream !== "boolean") {
     throw new InvalidRequest("stream must be boolean when present");
-  }
-  for (const name of ["container", "inference_geo", "service_tier"] as const) {
-    if (
-      value[name] !== undefined &&
-      value[name] !== null &&
-      typeof value[name] !== "string"
-    ) {
-      throw new InvalidRequest(`${name} must be a string when present`);
-    }
   }
 }
 
@@ -296,21 +252,15 @@ function validateSystem(value: unknown): string | undefined {
     ) {
       throw new InvalidRequest("system blocks must be text blocks");
     }
-    validateAnthropicSystemSupplementBlock(block, `$.system[${index}]`);
+    validateAnthropicSystemSourceBlock(block, `$.system[${index}]`);
     texts.push(block.text);
   }
   return texts.join("\n");
 }
 
-function validateOutputConfig(value: unknown): {
-  effort: AnthropicEffortIntent;
-  format: AnthropicPresence<AnthropicOutputFormat>;
-} {
+function validateOutputConfig(value: unknown): AnthropicEffortIntent {
   if (value === undefined) {
-    return {
-      effort: { kind: "omitted" },
-      format: { kind: "omitted" },
-    };
+    return { kind: "omitted" };
   }
   if (!isRecord(value)) {
     throw new InvalidRequest("output_config must be an object when present");
@@ -336,46 +286,7 @@ function validateOutputConfig(value: unknown): {
     };
   }
 
-  const format = value.format;
-  let formatIntent: AnthropicPresence<AnthropicOutputFormat>;
-  if (format === undefined) {
-    formatIntent = { kind: "omitted" };
-  } else if (format === null) {
-    formatIntent = { kind: "explicit-null" };
-  } else if (
-    !isRecord(format) ||
-    format.type !== "json_schema" ||
-    !isRecord(format.schema)
-  ) {
-    throw new InvalidRequest(
-      "output_config.format must be null or a json_schema object",
-    );
-  } else {
-    formatIntent = {
-      kind: "specified",
-      value: {
-        kind: "json-schema",
-        schema: immutableJsonObject(
-          structuredClone(format.schema),
-          "$.output_config.format.schema",
-        ),
-      },
-    };
-  }
-  return { effort: effortIntent, format: formatIntent };
-}
-
-function validateMetadata(value: unknown): AnthropicPresence<string> {
-  if (value === undefined) return { kind: "omitted" };
-  if (!isRecord(value)) {
-    throw new InvalidRequest("metadata must be an object when present");
-  }
-  if (value.user_id === undefined) return { kind: "omitted" };
-  if (value.user_id === null) return { kind: "explicit-null" };
-  if (typeof value.user_id !== "string") {
-    throw new InvalidRequest("metadata.user_id must be a string when present");
-  }
-  return { kind: "specified", value: value.user_id };
+  return effortIntent;
 }
 
 function validateThinkingDisplay(value: unknown): AnthropicThinkingDisplayIntent {
@@ -429,53 +340,6 @@ function validateThinking(value: unknown): AnthropicThinkingActivation {
   throw new InvalidRequest(`thinking.type is not supported: ${type}`);
 }
 
-function validateCacheControl(
-  value: unknown,
-): AnthropicPresence<AnthropicCacheControl> {
-  if (value === undefined) return { kind: "omitted" };
-  if (value === null) return { kind: "explicit-null" };
-  if (!isRecord(value)) {
-    throw new InvalidRequest("cache_control must be an object when present");
-  }
-  if (value.type !== undefined && value.type !== "ephemeral") {
-    throw new InvalidRequest("cache_control.type must be ephemeral");
-  }
-  const ttl = value.ttl;
-  if (ttl === undefined) return { kind: "specified", value: {} };
-  if (ttl !== "5m" && ttl !== "1h") {
-    throw new InvalidRequest("cache_control.ttl must be 5m or 1h");
-  }
-  return { kind: "specified", value: { ttl } };
-}
-
-function validateNullableString(
-  value: Record<string, unknown>,
-  field: "container" | "inference_geo",
-): AnthropicPresence<string> {
-  const candidate = value[field];
-  if (candidate === undefined) return { kind: "omitted" };
-  if (candidate === null) return { kind: "explicit-null" };
-  return { kind: "specified", value: candidate as string };
-}
-
-function validateServiceTier(
-  value: unknown,
-): AnthropicPresence<"auto" | "standard_only"> {
-  if (value === undefined) return { kind: "omitted" };
-  if (value !== "auto" && value !== "standard_only") {
-    throw new InvalidRequest("service_tier must be auto or standard_only");
-  }
-  return { kind: "specified", value };
-}
-
-function validateStopSequences(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
-    throw new InvalidRequest("stop_sequences must be an array of strings");
-  }
-  return [...value] as string[];
-}
-
 function validateToolChoice(value: unknown): AnthropicToolChoice | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value) || typeof value.type !== "string") {
@@ -489,23 +353,28 @@ function validateToolChoice(value: unknown): AnthropicToolChoice | undefined {
     }
     return { kind: "none" };
   }
-  if (
-    value.disable_parallel_tool_use !== undefined &&
-    typeof value.disable_parallel_tool_use !== "boolean"
-  ) {
+  if (value.disable_parallel_tool_use !== undefined &&
+      typeof value.disable_parallel_tool_use !== "boolean") {
     throw new InvalidRequest(
       "tool_choice.disable_parallel_tool_use must be boolean",
     );
   }
   const disableParallelToolUse = value.disable_parallel_tool_use === true;
-  if (value.type === "auto" || value.type === "any") {
-    return { kind: value.type, disableParallelToolUse };
+  if (value.type === "auto") {
+    return { kind: "auto", disableParallelToolUse };
+  }
+  if (value.type === "any") {
+    return { kind: "any", disableParallelToolUse };
   }
   if (value.type === "tool") {
     if (typeof value.name !== "string" || value.name.length === 0) {
       throw new InvalidRequest("tool_choice.tool requires a non-empty name");
     }
-    return { kind: "named", name: value.name, disableParallelToolUse };
+    return {
+      kind: "named",
+      name: value.name,
+      disableParallelToolUse,
+    };
   }
   throw new InvalidRequest(`tool_choice.type is not supported: ${value.type}`);
 }
@@ -544,7 +413,7 @@ function validateMessages(
     const isAssistantTurn = message.role === "assistant";
     for (const [contentIndex, block] of message.content.entries()) {
       if (isRecord(block)) {
-        validateAnthropicSupplementContentBlock(
+        validateAnthropicSourceContentBlock(
           block,
           `$.messages[${messageIndex}].content[${contentIndex}]`,
         );
@@ -843,10 +712,8 @@ export function validateAnthropicSourceRequest(
   const messageFacts = validateMessages(messages);
   const tools = validateAnthropicTools(request.tools);
   const systemPrompt = validateSystem(request.system);
-  const metadataUserId = validateMetadata(request.metadata);
   const outputConfig = validateOutputConfig(request.output_config);
   const thinking = validateThinking(request.thinking);
-  const cacheControl = validateCacheControl(request.cache_control);
   if (
     thinking.kind === "enabled" &&
     thinking.budgetTokens >= (maxTokens as number)
@@ -861,7 +728,7 @@ export function validateAnthropicSourceRequest(
     maxTokens: maxTokens as number,
     reasoning: {
       activation: thinking,
-      effort: outputConfig.effort,
+      effort: outputConfig,
       history: [],
       continuity: [],
     },
@@ -871,44 +738,30 @@ export function validateAnthropicSourceRequest(
     stream: request.stream === true,
     finalAssistantPrefill:
       messageFacts.messages.at(-1)?.role === "assistant",
-    outputFormat: outputConfig.format,
-    metadataUserId,
-    serviceTier: validateServiceTier(request.service_tier),
-    inferenceGeo: validateNullableString(request, "inference_geo"),
-    container: validateNullableString(request, "container"),
-    cacheControl,
-    unclaimedTopLevelKeys: Object.freeze(
-      Object.keys(request)
+    unclaimedJsonPaths: Object.freeze([
+      ...Object.keys(request)
         .filter((key) => !ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS.has(key))
-        .slice(0, MAX_UNCLAIMED_REQUEST_FIELD_NOTICES),
-    ),
+        .slice(0, MAX_UNCLAIMED_REQUEST_FIELD_NOTICES)
+        .map((key) => `$.${key}`),
+      ...(isRecord(request.output_config) &&
+      Object.hasOwn(request.output_config, "format")
+        ? ["$.output_config.format"]
+        : []),
+    ]),
   };
   if (systemPrompt !== undefined) validated.systemPrompt = systemPrompt;
-  if (request.system !== undefined) {
-    validated.systemSource = structuredClone(
-      request.system as string | Array<Record<string, unknown>>,
-    );
-  }
   if (tools !== undefined) validated.tools = tools;
   if (request.temperature !== undefined) {
     validated.temperature = request.temperature as number;
   }
-  if (request.top_p !== undefined) {
-    validated.topP = request.top_p as number;
-  }
-  if (request.top_k !== undefined) {
-    validated.topK = request.top_k as number;
-  }
-  const stopSequences = validateStopSequences(request.stop_sequences);
-  if (stopSequences !== undefined) validated.stopSequences = stopSequences;
   const toolChoice = validateToolChoice(request.tool_choice);
-  if (toolChoice?.kind === "named") {
-    const exists = tools?.some((tool) => tool.name === toolChoice.name) === true;
-    if (!exists) {
-      throw new InvalidRequest(
-        `tool_choice named tool ${toolChoice.name} is not present in tools`,
-      );
-    }
+  if (
+    toolChoice?.kind === "named" &&
+    (tools === undefined || !tools.some((tool) => tool.name === toolChoice.name))
+  ) {
+    throw new InvalidRequest(
+      `tool_choice.tool names an undeclared tool: ${toolChoice.name}`,
+    );
   }
   if (toolChoice !== undefined) validated.toolChoice = toolChoice;
   return validated;
@@ -938,31 +791,25 @@ interface PendingToolCall {
   readonly name: string;
 }
 
-interface ConversationToolRepair {
-  readonly beforeMessageIndex: number;
-  readonly beforeContentIndex?: number;
-  readonly callId: string;
-}
-
 type ConvertedBlock =
   | TextContent
   | ThinkingContent
   | ImageContent
-  | { type: "toolUse"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "toolUse"; id: string; name: string; input: JsonObject }
   | {
       type: "toolResult";
       toolUseId: string;
       toolName: string;
       content: Array<TextContent | ImageContent>;
       isError: boolean;
-      addedToolNames?: string[];
     }
-  | { type: "transcript"; text: string }
-  | { type: "supplementOnly" };
+  | { type: "transcript"; text: string };
 
 function convertDocumentBlock(
   block: Record<string, unknown>,
-): ConvertedBlock {
+  notices: ConversionNotice[],
+  jsonPath: string,
+): ConvertedBlock | undefined {
   const source = block.source as Record<string, unknown>;
   if (source.type === "content") {
     if (typeof source.content === "string") {
@@ -971,21 +818,47 @@ function convertDocumentBlock(
     const texts = (source.content as Array<Record<string, unknown>>)
       .filter((entry) => entry.type === "text")
       .map((entry) => entry.text as string);
-    return texts.length === 0
-      ? { type: "supplementOnly" }
-      : { type: "text", text: texts.join("\n") };
+    if (texts.length === 0) {
+      notices.push(requestNotice(
+        UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE,
+        "ignore",
+        jsonPath,
+      ));
+      return undefined;
+    }
+    notices.push(requestNotice(
+      CONTENT_METADATA_OMITTED_NOTICE_CODE,
+      "degrade",
+      jsonPath,
+    ));
+    return { type: "text", text: texts.join("\n") };
   }
   if (source.type === "text") {
+    notices.push(requestNotice(
+      CONTENT_METADATA_OMITTED_NOTICE_CODE,
+      "degrade",
+      jsonPath,
+    ));
     return { type: "text", text: source.data as string };
   }
-  // URL/base64 documents are retained in the protocol-owned supplement.
-  // Pi IR must not fabricate visible text for bytes it did not resolve.
-  return { type: "supplementOnly" };
+  notices.push(requestNotice(
+    UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE,
+    "ignore",
+    jsonPath,
+  ));
+  return undefined;
 }
 
 function convertSearchResultBlock(
   block: Record<string, unknown>,
+  notices: ConversionNotice[],
+  jsonPath: string,
 ): ConvertedBlock {
+  notices.push(requestNotice(
+    CONTENT_METADATA_OMITTED_NOTICE_CODE,
+    "degrade",
+    jsonPath,
+  ));
   const title = block.title as string;
   const content = (block.content as Array<Record<string, unknown>>)
     .map((entry) => entry.text as string)
@@ -1006,6 +879,13 @@ function convertBlock(
 ): ConvertedBlock | undefined {
   switch (block.type) {
     case "text":
+      if (block.citations !== undefined || block.cache_control !== undefined) {
+        notices.push(requestNotice(
+          CONTENT_METADATA_OMITTED_NOTICE_CODE,
+          "ignore",
+          jsonPath,
+        ));
+      }
       return { type: "text", text: block.text as string };
     case "thinking": {
       const signature = block.signature as string;
@@ -1024,7 +904,21 @@ function convertBlock(
       };
     case "image": {
       const source = block.source as Record<string, unknown>;
-      if (source.type !== "base64") return { type: "supplementOnly" };
+      if (source.type !== "base64") {
+        notices.push(requestNotice(
+          UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE,
+          "ignore",
+          jsonPath,
+        ));
+        return undefined;
+      }
+      if (block.cache_control !== undefined) {
+        notices.push(requestNotice(
+          CONTENT_METADATA_OMITTED_NOTICE_CODE,
+          "ignore",
+          `${jsonPath}.cache_control`,
+        ));
+      }
       return {
         type: "image",
         mimeType: source.media_type as string,
@@ -1032,11 +926,21 @@ function convertBlock(
       };
     }
     case "tool_use":
+      if (block.cache_control !== undefined || block.caller !== undefined) {
+        notices.push(requestNotice(
+          CONTENT_METADATA_OMITTED_NOTICE_CODE,
+          "ignore",
+          jsonPath,
+        ));
+      }
       return {
         type: "toolUse",
         id: block.id as string,
         name: block.name as string,
-        input: block.input as Record<string, unknown>,
+        input: immutableJsonObject(
+          structuredClone(block.input as Record<string, unknown>),
+          `${jsonPath}.input`,
+        ),
       };
     case "tool_result": {
       const call = pendingCalls.find(
@@ -1049,7 +953,6 @@ function convertBlock(
       }
       const rawContent = block.content;
       const content: Array<TextContent | ImageContent> = [];
-      const addedToolNames: string[] = [];
       if (typeof rawContent === "string") {
         content.push({ type: "text", text: rawContent });
       } else if (Array.isArray(rawContent)) {
@@ -1064,8 +967,9 @@ function convertBlock(
                 `Unknown referenced tool name: ${candidate.tool_name}`,
               );
             }
-            addedToolNames.push(candidate.tool_name as string);
-            continue;
+            throw new InvalidRequest(
+              "tool_reference requires a mid-conversation tool update that Pi Context cannot represent",
+            );
           }
           const converted = convertBlock(
             candidate,
@@ -1088,17 +992,15 @@ function convertBlock(
         toolName: call.name,
         content,
         isError: block.is_error === true,
-        ...(addedToolNames.length === 0 ? {} : { addedToolNames }),
       };
     }
     case "document":
-      return convertDocumentBlock(block);
+      return convertDocumentBlock(block, notices, jsonPath);
     case "search_result":
-      return convertSearchResultBlock(block);
+      return convertSearchResultBlock(block, notices, jsonPath);
     case "document-resolver-required":
-      return convertDocumentBlock(block);
+      return convertDocumentBlock(block, notices, jsonPath);
     case "server_tool_use":
-      return { type: "supplementOnly" };
     case "web_search_tool_result":
     case "web_fetch_tool_result":
     case "code_execution_tool_result":
@@ -1106,7 +1008,12 @@ function convertBlock(
     case "text_editor_code_execution_tool_result":
     case "tool_search_tool_result":
     case "container_upload":
-      return { type: "supplementOnly" };
+      notices.push(requestNotice(
+        UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE,
+        "ignore",
+        jsonPath,
+      ));
+      return undefined;
     default:
       if (policy.unknownContent === "ignore") {
         notices.push(
@@ -1219,698 +1126,6 @@ function convertHistoricalAssistant(
   };
 }
 
-function withoutCandidateOnlyFields(
-  value: Record<string, unknown>,
-  path: string,
-): ReadonlyJsonObject {
-  const copied = structuredClone(value);
-  delete copied.token_continuity;
-  delete copied.cache_control;
-  return immutableJsonObject(copied, path);
-}
-
-const CONTENT_CONTAINER_TYPES = new Set([
-  "search_result",
-  "tool_result",
-  "web_search_tool_result",
-  "web_fetch_tool_result",
-  "code_execution_tool_result",
-  "bash_code_execution_tool_result",
-  "text_editor_code_execution_tool_result",
-  "tool_search_tool_result",
-]);
-
-function visitContentBlocks(
-  block: Record<string, unknown>,
-  visit: (candidate: Record<string, unknown>, nestedPath: readonly (string | number)[]) => void,
-  nestedPath: readonly (string | number)[] = [],
-): void {
-  visit(block, nestedPath);
-  const childArrays: Array<readonly [readonly (string | number)[], unknown[]]> = [];
-  if (CONTENT_CONTAINER_TYPES.has(String(block.type)) && Array.isArray(block.content)) {
-    childArrays.push([[...nestedPath, "content"], block.content]);
-  }
-  if (block.type === "document" && isRecord(block.source) && Array.isArray(block.source.content)) {
-    childArrays.push([[...nestedPath, "source", "content"], block.source.content]);
-  }
-  for (const [parentPath, children] of childArrays) {
-    children.forEach((child, childIndex) => {
-      if (!isRecord(child)) return;
-      visitContentBlocks(child, visit, [...parentPath, childIndex]);
-    });
-  }
-}
-
-function withoutContentCandidateOnlyFields(
-  value: Record<string, unknown>,
-  path: string,
-): ReadonlyJsonObject {
-  const copied = structuredClone(value);
-  if (copied.caller === undefined) delete copied.caller;
-  visitContentBlocks(copied, (candidate) => {
-    delete candidate.token_continuity;
-    delete candidate.cache_control;
-  });
-  return immutableJsonObject(copied, path);
-}
-
-function hasOnlyKeys(
-  value: Record<string, unknown>,
-  keys: readonly string[],
-): boolean {
-  const allowed = new Set(keys);
-  return Object.keys(value).every((key) => allowed.has(key));
-}
-
-function contentPiRepresentation(
-  block: Record<string, unknown>,
-): "partial" | "none" | undefined {
-  switch (block.type) {
-    case "text":
-      return hasOnlyKeys(block, ["type", "text", "token_continuity"])
-        ? undefined
-        : "partial";
-    case "thinking":
-      return hasOnlyKeys(block, [
-        "type",
-        "thinking",
-        "signature",
-        "token_continuity",
-      ])
-        ? undefined
-        : "partial";
-    case "redacted_thinking":
-      return hasOnlyKeys(block, ["type", "data", "token_continuity"])
-        ? undefined
-        : "partial";
-    case "image": {
-      const source = block.source as Record<string, unknown>;
-      return source.type === "base64" && hasOnlyKeys(block, ["type", "source"])
-        ? undefined
-        : source.type === "base64"
-          ? "partial"
-          : "none";
-    }
-    case "tool_use": {
-      const caller = block.caller;
-      const directCaller =
-        isRecord(caller) &&
-        caller.type === "direct" &&
-        hasOnlyKeys(caller, ["type"]);
-      return hasOnlyKeys(block, [
-        "type",
-        "id",
-        "name",
-        "input",
-        ...(directCaller ? ["caller"] : []),
-        "token_continuity",
-      ])
-        ? undefined
-        : "partial";
-    }
-    case "tool_result": {
-      if (!hasOnlyKeys(block, ["type", "tool_use_id", "content", "is_error"])) {
-        return "partial";
-      }
-      return Array.isArray(block.content) &&
-        block.content.some(
-          (nested) =>
-            isRecord(nested) &&
-            !["text", "image"].includes(nested.type as string),
-        )
-        ? "partial"
-        : undefined;
-    }
-    case "document": {
-      const source = block.source as Record<string, unknown>;
-      if (source.type === "text") return "partial";
-      if (source.type !== "content") return "none";
-      if (typeof source.content === "string") return "partial";
-      return (source.content as Array<Record<string, unknown>>).some(
-        (entry) => entry.type === "text",
-      )
-        ? "partial"
-        : "none";
-    }
-    case "search_result":
-      return "partial";
-    case "server_tool_use":
-    case "web_search_tool_result":
-    case "web_fetch_tool_result":
-    case "code_execution_tool_result":
-    case "bash_code_execution_tool_result":
-    case "text_editor_code_execution_tool_result":
-    case "tool_search_tool_result":
-    case "container_upload":
-      return "none";
-    default:
-      return undefined;
-  }
-}
-
-function buildContentSupplement(
-  request: ValidatedAnthropicSourceRequest,
-): AnthropicProjectionSupplement["content"] {
-  const content: AnthropicProjectionSupplement["content"][number][] = [];
-  for (const [sourceMessageIndex, message] of request.messages.entries()) {
-    if (!Array.isArray(message.content)) continue;
-    for (const [sourceContentIndex, candidate] of message.content.entries()) {
-      if (!isRecord(candidate)) continue;
-      const normalized = withoutContentCandidateOnlyFields(
-        candidate,
-        `$.messages[${sourceMessageIndex}].content[${sourceContentIndex}]`,
-      );
-      const piRepresentation = contentPiRepresentation(
-        normalized as Record<string, unknown>,
-      );
-      const idPrefix = `content[${sourceMessageIndex}:${sourceContentIndex}]`;
-      const source = Object.freeze({
-        kind: "message-content" as const,
-        messageIndex: sourceMessageIndex,
-        contentIndex: sourceContentIndex,
-      });
-      const messageAttachment = Object.freeze({
-        kind: "message-content" as const,
-        messageIndex: sourceMessageIndex,
-        contentIndex: sourceContentIndex,
-      });
-      const common = {
-        source,
-        sourceMessageIndex,
-        sourceContentIndex,
-        effectiveRole:
-          message.role === "assistant" ? "assistant" as const : "user" as const,
-      };
-      const block = normalized as Record<string, unknown>;
-      switch (block.type) {
-        case "text": {
-          if (!Object.hasOwn(block, "citations")) break;
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.citations`),
-            kind: "text-citations" as const,
-            piRepresentation: "partial" as const,
-            piAttachment: messageAttachment,
-            value: block.citations as readonly ReadonlyJsonObject[] | null,
-          }));
-          break;
-        }
-        case "image": {
-          const imageSource = block.source as ReadonlyJsonObject;
-          if (imageSource.type !== "url") break;
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.source`),
-            kind: "url-image-source" as const,
-            piRepresentation: "none" as const,
-            value: imageSource as { readonly type: "url"; readonly url: string },
-          }));
-          break;
-        }
-        case "document": {
-          const representation = piRepresentation ?? "none";
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.source`),
-            kind: "document-source" as const,
-            piRepresentation: representation,
-            ...(representation === "partial" ? { piAttachment: messageAttachment } : {}),
-            value: block.source as ReadonlyJsonObject,
-          }));
-          if (
-            Object.hasOwn(block, "citations") ||
-            Object.hasOwn(block, "context") ||
-            Object.hasOwn(block, "title")
-          ) {
-            content.push(Object.freeze({
-              ...common,
-              id: anthropicCandidateId(`${idPrefix}.metadata`),
-              kind: "document-metadata" as const,
-              piRepresentation: "none" as const,
-              value: Object.freeze({
-                ...(Object.hasOwn(block, "citations")
-                  ? { citations: block.citations as ReadonlyJsonObject | null }
-                  : {}),
-                ...(Object.hasOwn(block, "context")
-                  ? { context: block.context as string | null }
-                  : {}),
-                ...(Object.hasOwn(block, "title")
-                  ? { title: block.title as string | null }
-                  : {}),
-              }),
-            }));
-          }
-          break;
-        }
-        case "search_result":
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.searchResult`),
-            kind: "search-result" as const,
-            piRepresentation: "partial" as const,
-            piAttachment: messageAttachment,
-            value: normalized,
-          }));
-          break;
-        case "tool_use": {
-          if (!isRecord(block.caller) || block.caller.type === "direct") break;
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.caller`),
-            kind: "client-tool-use-caller" as const,
-            piRepresentation: "partial" as const,
-            piAttachment: Object.freeze({
-              kind: "tool-call" as const,
-              callId: block.id as string,
-            }),
-            value: block.caller as AnthropicCaller,
-          }));
-          break;
-        }
-        case "tool_result": {
-          if (!Array.isArray(block.content)) break;
-          const contentLength = block.content.length;
-          const richBlocks: Array<{
-            readonly contentIndex: number;
-            readonly piContentCount: 0 | 1;
-            readonly value: ReadonlyJsonObject;
-          }> = [];
-          const references: Array<{ readonly contentIndex: number; readonly toolName: string }> = [];
-          for (const [nestedIndex, nested] of block.content.entries()) {
-            if (!isRecord(nested)) continue;
-            if (nested.type === "tool_reference") {
-              references.push(Object.freeze({
-                contentIndex: nestedIndex,
-                toolName: nested.tool_name as string,
-              }));
-            } else if (nested.type !== "text" && nested.type !== "image") {
-              richBlocks.push(Object.freeze({
-                contentIndex: nestedIndex,
-                piContentCount:
-                  contentPiRepresentation(nested) === "partial" ? 1 : 0,
-                value: nested as ReadonlyJsonObject,
-              }));
-            }
-          }
-          const piAttachment = Object.freeze({
-            kind: "tool-result" as const,
-            callId: block.tool_use_id as string,
-          });
-          if (richBlocks.length > 0) {
-            content.push(Object.freeze({
-              ...common,
-              id: anthropicCandidateId(`${idPrefix}.richContent`),
-              kind: "rich-client-tool-result" as const,
-              piRepresentation: "partial" as const,
-              piAttachment,
-              value: Object.freeze({
-                contentLength,
-                blocks: Object.freeze(richBlocks),
-              }),
-            }));
-          }
-          for (const reference of references) {
-            content.push(Object.freeze({
-              ...common,
-              id: anthropicCandidateId(
-                `${idPrefix}.content[${reference.contentIndex}].toolReference`,
-              ),
-              kind: "tool-reference" as const,
-              piRepresentation: "partial" as const,
-              piAttachment,
-              value: Object.freeze({ contentLength, ...reference }),
-            }));
-          }
-          break;
-        }
-        case "server_tool_use":
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.serverUse`),
-            kind: "server-tool-use" as const,
-            piRepresentation: "none" as const,
-            value: normalized,
-          }));
-          break;
-        case "web_search_tool_result":
-        case "web_fetch_tool_result":
-        case "code_execution_tool_result":
-        case "bash_code_execution_tool_result":
-        case "text_editor_code_execution_tool_result":
-        case "tool_search_tool_result":
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.serverResult`),
-            kind: "server-tool-result" as const,
-            piRepresentation: "none" as const,
-            value: normalized,
-          }));
-          break;
-        case "container_upload":
-          content.push(Object.freeze({
-            ...common,
-            id: anthropicCandidateId(`${idPrefix}.fileId`),
-            kind: "container-upload" as const,
-            piRepresentation: "none" as const,
-            value: Object.freeze({ fileId: block.file_id as string }),
-          }));
-          break;
-      }
-    }
-  }
-  return Object.freeze(content);
-}
-
-function buildToolSupplement(
-  tools: readonly ValidatedAnthropicTool[] | undefined,
-): AnthropicProjectionSupplement["tools"] {
-  if (tools === undefined) return Object.freeze([]);
-  return Object.freeze(
-    tools.flatMap<AnthropicProjectionSupplement["tools"][number]>(
-      (tool, sourceToolIndex) => {
-      const source = Object.freeze({
-        kind: "tool-definition" as const,
-        toolIndex: sourceToolIndex,
-      });
-      if (tool.kind === "server") {
-        return [Object.freeze({
-          id: anthropicCandidateId(`tools[${sourceToolIndex}].serverDefinition`),
-          source,
-          sourceToolIndex,
-          name: tool.name,
-          toolKind: "server" as const,
-          kind: "server-tool-definition" as const,
-          piRepresentation: "none" as const,
-          value: withoutCandidateOnlyFields(
-            tool.source,
-            `$.tools[${sourceToolIndex}]`,
-          ),
-        })];
-      }
-
-      const piAttachment = Object.freeze({
-        kind: "tool-definition" as const,
-        toolName: tool.name,
-      });
-      const common = {
-        source,
-        piAttachment,
-        sourceToolIndex,
-        name: tool.name,
-        toolKind: "custom" as const,
-        piRepresentation: "partial" as const,
-      };
-      const candidates: AnthropicProjectionSupplement["tools"][number][] = [];
-      if (tool.source.allowed_callers !== undefined) {
-        candidates.push(Object.freeze({
-          ...common,
-          id: anthropicCandidateId(`tools[${sourceToolIndex}].allowedCallers`),
-          kind: "custom-tool-caller-policy" as const,
-          value: Object.freeze([...(tool.source.allowed_callers as string[])]) as readonly (
-            | "direct"
-            | "code_execution_20250825"
-            | "code_execution_20260120"
-          )[],
-        }));
-      }
-      if (tool.source.defer_loading !== undefined) {
-        candidates.push(Object.freeze({
-          ...common,
-          id: anthropicCandidateId(`tools[${sourceToolIndex}].deferLoading`),
-          kind: "custom-tool-deferred-loading" as const,
-          value: tool.source.defer_loading as boolean,
-        }));
-      }
-      if (tool.source.eager_input_streaming !== undefined) {
-        candidates.push(Object.freeze({
-          ...common,
-          id: anthropicCandidateId(`tools[${sourceToolIndex}].eagerInputStreaming`),
-          kind: "custom-tool-input-streaming" as const,
-          value: tool.source.eager_input_streaming as boolean | null,
-        }));
-      }
-      if (tool.source.input_examples !== undefined) {
-        candidates.push(Object.freeze({
-          ...common,
-          id: anthropicCandidateId(`tools[${sourceToolIndex}].inputExamples`),
-          kind: "custom-tool-input-examples" as const,
-          value: Object.freeze(
-            (tool.source.input_examples as Record<string, unknown>[]).map(
-              (example, exampleIndex) => immutableJsonObject(
-                example,
-                `$.tools[${sourceToolIndex}].input_examples[${exampleIndex}]`,
-              ),
-            ),
-          ),
-        }));
-      }
-        return candidates;
-      },
-    ),
-  );
-}
-
-function cacheValue(value: unknown): AnthropicCacheControl | null {
-  if (value === null) return null;
-  const source = value as Record<string, unknown>;
-  return Object.freeze(
-    source.ttl === undefined ? {} : { ttl: source.ttl as "5m" | "1h" },
-  );
-}
-
-function cacheCandidateId(
-  messageIndex: number,
-  contentIndex: number,
-  nestedPath: readonly (string | number)[],
-): AnthropicCandidateId {
-  const suffix = nestedPath.map((segment) =>
-    typeof segment === "number" ? `[${segment}]` : `.${segment}`
-  ).join("");
-  return anthropicCandidateId(
-    `content[${messageIndex}:${contentIndex}]${suffix}.cacheControl`,
-  );
-}
-
-function buildCacheSupplement(
-  request: ValidatedAnthropicSourceRequest,
-  ignoredContentBlocks: ReadonlySet<string>,
-): AnthropicProjectionSupplement["cache"] {
-  const cache: AnthropicProjectionSupplement["cache"][number][] = [];
-  if (request.cacheControl.kind !== "omitted") {
-    cache.push(Object.freeze({
-      id: anthropicCandidateId("cacheControl"),
-      kind: "cache-control" as const,
-      source: Object.freeze({ kind: "request" as const, path: "$.cache_control" }),
-      attachment: Object.freeze({ kind: "request" as const }),
-      value: request.cacheControl.kind === "explicit-null"
-        ? null
-        : Object.freeze({ ...request.cacheControl.value }),
-    }));
-  }
-  if (Array.isArray(request.systemSource)) {
-    for (const [blockIndex, block] of request.systemSource.entries()) {
-      if (!Object.hasOwn(block, "cache_control")) continue;
-      cache.push(Object.freeze({
-        id: anthropicCandidateId(`system[${blockIndex}].cacheControl`),
-        kind: "cache-control" as const,
-        source: Object.freeze({ kind: "system-block" as const, blockIndex }),
-        attachment: Object.freeze({ kind: "system-block" as const, blockIndex }),
-        value: cacheValue(block.cache_control),
-      }));
-    }
-  }
-  for (const [messageIndex, message] of request.messages.entries()) {
-    if (!Array.isArray(message.content)) continue;
-    for (const [contentIndex, block] of message.content.entries()) {
-      if (!isRecord(block)) continue;
-      if (ignoredContentBlocks.has(`${messageIndex}:${contentIndex}`)) continue;
-      visitContentBlocks(block, (candidate, nestedPath) => {
-        if (!Object.hasOwn(candidate, "cache_control")) return;
-        cache.push(Object.freeze({
-          id: cacheCandidateId(messageIndex, contentIndex, nestedPath),
-          kind: "cache-control" as const,
-          source: Object.freeze({
-            kind: "message-content" as const,
-            messageIndex,
-            contentIndex,
-            ...(nestedPath.length === 0
-              ? {}
-              : { nestedPath: Object.freeze([...nestedPath]) }),
-          }),
-          attachment: Object.freeze({
-            kind: "message-content" as const,
-            messageIndex,
-            contentIndex,
-            ...(nestedPath.length === 0
-              ? {}
-              : { nestedPath: Object.freeze([...nestedPath]) }),
-          }),
-          value: cacheValue(candidate.cache_control),
-        }));
-      });
-    }
-  }
-  for (const [toolIndex, tool] of (request.tools ?? []).entries()) {
-    if (!Object.hasOwn(tool.source, "cache_control")) continue;
-    cache.push(Object.freeze({
-      id: anthropicCandidateId(`tools[${toolIndex}].cacheControl`),
-      kind: "cache-control" as const,
-      source: Object.freeze({ kind: "tool-definition" as const, toolIndex }),
-      attachment: Object.freeze({ kind: "tool-definition" as const, toolIndex }),
-      value: cacheValue(tool.source.cache_control),
-    }));
-  }
-  return Object.freeze(cache);
-}
-
-function buildSystemSupplement(
-  request: ValidatedAnthropicSourceRequest,
-): AnthropicProjectionSupplement["system"] {
-  if (!Array.isArray(request.systemSource)) return Object.freeze([]);
-  return Object.freeze(request.systemSource.map((block, blockIndex) =>
-    Object.freeze({
-      id: anthropicCandidateId(`system[${blockIndex}]`),
-      kind: "structured-system-block" as const,
-      source: Object.freeze({ kind: "system-block" as const, blockIndex }),
-      blockIndex,
-      value: withoutCandidateOnlyFields(block, `$.system[${blockIndex}]`),
-    })
-  ));
-}
-
-function buildConversationLayout(
-  request: ValidatedAnthropicSourceRequest,
-  content: AnthropicProjectionSupplement["content"],
-  cache: AnthropicProjectionSupplement["cache"],
-  repairs: readonly ConversationToolRepair[],
-  ignoredContentBlocks: ReadonlySet<string>,
-): AnthropicProjectionSupplement["conversation"] {
-  const contentIds = new Map<string, AnthropicCandidateId[]>();
-  for (const candidate of content) {
-    const key = `${candidate.sourceMessageIndex}:${candidate.sourceContentIndex}`;
-    const ids = contentIds.get(key) ?? [];
-    ids.push(candidate.id);
-    contentIds.set(key, ids);
-  }
-  const cacheIds = new Map<string, AnthropicCandidateId[]>();
-  for (const candidate of cache) {
-    if (candidate.attachment.kind !== "message-content") continue;
-    const key = `${candidate.attachment.messageIndex}:${candidate.attachment.contentIndex}`;
-    const ids = cacheIds.get(key) ?? [];
-    ids.push(candidate.id);
-    cacheIds.set(key, ids);
-  }
-  const repairEntries = (
-    beforeMessageIndex: number,
-    beforeContentIndex: number | undefined,
-  ): AnthropicProjectionSupplement["conversation"]["messages"][number]["entries"] =>
-    Object.freeze(
-      repairs
-        .filter((repair) =>
-          repair.beforeMessageIndex === beforeMessageIndex &&
-          repair.beforeContentIndex === beforeContentIndex
-        )
-        .map((repair) => Object.freeze({
-          kind: "synthetic-tool-result" as const,
-          callId: repair.callId,
-          piAttachment: Object.freeze({
-            kind: "tool-result" as const,
-            callId: repair.callId,
-          }),
-          candidateIds: Object.freeze([]) as readonly [],
-        })),
-    );
-  let sawMessageSystem = false;
-  const messages: AnthropicProjectionSupplement["conversation"]["messages"][number][] = [];
-  for (const [sourceMessageIndex, message] of request.messages.entries()) {
-    const repairsBeforeMessage = repairEntries(sourceMessageIndex, undefined);
-    if (repairsBeforeMessage.length > 0) {
-      messages.push(Object.freeze({
-        sourceMessageIndex,
-        effectiveRole: "user" as const,
-        entries: repairsBeforeMessage,
-      }));
-    }
-
-    const firstMessageSystem = message.role === "system" && !sawMessageSystem;
-    if (message.role === "system") sawMessageSystem = true;
-    const sourceContent = message.content;
-    const entries: AnthropicProjectionSupplement["conversation"]["messages"][number]["entries"][number][] = [];
-    if (typeof sourceContent === "string") {
-      entries.push(...repairEntries(sourceMessageIndex, 0));
-      if (
-        !firstMessageSystem &&
-        !(message.role === "system" && sourceContent.length === 0) &&
-        sourceContent.trim().length > 0
-      ) {
-        entries.push(Object.freeze({
-          kind: "source-content" as const,
-          sourceContentIndex: 0,
-          piAttachment: Object.freeze({
-            kind: "message-content" as const,
-            messageIndex: sourceMessageIndex,
-            contentIndex: 0,
-          }),
-          candidateIds: Object.freeze([]) as readonly AnthropicCandidateId[],
-        }));
-      }
-    } else {
-      for (const [sourceContentIndex, block] of (
-        sourceContent as Array<Record<string, unknown>>
-      ).entries()) {
-        const key = `${sourceMessageIndex}:${sourceContentIndex}`;
-        if (ignoredContentBlocks.has(key)) continue;
-        entries.push(...repairEntries(sourceMessageIndex, sourceContentIndex));
-        if (firstMessageSystem && block.type === "text") continue;
-        if (
-          message.role === "system" &&
-          block.type === "text" &&
-          block.text === ""
-        ) continue;
-        const ids = [
-          ...(contentIds.get(key) ?? []),
-          ...(cacheIds.get(key) ?? []),
-        ];
-        const normalized = withoutContentCandidateOnlyFields(
-          block,
-          `$.messages[${sourceMessageIndex}].content[${sourceContentIndex}]`,
-        );
-        const representation = contentPiRepresentation(
-          normalized as Record<string, unknown>,
-        );
-        entries.push(Object.freeze({
-          kind: "source-content" as const,
-          sourceContentIndex,
-          ...(representation === "none"
-            ? {}
-            : {
-                piAttachment: Object.freeze({
-                  kind: "message-content" as const,
-                  messageIndex: sourceMessageIndex,
-                  contentIndex: sourceContentIndex,
-                }),
-              }),
-          candidateIds: Object.freeze(ids),
-        }));
-      }
-    }
-    if (entries.length === 0) continue;
-    messages.push(Object.freeze({
-      sourceMessageIndex,
-      effectiveRole: message.role === "assistant" ? "assistant" : "user",
-      entries: Object.freeze(entries),
-    }));
-  }
-  const repairsAfterHistory = repairEntries(request.messages.length, undefined);
-  if (repairsAfterHistory.length > 0) {
-    messages.push(Object.freeze({
-      sourceMessageIndex: request.messages.length,
-      effectiveRole: "user" as const,
-      entries: repairsAfterHistory,
-    }));
-  }
-  return Object.freeze({ messages: Object.freeze(messages) });
-}
 
 export function convertValidatedAnthropicRequest(
   request: ValidatedAnthropicSourceRequest,
@@ -1939,12 +1154,21 @@ export function convertValidatedAnthropicRequestWithPolicy(
       ),
     );
   }
-  for (const key of request.unclaimedTopLevelKeys) {
+  for (const jsonPath of request.unclaimedJsonPaths) {
     notices.push(requestNotice(
       UNCLAIMED_REQUEST_FIELD_NOTICE_CODE,
       "ignore",
-      `$.${key}`,
+      jsonPath,
     ));
+  }
+  for (const tool of request.tools ?? []) {
+    for (const jsonPath of tool.omittedJsonPaths) {
+      notices.push(requestNotice(
+        UNCLAIMED_REQUEST_FIELD_NOTICE_CODE,
+        "ignore",
+        jsonPath,
+      ));
+    }
   }
   const messages: Message[] = [];
   const reasoningHistory: AnthropicReasoningSemantics["history"][number][] = [];
@@ -1953,15 +1177,11 @@ export function convertValidatedAnthropicRequestWithPolicy(
     request.tools === undefined
       ? undefined
       : new Set(request.tools.map((tool) => tool.name));
+  const tools = convertAnthropicTools(request.tools);
   const pendingCalls: PendingToolCall[] = [];
   const seenClientCallIds = new Set<string>();
-  const conversationRepairs: ConversationToolRepair[] = [];
-  const ignoredContentBlocks = new Set<string>();
 
-  const pushRepairResults = (
-    jsonPath: string,
-    insertion: Omit<ConversationToolRepair, "callId">,
-  ): void => {
+  const pushRepairResults = (jsonPath: string): void => {
     if (pendingCalls.length === 0) return;
     for (const call of pendingCalls) {
       messages.push({
@@ -1972,10 +1192,6 @@ export function convertValidatedAnthropicRequestWithPolicy(
         content: [{ type: "text", text: INCOMPLETE_TOOL_CALL_RESULT_TEXT }],
         timestamp: receivedAt,
       });
-      conversationRepairs.push(Object.freeze({
-        ...insertion,
-        callId: call.id,
-      }));
       notices.push(
         requestNotice(
           UNRESOLVED_TOOL_CALL_REPAIRED_NOTICE_CODE,
@@ -2054,17 +1270,12 @@ export function convertValidatedAnthropicRequestWithPolicy(
         if (converted !== undefined) {
           blocks.push(converted);
           blockSourceIndexes.push(blockIndex);
-        } else {
-          ignoredContentBlocks.add(`${messageIndex}:${blockIndex}`);
         }
       }
     }
 
     if (role === "assistant") {
-      pushRepairResults(
-        `$.messages[${messageIndex}]`,
-        { beforeMessageIndex: messageIndex },
-      );
+      pushRepairResults(`$.messages[${messageIndex}]`);
       const assistant = convertHistoricalAssistant(
         blocks,
         request.selector,
@@ -2160,16 +1371,14 @@ export function convertValidatedAnthropicRequestWithPolicy(
     }
 
     const ordinary: Array<TextContent | ImageContent> = [];
-    const sourceContentWasEmpty = blocks.length === 0;
+    const sourceContentWasEmpty =
+      Array.isArray(rawContent) && rawContent.length === 0;
     const consumedResultIds = new Set<string>();
     let repairedMissingCalls = false;
-    const repairCallsMissingFromThisMessage = (sourceContentIndex: number): void => {
+    const repairCallsMissingFromThisMessage = (): void => {
       if (repairedMissingCalls) return;
       repairedMissingCalls = true;
-      pushRepairResults(
-        `$.messages[${messageIndex}]`,
-        { beforeMessageIndex: messageIndex, beforeContentIndex: sourceContentIndex },
-      );
+      pushRepairResults(`$.messages[${messageIndex}]`);
     };
     const flushOrdinary = (): void => {
       if (ordinary.length === 0) return;
@@ -2187,8 +1396,7 @@ export function convertValidatedAnthropicRequestWithPolicy(
       }
       ordinary.length = 0;
     };
-    for (const [convertedIndex, block] of blocks.entries()) {
-      const sourceContentIndex = Math.max(0, blockSourceIndexes[convertedIndex] ?? 0);
+    for (const block of blocks) {
       if (block.type === "toolResult") {
         flushOrdinary();
         if (consumedResultIds.has(block.toolUseId)) {
@@ -2212,14 +1420,11 @@ export function convertValidatedAnthropicRequestWithPolicy(
           content: block.content,
           isError: block.isError,
           timestamp: receivedAt,
-          ...(block.addedToolNames === undefined
-            ? {}
-            : { addedToolNames: block.addedToolNames }),
         };
         messages.push(result);
         pendingCalls.splice(callIndex, 1);
       } else if (block.type === "transcript") {
-        repairCallsMissingFromThisMessage(sourceContentIndex);
+        repairCallsMissingFromThisMessage();
         ordinary.push({ type: "text", text: block.text });
       } else if (block.type === "toolUse") {
         throw new InvalidRequest(
@@ -2229,16 +1434,14 @@ export function convertValidatedAnthropicRequestWithPolicy(
         throw new InvalidRequest(
           "thinking is valid only in an assistant turn",
         );
-      } else if (block.type === "supplementOnly") {
-        repairCallsMissingFromThisMessage(sourceContentIndex);
       } else {
-        repairCallsMissingFromThisMessage(sourceContentIndex);
+        repairCallsMissingFromThisMessage();
         ordinary.push(block);
       }
     }
     flushOrdinary();
     if (sourceContentWasEmpty) {
-      repairCallsMissingFromThisMessage(0);
+      repairCallsMissingFromThisMessage();
       if (sourceRole !== "system") {
         // An explicitly empty source user message is preserved as an empty
         // UserMessage (frozen grammar boundary). Compatibility system turns
@@ -2248,13 +1451,11 @@ export function convertValidatedAnthropicRequestWithPolicy(
     }
   }
 
-  pushRepairResults(
-    "$.messages",
-    { beforeMessageIndex: request.messages.length },
-  );
+  pushRepairResults("$.messages");
 
-  const tools = convertAnthropicTools(request.tools);
-  if (tools !== undefined) context.tools = tools;
+  if (tools !== undefined) {
+    context.tools = tools;
+  }
 
   const options: Partial<ModelsSimpleStreamOptions> = {
     maxTokens: request.maxTokens,
@@ -2262,11 +1463,30 @@ export function convertValidatedAnthropicRequestWithPolicy(
   if (request.temperature !== undefined) {
     options.temperature = request.temperature;
   }
-  const samplingParams: Record<string, unknown> = {};
-  if (request.topP !== undefined) samplingParams.top_p = request.topP;
-  if (request.topK !== undefined) samplingParams.top_k = request.topK;
-  if (Object.keys(samplingParams).length > 0) {
-    options.samplingParams = Object.freeze(samplingParams);
+  if (request.toolChoice !== undefined) {
+    switch (request.toolChoice.kind) {
+      case "auto":
+        options.toolChoice = "auto";
+        break;
+      case "none":
+        options.toolChoice = "none";
+        break;
+      case "any":
+        options.toolChoice = "required";
+        break;
+      case "named":
+        options.toolChoice = Object.freeze({
+          type: "tool",
+          name: request.toolChoice.name,
+        });
+        break;
+    }
+    if (
+      request.toolChoice.kind !== "none" &&
+      request.toolChoice.disableParallelToolUse
+    ) {
+      options.parallelToolCalls = false;
+    }
   }
   if (request.reasoning.activation.kind === "enabled") {
     const budget = request.reasoning.activation.budgetTokens;
@@ -2280,173 +1500,7 @@ export function convertValidatedAnthropicRequestWithPolicy(
     };
     options.thinkingBudgets = Object.freeze(budgets);
   }
-  if (request.metadataUserId.kind === "specified") {
-    options.metadata = Object.freeze({ user_id: request.metadataUserId.value });
-  }
 
-  const requestSource = (path: string) =>
-    Object.freeze({ kind: "request" as const, path });
-  const presenceValue = <T>(presence: AnthropicPresence<T>): T | null | undefined =>
-    presence.kind === "omitted"
-      ? undefined
-      : presence.kind === "explicit-null"
-        ? null
-        : presence.value;
-  const contentSupplement = buildContentSupplement(request);
-  const toolSupplement = buildToolSupplement(request.tools);
-  const cacheSupplement = buildCacheSupplement(request, ignoredContentBlocks);
-  const systemSupplement = buildSystemSupplement(request);
-  const outputFormat = presenceValue(request.outputFormat);
-  const metadataUserId = presenceValue(request.metadataUserId);
-  const serviceTier = presenceValue(request.serviceTier);
-  const inferenceGeo = presenceValue(request.inferenceGeo);
-  const container = presenceValue(request.container);
-  const controls: AnthropicProjectionSupplement["controls"] = Object.freeze({
-    outputTokenCeiling: Object.freeze({
-      id: anthropicCandidateId("maxTokens"),
-      kind: "output-token-ceiling" as const,
-      writer: "ceiling-verifier" as const,
-      source: requestSource("$.max_tokens"),
-      value: request.maxTokens,
-    }),
-    ...(request.temperature === undefined
-      ? {}
-      : {
-          temperature: Object.freeze({
-            id: anthropicCandidateId("sampling.temperature"),
-            kind: "pi-verification" as const,
-            writer: "pi-verifier" as const,
-            source: requestSource("$.temperature"),
-            value: request.temperature,
-          }),
-        }),
-    ...(request.topP === undefined
-      ? {}
-      : {
-          topP: Object.freeze({
-            id: anthropicCandidateId("sampling.topP"),
-            kind: "pi-first-projection" as const,
-            writer: "pi-first-projector" as const,
-            source: requestSource("$.top_p"),
-            value: request.topP,
-          }),
-        }),
-    ...(request.topK === undefined
-      ? {}
-      : {
-          topK: Object.freeze({
-            id: anthropicCandidateId("sampling.topK"),
-            kind: "pi-first-projection" as const,
-            writer: "pi-first-projector" as const,
-            source: requestSource("$.top_k"),
-            value: request.topK,
-          }),
-        }),
-    ...(request.stopSequences === undefined
-      ? {}
-      : {
-          stopSequences: Object.freeze({
-            id: anthropicCandidateId("stopSequences"),
-            kind: "target-projection" as const,
-            writer: "target-projector" as const,
-            source: requestSource("$.stop_sequences"),
-            value: Object.freeze([...request.stopSequences]),
-          }),
-        }),
-    ...(request.toolChoice === undefined
-      ? {}
-      : {
-          toolChoice: Object.freeze({
-            id: anthropicCandidateId("toolChoice"),
-            kind: "tool-choice" as const,
-            writer: "target-projector" as const,
-            source: requestSource("$.tool_choice"),
-            value: Object.freeze({ ...request.toolChoice }),
-          }),
-        }),
-    ...(outputFormat === undefined
-      ? {}
-      : {
-          outputFormat: Object.freeze({
-            id: anthropicCandidateId("outputFormat"),
-            kind: "target-projection" as const,
-            writer: "target-projector" as const,
-            source: requestSource("$.output_config.format"),
-            value: outputFormat === null
-              ? null
-              : Object.freeze({ ...outputFormat }),
-          }),
-        }),
-    ...(metadataUserId === undefined
-      ? {}
-      : {
-          metadataUserId: Object.freeze({
-            id: anthropicCandidateId("metadataUserId"),
-            kind: "pi-first-projection" as const,
-            writer: "pi-first-projector" as const,
-            source: requestSource("$.metadata.user_id"),
-            value: metadataUserId,
-          }),
-        }),
-    ...(serviceTier === undefined
-      ? {}
-      : {
-          serviceTier: Object.freeze({
-            id: anthropicCandidateId("serviceTier"),
-            kind: "target-projection" as const,
-            writer: "target-projector" as const,
-            source: requestSource("$.service_tier"),
-            value: serviceTier,
-          }),
-        }),
-    ...(inferenceGeo === undefined
-      ? {}
-      : {
-          inferenceGeo: Object.freeze({
-            id: anthropicCandidateId("inferenceGeo"),
-            kind: "target-projection" as const,
-            writer: "target-projector" as const,
-            source: requestSource("$.inference_geo"),
-            value: inferenceGeo,
-          }),
-        }),
-    ...(container === undefined
-      ? {}
-      : {
-          container: Object.freeze({
-            id: anthropicCandidateId("container"),
-            kind: "target-projection" as const,
-            writer: "target-projector" as const,
-            source: requestSource("$.container"),
-            value: container,
-          }),
-        }),
-    ...(request.finalAssistantPrefill
-      ? {
-          finalAssistantPrefill: Object.freeze({
-            id: anthropicCandidateId("finalAssistantPrefill"),
-            kind: "target-projection" as const,
-            writer: "target-projector" as const,
-            source: requestSource("$.messages"),
-            value: true as const,
-          }),
-        }
-      : {}),
-  });
-  const supplement: AnthropicProjectionSupplement = Object.freeze({
-    controls,
-    system: systemSupplement,
-    conversation: buildConversationLayout(
-      request,
-      contentSupplement,
-      cacheSupplement,
-      conversationRepairs,
-      ignoredContentBlocks,
-    ),
-    content: contentSupplement,
-    tools: toolSupplement,
-    cache: cacheSupplement,
-  });
   const reasoning: AnthropicReasoningSemantics = Object.freeze({
     activation: request.reasoning.activation,
     effort: request.reasoning.effort,
@@ -2459,7 +1513,6 @@ export function convertValidatedAnthropicRequestWithPolicy(
     invocation: {
       pi: { context, options },
       reasoning,
-      supplement,
     },
     client: {
       renderState: {

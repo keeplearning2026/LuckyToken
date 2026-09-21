@@ -1824,22 +1824,23 @@ describe("16: every known Responses tool-definition family", () => {
     expect(serialized).not.toContain("authorization");
   });
 
-  it("preserves SDK name-less shell/apply_patch forced tool choices for projection", () => {
+  it("omits SDK hosted tool controls that have no neutral Pi representation", () => {
     for (const choice of [{ type: "shell" }, { type: "apply_patch" }]) {
       const invocation = convertResponsesRequest(
         { model: "m", input: "x", tool_choice: choice },
         1,
         policy(),
       );
-      expect(invocation.invocation.pi.context.tools).toBeUndefined();
-      expect(invocation.invocation.supplement.tools?.choice).toEqual({
-        value: { kind: "hosted", toolType: choice.type },
-      });
-      expect(invocation.client.notices).toEqual([]);
+      expect(invocation.invocation.pi.options.toolChoice).toBeUndefined();
+      expect(invocation.client.notices).toContainEqual(expect.objectContaining({
+        code: "openai-responses_tool_choice_omitted",
+        jsonPath: "$.tool_choice",
+        action: "ignore",
+      }));
     }
   });
 
-  it("preserves a declared-client mcp forced tool choice for projection", () => {
+  it("omits a declared-client MCP control that Pi cannot express neutrally", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -1854,16 +1855,12 @@ describe("16: every known Responses tool-definition family", () => {
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["db_query"]);
-    expect(invocation.invocation.supplement.tools?.choice).toEqual({
-      value: {
-        kind: "hosted",
-        toolType: "mcp",
-        serverLabel: "db-server",
-        name: "db_query",
-      },
-    });
-    expect(invocation.client.notices).toEqual([]);
+    expect(invocation.invocation.pi.options.toolChoice).toBeUndefined();
+    expect(invocation.client.notices).toContainEqual(expect.objectContaining({
+      code: "openai-responses_tool_choice_omitted",
+      jsonPath: "$.tool_choice",
+      action: "ignore",
+    }));
   });
 
   it("errors on a forced tool choice depending on any dropped hosted tool", () => {
@@ -1884,7 +1881,7 @@ describe("16: every known Responses tool-definition family", () => {
           1,
           policy(),
         ),
-      ).toThrow(/unavailable tool/);
+      ).toThrow(/undeclared tool/u);
     }
   });
 
@@ -1900,7 +1897,7 @@ describe("16: every known Responses tool-definition family", () => {
         1,
         policy(),
       ),
-    ).toThrow(/unavailable tool|requires/);
+    ).toThrow(/undeclared tool/u);
   });
 
   it("keeps known malformed and future unknown distinct", () => {

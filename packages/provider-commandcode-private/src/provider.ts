@@ -1,15 +1,21 @@
 import {
+  collapseSystemMessages,
   createAssistantMessageEventStream,
   createProvider,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   getSupportedThinkingLevels,
+  withoutInitialSystemMessage,
   type AssistantMessageEventStream,
-  type Context,
   type FetchFunction,
+  type Message,
   type Model,
   type ModelThinkingLevel,
   type Provider,
   type SimpleStreamOptions,
   type StreamFunction,
+  type Tool,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
@@ -112,7 +118,7 @@ interface CommandCodeMessageConversion {
 
 function convertCommandCodeMessageHistory(
   model: Model<typeof API_ID>,
-  context: Context,
+  messages: readonly Message[],
   policy: CommandCodeRequestConversionPolicy = DEFAULT_REQUEST_CONVERSION_POLICY,
 ): CommandCodeMessageConversion {
   const converted: Array<Record<string, unknown>> = [];
@@ -137,7 +143,7 @@ function convertCommandCodeMessageHistory(
     pending = new Map();
   };
 
-  for (const message of context.messages) {
+  for (const message of messages) {
     if (message.role === "toolResult") {
       const call = pending.get(message.toolCallId);
       if (call === undefined) {
@@ -168,6 +174,12 @@ function convertCommandCodeMessageHistory(
     }
 
     flushMissingResults();
+
+    if (message.role === "system") {
+      throw new Error(
+        "CommandCode message conversion requires collapsed system messages",
+      );
+    }
 
     if (message.role === "user") {
       const content =
@@ -230,10 +242,15 @@ function convertCommandCodeMessageHistory(
 
 export function convertCommandCodeMessages(
   model: Model<typeof API_ID>,
-  context: Context,
+  context: TranscriptContext,
   policy: CommandCodeRequestConversionPolicy = DEFAULT_REQUEST_CONVERSION_POLICY,
 ): Array<Record<string, unknown>> {
-  return convertCommandCodeMessageHistory(model, context, policy).messages;
+  const collapsed = collapseSystemMessages(context);
+  return convertCommandCodeMessageHistory(
+    model,
+    withoutInitialSystemMessage(collapsed.messages),
+    policy,
+  ).messages;
 }
 
 interface CommandCodeToolConversion {
@@ -242,7 +259,7 @@ interface CommandCodeToolConversion {
 }
 
 function convertCommandCodeToolCatalog(
-  tools: Context["tools"],
+  tools: readonly Tool[] | undefined,
 ): CommandCodeToolConversion {
   const notices: ConversionNotice[] = [];
   const converted = (tools ?? []).map((tool, index) => {
@@ -277,7 +294,7 @@ function convertCommandCodeToolCatalog(
 }
 
 export function convertCommandCodeTools(
-  tools: Context["tools"],
+  tools: readonly Tool[] | undefined,
 ): Array<Record<string, unknown>> {
   return convertCommandCodeToolCatalog(tools).tools;
 }
@@ -296,6 +313,39 @@ function mappedReasoningLevel(
     : undefined;
 }
 
+function commandCodeToolControlNotices(
+  options: SimpleStreamOptions | undefined,
+): readonly ConversionNotice[] {
+  const notices: ConversionNotice[] = [];
+  if (
+    options?.toolChoice === "required" ||
+    (typeof options?.toolChoice === "object" &&
+      options.toolChoice.type === "tool")
+  ) {
+    notices.push(
+      Object.freeze({
+        adapter: PROVIDER_ID,
+        direction: "request",
+        code: "tool_choice_unsupported_omitted",
+        jsonPath: "$.toolChoice",
+        action: "ignore",
+      }),
+    );
+  }
+  if (options?.parallelToolCalls === false) {
+    notices.push(
+      Object.freeze({
+        adapter: PROVIDER_ID,
+        direction: "request",
+        code: "parallel_tool_calls_unsupported_omitted",
+        jsonPath: "$.parallelToolCalls",
+        action: "ignore",
+      }),
+    );
+  }
+  return notices;
+}
+
 function resolveReasoning(
   model: Model<typeof API_ID>,
   options: SimpleStreamOptions | undefined,
@@ -306,7 +356,9 @@ function resolveReasoning(
     const mapped = mappedReasoningLevel(model, level);
     if (mapped !== undefined) supportedEfforts.add(mapped);
   }
-  if (options?.reasoning === undefined) return { supportedEfforts };
+  if (options?.reasoning === undefined || options.reasoning === "off") {
+    return { supportedEfforts };
+  }
   const effort = mappedReasoningLevel(model, options.reasoning);
   return effort === undefined
     ? { supportedEfforts }
@@ -678,7 +730,7 @@ export function validateCommandCodeRequest(
 
 export function buildCommandCodeBody(
   model: Model<typeof API_ID>,
-  context: Context,
+  context: TranscriptContext,
   options: SimpleStreamOptions | undefined,
   config: ServerConfig,
   sessionId: string,
@@ -686,12 +738,17 @@ export function buildCommandCodeBody(
   requestConversion: CommandCodeRequestConversionPolicy =
     DEFAULT_REQUEST_CONVERSION_POLICY,
 ): BuiltCommandCodeBody {
+  const collapsed = collapseSystemMessages(context);
+  const systemPrompt = getCurrentSystemPrompt(collapsed.messages);
+  const tools = getCurrentTools(collapsed.messages);
   const conversion = convertCommandCodeMessageHistory(
     model,
-    context,
+    withoutInitialSystemMessage(collapsed.messages),
     requestConversion,
   );
-  const toolConversion = convertCommandCodeToolCatalog(context.tools);
+  const toolConversion = convertCommandCodeToolCatalog(
+    options?.toolChoice === "none" ? [] : tools,
+  );
   const maxTokensCandidate = options?.maxTokens ?? model.maxTokens;
   if (
     !Number.isSafeInteger(maxTokensCandidate) ||
@@ -715,7 +772,7 @@ export function buildCommandCodeBody(
     max_tokens: maxTokensCandidate,
     stream: true,
   };
-  if (context.systemPrompt !== undefined) params.system = context.systemPrompt;
+  if (systemPrompt.length > 0) params.system = systemPrompt;
   if (options?.temperature !== undefined) params.temperature = options.temperature;
   if (reasoning.effort !== undefined) params.reasoning_effort = reasoning.effort;
 
@@ -723,6 +780,7 @@ export function buildCommandCodeBody(
     notices: Object.freeze([
       ...conversion.notices,
       ...toolConversion.notices,
+      ...commandCodeToolControlNotices(options),
     ]),
     supportedReasoningEfforts: reasoning.supportedEfforts,
     body: {
@@ -809,7 +867,7 @@ export interface CommandCodePreparationDependencies {
 
 export async function prepareCommandCodeRequest(
   model: Model<typeof API_ID>,
-  context: Context,
+  context: TranscriptContext,
   options: SimpleStreamOptions | undefined,
   dependencies: CommandCodePreparationDependencies,
 ): Promise<PreparedCommandCodeRequest> {

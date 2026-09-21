@@ -236,7 +236,6 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
       const invocation = await artifactJson(authority, "pi_invocation_snapshot");
       expect(invocation).toEqual(expect.objectContaining({
         reasoning: expect.any(Object),
-        supplement: expect.any(Object),
         context: expect.any(Object),
         options: expect.any(Object),
         client: expect.any(Object),
@@ -283,16 +282,20 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
         },
       });
       const semanticExecution: ExecutionOperation = vi.fn(
-        async (_models, selectedModel, context, options) => {
-          await options.onPayload?.(
-            {
-              model: selectedModel.id,
-              max_tokens: options.maxTokens,
-              messages: context.messages,
-              stream: true,
-            },
-            selectedModel,
-          );
+        async (
+          _models,
+          selectedModel,
+          context,
+          options,
+          _factsSink,
+          observation,
+        ) => {
+          observation?.providerRequest?.({
+            model: selectedModel.id,
+            max_tokens: options.maxTokens,
+            messages: context.messages,
+            stream: true,
+          });
           throw new ExecutionFailure(
             "Pi execution failed before response headers",
             undefined,

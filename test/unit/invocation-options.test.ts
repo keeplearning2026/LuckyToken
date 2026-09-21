@@ -34,8 +34,6 @@ describe("Anthropic Pi invocation controls", () => {
     expect(invocation.invocation.pi.options).toEqual({
       maxTokens: 32,
       temperature: 0,
-      samplingParams: { top_p: 0.5, top_k: 3 },
-      metadata: { user_id: "exact-user" },
     });
     expect(invocation.invocation.reasoning.effort).toEqual({
       kind: "specified",
@@ -48,6 +46,11 @@ describe("Anthropic Pi invocation controls", () => {
       thinkingDisplay: { kind: "omitted" },
     });
     expect(invocation.invocation.pi.options).not.toHaveProperty("stream");
+    expect(invocation.client.notices).toEqual(expect.arrayContaining([
+      expect.objectContaining({ jsonPath: "$.metadata", action: "ignore" }),
+      expect.objectContaining({ jsonPath: "$.top_p", action: "ignore" }),
+      expect.objectContaining({ jsonPath: "$.top_k", action: "ignore" }),
+    ]));
   });
 
   it("preserves omission without materializing option containers", () => {
@@ -60,16 +63,25 @@ describe("Anthropic Pi invocation controls", () => {
     expect(invocation.client.renderState.stream).toBe(false);
   });
 
-  it.each([
-    ["temperature string", { temperature: "0.5" }, InvalidRequest],
-    ["metadata user id number", { metadata: { user_id: 1 } }, InvalidRequest],
-  ])("rejects unsupported or malformed control: %s", (_name, extras, failure) => {
-    expect(() => validateAnthropicSourceRequest(request(extras))).toThrow(failure);
+  it("rejects a malformed consumed temperature", () => {
+    expect(() =>
+      validateAnthropicSourceRequest(request({ temperature: "0.5" })),
+    ).toThrow(InvalidRequest);
+  });
+
+  it("leaves malformed unconsumed metadata unread and warns", () => {
+    const invocation = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(request({ metadata: { user_id: 1 } })),
+      1,
+    );
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.metadata", action: "ignore" }),
+    );
   });
 
   it.each([
-    { name: "top p", extras: { top_p: 0.5 }, expected: { samplingParams: { top_p: 0.5 } } },
-    { name: "top k", extras: { top_k: 1 }, expected: { samplingParams: { top_k: 1 } } },
+    { name: "top p", extras: { top_p: 0.5 }, expected: {} },
+    { name: "top k", extras: { top_k: 1 }, expected: {} },
     { name: "thinking disabled", extras: { thinking: { type: "disabled" } }, expected: {} },
     { name: "thinking adaptive", extras: { thinking: { type: "adaptive" } }, expected: {} },
     { name: "stop sequences", extras: { stop_sequences: ["stop"] }, expected: {} },
@@ -105,12 +117,19 @@ describe("Anthropic Pi invocation controls", () => {
     );
   });
 
-  it("rejects a malformed known output format instead of ignoring it", () => {
-    expect(() =>
+  it("does not validate an unconsumed output format and warns", () => {
+    const invocation = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(
         request({ output_config: { format: "text" } }),
       ),
-    ).toThrow(InvalidRequest);
+      1,
+    );
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        jsonPath: "$.output_config.format",
+        action: "ignore",
+      }),
+    );
   });
 
   it("rejects a non-string output_config.effort as malformed", () => {

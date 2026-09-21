@@ -212,7 +212,7 @@ describe("models.json custom provider registration", () => {
     });
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0]?.url).toBe(
-      "https://gateway.example.com/v1/messages",
+      "https://gateway.example.com/v1/messages?beta=true",
     );
     expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe("gateway-key");
   });

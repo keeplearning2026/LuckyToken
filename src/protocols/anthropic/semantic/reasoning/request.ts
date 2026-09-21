@@ -5,14 +5,16 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import type { AnthropicSemanticInvocation } from "../invocation.js";
-import type { AnthropicProjectionOutcome } from "../projection/contract.js";
-import type { AnthropicEffortPlan } from "./contract.js";
+import type {
+  AnthropicEffortPlan,
+  AnthropicReasoningOutcome,
+} from "./contract.js";
 import { resolveAnthropicEffortPlan } from "./levels.js";
 
 export interface PreparedAnthropicReasoning {
   readonly invocation: AnthropicSemanticInvocation;
   readonly effortPlan: AnthropicEffortPlan;
-  readonly outcomes: readonly AnthropicProjectionOutcome[];
+  readonly outcomes: readonly AnthropicReasoningOutcome[];
 }
 
 function cloneOptions(
@@ -64,6 +66,15 @@ function acceptsNativeAnthropicHistory(model: Model<string>): boolean {
   return model.api === "anthropic-messages";
 }
 
+function reasoningLevelForBudget(
+  budget: number,
+): "minimal" | "low" | "medium" | "high" {
+  if (budget < 4_096) return "minimal";
+  if (budget < 16_384) return "low";
+  if (budget < 65_536) return "medium";
+  return "high";
+}
+
 export function prepareAnthropicReasoning<TApi extends string>(input: {
   readonly model: Model<TApi>;
   readonly invocation: AnthropicSemanticInvocation;
@@ -75,24 +86,70 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
     input.invocation.reasoning.effort,
   );
   delete options.reasoning;
-  if (effortPlan.kind === "specified") {
-    if (effortPlan.selection.kind === "selected") {
-      options.reasoning = effortPlan.selection.level;
-      if (input.invocation.reasoning.activation.kind === "enabled") {
+  const outcomes: AnthropicReasoningOutcome[] = [];
+  const activation = input.invocation.reasoning.activation;
+  if (activation.kind === "disabled") {
+    options.reasoning = "off";
+    delete options.thinkingBudgets;
+    outcomes.push(Object.freeze({
+      candidateId: "reasoning.activation",
+      outcome: Object.freeze({ kind: "pi-native" as const }),
+    }));
+  } else if (!input.model.reasoning && (
+    activation.kind === "enabled" ||
+    activation.kind === "adaptive" ||
+    effortPlan.kind === "specified"
+  )) {
+    delete options.thinkingBudgets;
+    outcomes.push(Object.freeze({
+      candidateId: "reasoning.activation",
+      outcome: Object.freeze({
+        kind: "degraded" as const,
+        warning: "target model does not support reasoning; ordinary generation retained",
+      }),
+    }));
+  } else {
+    const selectedLevel =
+      effortPlan.kind === "specified" &&
+      effortPlan.selection.kind === "selected"
+        ? effortPlan.selection.level
+        : activation.kind === "enabled"
+          ? reasoningLevelForBudget(activation.budgetTokens)
+          : activation.kind === "adaptive"
+            ? "medium"
+            : undefined;
+    if (selectedLevel !== undefined) {
+      options.reasoning = selectedLevel;
+      outcomes.push(Object.freeze({
+        candidateId: "reasoning.activation",
+        outcome: Object.freeze({ kind: "pi-native" as const }),
+      }));
+      if (activation.kind === "enabled") {
         const budgetLevel =
-          effortPlan.selection.level === "xhigh" ||
-          effortPlan.selection.level === "max"
+          selectedLevel === "xhigh" || selectedLevel === "max"
             ? "high"
-            : effortPlan.selection.level;
+            : selectedLevel;
         options.thinkingBudgets = Object.freeze({
-          [budgetLevel]: input.invocation.reasoning.activation.budgetTokens,
+          [budgetLevel]: activation.budgetTokens,
         });
       }
-    } else {
+    } else if (
+      effortPlan.kind === "specified" &&
+      effortPlan.selection.kind !== "selected"
+    ) {
       delete options.thinkingBudgets;
+      outcomes.push(Object.freeze({
+        candidateId: "reasoning.effort",
+        outcome: Object.freeze({
+          kind: "degraded" as const,
+          warning:
+            effortPlan.selection.kind === "non-reasoning"
+              ? "target model does not support reasoning; ordinary generation retained"
+              : "target model exposes no selectable reasoning level; Provider default retained",
+        }),
+      }));
     }
   }
-  const outcomes: AnthropicProjectionOutcome[] = [];
   const continuityByBlock = new Map<string, typeof input.invocation.reasoning.continuity>();
   for (const candidate of input.invocation.reasoning.continuity) {
     const key = `${candidate.piMessageIndex}:${candidate.piContentIndex}`;
@@ -237,7 +294,6 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
       options,
     }),
     reasoning: input.invocation.reasoning,
-    supplement: input.invocation.supplement,
   });
   return Object.freeze({
     invocation,

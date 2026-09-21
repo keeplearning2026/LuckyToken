@@ -1332,19 +1332,15 @@ locals:any
 context:any
 ```
 
-Pi `Options.metadata` 可以使用，但只能承载：
+Pi `Options` 中存在某个字段，不代表 Client Protocol 可以把它当作 generic carrier。
+Semantic Conversion 中，Client Protocol 只能写入 source semantics 与 Pi neutral common
+option 完全一致的 field；`samplingParams`、generic `metadata`、diagnostics 与 untyped
+extension bag 都不是 Client → Provider carrier。
 
-```text
-explicit field
-+
-known producer
-+
-known semantic consumer
-+
-matching Pi/client contract semantics
-```
-
-例如 Client Protocol 明确接受的 `metadata.user_id` 可以由该 Protocol owner 转成 allowlisted Pi metadata；`metadata` 本身不是 generic Token context，也不能被 credential/request-identity authority 当作信息走私通道。
+没有 neutral Pi representation 时，可选 Client field 应 omit with a bounded notice；
+要求 exact wire retention 时必须选择 Provider Native Preservation。Provider/API adapter
+再根据自身能力决定 apply、omit-with-bounded-notice 或 reject。Credential/request-identity
+authority 也不能生成 arbitrary metadata。
 
 ### Whole Request Object
 
@@ -2842,7 +2838,7 @@ Architecture rule 只有：
 > - **Client Protocol**：Token 对外暴露的一种 client-facing protocol，例如某种 Anthropic/OpenAI-compatible request/response contract。每种 Protocol 独立理解自己的 wire semantics。
 > - **Source Validity**：一个 request 是否满足它自己的 source Protocol Spec。Syntax parse 成功不等于 semantic validity 成立。
 > - **Pi Representability**：一个 source-valid fact 是否能够在 Token 选择的 Pi contracts 中正确表达，而不丢失必要 semantics。
-> - **Model-Aware Representability**：某些 representability decision 需要知道 resolved `Model<Api>` capability，因此必须在 Model Resolution 后完成。
+> - **Model-Aware Representability**：某些 Pi public representability decision 需要 resolved `Model<Api>` facts，因此必须在 Model Resolution 后完成；Client Protocol 不据此判断 concrete Provider capability，也不按 Provider ID 分支。
 > - **Context**：Pi 的 conversational semantic state，包括 `systemPrompt`、`messages`、`tools`。
 > - **Historical State**：Client 提供的历史 conversation 被转换成 Pi history 时所需的 semantic、continuity 与 structural information。
 > - **Protocol-Owned Render State**：同一个 Client Protocol 为了在 execution 结束后正确渲染 response，而从 request side 保留下来的最小 request-local information。它不是 Pi state。
@@ -3050,7 +3046,7 @@ Model Resolution 由 Chapter 6 定义。
 
 这个名称描述的是 ownership，不定义一个新的 type family。
 
-> **`protocol-derived invocation controls` is not a new generic Token contract. It is only the Client Protocol-owned projection of fields whose target semantics already belong to Pi `ModelsSimpleStreamOptions`.**
+> **`protocol-derived invocation controls` is not a new generic Token contract. It is only the Client Protocol-owned mapping of fields whose source semantics exactly match a Pi neutral common option in `ModelsSimpleStreamOptions`.**
 
 例如，一个 Protocol 可以从 source request 中解释：
 
@@ -3058,9 +3054,16 @@ Model Resolution 由 Chapter 6 定义。
 max token request
 temperature
 reasoning level
+toolChoice
+parallelToolCalls
 ```
 
-但只有当这些 semantics 能进入 `ModelsSimpleStreamOptions` 时，才形成对应 projection。
+但只有当这些 semantics 与 Pi neutral common option 完全一致时，才形成对应 mapping。
+Client Protocol 完整保留它消费的 neutral intent，不因某个 concrete Provider 不支持下述
+capability 而提前降级；selected Pi Provider/API adapter 独占 apply /
+omit-with-bounded-notice / reject 决策。`samplingParams`、generic `metadata`、
+Provider-native controls 与 callbacks 不属于此 mapping。Provider ID 只用于 registration /
+model resolution，不能用于协议分支。
 
 概念上：
 
@@ -3166,14 +3169,18 @@ Client Protocol implementation 必须在产生 Pi state 前 enforce source valid
 
 已知 event/field 结构 malformed 与 unknown future extension 是不同条件。
 
-对应 Protocol Spec 决定 unknown extension 是：
+Semantic Conversion 中，对应 Protocol Spec 决定 unknown extension 是：
 
 ```text
-accepted
-ignored
-preserved
+accepted with neutral Pi mapping
+ignored with bounded notice
 rejected
 ```
+
+没有 neutral Pi representation 的 extension 不能通过 `samplingParams`、generic `metadata`、
+diagnostics 或 untyped bag 进入 Pi。要求 exact wire retention 时必须选择 Provider Native
+Preservation；Provider/API adapter 可对其 Provider-specific extension 做 apply、
+omit-with-bounded-notice 或 reject。
 
 Architecture 不为所有 Client Protocol 强制一个统一 forward-compatibility policy。
 
@@ -3231,31 +3238,35 @@ source-invalid
 → protocol failure
 
 source-valid
-+
-Pi-representable
++ neutral Pi representation exists
 → convert
 
 source-valid
-+
-not Pi-representable
-→ explicit unsupported failure
++ optional Client/Provider-private control has no neutral Pi representation
+→ omit with a bounded notice; exact retention requires Provider Native Preservation
+
+source-valid
++ mandatory model-visible content, tool relationship, permission/security/residency
+  meaning cannot be represented
+→ fail before dispatch
 ```
 
-Conversion 必须 loss-aware。
+Conversion 必须 loss-aware，但 Provider/API capability 不是 Client Protocol 的
+representability input。Client Protocol 只判断 Pi public `Context`/选项是否能承载
+source semantics，并保留完整 neutral intent；selected Pi Provider/API adapter 再决定
+apply、omit-with-bounded-notice 或 reject。
 
-如果一个 semantic field、relationship 或 content type 在 Pi 中没有正确 representation，不能因为“Provider 也许会修”而静默删除。
-
-Model capability 可以参与 representability，例如：
+Pi public model capability 可以参与 Pi-neutral representability，例如：
 
 ```text
-Pi model capability
-→ may affect whether source semantics can be preserved
+Pi public model fact
+→ may affect whether a neutral Pi representation exists
 ```
 
-但 concrete upstream wire implementation 不参与 Client Protocol meaning：
+但 concrete upstream wire behavior 与 Provider ID 不参与 Client Protocol meaning：
 
 ```text
-concrete Provider wire behavior
+concrete Provider wire behavior / Provider ID
 → not part of Client Protocol representability
 ```
 
@@ -3263,7 +3274,7 @@ Exact feature support 与 mapping 属于对应 `Conversion Spec`。
 
 Architecture 冻结的 rule 是：
 
-> **Unsupported semantics fail explicitly rather than disappearing during conversion.**
+> **Critical or model-visible semantics fail explicitly rather than disappearing. Optional Client/Provider-private controls without a neutral Pi representation are omitted with a bounded notice, or require Provider Native Preservation for exact retention.**
 
 ---
 
@@ -3665,10 +3676,10 @@ Client Protocol module 在 response rendering 后不需要保留 upstream execut
 > - **Request Assembly**：ordinary orchestration control flow；负责按依赖顺序调用 owning boundaries/operations。
 > - **Model Resolution**：`external selector + Models → Model<Api>`。
 > - **Client → Pi Conversion**：`validated Client state + Model<Api> → Context + protocol-derived Pi controls`。
-> - **`composeOptions(...)`**：只把已经建立的 request facts / controls 投影为 Pi `ModelsSimpleStreamOptions`。
+> - **`composeOptions(...)`**：只把已经建立且 semantics 与 Pi neutral option 完全一致的 request facts / controls 映射为 Pi `ModelsSimpleStreamOptions`。
 > - **Composed Options**：Token → Pi `Models` 的 invocation input；它不是 Pi `Models` 完成 auth preparation 后交给 concrete Provider 的最终 effective options。
 > - **Precedence Rule**：多个 producer 能影响同一 Pi option field 时，必须显式定义优先级，而不能依赖 object-spread 顺序。
-> - **Non-Pi Request Fact**：若 concrete integration 真正需要、但现有 Pi invocation contract 无法正确承载的 fact，应作为 concrete integration gap 单独证明，而不是建立 generic bag。
+> - **Non-Pi Request Fact**：若 concrete integration 需要现有 Pi invocation contract 无法承载的 fact，可选控制必须 omit with bounded notice；exact retention 走 Provider Native Preservation；critical loss 或 demonstrated cross-Provider semantic gap 必须单独证明，不能建立 generic bag。
 
 本章不定义一个：
 
@@ -4057,7 +4068,10 @@ Options.sessionId
 
 `sessionId` 使用 Pi 已有的 session carrier。没有 Auth-derived `projectDir` projection；request identity 与 credential authority 都不能发明 Provider-consumable project metadata。
 
-Protocol-owned metadata（例如明确被 Client Protocol contract 接受的 `metadata.user_id`）仍由该 Client Protocol 自己转换，并受 `ClientPiOptions` allowlist 约束；它不是 request identity 或 credential authority 的输出。
+Protocol-derived neutral Pi controls 只按各 Client Protocol 的明确语义进入
+`ModelsSimpleStreamOptions`；`samplingParams`、generic `metadata`、diagnostics 或
+untyped extension bag 都不是 Client → Provider carrier。它们既不是 request identity
+authority 的输出，也不能被 credential authority 用来生成 arbitrary metadata。
 
 `resolveRequestIdentity()` 不直接构造 Pi `Options`；`composeOptions(...)` 只做 mechanical composition，并保持 protocol semantic options 与 infrastructure facts 分离。
 
@@ -4082,10 +4096,14 @@ const protocolOptions = {
   maxTokens,
   temperature,
   reasoning,
+  toolChoice,
+  parallelToolCalls,
 }
 ```
 
 但这个 object 的 semantic authority 仍来自 `ModelsSimpleStreamOptions`。
+这里的 fields 必须具有 exact neutral Pi semantics；selected Provider/API adapter 再决定
+apply、omit-with-bounded-notice 或 reject。
 
 不得自然演化成：
 
@@ -4246,6 +4264,7 @@ Pi option semantics
 ```text
 headers
 metadata
+samplingParams
 env
 sessionId
 ```
@@ -4258,9 +4277,14 @@ Current source/Pi evidence 已经关闭一个 request-identity mapping：
 normalized session identity → Options.sessionId
 ```
 
-Protocol-owned metadata 只能按各 Client Protocol 的明确 allowlist 进入 Pi（例如受支持的 `metadata.user_id`）；credential/request-identity authority 不产生 generic metadata。
+Client Protocol 只能写入 semantics 与 Pi option 完全一致的 neutral common controls；
+`samplingParams`、generic `metadata`、diagnostics 与 untyped extension bag 都不得承载
+unrepresentable Client fields。没有 neutral Pi representation 的可选 field 应 omit with a
+bounded notice；exact retention 只能通过 Provider Native Preservation。selected
+Provider/API adapter 独占 apply、omit-with-bounded-notice 或 reject 决策。
 
-除此之外仍不得把 `metadata`、`headers` 或其他 Pi options 当作 generic state bag。
+除此之外仍不得把 `metadata`、`samplingParams`、`headers` 或其他 Pi options 当作
+generic state bag。
 
 Client HTTP headers 也不能 generic forward 到 Pi request headers：
 
@@ -4315,21 +4339,30 @@ Decision order：
 required fact
     │
     ▼
-Does an existing Pi contract express
+Does an existing neutral Pi contract express
 matching semantics + lifecycle?
     │
     ├── yes
     │      ↓
-    │   reuse it
+    │   map to that contract
     │
     └── no
-           ↓
-explicit concrete integration gap
+           ├── optional Client/Provider-private control
+           │      ↓
+           │   omit with a bounded notice
+           │
+           ├── exact wire retention required
+           │      ↓
+           │   choose Provider Native Preservation
+           │
+           └── critical model-visible / relationship / security loss
+                  ↓
+              fail before dispatch
 ```
 
-Concrete integration 再拥有关闭这个 gap 的最小 contract。
-
-Generic Core 不提前建立 universal carrier。
+A demonstrated cross-Provider capability gap may justify a separate Pi public-contract
+extension. Generic Core does not pre-build a universal carrier, and an integration does not
+turn `samplingParams`、generic `metadata` or an untyped bag into one.
 
 ---
 
@@ -4429,7 +4462,15 @@ Model<Api>
 Context
 +
 ModelsSimpleStreamOptions
++
+optional diagnostics sink
++
+optional infrastructure observation capability
 ```
+
+Execution 不接收 concrete Provider。Semantic Conversion 的 `Options` 不得携带
+`onPayload` / `onResponse`；只有 Neutral Core execution 可以安装 Core-owned observation
+callback，复制并冻结 Provider-built payload 后原样返回，且不得检查、修补或替换它。
 
 成功 output：
 
@@ -4505,6 +4546,8 @@ Inputs
 - Model<Api>
 - Context
 - ModelsSimpleStreamOptions
+- optional facts sink
+- optional infrastructure observation capability
 
 Result
 - committed successful AssistantMessage
@@ -4527,9 +4570,11 @@ Must Not Access
 - request-identity implementation details
 - lane-specific raw credential authority state
 - Client Protocol internal state
-- concrete Provider implementation
+- concrete Provider instance or implementation
 - upstream wire/events
 - Provider transport or custom fetch
+- Provider callback lifecycle except its own bounded observation wrapper
+- caller/Provider-supplied `onPayload` / `onResponse` callbacks
 - global runtime configuration
 ```
 
@@ -5239,6 +5284,11 @@ AssistantMessageEventStream
 ```
 
 Token 进入 Pi `Models` 时使用 composed `ModelsSimpleStreamOptions`。Pi `Models` 可以进行 auth/header/env preparation，再调用 Provider。因此 Provider-facing options 是 Pi runtime 派生后的 request input，不是 Token 自己维护的第二套 Options。
+
+Client Protocol-specific 或没有 neutral Pi semantics 的 Client field 不通过 composed
+Options 传递；runtime/infrastructure owner 仍可按自己的 closed contract 写入其专属
+infrastructure fields。selected Provider/API adapter 对到达该边界的 semantic option
+独立决定 apply、omit-with-bounded-notice 或 reject。
 
 Provider 只 owns upstream-specific part。
 
@@ -6945,7 +6995,7 @@ Summary：
 | Module | Bound Dependencies | Important Owned State | Main Operations | Must Not Access |
 | --- | --- | --- | --- | --- |
 | **HTTP Boundary** | HTTP runtime; route/protocol policy | request transport lifecycle state while active; no separate long-lived state required | `route/read`; `emit` | conversational semantics; Provider wire |
-| **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; filesystem; HTTP connection internals |
+| **Client Protocol** | protocol-specific stable policy/config if needed | protocol-owned mutable runtime state only if any | `parse`; `convertToPi`; `render` | Provider credentials/wire; Provider-built payload / projector / projection Supplement / protocol-owned `onPayload`; filesystem; HTTP connection internals |
 | **Request Identity** | known session-header registry; fallback identity generator | none beyond optional bounded request-id helpers | `resolveRequestIdentity(headers)` | Model; Context; Provider credentials/wire |
 | **Direct Mode Caller Envelope** | compatible inbound request wire | request-local caller headers/query only | preserve caller envelope to one fixed upstream | authentication inside Token; Pi AI IR; Provider credential store; unrelated preservation lanes |
 | **Provider Package Loader** | versioned Package Contract; dynamic import capability; narrow host capabilities; Pi `MutableModels` | staged external Providers only during startup | `loadProviderPackages` | Client wire; Provider-native wire; package-private configuration semantics |
@@ -6972,8 +7022,8 @@ Summary：
 | Operation | Bound Dependencies | Inputs | Result | Effects |
 | --- | --- | --- | --- | --- |
 | **Model Resolution** | Models | external selector | `Model<Api>` or failure | none required |
-| **`composeOptions`** | Router/infrastructure defaults when bound | protocol controls; effectiveSessionId; AbortSignal; bounded infrastructure facts | `ModelsSimpleStreamOptions` | none |
-| **`execute`** | Models | Model + Context + Options | committed success or aborted/error failure | consume Pi stream; commit one atomic outcome |
+| **`composeOptions`** | Router/infrastructure defaults when bound | neutral protocol controls; effectiveSessionId; AbortSignal; bounded infrastructure facts | `ModelsSimpleStreamOptions` | none |
+| **`execute`** | Models | Model + Context + Options + optional facts sink / infrastructure observation | committed success or aborted/error failure | consume Pi stream; commit one atomic outcome |
 
 
 
@@ -7011,7 +7061,7 @@ Pi built-in Provider implementations remain Pi-owned.
 
 A Token-specific Provider, such as the CommandCode Private Provider, implements the same Pi Provider contract, while its own implementation dependency closure is Token-owned.
 
-The Provider Package Contract has two intentionally small exports:
+The Provider Package Contract has three intentionally small exports:
 
 ```text
 @token/provider-contract/package
@@ -7019,9 +7069,12 @@ The Provider Package Contract has two intentionally small exports:
 
 @token/provider-contract/diagnostics
   trusted neutral failures/notices/attempts/execution facts
+
+@token/provider-contract/usage
+  terminal product usage facts
 ```
 
-Neither export defines Provider wire types or a new common IR.
+None of these exports defines Provider wire types or a new common IR.
 
 ## 11.4 Fact Flow Contract Map
 
@@ -7085,8 +7138,8 @@ Options.signal
 Options.sessionId
 → Models may be transparent transit to a session-aware Provider
 
-Options.metadata.user_id
-→ only the Client Protocol / downstream consumer defined by the protocol contract may own that semantic
+Options.toolChoice / Options.parallelToolCalls
+→ model-visible neutral intent; the selected Provider/API adapter is the capability consumer
 ```
 
 `Model<Api>` 同样是 structured carrier，但在 architecture-level map 中可以整体标记 `Models` 为 semantic consumer，因为 current Pi runtime 明确读取其中的 runtime-relevant fields：
@@ -7172,10 +7225,13 @@ Models.streamSimple(...)
 
 and adopts the returned `AssistantMessageEventStream` as Pi completion channel.
 
-Conversion handlers do not inject custom fetch or read observer state. Provider
-transport facts cross this boundary only through trusted neutral Pi diagnostics;
-without one, Client rendering uses the fixed generic 502 upstream error. Native
-passthrough uses a separate narrow `passthroughFetch` outside Pi.
+Conversion handlers do not inject custom fetch or read ambient observer state. They may
+pass only a bounded infrastructure observation capability to Neutral Core execution; Core
+owns the Pi `onPayload` wiring, copies and freezes the Provider-built payload, and returns
+the original payload unchanged. Without observation, request semantics and terminal
+outcome are unchanged. Provider transport facts cross this boundary only through trusted
+neutral Pi diagnostics; without one, Client rendering uses the fixed generic 502 upstream
+error. Native passthrough uses a separate narrow `passthroughFetch` outside Pi.
 
 Cancellation precedence remains：
 
@@ -7294,7 +7350,13 @@ registered without an eligible model and confirmed upstream support.
 
 CommandCode Private 与 Goat vocabulary 不进入 Generic Core。
 
-The package root additionally exposes the existing direct Pi Provider factory and its option/policy types. Production Core uses the fixed `providerPackage` export through the generic loader; no project snapshot/project identity type is exported because current Provider request construction uses a fixed empty ServerConfig and no project metadata flow.
+Both CommandCode Provider package roots export only the fixed `providerPackage`
+registration contract. Concrete Provider factories and option/policy types remain internal
+to each package. Production Core loads `providerPackage` through the generic loader,
+registers the returned Pi Provider with `Models`, and Client Protocol / execution code
+receives only the `Models` capability; it never receives or invokes a concrete Provider.
+No project snapshot/project identity type is exported because current Provider request
+construction uses a fixed empty ServerConfig and no project metadata flow.
 
 ---
 

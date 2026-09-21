@@ -1,30 +1,40 @@
 import type { Model, Models } from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
-import type { ExecutionOperation } from "../../../execution.js";
 import {
-  executeWithAnthropicPi,
-  InvalidAnthropicPiExecution,
-} from "./pi-execution.js";
+  execute,
+  freezePiInvocation,
+  type ExecutionObservation,
+  type ExecutionOperation,
+} from "../../../execution.js";
 import type { AnthropicSemanticInvocation } from "./invocation.js";
-import {
-  prepareAnthropicPayloadProjection,
-  publishAnthropicProjectionWarnings,
-} from "./projection/request.js";
-import type { AnthropicProjectionOutcome } from "./projection/contract.js";
+import type { AnthropicReasoningOutcome } from "./reasoning/contract.js";
 import { prepareAnthropicReasoning } from "./reasoning/request.js";
 
 export interface AnthropicSemanticExecutionResult {
   readonly message: Awaited<ReturnType<ExecutionOperation>>;
-  readonly outcomes: readonly AnthropicProjectionOutcome[];
+  readonly outcomes: readonly AnthropicReasoningOutcome[];
 }
 
-export class InvalidAnthropicSemanticExecution extends Error {
-  readonly kind = "InvalidAnthropicSemanticExecution";
-
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidAnthropicSemanticExecution";
+function publishReasoningWarnings(
+  outcomes: readonly AnthropicReasoningOutcome[],
+  factsSink: ExecutionFactsSink | undefined,
+): void {
+  for (const entry of outcomes) {
+    if (entry.outcome.kind === "pi-native") continue;
+    try {
+      factsSink?.notice({
+        adapter: "anthropic",
+        direction: "request",
+        code:
+          entry.outcome.kind === "degraded"
+            ? "semantic_reasoning_degraded"
+            : "semantic_reasoning_omitted",
+        action: "degrade",
+      });
+    } catch {
+      // Diagnostics are fail-open and cannot affect semantic execution.
+    }
   }
 }
 
@@ -45,48 +55,30 @@ export async function executeAnthropicSemanticInvocation(input: {
     model: input.model,
     invocation: input.invocation,
   });
-  publishAnthropicProjectionWarnings(
-    prepared.outcomes,
-    input.execution.factsSink,
+  publishReasoningWarnings(prepared.outcomes, input.execution.factsSink);
+
+  freezePiInvocation(
+    input.model,
+    prepared.invocation.pi.context,
+    prepared.invocation.pi.options,
   );
-  const providerProjection = prepareAnthropicPayloadProjection({
-    model: input.model,
-    invocation: prepared.invocation,
-    effortPlan: prepared.effortPlan,
-    ...(input.execution.factsSink === undefined
-      ? {}
-      : { factsSink: input.execution.factsSink }),
-  });
-  const projection = Object.freeze({
-    initialOutcomes: prepared.outcomes,
-    async project(payload: unknown, model: Model<string>) {
-      const result = await providerProjection.project(payload, model);
-      return {
-        ...result,
-        outcomes: Object.freeze([...prepared.outcomes, ...result.outcomes]),
-      };
-    },
-  });
-  try {
-    return await executeWithAnthropicPi({
-      models: input.models,
-      model: input.model,
-      pi: prepared.invocation.pi,
-      projection,
-      infrastructure: {
-        executeOperation: input.execution.executeOperation,
-        ...(input.execution.factsSink === undefined
-          ? {}
-          : { factsSink: input.execution.factsSink }),
-        ...(input.execution.providerEvidence === undefined
-          ? {}
-          : { providerEvidence: input.execution.providerEvidence }),
-      },
-    });
-  } catch (error) {
-    if (error instanceof InvalidAnthropicPiExecution) {
-      throw new InvalidAnthropicSemanticExecution(error.message);
-    }
-    throw error;
-  }
+  const providerEvidence = input.execution.providerEvidence;
+  const observation: ExecutionObservation | undefined =
+    providerEvidence === undefined
+      ? undefined
+      : {
+          providerRequest: providerEvidence.request,
+          ...(providerEvidence.response === undefined
+            ? {}
+            : { providerResponse: providerEvidence.response }),
+        };
+  const message = await (input.execution.executeOperation ?? execute)(
+    input.models,
+    input.model,
+    prepared.invocation.pi.context,
+    prepared.invocation.pi.options,
+    input.execution.factsSink,
+    observation,
+  );
+  return Object.freeze({ message, outcomes: prepared.outcomes });
 }

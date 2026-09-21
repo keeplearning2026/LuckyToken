@@ -45,13 +45,17 @@ Compact remains a separately tested native operation and does not inherit ordina
 ```text
 Responses request
 → Responses Client adapter
-→ Pi Context / options
-→ selected Pi Provider
+→ resolved Pi Model + Pi Context + ModelsSimpleStreamOptions
+→ Models.streamSimple()
+→ Pi Context normalization → TranscriptContext
+→ registered Pi Provider/API adapter
 → Pi AssistantMessage
 → Responses JSON or atomic SSE
 ```
 
-The Client adapter owns Responses parsing, local history, resource resolver capabilities, Pi conversion, response rendering, and Responses-specific errors. It never inspects a concrete Provider protocol merely to change conversion semantics.
+The Client adapter owns Responses parsing, local history, resource resolver capabilities, Pi conversion, response rendering, and Responses-specific errors. On the upstream edge it produces only the resolved Pi Model, public Pi `Context`, and `ModelsSimpleStreamOptions`; it calls `Models.streamSimple()` and never receives a concrete `Provider` or calls `Provider.stream()`. Provider factories are visible only to the composition root, and a Provider ID is used only for model resolution/registration, never as an adapter branch. The selected Pi Provider/API adapter owns `TranscriptContext` to Provider request conversion, transport, and Provider response to Pi `AssistantMessage`.
+
+The Client adapter never inspects, validates, clones, replaces, or repairs a Provider payload, and never creates or depends on protocol-owned `onPayload`.
 
 Lane selection is capability/contract driven. Direct Mode, Provider Native, and Semantic Conversion have separate credential/transport authority; once a lane begins execution, failure does not fall through to another lane.
 

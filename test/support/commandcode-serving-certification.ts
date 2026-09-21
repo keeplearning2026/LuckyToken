@@ -1,10 +1,10 @@
 import type { Model } from "@earendil-works/pi-ai";
 
 import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options.js";
-import type { CommandCodeCompatibilityPolicy } from "@token/provider-commandcode-private";
+import type { CommandCodeCompatibilityPolicy } from "../../packages/provider-commandcode-private/src/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:555d9cfe6c9207557e9671e7c4916267fa3a2b9bd4b5e14250c5c0fed79cfd04";
+  "sha256:065c48ec5f799c60d3847fc8eeca69befc859c6cbf7cfcca2f23eb62c7e44384";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -299,14 +299,14 @@ export function certifyServingComposition(
         evidence: {
           protocol: "Pi AI IR Protocol v0.10.0",
           referenceCommit: "914cf1472e715297caa30db4b9535d534a9eb718",
-          referencePackage: "@earendil-works/pi-ai 0.84.2",
+          referencePackage: "@earendil-works/pi-ai 0.86.1",
           protocolBlobSha: "ebf2e9ef043d7351a38fd69909bf367f0f103884",
         },
         runtime: {
           package: "@earendil-works/pi-ai",
-          version: "0.84.2",
+          version: "0.86.1",
           integrity:
-            "sha512-6MzsrYIYNVlE7SfpbL2yYb67Qo58p/7Q+xWG1RZvoX1P80aRCHSod2/13aFpxkow1lPO2LEh3c495J0Gwmyjig==",
+            "sha512-1XHhI6D/fyQdsBieHC/E/4zGKVOoGe4yDyX67VXvzoYkFsX/qE7NpZE7E1RC8e6Bz8B9oG/P+MQFXikv2/BGEg==",
         },
       },
       commandCode: {

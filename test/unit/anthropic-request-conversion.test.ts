@@ -314,8 +314,8 @@ describe("06: Anthropic tool lifecycle and local missing-result repair", () => {
     ]);
   });
 
-  it("preserves tool_reference as addedToolNames and rejects unknown references", () => {
-    const invocation = parseAnthropicTextInvocation(
+  it("rejects known tool_reference updates and unknown references", () => {
+    expect(() => parseAnthropicTextInvocation(
       body(
         [
           { role: "user", content: "search" },
@@ -342,11 +342,7 @@ describe("06: Anthropic tool lifecycle and local missing-result repair", () => {
         },
       ),
       1,
-    );
-    const result = invocation.invocation.pi.context.messages.find(
-      (message) => message.role === "toolResult",
-    );
-    expect(result?.addedToolNames).toEqual(["later_tool"]);
+    )).toThrow(/mid-conversation tool update.*cannot represent/u);
 
     expect(() =>
       parseAnthropicTextInvocation(
@@ -545,7 +541,7 @@ describe("06: Anthropic tool lifecycle and local missing-result repair", () => {
 });
 
 describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
-  it("maps top_p/top_k into samplingParams and metadata user_id", () => {
+  it("does not smuggle top_p/top_k or metadata through generic Pi bags", () => {
     const invocation = parseAnthropicTextInvocation(
       body([{ role: "user", content: "hi" }], {
         top_p: 0.9,
@@ -554,8 +550,13 @@ describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
       }),
       1,
     );
-    expect(invocation.invocation.pi.options.samplingParams).toEqual({ top_p: 0.9, top_k: 5 });
-    expect(invocation.invocation.pi.options.metadata).toEqual({ user_id: "user-1" });
+    expect(invocation.invocation.pi.options.samplingParams).toBeUndefined();
+    expect(invocation.invocation.pi.options.metadata).toBeUndefined();
+    for (const jsonPath of ["$.top_p", "$.top_k", "$.metadata"]) {
+      expect(invocation.client.notices).toContainEqual(
+        expect.objectContaining({ jsonPath, action: "ignore" }),
+      );
+    }
   });
 
   it("omits metadata.user_id when null or absent", () => {
@@ -619,12 +620,9 @@ describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
       1,
     );
     expect(converted.invocation.pi.options.cacheRetention).toBeUndefined();
-    expect(converted.invocation.supplement.cache).toContainEqual(
-      expect.objectContaining({
-        id: "cacheControl",
-        attachment: { kind: "request" },
-        value: { ttl: "1h" },
-      }),
+    expect(converted.invocation).not.toHaveProperty("supplement");
+    expect(converted.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.cache_control", action: "ignore" }),
     );
   });
 
@@ -637,15 +635,16 @@ describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
         1,
       ),
     ).toThrow(/1024/u);
-    expect(() =>
-      parseAnthropicTextInvocation(
-        body([{ role: "user", content: "hi" }], { top_p: Number.NaN }),
-        1,
-      ),
-    ).toThrow(/finite/u);
+    const ignored = parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hi" }], { top_p: Number.NaN }),
+      1,
+    );
+    expect(ignored.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.top_p", action: "ignore" }),
+    );
   });
 
-  it("preserves nullable container and inference_geo without putting them in Pi options", () => {
+  it("omits nullable Provider-private controls with warnings", () => {
     const invocation = parseAnthropicTextInvocation(
       body([{ role: "user", content: "hi" }], {
         container: null,
@@ -654,25 +653,22 @@ describe("07: Anthropic sampling, thinking budgets, and cache policy", () => {
       }),
       1,
     );
-    expect(invocation.invocation.pi.options).toEqual({
-      maxTokens: 64,
-      samplingParams: { top_p: 0.5 },
-    });
-    expect(invocation.invocation.supplement.controls.container).toMatchObject({
-      value: null,
-    });
-    expect(invocation.invocation.supplement.controls.inferenceGeo).toMatchObject({
-      value: null,
-    });
+    expect(invocation.invocation.pi.options).toEqual({ maxTokens: 64 });
+    for (const jsonPath of ["$.container", "$.inference_geo", "$.top_p"]) {
+      expect(invocation.client.notices).toContainEqual(
+        expect.objectContaining({ jsonPath, action: "ignore" }),
+      );
+    }
   });
 
-  it("rejects null service_tier because the pinned Anthropic grammar is not nullable", () => {
-    expect(() =>
-      parseAnthropicTextInvocation(
-        body([{ role: "user", content: "hi" }], { service_tier: null }),
-        1,
-      ),
-    ).toThrow(/service_tier/u);
+  it("leaves service_tier unread and warns", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hi" }], { service_tier: null }),
+      1,
+    );
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({ jsonPath: "$.service_tier", action: "ignore" }),
+    );
   });
 });
 
@@ -713,7 +709,7 @@ describe("08: Anthropic known content and tools", () => {
     ]);
   });
 
-  it("preserves resolver-dependent document sources only in the supplement", () => {
+  it("omits resolver-dependent document sources with a warning", () => {
     const converted = parseAnthropicTextInvocation(
         body([
           {
@@ -729,18 +725,16 @@ describe("08: Anthropic known content and tools", () => {
         1,
       );
     expect(converted.invocation.pi.context.messages).toEqual([]);
-    expect(converted.invocation.supplement.content).toEqual([
+    expect(converted.invocation).not.toHaveProperty("supplement");
+    expect(converted.client.notices).toContainEqual(
       expect.objectContaining({
-        sourceMessageIndex: 0,
-        sourceContentIndex: 0,
-        kind: "document-source",
-        piRepresentation: "none",
-        value: { type: "url", url: "https://example.test/doc.pdf" },
+        code: "anthropic_unrepresentable_content_omitted",
+        action: "ignore",
       }),
-    ]);
+    );
   });
 
-  it("preserves URL images and fails an unsupported image media type precisely", () => {
+  it("omits URL images and fails an unsupported image media type precisely", () => {
     const converted = parseAnthropicTextInvocation(
         body([
           {
@@ -756,13 +750,12 @@ describe("08: Anthropic known content and tools", () => {
         1,
       );
     expect(converted.invocation.pi.context.messages).toEqual([]);
-    expect(converted.invocation.supplement.content).toEqual([
+    expect(converted.client.notices).toContainEqual(
       expect.objectContaining({
-        kind: "url-image-source",
-        piRepresentation: "none",
-        value: { type: "url", url: "https://example.test/a.png" },
+        code: "anthropic_unrepresentable_content_omitted",
+        action: "ignore",
       }),
-    ]);
+    );
     expect(() =>
       parseAnthropicTextInvocation(
         body([
@@ -826,18 +819,10 @@ describe("08: Anthropic known content and tools", () => {
     expect(assistant?.content).toEqual([]);
     expect(invocation.invocation.pi.context.tools).toBeUndefined();
     expect(invocation.invocation.pi.context.messages.some((m) => m.role === "toolResult")).toBe(false);
-    expect(invocation.invocation.supplement.content).toEqual([
-      expect.objectContaining({
-        kind: "server-tool-use",
-        piRepresentation: "none",
-        value: expect.objectContaining({ id: "server_1", name: "web_search" }),
-      }),
-      expect.objectContaining({
-        kind: "server-tool-result",
-        piRepresentation: "none",
-        value: expect.objectContaining({ tool_use_id: "server_1" }),
-      }),
-    ]);
+    expect(invocation.invocation).not.toHaveProperty("supplement");
+    expect(invocation.client.notices.filter(
+      (notice) => notice.code === "anthropic_unrepresentable_content_omitted",
+    )).toHaveLength(2);
   });
 
   it("maps client/BYOT tools including defer_loading definitions", () => {
@@ -870,6 +855,60 @@ describe("08: Anthropic known content and tools", () => {
     ]);
   });
 
+  it.each([
+    ["auto", { type: "auto" }, "auto"],
+    ["none", { type: "none" }, "none"],
+    ["any", { type: "any" }, "required"],
+    ["named", { type: "tool", name: "lookup" }, { type: "tool", name: "lookup" }],
+  ] as const)("preserves %s tool_choice in Pi while retaining the tool catalog", (
+    _name,
+    toolChoice,
+    expected,
+  ) => {
+    const invocation = parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hi" }], {
+        tools: [{
+          name: "lookup",
+          description: "Lookup",
+          input_schema: { type: "object" },
+        }],
+        tool_choice: toolChoice,
+      }),
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual([
+      "lookup",
+    ]);
+    expect(invocation.invocation.pi.options.toolChoice).toEqual(expected);
+    expect(invocation.client.notices).toEqual([]);
+  });
+
+  it("preserves disable_parallel_tool_use as neutral Pi parallel intent", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hi" }], {
+        tools: [{ name: "lookup", input_schema: { type: "object" } }],
+        tool_choice: { type: "tool", name: "lookup", disable_parallel_tool_use: true },
+      }),
+      1,
+    );
+
+    expect(invocation.invocation.pi.options).toMatchObject({
+      toolChoice: { type: "tool", name: "lookup" },
+      parallelToolCalls: false,
+    });
+  });
+
+  it("fails a named tool_choice whose tool relationship is invalid", () => {
+    expect(() => parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hi" }], {
+        tools: [{ name: "lookup", input_schema: { type: "object" } }],
+        tool_choice: { type: "tool", name: "missing" },
+      }),
+      1,
+    )).toThrow(/undeclared tool/u);
+  });
+
   it("handles unknown content with the error/ignore policy", () => {
     expect(() =>
       parseAnthropicTextInvocation(
@@ -886,7 +925,7 @@ describe("08: Anthropic known content and tools", () => {
       1,
       policy({ unknownContent: "ignore" }),
     );
-    expect(ignored.invocation.pi.context.messages[0]?.content).toEqual([]);
+    expect(ignored.invocation.pi.context.messages).toEqual([]);
     expect(
       ignored.client.notices.some(
         (notice) => notice.code === "anthropic_unknown_content_ignored",
@@ -955,7 +994,7 @@ describe("08: Anthropic known content and tools", () => {
     ).toThrow(/non-empty/u);
   });
 
-  it("preserves URL and base64 document sources without exposing them as text", () => {
+  it("omits URL and base64 document sources without exposing them as text", () => {
     for (const source of [
       { type: "url", url: "https://example.test/doc.pdf" },
       { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQ=" },
@@ -970,18 +1009,17 @@ describe("08: Anthropic known content and tools", () => {
           1,
         );
       expect(converted.invocation.pi.context.messages).toEqual([]);
-      expect(converted.invocation.supplement.content).toEqual([
+      expect(converted.client.notices).toContainEqual(
         expect.objectContaining({
-          kind: "document-source",
-          piRepresentation: "none",
-          value: source,
+          code: "anthropic_unrepresentable_content_omitted",
+          action: "ignore",
         }),
-      ]);
+      );
     }
   });
 
-  it("keeps all client tools in the catalog when tool_reference is present", () => {
-    const invocation = parseAnthropicTextInvocation(
+  it("rejects tool_reference because Pi Context cannot express mid-conversation tool updates", () => {
+    expect(() => parseAnthropicTextInvocation(
       body(
         [
           { role: "user", content: "go" },
@@ -1008,10 +1046,6 @@ describe("08: Anthropic known content and tools", () => {
         },
       ),
       1,
-    );
-    expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual([
-      "search",
-      "deferred_tool",
-    ]);
+    )).toThrow(/mid-conversation tool update.*cannot represent/u);
   });
 });

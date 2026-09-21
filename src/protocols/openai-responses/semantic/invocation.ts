@@ -5,7 +5,6 @@ import type {
 import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 
 import type { ResponsesReasoningSemantics } from "./reasoning/contract.js";
-import type { ResponsesProjectionSupplement } from "./supplement/contract.js";
 
 export interface ResponsesSemanticInvocation {
   readonly pi: {
@@ -13,7 +12,6 @@ export interface ResponsesSemanticInvocation {
     readonly options: ModelsSimpleStreamOptions;
   };
   readonly reasoning: ResponsesReasoningSemantics;
-  readonly supplement: ResponsesProjectionSupplement;
 }
 
 export interface ResponsesConversionResult<TRenderState> {

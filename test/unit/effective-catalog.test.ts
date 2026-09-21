@@ -92,6 +92,7 @@ describe("effective catalog composition", () => {
       "groq",
       "huggingface",
       "kimi-coding",
+      "meta",
       "minimax",
       "minimax-cn",
       "mistral",
@@ -313,16 +314,17 @@ describe("effective catalog composition", () => {
 
     const deepseek = catalog.providers.find((provider) => provider.id === "deepseek");
     expect(deepseek?.layer).toBe("overlaid");
-    // The upserted model replaces the base entry in place (base position
-    // preserved); the custom model is appended after all base models.
+    // Pi 0.86.1 contributes the current built-ins first; user-only model ids
+    // are appended in declaration order.
     expect(deepseek?.models.map((model) => model.id)).toEqual([
-      "deepseek-v4-flash",
+      "deepseek-flash",
       "deepseek-v4-pro",
+      "deepseek-v4-flash",
       "custom-model",
     ]);
     const flash = deepseek?.models.find((model) => model.id === "deepseek-v4-flash");
     expect(flash).toMatchObject({
-      layer: "upserted",
+      layer: "user",
       name: "deepseek-v4-flash",
       api: "openai-completions",
       baseUrl: "https://gateway.example.com",

@@ -1,4 +1,9 @@
-import type { Context, Model, Tool } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type Model,
+  type SimpleStreamOptions,
+  type Tool,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -21,15 +26,15 @@ const model: Model<typeof commandCodePrivateApiId> = {
   maxTokens: 100,
 };
 
-function build(tools: Tool[]) {
-  const context: Context = {
+function build(tools: Tool[], options: SimpleStreamOptions = {}) {
+  const context = normalizeContext({
     messages: [{ role: "user", content: "hello", timestamp: 1 }],
     tools,
-  };
+  });
   return buildCommandCodeBody(
     model,
     context,
-    {},
+    options,
     createEmptyServerConfig(),
     "00000000-0000-4000-8000-000000000022",
     {},
@@ -68,6 +73,45 @@ describe("CommandCode Pi tool definitions", () => {
         input_schema: { type: "object", properties: {} },
       },
     ]);
+  });
+
+  it("implements Pi toolChoice none by removing the current tool catalog", () => {
+    const tools: Tool[] = [
+      {
+        name: "lookup",
+        description: "Exact description",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+
+    expect((build(tools, { toolChoice: "none" }).body.params as { tools: unknown[] }).tools)
+      .toEqual([]);
+    expect((build(tools, { toolChoice: "auto" }).body.params as { tools: unknown[] }).tools)
+      .toHaveLength(1);
+    expect((build(tools).body.params as { tools: unknown[] }).tools).toHaveLength(1);
+  });
+
+  it.each([
+    ["required", { toolChoice: "required" }],
+    ["named", { toolChoice: { type: "tool", name: "lookup" } }],
+    ["serial", { parallelToolCalls: false }],
+  ] as const)("keeps the catalog and reports Provider-owned omission for %s", (_name, options) => {
+    const tools: Tool[] = [{
+      name: "lookup",
+      description: "Exact description",
+      parameters: { type: "object", properties: {} },
+    }];
+    const built = build(tools, options);
+
+    expect((built.body.params as { tools: unknown[] }).tools).toHaveLength(1);
+    expect(built.notices).toContainEqual(expect.objectContaining({
+      adapter: "commandcode-private",
+      direction: "request",
+      code: _name === "serial"
+        ? "parallel_tool_calls_unsupported_omitted"
+        : "tool_choice_unsupported_omitted",
+      action: "ignore",
+    }));
   });
 
   it("degrades required JSON-schema enforcement to an ordinary tool and notice", () => {

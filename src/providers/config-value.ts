@@ -2,10 +2,11 @@
  * Config-value resolution: literal values, `$VAR`/`${VAR}` environment
  * references (with `$$`/`$!` escapes) and `!command` shell commands.
  *
- * Mirrors the pinned Pi implementation
- * (`pi-agent/packages/coding-agent/src/core/resolve-config-value.ts` in
- * `@earendil-works/pi-coding-agent` 0.84.2) with two deliberate local
- * adaptations:
+ * Mirrors the vendored `pi-agent/` reference tree, not the runtime
+ * `@earendil-works/pi-ai@0.86.1` Provider execution dependency
+ * (`pi-agent/packages/coding-agent/src/core/resolve-config-value.ts`, whose
+ * reference identity is `@earendil-works/pi-coding-agent` 0.84.2) with two
+ * deliberate local adaptations:
  *
  * - resolution is always UNCACHED: the pinned request path resolves API keys
  *   and headers through `resolveConfigValueUncached`, so every request

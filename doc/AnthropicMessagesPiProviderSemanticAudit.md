@@ -2,43 +2,47 @@
 
 Date: 2026-08-23
 
-Status: implementation baseline for `@earendil-works/pi-ai` 0.84.2 and `@anthropic-ai/sdk` 0.91.1
+Status: **SUPERSEDED historical evidence baseline** for `@earendil-works/pi-ai` 0.84.2 and `@anthropic-ai/sdk` 0.91.1. Current authority is `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md` and `doc/Spec/TokenAnthropicSemanticConversionArchitectureSpec.md`.
+
+Current boundary banner: the projector and Supplement architecture described below was the historical baseline. The current Pi 0.86.1 boundary deletes that architecture. Client Protocol conversion maps Anthropic semantics only into Pi `Context` and neutral Pi common options; the selected Pi Provider/API adapter alone decides apply, omit-with-bounded-notice, or reject. The baseline prescriptions below are retained as evidence, not as current implementation instructions, and do not authorize a protocol-owned projector, registry, Supplement, payload seam, or `onPayload`.
 
 Scope: Anthropic Messages as the Client Protocol after the request has committed to Token's Semantic Conversion lane. Provider Native and Direct Mode requests bypass this audit. OpenAI Responses source semantics are deliberately outside this document.
 
 ## Conclusion
 
-The current Anthropic semantic path is valid only for a useful subset of ordinary text, base64 images, client tools, tool turns, temperature, a coarse reasoning request, and basic Pi response content. It does not yet prove the final Provider request for many recognized Anthropic controls, and it sometimes replaces source meaning with invented model-visible text.
+At the audit baseline, the Anthropic semantic path was valid only for a useful subset of ordinary text, base64 images, client tools, tool turns, temperature, a coarse reasoning request, and basic Pi response content. It did not yet prove the final Provider request for many recognized Anthropic controls, and it sometimes replaced source meaning with invented model-visible text.
 
-The implementation therefore needs an Anthropic-owned Invocation and selective target projection. The existing converter first produces the strongest Pi IR/options; a complete Anthropic supplement then carries every remaining validated fact Pi cannot represent, without implying universal target support. The wrapper selects a target Adapter only when it has a proven mapping, that Adapter consumes only its supported subset, and the Anthropic executor centrally resolves unconsumed facts. The final Provider request after the Anthropic-owned `onPayload` is the request support endpoint; response conversion starts from Pi `AssistantMessage` and adds no raw Provider interception layer.
+The historical baseline proposed an Anthropic-owned Invocation, selective target projection, and a complete Anthropic supplement. That proposal is superseded: the current boundary deletes the projector and Supplement and sends only Pi `Context` plus neutral options through `Models.streamSimple()`. Provider capability decisions belong to the Pi Provider/API adapter; response conversion starts from Pi `AssistantMessage`.
 
-The most important release blockers are:
+At the audit baseline, the most important release blockers were:
 
 1. `stop_sequences`, every `tool_choice` form, `disable_parallel_tool_use`, and `output_config.format` are validated incompletely or dropped before final Provider construction.
 2. `thinking.disabled`, `thinking.adaptive`, display omission/null/value, and effort omission/null/value collapse. Enabled thinking also lacks the required `budget_tokens < max_tokens` validation, while Pi may increase an Anthropic/Bedrock reasoning request's final output ceiling.
-3. final-assistant prefill is changed into ordinary history, and unresolved ordinary Client tool calls currently fail instead of receiving the fixed honest interruption result. Both require the explicit degraded behavior below.
+3. final-assistant prefill was changed into ordinary history, and unresolved ordinary Client tool calls failed instead of receiving the fixed honest interruption result. Both required the explicit degraded behavior recorded below.
 4. URL images, binary/URL documents, rich search results, server-tool calls/results, caller identity, citations, cache attachment points, and tool-specific controls are rejected, flattened, omitted, or replaced by placeholders.
 5. the response renderer hard-codes citations, container, stop details/sequence, inference geography, service tier, and server-tool usage to `null`; this is not evidence that the upstream Provider omitted those facts.
 
 ## Authority and method
 
-The fixed usability decisions in `Spec/TokenAnthropicSemanticConversionArchitectureSpec.md` section 12.1 are normative. This audit records evidence and target dispositions; it does not redefine those decisions.
+For this historical audit, the usability decisions in `doc/Spec/TokenAnthropicSemanticConversionArchitectureSpec.md` section 12.1 supplied the baseline. Current authority is that specification together with `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md`; this audit records evidence and target dispositions.
 
-The source grammar is the pinned official Anthropic SDK `MessageCreateParamsBase`, `ContentBlockParam`, `ToolUnion`, `ThinkingConfigParam`, `ToolChoice`, and response/SSE types in `node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts`. The target builders and response parsers are the pinned Pi 0.84.2 files in `node_modules/@earendil-works/pi-ai/dist/api`. Token's baseline behavior is in `src/protocols/anthropic/request.ts`, `tools.ts`, `response.ts`, and `sse.ts`.
+The source grammar is the pinned official Anthropic SDK `MessageCreateParamsBase`, `ContentBlockParam`, `ToolUnion`, `ThinkingConfigParam`, `ToolChoice`, and response/SSE types in `node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts`. At the audit baseline, the target builders and response parsers were the pinned Pi 0.84.2 files in `node_modules/@earendil-works/pi-ai/dist/api`. Token's baseline behavior is in `src/protocols/anthropic/request.ts`, `tools.ts`, `response.ts`, and `sse.ts`.
 
-The audit uses these dispositions:
+In this historical record, the audit uses these dispositions:
 
 - **Pi-native**: an audited Pi option/IR relationship already produces the exact final target field.
-- **Project**: the Anthropic-owned projector can validate or write an exact target field at the final payload seam.
+- **Project**: historical baseline disposition for the now-deleted Anthropic-owned projector. It is not a current implementation option.
 - **Fallback**: a documented, protocol-valid visible degradation is possible and must warn.
 - **Fixed fallback**: a documented, protocol-valid degradation is required by the Anthropic contract and must report `degraded`, never exact application.
 - **Omit**: an optional preference may be omitted with an explicit outcome and warning.
 - **Fail**: the source requirement is hard or no honest target representation is known; fail before Provider dispatch.
 - **Unavailable**: the Pi response parser discarded a response fact. The Anthropic response module must use only a source-protocol-defined null/default, warn/omit, or fail; it may not guess or intercept the raw Provider response.
 
-## Request ownership matrix
+## Historical request ownership matrix (superseded baseline)
 
-| Anthropic source fact | Validation baseline | Current Pi behavior | Requirement | Authoritative owner | Required disposition |
+Every `Project`, `supplement`, and target-specific disposition below records the superseded baseline proposal. In the current boundary, the Anthropic converter preserves the neutral Pi semantic and the selected Pi Provider/API adapter owns apply/omit/reject.
+
+| Anthropic source fact | Validation baseline | Current Pi behavior | Historical baseline requirement | Historical authoritative owner | Historical disposition |
 |---|---|---|---|---|---|
 | `model` | non-empty string | selector is resolved outside conversion | hard | runtime model resolution | resolved target model replaces selector only at the Provider boundary |
 | `messages` roles | currently rejects non-standard `system` | no current Pi representation for rejected request | compatibility extension | Pi context and conversion notice | promote text from the first message-level system to `systemPrompt`; convert its non-text and all later system content as ordinary user content; emit one degradation notice |
@@ -70,9 +74,11 @@ The audit uses these dispositions:
 | final assistant prefill | detected | degraded to ordinary history with notice | degradable continuation constraint | supplement plus Pi association | validate exact target continuation semantics; otherwise history fallback with warning |
 | unresolved ordinary Client tool call | currently fails before later history | no usable Pi history | fixed honest interruption repair | Pi context conversion | insert an `isError=true` ToolResult with the original ID/name and fixed incomplete-call text; orphan, duplicate, empty-ID, ambiguous, and server-tool relationships still fail |
 
-## Content and tool audit
+## Historical content and tool audit (superseded baseline)
 
-| Source family | Current behavior | Intended owner and outcome |
+This table records the audit-time behavior and proposed ownership. Its `supplement` and `Project` terms describe the deleted baseline.
+
+| Source family | Historical behavior | Historical owner and outcome |
 |---|---|---|
 | text text | Pi text | Pi context; exact ordered text required |
 | text citations/cache | citations/cache dropped | supplement association; Project to exact nested target block, otherwise warn/fail according to citation/cache requirement |
@@ -98,7 +104,7 @@ The audit uses these dispositions:
 
 No placeholder string may stand in for server execution, a server result, document, citation, or opaque continuity value. The fixed unresolved ordinary Client ToolCall repair is different: it is an honest `isError=true` statement that execution did not complete and never claims a tool answer.
 
-## Target request matrix
+## Historical target request matrix (superseded baseline)
 
 Legend: **P** = Pi-native or exact Project available after payload-shape certification; **M** = model/provider compatibility decision required; **D** = exact mapping when available, otherwise the documented fixed degradation; **O** = optional preference may warn and omit; **F** = no certified critical mapping, so fail.
 
@@ -119,7 +125,9 @@ Legend: **P** = Pi-native or exact Project available after payload-shape certifi
 
 Every **P**, **M**, or **D** cell requires its own Anthropic Client Wire → Pi → final Provider payload fixture. A Provider/API row is not enabled merely because another API uses a similar JSON key. `samplingParams` is evidence only for builders that actually merge it; it is never the semantic owner.
 
-### Pi 0.84.2 starting evidence
+### Historical Pi 0.84.2 starting evidence (superseded)
+
+These are observations of the Pi 0.84.2 reference adapters at the audit baseline, not the current runtime contract.
 
 - CommandCode Private is not an `openai-completions` alias. Its registered `commandcode-private` Provider builds `{config, memory, taste, skills, permissionMode, threadId, params}` and exposes `onPayload` before validating and serializing that exact custom body. `params` supports model, system, messages, tools, max tokens, temperature, and reasoning effort, but has no stop, top-p/top-k, forced/serial-tool, or structured-output field.
 - `anthropic-messages` builds `max_tokens`, temperature when compatible, tools, thinking, metadata, and direct tool choice, then calls `onPayload`. Its simple wrapper can add a thinking budget to max tokens, so the Anthropic Client ceiling requires explicit correction.
@@ -127,35 +135,38 @@ Every **P**, **M**, or **D** cell requires its own Anthropic Client Wire → Pi 
 - Responses and Azure Responses expose a final payload callback and merge selected simple options; target lifecycle and response-shape semantics still require separate certification.
 - Codex Responses uses a distinct builder with hard-coded defaults and cannot inherit the generic Responses row.
 - Google Generative AI and Vertex build separate native shapes (`generationConfig` versus `config`) and need separate registrations even where their semantics match.
-- Mistral builds camel-case SDK payload fields and later serializes them to snake case. Projection must occur against the exact object passed to `onPayload`, not a guessed HTTP JSON shape.
+- Mistral builds camel-case SDK payload fields and later serializes them to snake case. At the baseline, projection was evaluated against the exact object passed to the Provider's public `onPayload` hook; the current boundary does not make that hook a protocol-owned seam.
 - Bedrock passes an AWS `ConverseStreamCommandInput`-shaped object to `onPayload`; Claude and non-Claude reasoning fields differ.
 - Pi Messages passes `{model, context, options}` and delegates Pi IR. It is not an arbitrary Provider-wire extension bag.
 
 ### CommandCode GOAT forced-tool direct wire-probe evidence
 
-Direct upstream probes on 2026-08-23 against `commandcode-goat/deepseek/deepseek-v4-flash` established the current compatibility rule:
+Direct upstream probes on 2026-08-23 against `commandcode-goat/deepseek/deepseek-v4-flash` established the compatibility behavior at the historical baseline:
 
 - ordinary non-streaming, streaming, and `tool_choice: auto` requests succeeded;
 - forced `required` and named tool choices returned HTTP 400 with `Thinking mode does not support this tool_choice` under default, serial, `high`, and `max` reasoning cases;
 - `thinking: {type: "disabled"}` and `enable_thinking: false` did not remove that conflict, while `reasoning_effort: "none"` was rejected as an invalid enum;
 - the bounded fallback `tool_choice: auto` + only the named tool exposed + `parallel_tool_calls: false` selected the named tool in 9/9 probes across explicit, implicit, and direct-answer prompts.
 
-The 9/9 result is availability evidence, not an exact guarantee or a completed certification-suite result. The fixed contract may use this fallback only with a `degraded` outcome and warning. The matching dated source-code comment is direct wire evidence and must remain until a replacement online run updates the Adapter, this audit, and the architecture specification together.
+The 9/9 result is availability evidence, not an exact guarantee or a completed certification-suite result. The historical Anthropic contract used this fallback only with a `degraded` outcome and warning. In the current boundary, the Anthropic converter preserves the neutral tool-choice semantic and the selected Pi Provider adapter owns any fallback or omission notice.
 
 The independent Anthropic semantic-conversion online suite was rerun on
 2026-08-24. GOAT accepted a final Provider body containing
 `thinking: {type: "disabled"}`, but the response still contained thinking.
 Therefore this target/model does not have a certified exact reasoning-disable
-mapping. Token removes known reasoning controls, emits a `degraded`
-warning, accepts the target default, and preserves any thinking actually
-returned by the Provider. The corresponding online case asserts the final
-Provider body and Client response independently.
+mapping. At the historical baseline, Token removed known reasoning controls,
+emitted a `degraded` warning, accepted the target default, and preserved any
+thinking actually returned by the Provider. In the current boundary, the
+Anthropic converter maps reasoning omission/off/enabled level onto neutral Pi
+reasoning, and the Provider adapter owns unsupported-disable disposal. The
+corresponding historical online case asserted the final Provider body and
+Client response independently.
 
-### Current failure inventory and availability decision
+### Historical failure inventory and availability decision (superseded baseline)
 
-This inventory reviews the failure families currently present in Anthropic validation, target projectors, supplement disposition, and response interpretation. Direction is stated explicitly so a request-side failure is not confused with a response-side failure.
+At the audit baseline, this inventory reviewed the failure families present in Anthropic validation, target projectors, Supplement disposition, and response interpretation. Direction is stated explicitly so a request-side failure was not confused with a response-side failure. Projector and Supplement terms below describe that deleted baseline, not the current architecture.
 
-| Direction/stage | Current failure family | Representative current sites | Required behavior | Configurable? |
+| Direction/stage | Historical failure family | Historical representative sites | Historical baseline behavior | Configurable? |
 |---|---|---|---|---|
 | Request: Client parsing | invalid source object, enum, numeric relationship, schema, duplicate identity, or orphan tool result | request/tool/supplement validation | Fail as an invalid request before upstream dispatch | no |
 | Request or response, independently | unknown Client content or unknown Pi response content | existing Anthropic conversion policy | Keep request `unknownContent`; response unknown Pi content is fixed block omission plus warning | request only |
@@ -188,17 +199,17 @@ This inventory reviews the failure families currently present in Anthropic valid
 
 Availability dispositions are fixed Anthropic behavior rather than Advanced Settings. Only request `unknownContent` remains configurable. These decisions do not weaken malformed consumed-source validation, output ceilings, ordinary Client caller permissions, Client tool relationships, or payload-shape checks.
 
-## Response audit
+## Historical response audit (superseded baseline)
 
 The Anthropic response module starts at Pi `AssistantMessage`; it does not receive raw Provider responses. Pi IR can retain ordered text, thinking, tool calls, response/provider/API/model provenance, a response ID, `rawStopReason`, `endTurn`, basic usage, reasoning/cache counts, and signatures on thinking/text/tool-call attachment points. It has no general fields for Anthropic citations, server-tool blocks, container, stop details, matched stop sequence, inference geography, service tier, or server-tool usage. The Provider-response column below is dependency evidence explaining where a Pi fact originated, not a runtime input to Anthropic response conversion.
 
-| Provider response fact | Pi 0.84.2 retention | Baseline Anthropic output | Required response disposition | Next-request replay |
+| Provider response fact | Historical Pi 0.84.2 retention | Baseline Anthropic output | Historical response disposition | Next-request replay |
 |---|---|---|---|---|
 | response ID/API/provider/model | retained | ID used; client selector intentionally echoed as model | exact | provenance feeds continuity compatibility |
 | text | retained | exact text, citations forced null | exact text; citations handled separately | visible history |
 | text citations | generally discarded | `null` | preserve visible text, use the Anthropic-defined nullable representation, and warn when citation provenance was unavailable; fail only if a retained relationship makes citations required | response-only unless client returns citations as history semantics |
 | thinking text | retained | Anthropic thinking block | exact visible thinking; when request `display` is `omitted`, emit `thinking: ""` instead | yes |
-| Anthropic thinking signature/redacted data | retained on Pi thinking for Anthropic/Claude Bedrock | currently emitted as standard Anthropic fields without real provenance test | standard field only for certified compatible source; when ordinary thinking has no signature emit `signature: ""` plus warning and treat it as absent on replay; never empty redacted data | yes, same block |
+| Anthropic thinking signature/redacted data | retained on Pi thinking for Anthropic/Claude Bedrock | emitted as standard Anthropic fields at the baseline without real provenance test | standard field only for certified compatible source; when ordinary thinking has no signature emit `signature: ""` plus warning and treat it as absent on replay; never empty redacted data | yes, same block |
 | Google/Vertex text/thinking/tool signature | retained at Pi attachment-specific fields | text/tool signatures dropped; thinking may masquerade as Anthropic signature | item-local foreign continuity envelope | yes, same attachment |
 | Responses/Azure/Codex reasoning state | retained in Pi signature-like fields/identity | incompletely rendered | item-local foreign continuity envelope; never `thinking.signature` | yes |
 | Chat-Completions reasoning details | provider/model-dependent on thinking/tool calls | incompletely rendered | target-aware certified carrier or visible fallback | yes when replay contract requires |
@@ -209,7 +220,7 @@ The Anthropic response module starts at Pi `AssistantMessage`; it does not recei
 | ordinary end/max/tool stop | retained as normalized `stopReason`; raw value often retained | `end_turn|max_tokens|tool_use` | target-aware exact mapping | response-only except tool relationship |
 | `stop_sequence` + matched sequence | raw reason retained; matched sequence discarded | normalized `end_turn`, sequence null | when exact Anthropic `stop_sequence` cannot be constructed, preserve the already-stopped visible content, normalize to the legal `end_turn`/null fallback, and warn rather than fail the response | response-only |
 | `pause_turn` | Anthropic parser maps to stop and retains raw reason | normalized `end_turn` | continuation state is unavailable in Pi IR, so retain portable visible content, normalize to the strongest legal Pi terminal, and warn | no opaque pause-state replay |
-| `refusal` + details | Anthropic parser usually turns it into an upstream error; a committed Pi message may retain raw refusal with visible content but lose details | ordinary success renderer does not currently accept it | preserve the upstream error when no committed message exists; otherwise render Anthropic `refusal`, use nullable `stop_details` when details are unavailable, and warn rather than relabel it as ordinary success | no ordinary history |
+| `refusal` + details | Anthropic parser usually turns it into an upstream error; a committed Pi message may retain raw refusal with visible content but lose details | ordinary success renderer did not accept it at the baseline | preserve the upstream error when no committed message exists; otherwise render Anthropic `refusal`, use nullable `stop_details` when details are unavailable, and warn rather than relabel it as ordinary success | no ordinary history |
 | input/output usage | retained | exact or atomic fail-open zero fallback | exact retained counts; malformed usage may use documented atomic observability fallback | response-only |
 | cache read/write/1h | retained partly | mapped | exact retained split only | response-only |
 | thinking usage | retained partly | mapped when valid | exact retained value only | response-only |
@@ -234,7 +245,7 @@ The Anthropic response module starts at Pi `AssistantMessage`; it does not recei
 
 This table is a test-routing baseline, not a runtime response registry or support claim. Ordinary rendering tests start at Pi `AssistantMessage`; exact replay support additionally requires Provider response fixture → Pi `AssistantMessage` → Anthropic JSON/SSE → next complete-history Client request → final Provider request.
 
-## Required red and final-wire fixtures
+## Historical required red and final-wire fixtures
 
 The first failing request fixtures cover:
 
@@ -246,7 +257,7 @@ The first failing request fixtures cover:
 - total output ceiling with reasoning;
 - final assistant prefill;
 - native and foreign full-history provenance;
-- every current placeholder/flattening path listed above;
+- every then-current placeholder/flattening path listed above;
 - dependency isolation from OpenAI Responses semantic modules.
 
 The first response fixtures start at Pi `AssistantMessage` and cover `thinking.display: "omitted"`, missing-signature `""` fallback, warning fallbacks for citations and safely representable stop/refusal loss, block omission for caller/namespace/tool-input ambiguity and unknown Pi content, visible fallback or omission for server/container continuation, strongest-legal `pause_turn` normalization, complete usage, all signature attachment points, JSON/SSE parity, stop recomputation, and next-history replay.

@@ -41,6 +41,8 @@ export interface ClientPiOptions {
   readonly maxTokens?: ModelsSimpleStreamOptions["maxTokens"];
   readonly temperature?: ModelsSimpleStreamOptions["temperature"];
   readonly reasoning?: ModelsSimpleStreamOptions["reasoning"];
+  readonly toolChoice?: ModelsSimpleStreamOptions["toolChoice"];
+  readonly parallelToolCalls?: ModelsSimpleStreamOptions["parallelToolCalls"];
   readonly samplingParams?: Readonly<Record<string, unknown>>;
   readonly cacheRetention?: ModelsSimpleStreamOptions["cacheRetention"];
   readonly thinkingBudgets?: Readonly<
@@ -72,6 +74,8 @@ const PROTOCOL_OPTION_KEYS = new Set([
   "maxTokens",
   "temperature",
   "reasoning",
+  "toolChoice",
+  "parallelToolCalls",
   "samplingParams",
   "cacheRetention",
   "thinkingBudgets",
@@ -95,6 +99,7 @@ const INFRASTRUCTURE_KEYS = new Set([
   "transformHeaders",
 ]);
 const THINKING_LEVELS = new Set([
+  "off",
   "minimal",
   "low",
   "medium",
@@ -229,6 +234,30 @@ function validateProtocolOptions(options: ClientPiOptions): void {
   ) {
     throw new InvocationCompositionFailure(
       "Client Protocol reasoning must be a known thinking level",
+    );
+  }
+  if (options.toolChoice !== undefined) {
+    const choice = options.toolChoice;
+    const validString =
+      choice === "auto" || choice === "none" || choice === "required";
+    const validNamed =
+      isRecord(choice) &&
+      choice.type === "tool" &&
+      typeof choice.name === "string" &&
+      choice.name.length > 0 &&
+      Object.keys(choice).every((key) => key === "type" || key === "name");
+    if (!validString && !validNamed) {
+      throw new InvocationCompositionFailure(
+        "Client Protocol toolChoice must be auto, none, required, or one named tool",
+      );
+    }
+  }
+  if (
+    options.parallelToolCalls !== undefined &&
+    typeof options.parallelToolCalls !== "boolean"
+  ) {
+    throw new InvocationCompositionFailure(
+      "Client Protocol parallelToolCalls must be boolean",
     );
   }
   if (options.samplingParams !== undefined) {
@@ -425,6 +454,14 @@ export function composeOptions(
   }
   if (protocolOptions.reasoning !== undefined) {
     effective.reasoning = protocolOptions.reasoning;
+  }
+  if (protocolOptions.toolChoice !== undefined) {
+    effective.toolChoice = cloneAndFreezeValue(
+      protocolOptions.toolChoice,
+    ) as NonNullable<ModelsSimpleStreamOptions["toolChoice"]>;
+  }
+  if (protocolOptions.parallelToolCalls !== undefined) {
+    effective.parallelToolCalls = protocolOptions.parallelToolCalls;
   }
   if (protocolOptions.samplingParams !== undefined) {
     effective.samplingParams = cloneAndFreezeValue(

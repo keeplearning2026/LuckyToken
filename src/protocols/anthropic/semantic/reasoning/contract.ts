@@ -73,6 +73,23 @@ export interface AnthropicReasoningSemantics {
   readonly history: readonly AnthropicHistoricalReasoning[];
   readonly continuity: readonly AnthropicContinuityCandidate[];
 }
+
+export type AnthropicReasoningOutcomeId =
+  | "reasoning.activation"
+  | "reasoning.effort"
+  | "reasoning.encrypted_content"
+  | `reasoning.history[${number}:${number}]`
+  | `reasoning.continuity[${number}:${number}]`;
+
+export type AnthropicReasoningDisposition =
+  | { readonly kind: "pi-native" }
+  | { readonly kind: "degraded"; readonly warning: string }
+  | { readonly kind: "omitted"; readonly warning: string };
+
+export interface AnthropicReasoningOutcome {
+  readonly candidateId: AnthropicReasoningOutcomeId;
+  readonly outcome: AnthropicReasoningDisposition;
+}
 import type {
   AnthropicContinuityAttachment,
   AnthropicContinuitySource,

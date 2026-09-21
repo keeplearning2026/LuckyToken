@@ -219,7 +219,11 @@ describe("Codex CLI request sample replay", () => {
       );
 
       // Black-box: accepted with a well-formed response object.
-      expect(response.status).toBe(200);
+      if (response.status !== 200) {
+        throw new Error(
+          `fixture ${sample.file} returned ${response.status}: ${await response.clone().text()}`,
+        );
+      }
       const isStream = sample.body.stream === true;
       const json = isStream
         ? parseSseResponse(await response.text())

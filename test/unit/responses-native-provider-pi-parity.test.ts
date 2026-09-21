@@ -1,9 +1,9 @@
-import type {
-  AssistantMessageEventStream,
-  AuthResult,
-  Context,
-  FetchFunction,
-  Model,
+import {
+  normalizeContext,
+  type AssistantMessageEventStream,
+  type AuthResult,
+  type FetchFunction,
+  type Model,
 } from "@earendil-works/pi-ai";
 import { stream as streamAzureResponses } from "@earendil-works/pi-ai/api/azure-openai-responses";
 import { stream as streamCodexResponses } from "@earendil-works/pi-ai/api/openai-codex-responses";
@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import { createProviderResponsesSender } from "../../src/provider-native-responses/index.js";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000123";
-const CONTEXT: Context = { messages: [] };
+const CONTEXT = normalizeContext({ messages: [] });
 
 function model<TApi extends string>(
   provider: string,

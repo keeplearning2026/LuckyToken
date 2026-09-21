@@ -1,6 +1,6 @@
 # Token Full-Journey Diagnostics Capture Design
 
-Status: reviewed and implemented, based on source and test evidence inspected on 2026-08-25. Section 8 defines the fixed Pi 0.84.2 Semantic evidence boundary; raw Provider response events are intentionally outside the required diagnostic scene.
+Status: reviewed and implemented, updated for the pinned Pi 0.86.1 Semantic evidence boundary on 2026-09-21. Raw Provider response events are intentionally outside the required diagnostic scene.
 
 ## 1. Decision
 
@@ -40,7 +40,7 @@ The pre-implementation review proved that this contract could not be met by incr
 Two ownership limits remain deliberately truthful:
 
 - an intermediate Provider Native OpenAI 429 body that the normal profile-switch path does not read remains `unavailable:response_body_not_read_before_profile_switch`; diagnostics cannot add a reader, clone, tee, or await;
-- the pinned Pi 0.84.2 public contract exposes the complete provider-native request payload returned by the protocol-owned `onPayload`, response status/headers through `onResponse`, and the decoded `AssistantMessage`. These are the required Semantic Provider boundary artifacts. SDK/Adapter-internal HTTP serialization and raw Provider response events are not required, and Token does not inject transport to obtain them.
+- the pinned Pi 0.86.1 public contract exposes the complete Provider-native request payload through `onPayload`, response status/headers through `onResponse`, and the decoded `AssistantMessage`. Neutral Core execution observation may copy these required Semantic Provider boundary artifacts without changing them. Client Protocol modules do not own the callback or the payload. SDK/Adapter-internal HTTP serialization and raw Provider response events are not required, and Token does not inject transport to obtain them.
 
 ## 3. Required diagnostic vocabulary
 
@@ -208,9 +208,9 @@ For an intermediate OpenAI 429 whose body is not normally read before profile sw
 | Stage | Required artifact | Authoritative owner/seam |
 | --- | --- | --- |
 | Client ingress | Safe envelope and complete OpenAI Responses Client Wire JSON | Server/request converter boundary |
-| Protocol invocation | Complete protocol-owned invocation, Pi context/options, tools, reasoning/continuity facts, and projection supplement; credentials/functions/signals excluded | OpenAI Responses semantic module |
-| Provider request payload | Complete provider-native payload returned by the protocol-owned `onPayload` after Pi construction and protocol projection; excludes credentials and Adapter/SDK transport serialization | OpenAI Responses semantic executor through pinned Pi `onPayload` |
-| Provider response evidence | Safe response status/headers plus the complete decoded Pi `AssistantMessage`; raw Provider events are not required | Pinned Pi `onResponse` plus OpenAI Responses semantic executor |
+| Protocol invocation | Complete protocol-owned Pi `Context`/options, tools, reasoning/continuity facts, and Client render state; credentials/functions/signals excluded | OpenAI Responses semantic module |
+| Provider request payload | Complete Provider-native payload observed after Pi Provider construction; never inspected or modified by the Client Protocol; excludes credentials and Adapter/SDK transport serialization | Neutral Core execution observation through pinned Pi `onPayload` |
+| Provider response evidence | Safe response status/headers plus the complete decoded Pi `AssistantMessage`; raw Provider events are not required | Neutral Core execution observation through Pi `onResponse`, plus the OpenAI Responses execution coordinator |
 | Pi result | Complete Pi `AssistantMessage` representation plus protocol-owned continuity provenance required by the response converter | OpenAI Responses semantic module |
 | Client egress | Exact OpenAI Responses result/status/safe headers/body | Response converter/server emission owner |
 
@@ -219,29 +219,29 @@ For an intermediate OpenAI 429 whose body is not normally read before profile sw
 | Stage | Required artifact | Authoritative owner/seam |
 | --- | --- | --- |
 | Client ingress | Safe envelope and complete Anthropic Messages Client Wire JSON | Server/request converter boundary |
-| Protocol invocation | Complete protocol-owned invocation, Pi context/options, tools, reasoning/continuity facts, and Anthropic-owned projection supplement; credentials/functions/signals excluded | Anthropic Messages semantic module |
-| Provider request payload | Complete provider-native payload returned by the protocol-owned `onPayload` after Pi construction and protocol projection; excludes credentials and Adapter/SDK transport serialization | Anthropic semantic executor through pinned Pi `onPayload` |
-| Provider response evidence | Safe response status/headers plus the complete decoded Pi `AssistantMessage`; raw Provider events are not required | Pinned Pi `onResponse` plus Anthropic semantic executor |
+| Protocol invocation | Complete protocol-owned Pi `Context`/options, tools, reasoning/continuity facts, and Client render state; credentials/functions/signals excluded | Anthropic Messages semantic module |
+| Provider request payload | Complete Provider-native payload observed after Pi Provider construction; never inspected or modified by the Client Protocol; excludes credentials and Adapter/SDK transport serialization | Neutral Core execution observation through pinned Pi `onPayload` |
+| Provider response evidence | Safe response status/headers plus the complete decoded Pi `AssistantMessage`; raw Provider events are not required | Neutral Core execution observation through Pi `onResponse`, plus the Anthropic execution coordinator |
 | Pi result | Complete Pi `AssistantMessage` plus Anthropic-owned opaque continuity provenance | Anthropic Messages semantic module |
 | Client egress | Exact Anthropic Messages result/status/safe headers/body | Response converter/server emission owner |
 
-OpenAI and Anthropic must implement their own serializers and artifact-stage definitions. They may share only the mechanism-only recorder, chunking, redaction, hashing, and storage facilities. No common Semantic Invocation, supplement, projector registry, semantic executor, outcome union, or semantic error may be introduced.
+OpenAI and Anthropic own their protocol invocation and response artifact serializers and stage definitions. They may share the neutral Pi execution observation mechanism, recorder, chunking, redaction, hashing, and storage facilities. No common Semantic Invocation, reasoning request model, Client response state, outcome union, or semantic error may be introduced. No Supplement or projector registry exists.
 
-## 8. Pinned Pi 0.84.2 Semantic evidence boundary
+## 8. Pinned Pi 0.86.1 Semantic evidence boundary
 
-The required Semantic Provider request artifact is the complete provider-native payload returned from the protocol-owned `onPayload` projection operation. This is Pi 0.84.2's public request-construction boundary: Pi has constructed the selected Adapter's payload, the owning Client Protocol has applied and verified its certified projections, and that exact returned value continues into the Adapter. Credentials, URL/header transport assembly, SDK serialization, signing, and fixed transport framing that an Adapter adds later are outside this artifact and must not be reconstructed or guessed.
+The required Semantic Provider request artifact is an immutable copy of the complete Provider-native payload exposed through Pi `onPayload`. This is Pi 0.86.1's public request-construction boundary: the selected Pi Provider/API adapter has constructed the payload it owns. Neutral Core execution observation copies that value and returns the original unchanged. No Client Protocol projector, repair, assertion, or mutation runs at this seam. Credentials, URL/header transport assembly, SDK serialization, signing, and fixed transport framing that an Adapter adds later are outside this artifact and must not be reconstructed or guessed.
 
 The required Semantic response scene deliberately stops at the public Pi boundary. Raw Provider response events are not required. Token records safe status/headers when Pi calls `onResponse`, then records the complete decoded Pi `AssistantMessage` and protocol-owned continuity provenance. A failure before either callback receives an explicit unavailable descriptor for that required public-boundary artifact; it does not create a raw-wire placeholder.
 
-Each Semantic Client Protocol owns its own artifact names and serialization:
+Each Semantic Client Protocol owns its invocation and response artifact serialization. Neutral Core execution observation owns callback attachment for Provider-boundary evidence:
 
 1. `pi_invocation_snapshot`: complete protocol-owned invocation/Pi Context and safe Pi options, excluding functions, signals, credentials, transport objects, and mutable execution state;
-2. `pi_provider_request_payload`: complete value returned by that protocol's `onPayload` operation;
+2. `pi_provider_request_payload`: complete immutable copy observed through the Core-owned Pi `onPayload` callback, which returns the original payload unchanged;
 3. `pi_provider_response_metadata`: safe status and allowlisted headers published through Pi `onResponse`, or a truthful unavailable reason when the callback was not reached;
 4. `pi_provider_response_ir`: complete decoded Pi `AssistantMessage` and protocol-owned continuity facts, or a truthful unavailable reason when decoding did not complete;
 5. `client_response_wire`: exact Client response body at the normal response-emission seam.
 
-There is no `pi_provider_final_request_wire` or `pi_provider_raw_response_wire` contract. Product/UI language says “Provider request payload”, “Provider response metadata”, and “Pi response IR”; it does not call these raw HTTP wire. A global fetch wrapper, injected diagnostic transport, `Response.clone()`, tee, second consumer, hidden Pi fork, or guessed post-Adapter field remains prohibited because it would violate ownership and non-interference.
+There is no `pi_provider_final_request_wire` or `pi_provider_raw_response_wire` contract. Product/UI language says “Provider request payload”, “Provider response metadata”, and “Pi response IR”; it does not call these raw HTTP wire. A global fetch wrapper, injected diagnostic transport, `Response.clone()`, tee, second consumer, hidden Pi fork, or guessed post-Adapter field remains prohibited because it would violate ownership and non-interference. Removing the observation callbacks must leave routing, conversion, dispatch, Provider Wire, and Client output unchanged.
 
 ## 9. Non-interference proof
 
@@ -291,7 +291,7 @@ Keep generic artifact retrieval paged and add metadata-first inspection. The ren
 2. Add red Settings, storage-directory, non-interference, and boundary tests before production wiring.
 3. Implement the policy snapshot Adapter, chunked recorder, isolated complete-document redaction, bounded IPC queue/process supervisor, provisional v3 file storage/index, health reporting, and paged read contract.
 4. Wire Direct Mode and both Provider Native implementations at their lane-owned seams.
-5. Wire `pi_provider_request_payload`, safe response metadata, and decoded response IR independently for OpenAI Responses and Anthropic Messages through official Pi 0.84.2 public callbacks.
+5. Wire `pi_provider_request_payload` and safe response metadata through neutral Core execution observation over official Pi 0.86.1 public callbacks; retain independently serialized decoded response IR for OpenAI Responses and Anthropic Messages.
 6. Replace lossy semantic snapshots with complete protocol-owned artifacts while retaining optional summaries only as explicitly labelled convenience artifacts.
 7. Add the Settings toggle/directory display, system-viewer desktop open flow, and the full cross-lane certification matrix.
 

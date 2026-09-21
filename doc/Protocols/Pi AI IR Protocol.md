@@ -3,13 +3,15 @@
 **Version:** 0.10.0
 **Status:** Frozen
 
+**Runtime Package:** `@earendil-works/pi-ai` `0.86.1` (exact production pin)
+**Runtime Module:** the installed `@earendil-works/pi-ai` package
+**Vendored Reference Tree:** `pi-agent/packages/ai`, reference material only, currently
+the `0.86.1` snapshot; Token-specific code does not modify it
 **Reference Repository:** `earendil-works/pi`
-**Reference Commit:** `914cf1472e715297caa30db4b9535d534a9eb718` (`v0.84.2`)
-**Vendored Token Snapshot:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
-**Reference Package:** `@earendil-works/pi-ai` `0.84.2`
-**Reference Date:** `2026-08-14`
-
-**Reference Module:** `pi-agent/packages/ai`
+**Original Extraction Provenance:** commit `914cf1472e715297caa30db4b9535d534a9eb718`
+(`v0.84.2`); this document has been refreshed against the `0.86.1` reference tree, and
+the sections whose seam changed are marked inline
+**Reference Date:** `2026-08-14` (original extraction)
 
 ---
 
@@ -42,7 +44,7 @@ API / Provider Adapter
         │
         ├── constructs callback-visible payload
         │
-        ├── may invoke onPayload
+        ├── may invoke Pi-owned onPayload hook
         │
         └── performs remaining provider/SDK processing
         │
@@ -55,6 +57,47 @@ AssistantMessageEventStream
         ▼
 AssistantMessage
 ```
+
+**Token Semantic Conversion runtime boundary.** Token's production runtime pins `@earendil-works/pi-ai` `0.86.1` exactly. The checked-in `pi-agent/` tree is the current v0.86.1 reference snapshot; it is not the runtime dependency. The v0.84.2 commit above is the original extraction provenance, not the current vendored tree version.
+
+The fixed Semantic Conversion call path is:
+
+```text
+Client Wire
+        │
+        ▼
+Client Protocol converter
+        │
+        ▼
+Resolved Pi Model
++
+Pi Context
++
+ModelsSimpleStreamOptions
+        │
+        ▼
+Models.streamSimple()
+        │
+        ▼
+Pi normalizeContext()
+        │
+        ▼
+TranscriptContext
+        │
+        ▼
+Pi Provider/API adapter
+        │
+        ▼
+Provider Wire
+```
+
+At this boundary, the Pi neutral common request controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Pi Provider/API adapter alone decides whether each control is applied, omitted with a bounded notice, or rejected.
+
+The composition root is the only layer that sees Private/Goat factories and registers them with Pi Models. Client Protocol and runtime execution receive a resolved `Model` with Pi `Context` and Pi options; they do not receive a concrete `Provider` and do not call Provider/Goat `stream()` or `streamSimple()` directly. Provider IDs are model-resolution and registration facts only, not Client Protocol branching conditions.
+
+Client Protocol modules do not import Provider-native request types, inspect or repair a Provider payload, define a target Provider projector or projector registry, own a projection Supplement, create or depend on `onPayload`, or hide fields in `samplingParams`, generic `metadata`, diagnostics, or untyped extension bags.
+
+`onPayload` remains a Pi public hook owned by the Provider/API adapter. Token may use it only for Provider-wire capture in tests, bounded diagnostics at an infrastructure seam, and explicit low-level experiments. Production Semantic Conversion never creates or depends on it, and with `onPayload` absent every Semantic Conversion request has the same semantics and terminal result.
 
 Shared helpers are not mandatory generic middleware stages.
 
@@ -291,7 +334,7 @@ stream terminates using done | error
 StreamFunction should return a stream
 rather than throwing request/runtime failures
 
-onPayload can inspect or replace the
+Pi's onPayload public hook can inspect or replace the
 callback-visible request payload
 
 DeferredFetchOptions.wait defaults to 0
@@ -320,7 +363,7 @@ event.partial may reference reused mutable state
 some adapters merge samplingParams
 after named payload fields
 
-onPayload can be followed by
+Pi's onPayload public hook can be followed by
 additional adapter/wire conversion
 
 lazyStream catch covers setup and
@@ -670,7 +713,7 @@ ThinkingLevel
 ModelThinkingLevel
 ```
 
-`SimpleStreamOptions.reasoning` accepts `ThinkingLevel` and does not accept `"off"`.
+At the installed `0.86.1` runtime boundary, `SimpleStreamOptions.reasoning` accepts `ModelThinkingLevel`: omitted means the Provider default, `"off"` explicitly disables reasoning, and every enabled level is resolved through `Model.thinkingLevelMap` plus `getSupportedThinkingLevels()`/`clampThinkingLevel()`.
 
 **ThinkingLevelMap**
 
@@ -1714,6 +1757,12 @@ These fields control authentication, transport/runtime execution, callbacks, ret
 
 They are not model-visible conversation semantics.
 
+**Token ownership boundary**
+
+`onPayload` is a Pi public hook owned by the Provider/API adapter. Token Semantic Conversion production code never creates or depends on it. The permitted Token uses are Provider-wire capture in tests, bounded diagnostics at an infrastructure seam, and explicit low-level experiments; an observation callback copies the Provider-built payload as an immutable bounded fact and returns it unchanged.
+
+With `onPayload` absent, every Semantic Conversion request has the same semantics and terminal result. Client Protocol modules do not treat this callback as a projector, Supplement, repair hook, or target-Provider capability decision point.
+
 **ProviderHeaders**
 
 ```ts
@@ -1763,7 +1812,7 @@ The callback contract therefore establishes:
 
 ```text
 onPayload
-→ caller inspection boundary
+→ Provider/API adapter-owned callback boundary
 → optional replacement boundary
   for the callback-visible payload representation
 ```
@@ -1914,12 +1963,14 @@ custom API
 ```ts
 stream<T extends TApi>(
   model: Model<T>,
-  context: Context,
+  context: TranscriptContext,
   options?: ApiStreamOptions<T>
 ): AssistantMessageEventStream
 ```
 
 This is the public API-specific Provider invocation form.
+
+This Provider-layer form receives an already normalized `TranscriptContext`. In production Semantic Conversion, Client Protocol code does not hold a concrete `Provider` or call this method; `Models.streamSimple()` performs the `Context` normalization and Provider dispatch behind the fixed call surface.
 
 ---
 
@@ -1930,7 +1981,11 @@ This is the public API-specific Provider invocation form.
 ```ts
 interface SimpleStreamOptions
   extends StreamOptions {
-  reasoning?: ThinkingLevel
+  toolChoice?: ToolChoice
+
+  parallelToolCalls?: boolean
+
+  reasoning?: ModelThinkingLevel
 
   deferred?:
     | boolean
@@ -1950,7 +2005,11 @@ interface SimpleStreamOptions
 }
 ```
 
+The installed `@earendil-works/pi-ai` `0.86.1` declaration at `node_modules/@earendil-works/pi-ai/dist/types.d.ts` is the authority for this runtime option shape. The current vendored snapshot at `pi-agent/packages/ai/src/types.ts` is narrower: it declares `ToolChoice = "auto" | "none"`, omits `parallelToolCalls` from `SimpleStreamOptions`, and types `reasoning` as `ThinkingLevel`.
+
 This provides a provider-neutral simplified request surface.
+
+The neutral common controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Provider/API adapter alone decides whether each control is applied, omitted with a bounded notice, or rejected.
 
 ---
 
@@ -1960,7 +2019,7 @@ This provides a provider-neutral simplified request surface.
 Provider.streamSimple()
 │
 ├── Model
-├── Context
+├── TranscriptContext
 └── SimpleStreamOptions
         │
         ▼
@@ -1968,6 +2027,8 @@ AssistantMessageEventStream
 ```
 
 It exposes generic reasoning/deferred controls rather than every API-specific feature.
+
+Token Semantic Conversion does not call `Provider.streamSimple()` directly. The fixed public call is `Models.streamSimple(model, context, options)`, where `context` is Pi `Context`; Models normalizes it before dispatch to the selected Provider/API adapter.
 
 ---
 
@@ -2050,9 +2111,9 @@ This rule is not universal across all API families.
 
 Other API families may ignore `samplingParams`.
 
-**Caller callback boundary**
+**Pi Provider/API adapter callback boundary**
 
-Where an adapter subsequently invokes `onPayload`:
+Where the Provider/API adapter subsequently invokes its Pi-owned `onPayload` hook:
 
 ```text
 adapter-built
@@ -2101,7 +2162,7 @@ Stage 3 — caller callback boundary
 
 callback-visible payload representation
         ↓ optionally replaced by
-onPayload
+Pi Provider/API adapter-owned onPayload
         ↓
 post-callback adapter / SDK processing
         ↓
@@ -2133,6 +2194,8 @@ onPayload output
 ```
 
 because adapter/SDK processing may still occur afterward.
+
+These mechanics describe Pi Provider/API adapter behavior. They do not make `onPayload` a Token Semantic Conversion extension point, and Token production code does not create or depend on the callback.
 
 **Context-aware maxTokens**
 
@@ -3817,10 +3880,12 @@ type StreamFunction<
   TOptions extends StreamOptions = StreamOptions
 > = (
   model: Model<TApi>,
-  context: Context,
+  context: TranscriptContext,
   options?: TOptions
 ) => AssistantMessageEventStream
 ```
+
+`StreamFunction` is a Provider-layer function type. Its context input is `TranscriptContext`; Models performs `Context` normalization before calling it.
 
 Its source-declared contract states:
 
@@ -3869,13 +3934,13 @@ The mismatch belongs to the direct API implementation layer.
 interface ProviderStreams {
   stream(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: StreamOptions
   ): AssistantMessageEventStream
 
   streamSimple(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions
   ): AssistantMessageEventStream
 
@@ -3894,6 +3959,8 @@ interface ProviderStreams {
 ```
 
 `ProviderStreams` is the uniform API implementation-module dispatch shape.
+
+Provider-facing stream functions receive `TranscriptContext`. Client Protocol converters produce Pi `Context`; `Models` calls `normalizeContext()` before Provider dispatch, and Token Semantic Conversion code does not construct or pass `TranscriptContext` itself.
 
 It is intentionally less API-specific than:
 
@@ -4210,6 +4277,8 @@ deferred continuation/cancellation convenience
 
 Providers own stream behavior while Models resolves auth and delegates to the Provider owning the model.
 
+`Models.streamSimple()` is the fixed outer call surface for Token Semantic Conversion. The composition root registers Private/Goat factories with Models; Client Protocol and runtime execution receive only the resolved `Model`, Pi `Context`, and Pi options, never a concrete `Provider`.
+
 #### 6.5.1 Models Request Transforms
 
 ```ts
@@ -4281,6 +4350,8 @@ Models.streamSimple()
 ```
 
 return an outer `lazyStream()`.
+
+The supported Semantic Conversion form is `Models.streamSimple()` with Pi `Context`. Provider-layer `stream()`/`streamSimple()` calls receive `TranscriptContext` after Models normalization and remain implementation details behind the Models registry.
 
 Within its async chain they perform:
 
@@ -4864,23 +4935,44 @@ No additional authority vocabulary is introduced by this index.
 
 ## 8. Source Basis and Freeze Provenance
 
-This protocol version is pinned to:
+The Pi source material in this protocol version has two provenance layers. The original
+extraction was pinned to:
 
 ```text
 Upstream Repository:
 earendil-works/pi
 
-Upstream Commit / Tag:
+Original Extraction Upstream Commit / Tag:
 914cf1472e715297caa30db4b9535d534a9eb718 / v0.84.2
 
-Vendored Token Snapshot:
+Original Vendored Token Snapshot:
 fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575
 
-Package:
-@earendil-works/pi-ai 0.84.2
-
-Reference Date:
+Original Reference Date:
 2026-08-14
+```
+
+The checked-in reference tree has since been updated to:
+
+```text
+Reference Package:
+@earendil-works/pi-ai 0.86.1
+
+Reference Tree:
+pi-agent/packages/ai
+```
+
+Token's production runtime dependency is separate from this reference extraction:
+
+```text
+Runtime Package:
+@earendil-works/pi-ai 0.86.1
+
+Pin:
+exact, in the root package and every workspace package
+
+Runtime Module:
+the installed @earendil-works/pi-ai package
 ```
 
 **Package identity source:**
@@ -4889,19 +4981,21 @@ Reference Date:
 pi-agent/packages/ai/package.json
 ```
 
-The pinned `package.json` identifies:
+The checked-in reference `package.json` identifies:
 
 ```text
 name:
 @earendil-works/pi-ai
 
 version:
-0.84.2
+0.86.1
 ```
 
-The pinned upstream commit/tag defines the Pi source meaning of this protocol version; the vendored Token snapshot identifies the local evidence copy used by this repository.
+The original upstream commit/tag and `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575` identify the extraction baseline. The checked-in `pi-agent/` tree has since been updated to the `0.86.1` reference package snapshot. Both remain reference material and neither replaces Token's exact installed `@earendil-works/pi-ai` `0.86.1` production pin.
 
-Future source changes do not retroactively modify this extraction.
+All `pi-agent/...` paths in this section identify that reference tree. They are not runtime dependency paths for Token Semantic Conversion.
+
+Future source changes do not retroactively modify the frozen protocol meaning recorded here.
 
 ---
 
@@ -4917,6 +5011,8 @@ provides:
 chat identity types
 Model
 Context
+TranscriptContext
+ToolChoice
 Message
 content types
 Tool
@@ -4944,6 +5040,22 @@ StreamFunction
 
 AssistantMessageEvent
 ```
+
+The installed `0.86.1` declaration at `node_modules/@earendil-works/pi-ai/dist/types.d.ts` declares:
+
+```ts
+type ToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { type: "tool"; name: string }
+```
+
+Its `SimpleStreamOptions` carries `toolChoice`, `parallelToolCalls`, and `reasoning?: ModelThinkingLevel`.
+
+The current vendored source at `pi-agent/packages/ai/src/types.ts` differs: `ToolChoice` there is only `"auto" | "none"`; `SimpleStreamOptions` carries `toolChoice` and `reasoning?: ThinkingLevel` but does not declare `parallelToolCalls`. Use that file only for the narrower contract it actually contains.
+
+Both declarations type `ProviderStreams.stream()` and `streamSimple()` with `TranscriptContext`. `Context` remains a distinct public request input; only `normalizeContext()` produces `TranscriptContext`, and Client Protocol converters produce Pi `Context`, not `TranscriptContext`.
 
 It also establishes the existence of the separate image-generation contract family that is explicitly out of scope for this document.
 
@@ -5252,7 +5364,7 @@ direct streamSimple preflight behavior
 
 samplingParams provider-payload precedence
 
-onPayload replacement behavior
+Provider/API adapter-owned onPayload replacement behavior
 
 adapter-specific post-onPayload processing
 
@@ -5283,7 +5395,7 @@ For Mistral, the observed lifecycle includes:
 buildChatPayload()
         │
         ▼
-onPayload()
+Provider/API adapter-owned onPayload()
         │
         ▼
 toMistralWirePayload()
@@ -5380,6 +5492,8 @@ requires a new protocol version.
 
 The phrase `"current source"` must not be used to reinterpret this frozen version after the reference commit changes.
 
+This versioning rule applies to this frozen protocol version. The original extraction provenance remains v0.84.2; the checked-in `pi-agent/` tree is now the `0.86.1` reference snapshot and remains reference material only. Neither changes Token's separate production runtime pin: the installed `@earendil-works/pi-ai` `0.86.1` package is the runtime dependency.
+
 ---
 
 ## 9. Frozen Contract Lifecycle
@@ -5399,7 +5513,7 @@ Shared Helpers / Adapter Conversion
 Callback-Visible Payload Representation
         │
         ▼
-onPayload
+Optional Provider/API Adapter onPayload
         │
         ▼
 Optional Adapter / SDK
@@ -5429,6 +5543,8 @@ Terminal
                     └── Promise<void>
 ```
 
+The `onPayload` stage is optional Pi Provider/API adapter behavior. Token Semantic Conversion does not create the callback, and the lifecycle is semantically identical when the stage is absent.
+
 The Frozen protocol preserves the following boundaries:
 
 ```text
@@ -5446,6 +5562,9 @@ callback-visible payload
 
 onPayload
 ≠ universal final transformation
+
+Pi Provider/API adapter onPayload ownership
+≠ Token Semantic Conversion extension point
 
 samplingParams precedence
 within adapter construction

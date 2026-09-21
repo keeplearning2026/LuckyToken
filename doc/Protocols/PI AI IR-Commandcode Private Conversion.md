@@ -85,7 +85,7 @@ Pi model + Context + SimpleStreamOptions
 → convert messages and tools
 → convert scalar options
 → build closed-world GenerateRequest
-→ optional onPayload mutation/replacement
+→ optional Pi onPayload observation hook (never created by Semantic Conversion)
 → JSON serialize/parse
 → repeat closed-world authority and schema validation
 → prepare retry-stable logical request
@@ -174,7 +174,14 @@ Resolve `options.reasoning` through Pi model capability normalization:
 
 Do not describe clamp as a CommandCode default. It is Pi/model compatibility normalization.
 
-### 5.5 Other options
+### 5.5 Tool controls and other options
+
+Pi tool controls are Provider capability decisions, not Client Protocol branches:
+
+- `toolChoice:"none"` is implemented exactly by sending an empty current tool catalog;
+- `toolChoice:"auto"` or omission keeps the complete current tool catalog and sends no extra wire control;
+- `toolChoice:"required"`, a named-tool choice, and `parallelToolCalls:false` have no CommandCode wire representation. Keep the tool catalog and omit only the unsupported constraint inside the Provider with a bounded Provider-owned request notice;
+- `parallelToolCalls:true` is the target default and requires no extra wire field.
 
 Map target-backed options such as timeout/retry, signal, callbacks, session identity, telemetry, fetch, and safe headers according to their runtime ownership.
 
@@ -202,7 +209,7 @@ This decision does not trust malformed content:
 
 - text and ordinary thinking convert normally;
 - ToolCall ID/name/arguments must remain valid;
-- Pi 0.84.2 `ToolCall.namespace` is not representable by the CommandCode request contract and therefore causes conversion failure rather than silent identity loss;
+- Pi 0.86.1 `ToolCall.namespace` is not representable by the CommandCode request contract and therefore causes conversion failure rather than silent identity loss;
 - lossless JSON object validation still applies;
 - unsupported signatures/provenance are dropped or rejected according to their actual content rule;
 - redacted thinking has no CommandCode representation and is dropped while preserving other content;
@@ -261,9 +268,11 @@ Never inject constraint instructions into the system prompt or tool description.
 
 ## 8. onPayload and final certification
 
-`onPayload` is an optional request hook. It may mutate or replace the candidate exactly once before retry.
+`onPayload` is Pi's public Provider hook. The Provider may observe or replace the Provider candidate exactly once before retry, then validates any replacement.
 
-After the hook:
+Token Semantic Conversion never creates, mutates, or depends on this callback. With no callback, request semantics and terminal outcome are identical. Tests may use it only as a Provider-wire capture seam; bounded diagnostics may observe immutable facts without changing the request.
+
+After the optional hook, or directly after conversion when it is absent:
 
 1. serialize to JSON;
 2. parse back to plain JSON;
@@ -357,7 +366,7 @@ Pi required `timestamp` remains the request/response-lifetime timestamp chosen b
 - CommandCode text → Pi TextContent;
 - CommandCode reasoning → Pi ThinkingContent, even if the model catalog says `reasoning:false`; already received representable content is not rejected by request capability metadata;
 - CommandCode final tool call → Pi ToolCall with preserved ID/name and lossless JSON object arguments; CommandCode supplies no authoritative namespace, so Pi `ToolCall.namespace` is omitted;
-- provider signatures/provenance with no installed Pi 0.84.2 slot are omitted or retained only in Pi fields that actually exist;
+- provider signatures/provenance with no installed Pi 0.86.1 slot are omitted or retained only in Pi fields that actually exist;
 - Pi `AssistantMessage.endTurn` remains undefined because CommandCode supplies no authoritative equivalent; never invent it from finish reason.
 
 ### 10.4 Stop reason normalization

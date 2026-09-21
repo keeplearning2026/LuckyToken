@@ -1,15 +1,24 @@
 import type { EffectiveCatalogBaseline } from "@token/application-control-plane/control-plane";
 
 /**
- * The exact pinned Pi implementation that Token's models.json schema
- * and effective catalog composition are compatible with (Ticket 09).
+ * The models.json/effective-catalog compatibility identity that Token
+ * mirrors (Ticket 09).
  *
- * This record is the single compatibility identity: the models.json schema
- * (`src/providers/models-json-schema.ts`) is extracted from the pinned
+ * This record is the recorded `@earendil-works/pi-coding-agent` reference
+ * identity for the schema and composition semantics below; it is not Token's
+ * runtime Provider execution dependency. The models.json schema
+ * (`src/providers/models-json-schema.ts`) is extracted from that tree's
  * `model-config.ts`, and the effective composition
- * (`src/providers/effective-composition.ts`) mirrors the pinned
+ * (`src/providers/effective-composition.ts`) mirrors its
  * `provider-composer.ts` apply/upsert/override semantics. Test fixtures
- * identify this baseline instead of importing Pi implementation objects.
+ * identify this reference baseline instead of importing Pi implementation
+ * objects.
+ *
+ * The checked-in `pi-agent/` tree is reference material only and has been
+ * updated to the `0.86.1` snapshot. Runtime Provider execution uses the
+ * separate npm package `@earendil-works/pi-ai@0.86.1`. Re-extracting this
+ * identity from the updated tree is separate work owned by the
+ * providers/models.json schema owner.
  */
 export const PI_COMPATIBILITY_BASELINE: EffectiveCatalogBaseline =
   Object.freeze({

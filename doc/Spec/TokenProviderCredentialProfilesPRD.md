@@ -464,8 +464,11 @@ POST http://127.0.0.1:<port>/v1/responses
     │
     └─ Semantic Conversion
          → capture managed or ambient Provider binding in the Semantic lane
-         → Pi Provider execution under that binding
-         → Pi AI IR → Responses rendering
+         → resolved Pi Model + Pi Context + ModelsSimpleStreamOptions
+         → Models.streamSimple()
+         → Pi normalizeContext() → TranscriptContext
+         → registered Pi Provider/API adapter
+         → Pi AssistantMessage → Responses rendering
 ```
 
 Provider Native does not perform a second credential-type eligibility decision and does not redirect to Semantic Conversion because of the selected auth branch or ambient binding. Semantic Conversion likewise does not inspect a Native result or credential choice. Once either lane begins, failure never falls through to the other. Direct Mode Responses is an independent contract and is not changed or otherwise specified by this PRD.
@@ -488,7 +491,7 @@ Changing transport encoding, such as compressing the rewritten JSON, is permitte
 
 ## 9.4 Semantic Conversion execution
 
-Semantic Conversion invokes the existing Pi Provider path under its own exact captured Provider auth binding and does not pass an inbound client credential as Pi `options.apiKey`. Pi owns Provider-specific `api_key`/OAuth/ambient resolution, non-interactive token refresh during auth consumption, and Provider wire construction. A refresh failure ends that semantic execution and never invokes interactive login. Credential Profiles never enter Pi AI IR.
+Semantic Conversion invokes `Models.streamSimple()` with the resolved Model, Pi `Context`, and `ModelsSimpleStreamOptions` under its own exact captured Provider auth binding and does not pass an inbound client credential as Pi `options.apiKey`. The Client Protocol never receives or calls a concrete `Provider`; `streamSimple()` resolves the composition-registered Pi Provider/API adapter and normalizes `Context` to `TranscriptContext` before dispatch. Pi owns Provider-specific `api_key`/OAuth/ambient resolution, non-interactive token refresh during auth consumption, and Provider wire construction. A refresh failure ends that semantic execution and never invokes interactive login. Credential Profiles never enter Pi AI IR.
 
 ## 9.5 Inbound request exclusion
 

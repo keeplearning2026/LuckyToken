@@ -11,7 +11,6 @@ import {
   nativeContinuity,
   omitContinuity,
 } from "./continuity-decisions.js";
-import { projectOpenAIResponsesPayload } from "./payload.js";
 
 function isCompleteReasoningItem(value: string): boolean {
   let parsed: unknown;
@@ -37,7 +36,6 @@ function adapter(api: string): ResponsesReasoningAdapter {
   return Object.freeze({
     id: api,
     api,
-    projectPayload: projectOpenAIResponsesPayload,
     prepareHistory(input: ResponsesReasoningHistoryPreparationInput) {
       if (!input.model.reasoning) {
         return fallback("target does not support reasoning");

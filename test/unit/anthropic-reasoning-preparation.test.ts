@@ -235,7 +235,7 @@ describe("Anthropic reasoning history preparation", () => {
     });
 
     expect(notice).toHaveBeenCalledWith(expect.objectContaining({
-      code: "anthropic_semantic_projection_omitted",
+      code: "semantic_reasoning_omitted",
       direction: "request",
       action: "degrade",
     }));

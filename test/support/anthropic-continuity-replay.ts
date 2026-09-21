@@ -1,12 +1,13 @@
-import type {
-  AssistantMessageEventStream,
-  Context,
-  Model,
-  ModelsSimpleStreamOptions,
+import {
+  normalizeContext,
+  type AssistantMessageEventStream,
+  type Context,
+  type Model,
+  type ModelsSimpleStreamOptions,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
-import { prepareAnthropicPayloadProjection } from "../../src/protocols/anthropic/semantic/projection/request.js";
 import { prepareAnthropicReasoning } from "../../src/protocols/anthropic/semantic/reasoning/request.js";
 import { captureFinalPiPayload } from "./pi-final-payload.js";
 
@@ -14,11 +15,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Certify opaque continuity through the real Pi 0.86.1 Provider boundary.
+ * `onPayload` is test-only observation: it captures and never repairs the
+ * payload constructed by the selected Pi adapter.
+ */
 export async function captureAnthropicContinuityReplay(input: {
   readonly model: Model<string>;
   readonly clientContent: readonly Record<string, unknown>[];
   readonly start: (
-    context: Context,
+    context: TranscriptContext,
     options: ModelsSimpleStreamOptions,
   ) => AssistantMessageEventStream;
   readonly verifyPreparedContext?: (context: Context) => void;
@@ -36,7 +42,10 @@ export async function captureAnthropicContinuityReplay(input: {
   const toolNames = new Set(
     toolUses
       .map((block) => block.name)
-      .filter((name): name is string => typeof name === "string" && name.length > 0),
+      .filter(
+        (name): name is string =>
+          typeof name === "string" && name.length > 0,
+      ),
   );
   const converted = parseAnthropicTextInvocation(
     {
@@ -64,25 +73,20 @@ export async function captureAnthropicContinuityReplay(input: {
   });
   const assistant = prepared.invocation.pi.context.messages[0];
   if (assistant?.role !== "assistant" || !Array.isArray(assistant.content)) {
-    throw new Error("Anthropic continuity fixture did not produce assistant history");
+    throw new Error(
+      "Anthropic continuity fixture did not produce assistant history",
+    );
   }
   if (!assistant.content.every(isRecord)) {
     throw new Error("Anthropic continuity fixture produced invalid Pi content");
   }
   input.verifyPreparedContext?.(prepared.invocation.pi.context);
 
-  const projection = prepareAnthropicPayloadProjection({
-    model: input.model,
-    invocation: prepared.invocation,
-    effortPlan: prepared.effortPlan,
-  });
+  const transcript = normalizeContext(prepared.invocation.pi.context);
   return captureFinalPiPayload((capture) =>
-    input.start(prepared.invocation.pi.context, {
+    input.start(transcript, {
       ...prepared.invocation.pi.options,
-      async onPayload(basePayload) {
-        const projected = await projection.project(basePayload, input.model);
-        return capture(projected.payload);
-      },
+      onPayload: capture,
     }),
   );
 }

@@ -58,7 +58,7 @@ Allowed values:
 
 - `unknownContent`: `error | ignore`, default `error`.
 
-Interrupted ordinary Client ToolCall repair, exact-only cache projection, unknown Pi response-block omission, duplicate ToolResult rejection, required IDs, redacted mapping, SSE order, and malformed JSON handling are fixed protocol behavior and are not configurable.
+Interrupted ordinary Client ToolCall repair, exact-only cache-control disposition, unknown Pi response-block omission, duplicate ToolResult rejection, required IDs, redacted mapping, SSE order, and malformed JSON handling are fixed protocol behavior and are not configurable.
 
 ## 3. Request envelope
 
@@ -70,16 +70,16 @@ Interrupted ordinary Client ToolCall repair, exact-only cache projection, unknow
 | `system` TextBlock[] | `Context.systemPrompt` | Concatenate block text in order with `\n` between blocks. Citations and local cache breakpoint metadata do not enter the string. |
 | `max_tokens` | `options.maxTokens` | Positive integer. Reject zero/negative at Client conversion as invalid request, not later as 500. |
 | `temperature` | `options.temperature` | Finite numeric value accepted by the target contract. |
-| `top_p` | `options.samplingParams.top_p` | Convert; Pi explicitly supports it. |
-| `top_k` | `options.samplingParams.top_k` | Convert; Pi explicitly supports it. |
-| `metadata.user_id` | `options.metadata.user_id` | String maps exactly. `null`/absence means omission. |
+| `top_p` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
+| `top_k` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
+| `metadata.user_id` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in generic `metadata`. Provider Native Preservation may retain the exact input. |
 | `thinking` | `options.reasoning` + `thinkingBudgets` | Use §4. |
 | `output_config.effort` | `options.reasoning` | Use §4. |
 | `output_config.format` | none | Drop and document. Do not borrow Tool.constrainedSampling. |
-| `cache_control` | Anthropic Supplement | Preserve exact consumed attachment/TTL candidates and use §8. Never promote a local marker to request-wide Pi cache retention. |
+| `cache_control` | protocol-private cache handling | Use §8. Do not create a protocol-owned auxiliary request carrier. Never promote a local marker to request-wide Pi cache retention. |
 | `stop_sequences` | none | Drop; no generic Pi option. |
-| `tool_choice` | none | Drop. It MUST NOT cause tools or messages to be fabricated. |
-| `container`, `inference_geo`, `service_tier` | Anthropic Supplement | Preserve only current typed projection candidates. An unsupported target omits them with a warning and still dispatches. `null` remains distinct only where a current Adapter consumes that distinction. |
+| `tool_choice` | `options.toolChoice` + `options.parallelToolCalls` | `auto`→`auto`, `none`→`none`, `any`→`required`, explicit tool→`{type:"tool", name}`; `disable_parallel_tool_use:true`→`parallelToolCalls:false`. Preserve the control completely; only the selected Pi Provider/API adapter may omit or reject an unsupported capability. |
+| `container`, `inference_geo`, `service_tier` | protocol-private omit/warn; Native Preservation | Not Pi 0.86.1 common options. Omit each with a bounded notice; never hide it in `samplingParams` or generic `metadata`. Provider Native Preservation may retain exact fields. |
 | `stream` | render state | `true` selects atomic Anthropic SSE; otherwise JSON. |
 | unknown property on known request | none | Ignore unless it violates a security/authority closed-world boundary. |
 
@@ -92,7 +92,7 @@ Source absence never creates a synthetic option. Pi/Provider defaults apply.
 1. If `output_config.effort` is present and non-null, it determines `options.reasoning`.
 2. Otherwise `thinking.type="enabled"` selects a level from `budget_tokens` using the adapter's documented deterministic budget ladder.
 3. `thinking.type="adaptive"` without effort requests no independent Pi field; drop the adaptive marker.
-4. `thinking.type="disabled"` cannot be distinguished from omission by the current Pi request type. Convert to reasoning omission and record this as a documented degradation, not as a proven explicit off.
+4. `thinking.type="disabled"` maps to `options.reasoning="off"`. Pi preserves this as an explicit disable, distinct from omission.
 5. `display` has no generic Pi control and is dropped.
 
 ### 4.2 Effort mapping
@@ -204,10 +204,10 @@ Content mapping:
 - nested document/search result → representable ordered text/image degradation;
 - cache markers affect §8 only.
 
-When an exact Anthropic target restores a retained nested document/search-result
-block, it must also consume the Pi fallback content emitted for that same source
-block. Restoring the rich block may replace the fallback value, but cannot leave
-the fallback unassociated or change the surrounding ToolResult relationship.
+Nested document/search-result blocks become representable ordered text/image
+fallback content in Pi. Semantic Conversion does not retain a protocol-owned
+side channel to restore the rich source block; exact preservation is owned by
+Provider Native Preservation.
 
 ### 6.2 Invalid states
 
@@ -258,9 +258,9 @@ Bash/code execution/web search/web fetch/editor/tool search/container/server too
 
 - If execution belongs to the server/provider and Pi has no execution owner, do not advertise it as a Pi client tool.
 - Preserve independently representable returned text/image content in order without claiming server execution.
-- Preserve only typed fields consumed by a current exact target Adapter; every other server-specific candidate is omitted with a warning.
+- Preserve only facts with an exact Pi neutral representation; omit every other server-specific field with a bounded notice or leave the exact request to Provider Native Preservation.
 - Drop pure lifecycle metadata. Do not invent a placeholder transcript merely to stand in for unavailable execution.
-- If source tool_choice requires a tool that was not included in the executable Pi catalog, drop the unsupported control under the auxiliary-control rule; do not fabricate capability.
+- Preserve every representable source tool choice in Pi `options.toolChoice`; do not rewrite it to `auto`, drop it, or otherwise pre-degrade it for a concrete Provider. The selected Provider/API adapter owns capability handling.
 
 ### 7.3 defer_loading and tool_reference
 
@@ -272,9 +272,10 @@ An unknown referenced tool name or malformed reference is a conversion error.
 
 Pi exposes only request-wide `cacheRetention`; Anthropic block-local cache breakpoints cannot be represented by that option without changing scope.
 
-- Preserve each currently consumed top-level, system-block, message-block, and tool-local marker as its own typed Supplement candidate.
-- A selected Adapter projects a marker only when it has an exact certified target attachment point and TTL representation.
-- Every unconsumed marker is centrally omitted with a warning.
+- Consumed top-level, system-block, message-block, and tool-local markers use protocol-private Anthropic disposition only.
+- Map a marker to a Pi common option only when an exact neutral contract exists; otherwise omit it with a bounded notice or leave the exact request to Provider Native Preservation.
+- Semantic Conversion does not retain a protocol-owned auxiliary request carrier or inspect a Provider request.
+- Every unconsumed marker is omitted with a warning.
 - Never use a local marker to set request-wide `cacheRetention`.
 - Never simulate cache control through model-visible instructions.
 
@@ -294,7 +295,7 @@ Pi exposes only request-wide `cacheRetention`; Anthropic block-local cache break
 | `stop_sequence` | null/default; Pi has no source fact |
 | `usage` | §9.4 |
 
-`responseModel`, diagnostics, rawStopReason, `endTurn`, cost, internal timestamps, notices, and credentials are not exposed unless the target protocol has an explicit safe field. Pi 0.84.2 `AssistantMessage.endTurn` is diagnostic-only here and does not alter Anthropic stop-reason rendering.
+`responseModel`, diagnostics, rawStopReason, `endTurn`, cost, internal timestamps, notices, and credentials are not exposed unless the target protocol has an explicit safe field. Pi 0.86.1 `AssistantMessage.endTurn` is diagnostic-only here and does not alter Anthropic stop-reason rendering.
 
 ### 9.2 Content projection
 

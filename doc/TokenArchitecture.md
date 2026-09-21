@@ -1,7 +1,7 @@
 # Token 实现架构说明
 
 **文档性质：** 当前实现的维护者地图（implementation architecture map）<br>
-**对应代码：** `src/` Backend/Core、`packages/desktop-shell/` Electron Desktop、`packages/` Provider/Control Plane 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.84.2<br>
+**对应代码：** `src/` Backend/Core、`packages/desktop-shell/` Electron Desktop、`packages/` Provider/Control Plane 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.86.1<br>
 **源码基线：** commit `590cd77`（2026-08-26，Release version 1.0.0）<br>
 **架构规范：** [Token Core Architecture Specification](./Spec/TokenCoreSpec.md)<br>
 **Desktop 架构：** [Token Electron Product Architecture Specification](./Spec/TokenElectronArchitectureSpec.md)（已实现；Windows packaged lifecycle 已认证，macOS/Linux 仍待真实平台认证）<br>
@@ -161,14 +161,16 @@ WHATWG Response → Node ServerResponse → Agent
   Atomic SSE；
 - 支持 Responses incremental input、`previous_response_id` 的有界持久化展开、
   Responses JSON/Atomic SSE、Codex tool shapes 与 `store:false` policy；
-- 支持 `output_config.effort` → Pi reasoning 映射、`metadata.user_id` 透传；
+- 支持 `output_config.effort` → Pi reasoning 映射；
   `max_tokens`/`max_output_tokens` 必须为正安全整数，`0` 在转换层即被拒绝；
   未知 effort 默认降级为 `max`（Responses `futureReasoningEffort` 默认 `max`；
   Anthropic 未知 effort 固定规范化为 `max` 并发布 degrade notice；
   Responses 可配置 omit/error）；
 - 支持 Claude Code 等真实 Anthropic Agent 接入；recognized fields 按冻结转换方法
-  直接转换或显式 omit/degrade，例如 `top_p` 与 thinking budget 进入 Pi，
-  `tool_choice` 无 Pi 表示时不伪造控制；
+  直接转换或显式 omit/degrade，例如 thinking budget 进入 Pi；
+  `tool_choice` 的 `auto`/`any`/`none`/named 与 `disable_parallel_tool_use`
+  完整映射到 Pi `toolChoice`/`parallelToolCalls`，由 selected Provider 决定应用、
+  省略并 warning；
 - 支持请求超时、客户端断开、服务关闭、Provider retry 与取消传播；
 - Provider 通过受信任的 neutral Pi diagnostic 提供有界 upstream failure facts；
   Execution 把已验证 fact 保存在 `ExecutionFailure.failure`，Anthropic/Responses
@@ -255,9 +257,9 @@ flowchart LR
 | --- | --- | --- | --- |
 | Transport/Runtime | `server.ts`, `runtime.ts`, `http.ts`, `settings/runtime.ts` | TCP、Node/Web 类型适配、route、协议启停 gate、取消、timeout、response delivery | Anthropic 字段、Pi message、Provider 配置 |
 | Credential/security authorities | `credentials/`, Application Control Plane capability | Provider credential mutation/status、management capability authentication | Codex caller credential（由 Direct Mode wire 自己保存）、Client/Provider semantic conversion |
-| Anthropic adapter | `protocols/anthropic/` | Anthropic Wire ↔ Pi，Anthropic error/JSON/SSE | CommandCode 协议与 Provider 决策 |
-| OpenAI Responses adapter | `protocols/openai-responses/` | Responses Wire ↔ Pi（独立语义执行/投影/推理/continuity），Responses error/JSON/Atomic SSE | CommandCode 协议与 Provider 决策 |
-| Pi integration/composition | `pi/`, `composition.ts`, `cli-config.ts`, `cli.ts` | 配置加载、Pi Models、Provider 注册、credential persistence、进程装配 | 两侧协议转换语义 |
+| Anthropic adapter | `src/protocols/anthropic/` | Anthropic Wire ↔ Pi，Anthropic error/JSON/SSE | CommandCode 协议与 Provider 决策 |
+| OpenAI Responses adapter | `src/protocols/openai-responses/` | Responses Wire ↔ Pi（独立语义转换/执行协调/推理/continuity），Responses error/JSON/Atomic SSE | CommandCode 协议与 Provider 决策 |
+| Pi integration/composition | `src/providers/`, `src/composition.ts`, `src/cli-config.ts`, `src/cli.ts` | 配置加载、Pi Models、Provider 注册、credential persistence、进程装配 | 两侧协议转换语义 |
 | CommandCode model capability catalog | `packages/commandcode-model-catalog/` | 两个 CommandCode Provider 的稳定模型能力事实；price-free Pi Model projection | Provider identity、credential、transport、wire lifecycle |
 | CommandCode Private Provider Package | `packages/provider-commandcode-private/` | Pi ↔ CommandCode Private、fixed runtime compatibility config、HTTP attempts、JSONL lifecycle | Goat/OpenAI Completions transport、Client Protocol 格式与 Core 注册策略 |
 | CommandCode Goat Provider Package | `packages/provider-commandcode-goat/` | 独立认证并使用 Pi OpenAI Completions adapter 调用 `/provider/v1` | Private Protocol conversion/transport/response handling |
@@ -448,8 +450,9 @@ flowchart LR
 | CommandCode request JSON | CommandCode Provider | upstream transport | transport 不再需要 body 后 |
 | partial JSONL/tool state | CommandCode assembler | Provider stream | content completion、terminal、abort 或 error 后 |
 | Anthropic 未声明字段（`context_management` 及未知顶层字段） | Anthropic handler | 读取所需字段时 | 无消费者声明、不读取、不进入 Pi 状态；仅生成 bounded unclaimed 警告 |
-| Anthropic `top_p`/`top_k` | Anthropic handler | Pi options `samplingParams` | Pi invocation terminal 后 |
+| Anthropic `top_p`/`top_k` 等未消费顶层字段 | Anthropic handler | 无 Pi 消费者 | 不读取、不进入 Pi 状态；仅生成 bounded unclaimed 警告 |
 | Anthropic `thinking` budget | Anthropic handler | Pi options `thinkingBudgets` | Pi invocation terminal 后 |
+| Anthropic `tool_choice` / `disable_parallel_tool_use` | Anthropic handler | Pi options `toolChoice` / `parallelToolCalls` | Provider 应用或省略后；省略事实仅保留 bounded notice |
 | CommandCode non-content 事件（`start`、`start-step`、`finish-step`、`provider-metadata`、`tool-result`） | CommandCode assembler | validate-then-drop；仅 finish-step last id/modelId 成为 response identity | committed result 建立前，其余 metadata/header/body 销毁 |
 | CommandCode `providerExecuted`/`dynamic` 元数据 | CommandCode assembler | 无（字段从未被读取/校验，assembler 无消费声明） | 不进入任何状态；事件到达即结束 |
 
@@ -824,19 +827,27 @@ validateAnthropicSourceRequest(value)
   → ValidatedAnthropicSourceRequest
 
 convertValidatedAnthropicRequest(validated, receivedAt)
-  → AnthropicInvocation
+  → AnthropicConversionResult
 ```
 
-`AnthropicInvocation` 是该 Client Protocol 的短生命周期输出，不是新的通用 IR；
-实际形状以 `src/protocols/anthropic/semantic/invocation.ts` 为准（`pi.context` +
-`pi.options`、`reasoning`、`supplement`、`client.renderState`）：
+该 Client Protocol 的短生命周期输出不是新的通用 IR；实际形状以
+`src/protocols/anthropic/semantic/invocation.ts` 为准。`AnthropicSemanticInvocation`
+只包含 `pi.context` + `pi.options` 与 `reasoning`；`AnthropicConversionResult`
+另外提供 `selector`、`client.renderState` 和 `client.notices`：
 
 ```ts
-interface AnthropicInvocation {
+interface AnthropicSemanticInvocation {
   pi: { context: Pi.Context; options: Pi.ModelsSimpleStreamOptions };
-  reasoning: AnthropicReasoningPlan;
-  supplement: ResponsesProjectionSupplementLike;
-  client: { renderState: AnthropicRenderState };
+  reasoning: AnthropicReasoningSemantics;
+}
+
+interface AnthropicConversionResult {
+  selector: string;
+  invocation: AnthropicSemanticInvocation;
+  client: {
+    renderState: AnthropicRequestRenderState;
+    notices: readonly ConversionNotice[];
+  };
 }
 ```
 
@@ -848,24 +859,24 @@ interface AnthropicInvocation {
 
 当前 accepted deterministic surface 包括 text、system prompt、历史 ordinary thinking、
 base64 image shape、client tool definition、tool use/result、temperature、
-`output_config.effort`、`metadata.user_id` 和 stream flag；但 image 还必须通过
-model-aware fidelity policy，production 默认 policy 当前不认证 image path，因此
-不会仅凭 JSON shape 放行。
+`output_config.effort` 和 stream flag；但 image 还必须通过 model-aware fidelity
+policy，production 默认 policy 当前不认证 image path，因此不会仅凭 JSON shape 放行。
 
 **只转换消费清单声明的字段。** 本模块维护 `ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS`
 （spec 声明的 positive-consumer union，用于派生 bounded omission warning，不是
 unsupported-field registry）。conversion 读取 `model`、`system`、`messages`、
 `tools`、`max_tokens`、`temperature`、`output_config.effort`、
-`metadata.user_id`、`stream`、`top_p`/`top_k`、`thinking`、`tool_choice`、
-`stop_sequences`、`cache_control`、`service_tier`、`inference_geo`、`container`；
-其中 `top_p`/`top_k` 进入 `options.samplingParams`，`thinking` budget 进入
-`options.thinkingBudgets`，`tool_choice`/`stop_sequences`/`cache_control`/
-`output_config.format`/`service_tier`/`inference_geo`/`container` 进入 supplement
-candidates。未声明的 `context_management` 及未来未知字段生成 bounded
-`unclaimedTopLevelKeys` 警告（上限 8 条），不校验、不进入 Pi 状态。顶层
-`cache_control` 是消费字段，不是忽略字段。content block 与 tool definition 的
-额外控制字段（`citations`、`caller`、`type`、`allowed_callers`、
-`defer_loading` 等）按"只读所需"原则忽略。
+`stream`、`thinking` 和 `tool_choice`。其中 `thinking` budget 进入
+`options.thinkingBudgets`；`tool_choice` 的 `auto`/`any`/`none`/named 分别映射到
+Pi `options.toolChoice` 的 `auto`/`required`/`none`/named tool，且
+`disable_parallel_tool_use` 映射到 `options.parallelToolCalls = false`。
+`top_p`/`top_k`、`stop_sequences`、顶层 `cache_control`、`output_config.format`、
+`service_tier`、`inference_geo`、`container` 等没有 Pi neutral 合同，按 bounded
+unclaimed 警告处理；若调用方必须逐字保留，只能选择 Native Preservation。它们不生成
+supplement，也不进入 Provider payload projector。未声明的 `context_management`
+及未来未知字段同样生成 bounded `unclaimedTopLevelKeys` 警告（上限 8 条），不校验、
+不进入 Pi 状态。content block 与 tool definition 的额外控制字段（`citations`、
+`caller`、`type`、`allowed_callers`、`defer_loading` 等）按"只读所需"原则忽略。
 
 **只有真正转换不了才报错。** 错误分类只有两类：
 
@@ -985,7 +996,7 @@ composeOptions(
 
 | Fact owner | 输入字段 | Pi carrier |
 | --- | --- | --- |
-| Anthropic protocol | `maxTokens`, `temperature?`, `reasoning?`, `metadata.user_id?` | 对应 Pi option |
+| Anthropic protocol | `maxTokens`, `temperature?`, `reasoning?`, `toolChoice?`, `parallelToolCalls?`, `thinkingBudgets?` | 对应 Pi semantic option |
 | Request Identity | `effectiveSessionId` | `sessionId` |
 | HTTP lifecycle | `AbortSignal` | `signal` |
 | Runtime/composition infrastructure | typed headers/env/transport/timeout/retry callbacks when explicitly owned | matching Pi infrastructure option |
@@ -993,10 +1004,10 @@ composeOptions(
 
 它使用 closed-world allowlist 防止某一 owner 覆盖另一 owner 的字段。特别是 request identity
 或 credential authority 不能制造 arbitrary metadata；Router defaults 也不能覆盖 Client
-Protocol 已拥有的 `metadata.user_id`。输出建立后，各输入来源分类结束，只剩 Pi options fields。
+Protocol 已拥有的 semantic option。输出建立后，各输入来源分类结束，只剩 Pi options fields。
 
 Anthropic protocol 现在直接拥有的 Pi option keys 为：`maxTokens`、`temperature`、
-`metadata`（其下仅 `user_id`）与 `thinkingBudgets`（effort 先映射为
+`toolChoice`、`parallelToolCalls` 与 `thinkingBudgets`（effort 先映射为
 `thinkingBudgets`）。`reasoning` Pi option 由 Anthropic reasoning 准备层
 （`semantic/reasoning/request.ts`）设置，Router defaults 不能注入 `reasoning`
 （它不属于 Router 的已分类 v1 policy）。
@@ -1016,7 +1027,7 @@ resolveModel(models, selector): Model<string>
 `models.json`，也不知道当前 Provider 是 CommandCode。Anthropic handler 使用它把
 external selector 变成真实 Pi `Model`；404 rendering 由 handler 拥有。
 
-## 5.8 Pi execution commit — `src/execution.ts`（经 `semantic/execution.ts`、`semantic/pi-execution.ts`）
+## 5.8 Pi execution commit — `src/execution.ts`（经 `semantic/execution.ts`）
 
 > **小白理解：** 模型回答可能像连续寄来的多页传真。这里会一直等待 Pi 发出正式的
 > “完成章”，并核对完成原因；仅仅传真机不再出纸（EOF）不等于任务成功。取消或
@@ -1040,7 +1051,7 @@ execute(models, model, context, options): Promise<AssistantMessage>
 
 该模块只认识 Pi event lifecycle，不知道 Anthropic JSON 或 CommandCode JSONL。
 调用链是 handler → `semantic/execution.ts`（`executeAnthropicSemanticInvocation`）→
-`semantic/pi-execution.ts`（独占创建 `onPayload`）→ 注入的顶层 `execute`。顶层
+neutral execution capability `src/execution.ts` → `Models.streamSimple()`。顶层
 `src/execution.ts` 是共享的 Pi 机制层，任何未来 Client Protocol 也可经自己的
 semantic 包装复用它。
 
@@ -1155,8 +1166,7 @@ flowchart TD
     H --> MV["representability.ts"]
     H --> O["options.ts"]
     H --> SE["semantic/execution.ts"]
-    SE --> PE["semantic/pi-execution.ts"]
-    PE --> E["src/execution.ts / Pi Models"]
+    SE --> E["src/execution.ts → Models.streamSimple()"]
     H --> RS["response.ts"]
     RS --> W["wire.ts JSON"]
     RS --> S["sse.ts Atomic SSE"]
@@ -1198,10 +1208,10 @@ Composition 可以理解为“开门前装配员”：它读取文件、造好�
 它自己不维护 client token，也不做协议翻译。
 
 Pi 是 Token 的共享 runtime/IR contract，但 Pi Agent 不是 Token 的应用
-架构。生产代码依赖 npm package `@earendil-works/pi-ai@0.84.2`；仓库中的
-`pi-agent/packages/ai` 用于 source review/reference，不被 Token-specific 代码
-修改。Token-owned 模块只补上文件加载、Profile persistence/binding、Provider
-construction 和 CLI shell。
+架构。生产代码依赖 npm package `@earendil-works/pi-ai@0.86.1`；仓库中的
+`pi-agent/packages/ai` 是与生产依赖对应的 `0.86.1` reference/source snapshot，
+用于 source review，不被 Token-specific 代码修改。Token-owned 模块只补上文件
+加载、Profile persistence/binding、Provider construction 和 CLI shell。
 
 ## 6.1 Pi public runtime contract
 
@@ -1210,7 +1220,7 @@ construction 和 CLI shell。
 > Protocol 只把任务递给总服务台，不会越过 Pi 直接联系某个供应商。
 
 Token 直接使用以下 Pi public interfaces（为文档精简的公共接口子集；完整定义以
-`@earendil-works/pi-ai@0.84.2` 的 `dist/models.d.ts` 为准）：
+`@earendil-works/pi-ai@0.86.1` 的 `dist/models.d.ts` 为准）：
 
 ```ts
 interface Provider {
@@ -1267,7 +1277,7 @@ Provider 自行选择模型，不共享认证、transport、wire conversion 或 
 模型数据来自官方 `command-code@1.32.1` bundle 提取表，并用当前 Provider API
 `/models` 结果核对可用性与缺失 context：
 
-- `id`：官方权威 id（如 `deepseek/deepseek-v4-flash`、`Qwen/Qwen3.8-Max`）；
+- `id`：官方权威 id（如 `deepseek/deepseek-v4.1-flash`、`Qwen/Qwen3.8-Max`）；
 - `contextWindow` / `input`（text/image）：官方模态；
 - `reasoningEfforts`：官方推理档位（如 DeepSeek 仅 `high/max`、Qwen3.8-Max 仅
   `low/medium/xhigh`）；官方未标注档位时不推断任何可选档位；
@@ -1281,7 +1291,7 @@ efforts 的模型把七个 level 全设为 `null`；有 efforts 时只映射明�
 其余 level 显式为 `null`。请求级选择只经过 Pi 的 capability clamp，Provider 不再
 自行 fallback 到最高档。事实未给出 `maxOutputTokens` 时，Pi 投影使用 `64_000`。
 
-默认模型仍是 `deepseek/deepseek-v4-flash`（`COMMANDCODE_DEFAULT_MODEL_ID`）。
+默认模型仍是 `deepseek/deepseek-v4.1-flash`（`COMMANDCODE_DEFAULT_MODEL_ID`）。
 
 ### 6.2.1 用户自定义 Provider — `models.json`（新增）
 
@@ -1567,9 +1577,10 @@ capability（preparation/attempts/assembler/semantic replay）。它从 Pi Provi
 invocation 得到唯一语义输入，生成稳定 CommandCode request；执行真实 HTTP
 attempts；在 physical EOF 后冻结并返回不可变 JSONL result（`finalizeAfterTransportEnd`
 仅校验完整性并 deep-freeze，失败时清空已拼装 slots）；再把结果转换并 replay 为
-Pi `AssistantMessageEventStream`。Client Protocol 侧投影与语义执行位于各协议模块的
-`commandcode-private` adapter，不属于本包。它完全不知道请求最初来自 Anthropic 还是
-OpenAI Responses。
+Pi `AssistantMessageEventStream`。Client Protocol 只输出 Pi `Context`/options；
+通用 `src/execution.ts` 经 `Models.streamSimple()` 执行，并由 Pi Models 选择已注册
+Provider。该包不拥有 Client Protocol conversion，也完全不知道请求最初来自 Anthropic
+还是 OpenAI Responses。
 
 ## 7.1 Provider factory 与 Pi 接口 — `provider.ts`
 
@@ -1745,8 +1756,9 @@ state，必须先在 Provider/Protocol contract 中证明 source、ownership、f
 ## 7.4 Request preparation/authority closure — `provider.ts`
 
 > **小白理解：** 这里像正式封箱：先确定模型、逻辑 session、fixed compatibility config
-> 和网络地址，再生成完整订单并重新验货，最后把它冻结。即使扩展回调参与修改载荷，
-> 也不能偷换已经确认的模型/session。一次逻辑任务只封箱一次，重试仍发送同一权威订单。
+> 和网络地址，再生成完整订单并重新验货，最后把它冻结。Pi public `onPayload` hook
+> 若由外部调用方提供，可在这个 Provider adapter 边界观察或替换候选 payload，但不能
+> 偷换已经确认的模型/session。一次逻辑任务只封箱一次，重试仍发送同一权威订单。
 
 ```ts
 prepareCommandCodeRequest(model, context, options, dependencies)
@@ -1760,16 +1772,19 @@ snapshot invoked model
 → resolve sessionId / logical trace
 → create fixed empty ServerConfig
 → build authoritative headers/body
-→ optional Pi onPayload callback
+→ optional Pi public `onPayload` hook（Provider adapter 观察；非 Client Protocol /
+  Semantic Conversion 创建的 seam）
 → JSON serialize
 → parse and validate against captured authority
 → freeze endpoint/headers/bodyText/signal/fetch
 ```
 
-`validateCommandCodeRequest()` 在 callback 和 serialization 之后重新检查 model ID、
-session、fixed config、permission、image/reasoning capabilities、message/tool lifecycle
-和 closed-world fields。因此 callback 可以参与 Pi-defined payload transform，但不能
-偷偷改写 Provider authority。
+`validateCommandCodeRequest()` 在 Pi public hook 与 serialization 之后重新检查
+model ID、session、fixed config、permission、image/reasoning capabilities、
+message/tool lifecycle 和 closed-world fields。因此 `onPayload` 若由 Provider
+测试或低层基础设施观察方通过 Pi options 提供，可以在 Pi Provider adapter 内参与
+payload transform，但 Client Protocol 与 Semantic Conversion 不创建、不依赖它，它也
+不能偷偷改写 Provider authority。
 
 Transport 选择 precedence 是 request `options.fetch` → Provider-bound fetch → global
 fetch。当前 certified composition 总是显式绑定 fetch，并禁止依赖 global fallback。
@@ -1955,7 +1970,7 @@ conversion 共用，防止 `JSON.stringify` 静默改变 semantic value。
 
 ```mermaid
 flowchart TD
-    Models["Pi Models"] --> Provider["Provider factory / stream"]
+    Models["Pi Models"] --> Provider["registered Pi Provider<br/>streamSimple boundary"]
     Provider --> Prep["request preparation"]
     Prep --> Config["project.ts fixed empty ServerConfig"]
     Prep --> Convert["Pi→CommandCode conversion"]
@@ -2196,9 +2211,9 @@ flowchart TB
 
 > **小白理解：** 这组模块把 Token 接到 Pi 的标准接口，并管理 Pi 所需的
 > Provider 凭证。CommandCode 的模型与上游地址由其 Provider Package 拥有，无需
-> `models.json`。仓库里的 `pi-agent/` 是供人核对上游行为的参考源，正式运行依赖 npm 包；
-> `pi-agent/` 整棵树不可修改（见 AGENTS.md），Token 只通过 Pi 公共接口消费，
-> 不在参考源码里打任何补丁。
+> `models.json`。仓库里的 `pi-agent/` 是当前 `0.86.1` 生产依赖对应的 reference/source
+> snapshot，供人核对上游行为，正式运行依赖 npm 包；该整棵 reference tree 不可修改
+> （见 AGENTS.md），Token 只通过 Pi 公共接口消费，不在参考源码里打任何补丁。
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
 | --- | --- | --- | --- | --- |
@@ -2206,8 +2221,8 @@ flowchart TB
 | `src/execution.ts` | Pi terminal → atomic success 或 `ExecutionFailure`；验证 neutral diagnostic 并保存在 `.failure` | Client handlers | Pi public event/diagnostic contracts、execution facts sink | execution unit + provider-boundary integration |
 | `packages/provider-contract/src/diagnostics.ts` | shared diagnostic contracts 与 trusted runtime identity | Providers、Execution、Client renderers | Pi `AssistantMessageDiagnostic` | upstream-failure + provider-boundary tests |
 | `src/providers/models-json.ts` | 最小 models.json 解析；构建 Pi Model 与 apiKey auth | catalog（`registerTokenProviders`） | Pi Model/ApiKeyAuth types、Node fs | `test/unit/models-json.test.ts`、`models-json-provider` integration |
-| `@earendil-works/pi-ai` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
-| `pi-agent/packages/ai` | reviewed reference/source mirror | maintainers/certification review | upstream Pi source | 不作为 Token production import |
+| `@earendil-works/pi-ai@0.86.1` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
+| `pi-agent/packages/ai` | `0.86.1` reviewed reference/source snapshot | maintainers/certification review | upstream Pi source | 不作为 Token production import |
 
 ## 9.3 Anthropic Client Protocol
 
@@ -2244,8 +2259,8 @@ flowchart TB
 | `packages/commandcode-model-catalog/src/models.ts`、`projection.ts` | **58 个当前模型事实的唯一权威目录**（含 minimum plan；无价格）及严格 Pi Model 投影 | Private、Goat model selection/projection | Pi Model type | `test/unit/commandcode-model-catalog.test.ts` |
 | `packages/provider-commandcode-private/src/models.ts` | Private identity projection | Private provider factory | shared capability catalog、`constants.ts` | model catalog/default-model tests |
 | `packages/provider-commandcode-private/src/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider | none | 被 model tests 覆盖 |
-| `packages/provider-commandcode-private/src/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4-flash`） | provider factory | `models.ts` | `test/unit/commandcode-model.test.ts` |
-| `packages/provider-commandcode-private/src/provider.ts` | factory、Pi→wire conversion、request preparation | Provider Package entry | fixed config helper、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
+| `packages/provider-commandcode-private/src/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4.1-flash`） | provider factory | `models.ts` | `test/unit/commandcode-model.test.ts` |
+| `packages/provider-commandcode-private/src/provider.ts` | internal factory、Pi→wire conversion、request preparation（package root 只导出 `providerPackage`） | Provider Package entry | fixed config helper、attempts、semantic、JSON、Pi helpers | golden request、payload authority、boundary/tools/history tests |
 | `project.ts` | `createEmptyServerConfig()` | Provider preparation | none | provider/project-compatibility tests |
 | `attempts.ts` | prepared request → committed `CommandCodeResult` | Provider stream | fetch/timers/assembler | attempt controls、decoder、retry/cancel integration |
 | `assembler.ts` | JSONL lines + EOF → ordered result or typed error | attempts | no other business module | assembler/response lifecycle tests |
@@ -2319,7 +2334,7 @@ flowchart TB
 | Online | direct Pi IR + Anthropic/Responses + Codex CLI/Claude Code + 真实 CommandCode | `test/online/*` | 是，五组显式命令 |
 
 普通 `npm test` 不读取真实 key、不自动产生费用。Online runner 独立读取被忽略的
-`CommandcodeAPIKey.txt`，默认模型是 `commandcode-private/deepseek/deepseek-v4-flash`，保存脱敏的完整
+`CommandcodeAPIKey.txt`，默认模型是 `commandcode-private/deepseek/deepseek-v4.1-flash`，保存脱敏的完整
 wire evidence。
 
 ## 10.2 Semantic coverage ownership
@@ -2449,7 +2464,7 @@ flowchart LR
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
 | Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
 | 模型单一权威来源 | CommandCode 58 个当前事实只存在于共享 catalog；Private 投影全部 58 个，Goat 按 Go/GOAT 选择 40 个，目录不保存易变价格 | 符合 |
-| `pi-agent/` 不可变 | 整个 `pi-agent/` 树（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
+| `pi-agent/` 不可变 | 当前 `0.86.1` reference tree（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
 | HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
 | Tool identity | 两侧转换都保留 call ID/name/correlation；不按位置猜测 | 符合 |
@@ -2513,11 +2528,13 @@ registration 和 provider-neutral certification，没有 message/content/usage/t
    SQLite 文件；Public Models 等其他 authority 按自己的 CAS/debounce/flush lifecycle 处理。
 
 7. **Recognized 与 future-unknown 必须分开处理。** 已识别 Anthropic 字段按冻结方法
-   direct map、omit+notice/degrade 或 fail；例如 `top_p` 与 thinking budget 进入 Pi，
-   `tool_choice` 没有 Pi 表示时不得伪造控制。未来未知字段只按 owning Client Protocol
-   的 unknown-family policy 处理，不能猜语义或借 Provider 行为反推。CommandCode
-   响应侧同理：只有规范定义的 content 生命周期进入 content，no-op/未知事件按
-   Provider-owned policy 处理。
+   direct map、omit+notice/degrade 或 fail；例如 thinking budget 进入 Pi，
+   `tool_choice` 与 `disable_parallel_tool_use` 完整映射到 Pi
+   `toolChoice`/`parallelToolCalls`，再只由 selected Provider 在自己的 adapter 内决定
+   应用或省略并发出 bounded notice。未来未知字段只按 owning Client Protocol 的
+   unknown-family policy 处理，不能猜语义或借 Provider 行为反推。CommandCode 响应侧
+   同理：只有规范定义的 content 生命周期进入 content，no-op/未知事件按 Provider-owned
+   policy 处理。
 
 8. **Provider HTTP 错误只通过 neutral fact 选择性保真。** Provider 在自己的
    transport boundary 有界采集并清洗 status、safe message/type/code、snapshot metadata
@@ -2634,7 +2651,7 @@ resolved 的 `Model`。
 > 先更新正式依赖并审查上游参考源码，再核对两侧接口和全部测试。不要为了省事直接
 > 修改仓库中的 Pi 参考副本，否则以后无法清楚同步上游。
 
-1. 更新 npm dependency/审查对应 `pi-agent/packages/ai` upstream snapshot；
+1. 更新 npm dependency/审查同版本 `pi-agent/packages/ai` upstream snapshot；
 2. 不在 vendored package 中加入 Token patch；
 3. 重新核对 `Models/Provider/CredentialStore/EventStream` public contracts；
 4. 运行 Pi runtime fidelity 和所有两侧 conversion tests；

@@ -1,6 +1,7 @@
 import type {
   Context,
   ImageContent,
+  JsonObject,
   Message,
   ModelsSimpleStreamOptions,
   TextContent,
@@ -23,15 +24,11 @@ import type {
   ResponsesReasoningSummaryPreference,
 } from "./semantic/reasoning/contract.js";
 import type {
-  ResponsesProjectionSupplement,
+  ResponsesAllowedTool,
+  ResponsesEchoToolChoice,
   ResponsesToolChoice,
-} from "./semantic/supplement/contract.js";
-import {
-  InvalidResponsesProjectionSupplement,
-  parseResponsesProjectionSupplement,
-  parseResponsesToolChoice,
-  SUPPLEMENT_REQUEST_FIELDS,
-} from "./semantic/supplement/request.js";
+} from "./semantic/tool-choice.js";
+import { toResponsesEchoToolChoice } from "./semantic/tool-choice.js";
 import {
   decodeResponsesContinuity,
   RESPONSES_CONTINUITY_FIELD,
@@ -87,8 +84,11 @@ export const DEFAULT_REFERENCE_LIMITS = Object.freeze({
 export interface ResponsesClientRenderState {
     clientModel: string;
     stream: boolean;
-    /** Effective tool_choice that actually took effect (auto/none). */
-    toolChoice?: string;
+    /** Client response echo for a tool choice represented exactly in Pi. */
+    toolChoice?: ResponsesEchoToolChoice;
+    parallelToolCalls?: boolean;
+    /** Client response echo for a sampling control represented directly in Pi. */
+    temperature?: number;
     /** Tool names declared as freeform `custom` tools; their calls must
      *  round-trip as `custom_tool_call` output items. */
     freeformToolNames?: ReadonlySet<string>;
@@ -109,11 +109,10 @@ interface ValidatedResponsesRequest {
   stream: boolean;
   maxOutputTokens?: number;
   temperature?: number;
-  topP?: number;
   cacheRetention?: "short" | "long";
-  metadataUserId?: string;
   tools?: Tool[];
   toolChoice?: ResponsesToolChoice;
+  parallelToolCalls?: boolean;
 }
 
 export const SYNTHETIC_CLIENT_HISTORY_API = "Token-client-history";
@@ -139,6 +138,8 @@ export const UNCONSUMED_REQUEST_FIELD_IGNORED_NOTICE_CODE =
   "openai-responses_unconsumed_request_field_ignored";
 export const ADDITIONAL_UNCONSUMED_REQUEST_FIELDS_IGNORED_NOTICE_CODE =
   "openai-responses_additional_unconsumed_request_fields_ignored";
+export const TOOL_CHOICE_OMITTED_NOTICE_CODE =
+  "openai-responses_tool_choice_omitted";
 
 /** Separator for the reversible Responses-owned namespace flattening scheme.
  *  A flattened name is `<namespace>__<child>`; the separator stays inside the
@@ -244,23 +245,17 @@ const MAIN_REQUEST_FIELDS = Object.freeze([
   "reasoning",
   "tools",
   "tool_choice",
+  "parallel_tool_calls",
   "max_output_tokens",
   "temperature",
-  "top_p",
   "prompt_cache_retention",
-  "safety_identifier",
-  "user",
 ] as const);
 
-const CONSUMED_REQUEST_FIELDS = new Set<string>([
-  ...MAIN_REQUEST_FIELDS,
-  ...SUPPLEMENT_REQUEST_FIELDS,
-]);
+const CONSUMED_REQUEST_FIELDS = new Set<string>(MAIN_REQUEST_FIELDS);
 const MAX_EXACT_UNCONSUMED_FIELD_NOTICES = 15;
 
 interface ResponsesConsumerViews {
   readonly mainRequest: Readonly<Record<string, unknown>>;
-  readonly supplementRequest: Readonly<Record<string, unknown>>;
   readonly notices: ConversionNotice[];
 }
 
@@ -311,7 +306,6 @@ function selectResponsesConsumerViews(value: unknown): ResponsesConsumerViews {
   }
   return Object.freeze({
     mainRequest: pickOwnFields(value, MAIN_REQUEST_FIELDS),
-    supplementRequest: pickOwnFields(value, SUPPLEMENT_REQUEST_FIELDS),
     notices,
   });
 }
@@ -459,11 +453,11 @@ function collectResolvableImages(content: unknown): Array<{
   return images;
 }
 
-function parseToolArguments(raw: unknown): Record<string, unknown> {
+function parseToolArguments(raw: unknown): JsonObject {
   if (typeof raw !== "string" || raw.trim().length === 0) return {};
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (isRecord(parsed)) return parsed;
+    if (isRecord(parsed)) return parsed as JsonObject;
     throw new InvalidRequest("function_call arguments must be a JSON object");
   } catch (error) {
     if (error instanceof InvalidRequest) throw error;
@@ -912,15 +906,84 @@ function convertReasoning(
   });
 }
 
-function parseToolChoice(value: unknown): ResponsesToolChoice | undefined {
-  try {
-    return parseResponsesToolChoice(value);
-  } catch (error) {
-    if (error instanceof InvalidResponsesProjectionSupplement) {
-      throw new InvalidRequest(error.message);
-    }
-    throw error;
+function parseAllowedTool(value: unknown, field: string): ResponsesAllowedTool {
+  if (!isRecord(value)) {
+    throw new InvalidRequest(`${field} must be an object`);
   }
+  if (value.type === "function" || value.type === "custom") {
+    return Object.freeze({
+      toolType: value.type,
+      name: nonEmptyString(value.name, `${field}.name`),
+    });
+  }
+  if (value.type === "apply_patch" || value.type === "shell") {
+    return Object.freeze({ toolType: value.type });
+  }
+  if (value.type === "mcp") {
+    return Object.freeze({
+      toolType: "mcp",
+      serverLabel: nonEmptyString(value.server_label, `${field}.server_label`),
+      ...(value.name === undefined
+        ? {}
+        : { name: nonEmptyString(value.name, `${field}.name`) }),
+    });
+  }
+  throw new InvalidRequest(`${field}.type is not a supported tool reference`);
+}
+
+function parseToolChoice(value: unknown): ResponsesToolChoice | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === "auto" || value === "none" || value === "required") {
+    return Object.freeze({ kind: value });
+  }
+  if (!isRecord(value)) {
+    throw new InvalidRequest(
+      "tool_choice must be auto, none, required, or an object",
+    );
+  }
+  if (value.type === "function" || value.type === "custom") {
+    return Object.freeze({
+      kind: "named",
+      toolType: value.type,
+      name: nonEmptyString(value.name, "tool_choice.name"),
+    });
+  }
+  if (value.type === "apply_patch" || value.type === "shell") {
+    return Object.freeze({ kind: "hosted", toolType: value.type });
+  }
+  if (value.type === "mcp") {
+    return Object.freeze({
+      kind: "hosted",
+      toolType: "mcp",
+      serverLabel: nonEmptyString(
+        value.server_label,
+        "tool_choice.server_label",
+      ),
+      ...(value.name === undefined
+        ? {}
+        : { name: nonEmptyString(value.name, "tool_choice.name") }),
+    });
+  }
+  if (value.type === "allowed_tools") {
+    if (value.mode !== "auto" && value.mode !== "required") {
+      throw new InvalidRequest("tool_choice.mode must be auto or required");
+    }
+    if (!Array.isArray(value.tools) || value.tools.length === 0) {
+      throw new InvalidRequest("tool_choice.tools must be a non-empty array");
+    }
+    return Object.freeze({
+      kind: "allowed",
+      mode: value.mode,
+      tools: Object.freeze(
+        value.tools.map((entry, index) =>
+          parseAllowedTool(entry, `tool_choice.tools[${index}]`),
+        ),
+      ),
+    });
+  }
+  throw new InvalidRequest(
+    `unsupported tool_choice.type: ${String(value.type)}`,
+  );
 }
 
 /**
@@ -929,7 +992,7 @@ function parseToolChoice(value: unknown): ResponsesToolChoice | undefined {
  * This deliberately performs no semantic validation beyond a JSON object
  * shape and a non-empty `model` string: passthrough must forward the raw
  * body verbatim. Semantic Conversion independently selects only the facts
- * consumed by its Responses-owned request and supplement views.
+ * consumed by its Responses-owned semantic request view.
  */
 export function extractResponsesModelSelector(value: unknown): string {
   if (!isRecord(value)) {
@@ -977,6 +1040,10 @@ function validateMainRequest(
     throw new InvalidRequest("store must be a boolean when present");
   }
   const toolChoice = parseToolChoice(value.tool_choice);
+  const parallelToolCalls = optionalBoolean(
+    value.parallel_tool_calls,
+    "parallel_tool_calls",
+  );
   validateReasoningShape(value.reasoning);
   const maxOutputTokens = optionalNonNegativeInt(
     value.max_output_tokens,
@@ -985,10 +1052,6 @@ function validateMainRequest(
   const temperature = optionalFiniteNumber(value.temperature, "temperature");
   if (temperature !== undefined && (temperature < 0 || temperature > 2)) {
     throw new InvalidRequest("temperature must be within 0 through 2");
-  }
-  const topP = optionalFiniteNumber(value.top_p, "top_p");
-  if (topP !== undefined && (topP < 0 || topP > 1)) {
-    throw new InvalidRequest("top_p must be within 0 through 1");
   }
   const cacheRetentionValue = value.prompt_cache_retention;
   let cacheRetention: "short" | "long" | undefined;
@@ -1000,20 +1063,6 @@ function validateMainRequest(
         "prompt_cache_retention must be in_memory or 24h when present",
       );
     }
-  }
-  const safetyIdentifier = value.safety_identifier;
-  const userValue = value.user;
-  let metadataUserId: string | undefined;
-  if (safetyIdentifier !== undefined && safetyIdentifier !== null) {
-    if (typeof safetyIdentifier !== "string") {
-      throw new InvalidRequest("safety_identifier must be a string when present");
-    }
-    metadataUserId = safetyIdentifier;
-  } else if (userValue !== undefined && userValue !== null) {
-    if (typeof userValue !== "string") {
-      throw new InvalidRequest("user must be a string when present");
-    }
-    metadataUserId = userValue;
   }
   const tools = convertTools(value.tools, freeformNames, namespaceReverse);
   const instructions =
@@ -1033,11 +1082,12 @@ function validateMainRequest(
   if (instructions !== undefined) validated.instructions = instructions;
   if (maxOutputTokens !== undefined) validated.maxOutputTokens = maxOutputTokens;
   if (temperature !== undefined) validated.temperature = temperature;
-  if (topP !== undefined) validated.topP = topP;
   if (cacheRetention !== undefined) validated.cacheRetention = cacheRetention;
-  if (metadataUserId !== undefined) validated.metadataUserId = metadataUserId;
   if (tools !== undefined) validated.tools = tools;
   if (toolChoice !== undefined) validated.toolChoice = toolChoice;
+  if (parallelToolCalls !== undefined) {
+    validated.parallelToolCalls = parallelToolCalls;
+  }
   return validated;
 }
 
@@ -1780,7 +1830,7 @@ function convertMessages(
         // `operation` object, and mcp/function with a JSON `arguments` string.
         // Structured objects map losslessly; otherwise the legacy JSON
         // arguments string applies.
-        let argumentsJson: Record<string, unknown>;
+        let argumentsJson: JsonObject;
         if (type === "custom_tool_call") {
           // The SDK models custom_tool_call.input as a string; a non-string
           // input is malformed, never silently rewritten.
@@ -1791,9 +1841,9 @@ function convertMessages(
           }
           argumentsJson = { input: rawItem.input };
         } else if (isRecord(rawItem.action)) {
-          argumentsJson = { ...rawItem.action };
+          argumentsJson = { ...rawItem.action } as JsonObject;
         } else if (isRecord(rawItem.operation)) {
-          argumentsJson = { ...rawItem.operation };
+          argumentsJson = { ...rawItem.operation } as JsonObject;
         } else {
           argumentsJson = parseToolArguments(rawItem.arguments);
         }
@@ -1852,6 +1902,40 @@ function convertMessages(
       case "shell_call_output":
       case "apply_patch_call_output":
       case "computer_call_output": {
+        // Codex app thread tools use a named, unpaired function_call_output
+        // for external notifications. It carries model-visible text but no
+        // call to correlate, so it belongs in the transcript as user input.
+        if (
+          type === "function_call_output" &&
+          (rawItem.call_id === undefined ||
+            rawItem.call_id === null ||
+            rawItem.call_id === "") &&
+          typeof rawItem.name === "string" &&
+          rawItem.name.length > 0
+        ) {
+          const name = rawItem.name;
+          const content: Array<TextContent | ImageContent> = [
+            ...parseContentParts(rawItem.output),
+            ...parseInlineImages(rawItem.output),
+          ];
+          if (collectResolvableImages(rawItem.output).length > 0) {
+            notices.push(
+              requestNotice(
+                OUTPUT_IMAGE_UNRESOLVED_NOTICE_CODE,
+                "ignore",
+                `$.input[?name=${name}].output[?type=input_image]`,
+              ),
+            );
+          }
+          if (content.length > 0) {
+            messages.push({
+              role: "user",
+              content,
+              timestamp: receivedAt,
+            });
+          }
+          continue;
+        }
         // A provider-hosted computer output has no correlated structured
         // call in the executable catalog; it degrades to a transcript drop.
         if (type === "computer_call_output") {
@@ -2451,13 +2535,31 @@ async function resolveLuckyReferences(
 function applyToolChoiceFilter(
   mergedTools: Tool[] | undefined,
   toolChoice: ResponsesToolChoice | undefined,
-): { tools: Tool[] | undefined; effective: string | undefined } {
+  notices: ConversionNotice[],
+): {
+  tools: Tool[] | undefined;
+  piToolChoice: ModelsSimpleStreamOptions["toolChoice"];
+  effective: ResponsesEchoToolChoice | undefined;
+} {
   let effectiveTools = mergedTools;
-  let effectiveToolChoice: string | undefined;
+  let piToolChoice: ModelsSimpleStreamOptions["toolChoice"];
+  let effectiveToolChoice: ResponsesEchoToolChoice | undefined;
   if (toolChoice?.kind === "none") {
-    effectiveTools = undefined;
+    piToolChoice = "none";
     effectiveToolChoice = "none";
   } else if (toolChoice?.kind === "allowed") {
+    const omittedHosted = toolChoice.tools.some(
+      (entry) => entry.toolType !== "function" && entry.toolType !== "custom",
+    );
+    if (omittedHosted) {
+      notices.push(
+        requestNotice(
+          TOOL_CHOICE_OMITTED_NOTICE_CODE,
+          "ignore",
+          "$.tool_choice.tools",
+        ),
+      );
+    }
     const names = new Set(
       toolChoice.tools.flatMap((entry) =>
         entry.toolType === "function" || entry.toolType === "custom"
@@ -2469,28 +2571,39 @@ function applyToolChoiceFilter(
       effectiveTools === undefined
         ? undefined
         : effectiveTools.filter((tool) => names.has(tool.name));
-    // The allowed_tools filter is auto-mode filtering: the SDK Response
-    // tool_choice has no bare "allowed" string (only
-    // 'none'|'auto'|'required' or the ToolChoiceAllowed object), so the
-    // effective echo is "auto" with the already-filtered catalog.
-    effectiveToolChoice = toolChoice.mode;
+    piToolChoice = (effectiveTools?.length ?? 0) === 0
+      ? undefined
+      : toolChoice.mode;
+    effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "named") {
-    const requiredName = toolChoice.name;
-      const catalogNames = new Set(
-        effectiveTools === undefined ? [] : effectiveTools.map((t) => t.name),
+    if (effectiveTools?.some((tool) => tool.name === toolChoice.name) !== true) {
+      throw new InvalidRequest(
+        `tool_choice names an undeclared tool: ${toolChoice.name}`,
       );
-      if (!catalogNames.has(requiredName)) {
-        throw new InvalidRequest(
-          `tool_choice requires an unavailable tool: ${requiredName}`,
-        );
-      }
-    effectiveToolChoice = "required";
+    }
+    piToolChoice = Object.freeze({ type: "tool", name: toolChoice.name });
+    effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "required") {
+    piToolChoice = "required";
     effectiveToolChoice = "required";
+  } else if (toolChoice?.kind === "hosted") {
+    notices.push(
+      requestNotice(
+        TOOL_CHOICE_OMITTED_NOTICE_CODE,
+        "ignore",
+        "$.tool_choice",
+      ),
+    );
+    effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "auto") {
+    piToolChoice = "auto";
     effectiveToolChoice = "auto";
   }
-  return { tools: effectiveTools, effective: effectiveToolChoice };
+  return {
+    tools: effectiveTools,
+    piToolChoice,
+    effective: effectiveToolChoice,
+  };
 }
 
 function buildInvocation(
@@ -2500,7 +2613,6 @@ function buildInvocation(
   additionalTools: unknown[],
   messages: Message[],
   reasoning: ResponsesReasoningSemantics,
-  supplement: ResponsesProjectionSupplement,
   notices: ConversionNotice[],
   policy: ResponseRequestConversionPolicy,
   inputForPromotion: unknown = validated.input,
@@ -2543,6 +2655,7 @@ function buildInvocation(
   const filtered = applyToolChoiceFilter(
     mergedTools,
     validated.toolChoice,
+    notices,
   );
   if (filtered.tools !== undefined && filtered.tools.length > 0) {
     context.tools = filtered.tools;
@@ -2554,21 +2667,20 @@ function buildInvocation(
   if (validated.temperature !== undefined) {
     options.temperature = validated.temperature;
   }
-  if (validated.topP !== undefined) {
-    options.samplingParams = { top_p: validated.topP };
-  }
   if (validated.cacheRetention !== undefined) {
     options.cacheRetention = validated.cacheRetention;
   }
-  if (validated.metadataUserId !== undefined) {
-    options.metadata = { user_id: validated.metadataUserId };
+  if (filtered.piToolChoice !== undefined) {
+    options.toolChoice = filtered.piToolChoice;
+  }
+  if (validated.parallelToolCalls !== undefined) {
+    options.parallelToolCalls = validated.parallelToolCalls;
   }
   return Object.freeze({
     selector: validated.selector,
     invocation: Object.freeze({
       pi: Object.freeze({ context, options }),
       reasoning,
-      supplement,
     }),
     client: Object.freeze({
       renderState: Object.freeze({
@@ -2577,6 +2689,12 @@ function buildInvocation(
         ...(filtered.effective === undefined
           ? {}
           : { toolChoice: filtered.effective }),
+        ...(validated.parallelToolCalls === undefined
+          ? {}
+          : { parallelToolCalls: validated.parallelToolCalls }),
+        ...(validated.temperature === undefined
+          ? {}
+          : { temperature: validated.temperature }),
         ...(freeformNames.size > 0 ? { freeformToolNames: freeformNames } : {}),
         ...(Object.keys(namespaceReverse).length > 0
           ? { namespaceReverse: Object.freeze(namespaceReverse) }
@@ -2642,15 +2760,6 @@ export function convertResponsesRequest(
     freeformNames,
     namespaceReverse,
   );
-  let supplement: ResponsesProjectionSupplement;
-  try {
-    supplement = parseResponsesProjectionSupplement(selected.supplementRequest);
-  } catch (error) {
-    if (error instanceof InvalidResponsesProjectionSupplement) {
-      throw new InvalidRequest(error.message);
-    }
-    throw error;
-  }
   const notices = selected.notices;
   const convertedReasoning = convertReasoning(
     mainRequest.reasoning,
@@ -2695,7 +2804,6 @@ export function convertResponsesRequest(
     additionalTools,
     messages,
     reasoning,
-    supplement,
     notices,
     policy,
     validated.input,
@@ -2732,15 +2840,6 @@ export async function convertResponsesRequestAsync(
     freeformNames,
     namespaceReverse,
   );
-  let supplement: ResponsesProjectionSupplement;
-  try {
-    supplement = parseResponsesProjectionSupplement(selected.supplementRequest);
-  } catch (error) {
-    if (error instanceof InvalidResponsesProjectionSupplement) {
-      throw new InvalidRequest(error.message);
-    }
-    throw error;
-  }
   const notices = selected.notices;
   const convertedReasoning = convertReasoning(
     mainRequest.reasoning,
@@ -2796,7 +2895,6 @@ export async function convertResponsesRequestAsync(
     additionalTools,
     messages,
     reasoning,
-    supplement,
     notices,
     policy,
     expandedItems,

@@ -65,7 +65,7 @@ function successfulPiMessageWithUnrepresentableClientArguments(): AssistantMessa
         type: "toolCall",
         id: "call",
         name: "tool",
-        arguments: { invalid: BigInt(1) },
+        arguments: { invalid: BigInt(1) } as never,
       },
     ],
     usage: {

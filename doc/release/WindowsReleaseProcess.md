@@ -30,9 +30,11 @@ directory without rebuilding or recompressing it.
 ## Blocking sequence
 
 1. Verify TypeScript, lint, the production dependency audit,
-   certification/unit tests, and integration tests. Release Vitest workers are
-   capped at four so process-owning integration tests are not invalidated by
-   Windows resource starvation.
+   certification/unit tests, and integration tests. The release pretest first
+   rebuilds and assembles the current root Backend so the installed-layout version
+   test cannot reuse stale output. Release Vitest workers are capped at four so
+   process-owning integration tests are not invalidated by Windows resource
+   starvation.
 2. Build workspace packages and assemble the fixed Backend runtime.
 3. Run Electron Forge Make exactly once.
 4. Require exactly one packaged EXE, one Setup.exe, one full `.nupkg`, and one

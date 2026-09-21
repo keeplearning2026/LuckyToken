@@ -868,7 +868,6 @@ async function handleAnthropicMessages(
         selector: invocation.client.renderState.selector,
         model: { provider: model.provider, id: model.id, api: model.api },
         reasoning: semanticInvocation.reasoning,
-        supplement: semanticInvocation.supplement,
         context: semanticInvocation.pi.context,
         options: {
           maxTokens: piOptions.maxTokens,

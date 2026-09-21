@@ -1,4 +1,7 @@
-import type { AssistantMessageDiagnostic } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessageDiagnostic,
+  JsonObject,
+} from "@earendil-works/pi-ai";
 
 import type { TerminalUsageFact } from "./usage.js";
 
@@ -9,7 +12,7 @@ export type {
   TerminalUsageClass,
 } from "./usage.js";
 
-export interface ConversionNotice {
+export interface ConversionNotice extends JsonObject {
   readonly adapter: string;
   readonly direction: "request" | "response";
   readonly code: string;
@@ -17,7 +20,7 @@ export interface ConversionNotice {
   readonly action: "ignore" | "degrade" | "xrepair";
 }
 
-export interface InvocationAttempt {
+export interface InvocationAttempt extends JsonObject {
   readonly attempt: number;
   readonly classification: string;
   readonly stage: string;

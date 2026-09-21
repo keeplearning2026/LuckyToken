@@ -194,11 +194,11 @@ test("binds the installed Pi runtime and every governing specification revision"
   const lock = JSON.parse(lockText);
   const piLock = lock.packages["node_modules/@earendil-works/pi-ai"];
 
-  assert.equal(packageJson.dependencies["@earendil-works/pi-ai"], "0.84.2");
-  assert.equal(piLock.version, "0.84.2");
+  assert.equal(packageJson.dependencies["@earendil-works/pi-ai"], "0.86.1");
+  assert.equal(piLock.version, "0.86.1");
   assert.equal(
     piLock.integrity,
-    "sha512-6MzsrYIYNVlE7SfpbL2yYb67Qo58p/7Q+xWG1RZvoX1P80aRCHSod2/13aFpxkow1lPO2LEh3c495J0Gwmyjig==",
+    "sha512-1XHhI6D/fyQdsBieHC/E/4zGKVOoGe4yDyX67VXvzoYkFsX/qE7NpZE7E1RC8e6Bz8B9oG/P+MQFXikv2/BGEg==",
   );
   assert.ok(source.includes(piLock.integrity));
 

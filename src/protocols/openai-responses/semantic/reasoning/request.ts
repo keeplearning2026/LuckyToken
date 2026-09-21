@@ -12,7 +12,6 @@ import type {
   PreparedResponsesReasoning,
   ResponsesReasoningContinuityAttachment,
   ResponsesReasoningOutcome,
-  ResponsesReasoningProjectionResult,
   ResponsesReasoningSemantics,
 } from "./contract.js";
 import { resolveResponsesEffortPlan } from "./levels.js";
@@ -226,11 +225,60 @@ export function prepareResponsesReasoning<TApi extends string>(input: {
     input.semantics.request.effort,
   );
   delete options.reasoning;
-  if (
-    effortPlan.kind === "enabled" &&
-    effortPlan.selection.kind === "selected"
-  ) {
-    options.reasoning = effortPlan.selection.level;
+  if (effortPlan.kind === "disabled") {
+    options.reasoning = "off";
+    outcomes.push(
+      Object.freeze({
+        subject: "effort",
+        outcome: Object.freeze({ kind: "pi-native" }),
+      }),
+    );
+  } else if (effortPlan.kind === "enabled") {
+    if (effortPlan.selection.kind === "selected") {
+      options.reasoning = effortPlan.selection.level;
+      outcomes.push(
+        Object.freeze({
+          subject: "effort",
+          outcome: Object.freeze(
+            effortPlan.requested === effortPlan.selection.level
+              ? { kind: "pi-native" as const }
+              : {
+                  kind: "degraded" as const,
+                  fallback: "reasoning-effort-nearest-level",
+                  warning: `requested reasoning level ${effortPlan.requested} mapped to supported level ${effortPlan.selection.level}`,
+                },
+          ),
+        }),
+      );
+    } else {
+      outcomes.push(
+        Object.freeze({
+          subject: "effort",
+          outcome: Object.freeze({
+            kind: "degraded" as const,
+            fallback:
+              effortPlan.selection.kind === "non-reasoning"
+                ? "reasoning-to-ordinary-generation"
+                : "reasoning-to-provider-default",
+            warning:
+              effortPlan.selection.kind === "non-reasoning"
+                ? "target model does not support reasoning; ordinary generation retained"
+                : "target model exposes no selectable reasoning level; Provider default retained",
+          }),
+        }),
+      );
+    }
+  }
+  if (input.semantics.request.summary.kind === "requested") {
+    outcomes.push(
+      Object.freeze({
+        subject: "summary",
+        outcome: Object.freeze({
+          kind: "omitted" as const,
+          warning: "Pi common options do not expose a reasoning summary preference",
+        }),
+      }),
+    );
   }
 
   return Object.freeze({
@@ -240,66 +288,5 @@ export function prepareResponsesReasoning<TApi extends string>(input: {
     effortPlan,
     outcomes: Object.freeze(outcomes),
     ...(adapter === undefined ? {} : { adapterId: adapter.id }),
-  });
-}
-
-export function projectResponsesReasoningPayload(input: {
-  readonly model: Model<string>;
-  readonly prepared: PreparedResponsesReasoning;
-  readonly payload: unknown;
-}): ResponsesReasoningProjectionResult {
-  const adapter = resolveResponsesReasoningAdapter(input.model);
-  if (adapter !== undefined) {
-    return adapter.projectPayload(input);
-  }
-  const outcomes: ResponsesReasoningOutcome[] = [...input.prepared.outcomes];
-  const effort = input.prepared.request.effort;
-  if (effort.kind === "disabled") {
-    outcomes.push(
-      Object.freeze({
-        subject: "effort",
-        outcome: Object.freeze({
-          kind: "degraded",
-          projector: input.model.api,
-          fallback: "reasoning-disable-to-provider-default",
-          warning:
-            "resolved API has no certified reasoning payload Adapter; Provider default retained",
-        }),
-      }),
-    );
-  } else if (effort.kind === "enabled") {
-    const nonReasoning =
-      input.prepared.effortPlan.kind === "enabled" &&
-      input.prepared.effortPlan.selection.kind === "non-reasoning";
-    outcomes.push(
-      Object.freeze({
-        subject: "effort",
-        outcome: Object.freeze({
-          kind: "degraded",
-          projector: input.model.api,
-          fallback: nonReasoning
-            ? "reasoning-to-ordinary-generation"
-            : "reasoning-to-provider-default",
-          warning: nonReasoning
-            ? "target model does not support reasoning; ordinary generation retained"
-            : "resolved API has no certified reasoning effort mapping; Provider default retained",
-        }),
-      }),
-    );
-  }
-  if (input.prepared.request.summary.kind === "requested") {
-    outcomes.push(
-      Object.freeze({
-        subject: "summary",
-        outcome: Object.freeze({
-          kind: "omitted",
-          warning: "resolved API has no certified reasoning summary mapping",
-        }),
-      }),
-    );
-  }
-  return Object.freeze({
-    payload: structuredClone(input.payload),
-    outcomes: Object.freeze(outcomes),
   });
 }

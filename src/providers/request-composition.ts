@@ -1,8 +1,10 @@
 /**
  * Request-time Provider-facing composition: auth resolution, headers and
- * authHeader, mirroring the pinned Pi implementation
+ * authHeader, mirroring the vendored `pi-agent/` reference tree, not the
+ * runtime `@earendil-works/pi-ai@0.86.1` Provider execution dependency
  * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts` and
- * `model-runtime.ts` in @earendil-works/pi-coding-agent 0.84.2).
+ * `model-runtime.ts`, whose reference identity is
+ * `@earendil-works/pi-coding-agent` 0.84.2).
  *
  * Ownership: this is the single Provider-facing invocation boundary for
  * models.json auth/header facts. Client Protocol adapters, the Pi semantic
@@ -60,7 +62,11 @@ import type {
   SimpleStreamOptions,
   StreamOptions,
 } from "@earendil-works/pi-ai";
-import { lazyStream, ModelsError } from "@earendil-works/pi-ai";
+import {
+  lazyStream,
+  ModelsError,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import type { ConfigValueResolver } from "./config-value.js";
 import type {
   ModelsJsonConfig,
@@ -525,7 +531,7 @@ export function createRequestCompositionModels(
       );
       return prepared.provider.stream(
         prepared.model as Model<TApi>,
-        context,
+        normalizeContext(context),
         prepared.options as never,
       );
     });
@@ -539,7 +545,7 @@ export function createRequestCompositionModels(
       const prepared = await prepareRequest(model, options);
       return prepared.provider.streamSimple(
         prepared.model,
-        context,
+        normalizeContext(context),
         prepared.options as SimpleStreamOptions,
       );
     });

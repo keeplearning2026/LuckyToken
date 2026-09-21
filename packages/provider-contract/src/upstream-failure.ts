@@ -1,4 +1,7 @@
-import type { AssistantMessageDiagnostic } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessageDiagnostic,
+  JsonObject,
+} from "@earendil-works/pi-ai";
 
 export const UPSTREAM_FAILURE_DIAGNOSTIC_TYPE =
   "token_upstream_failure";
@@ -30,7 +33,7 @@ export type UpstreamFailurePhase =
   | "retry_delay"
   | "payload_callback";
 
-export interface UpstreamFailureSnapshotMetadata {
+export interface UpstreamFailureSnapshotMetadata extends JsonObject {
   readonly mediaType?: string;
   readonly capturedBytes: number;
   readonly totalBytes?: number;
@@ -43,7 +46,7 @@ export interface UpstreamFailureSnapshotMetadata {
  * execution boundary. It deliberately has no raw body, request, prompt, tool
  * output, credential, cause, or stack slot.
  */
-export interface UpstreamFailureFact {
+export interface UpstreamFailureFact extends JsonObject {
   readonly kind: UpstreamFailureKind;
   readonly phase?: UpstreamFailurePhase;
   readonly status?: number;
@@ -257,7 +260,7 @@ export function findUpstreamFailureFact(
       candidate !== null &&
       createdFailureFacts.has(candidate)
     ) {
-      return candidate as UpstreamFailureFact;
+      return candidate as unknown as UpstreamFailureFact;
     }
   }
   return undefined;

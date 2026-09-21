@@ -106,9 +106,9 @@ describe("serving composition certification", () => {
           },
           runtime: {
             package: "@earendil-works/pi-ai",
-            version: "0.84.2",
+            version: "0.86.1",
             integrity:
-              "sha512-6MzsrYIYNVlE7SfpbL2yYb67Qo58p/7Q+xWG1RZvoX1P80aRCHSod2/13aFpxkow1lPO2LEh3c495J0Gwmyjig==",
+              "sha512-1XHhI6D/fyQdsBieHC/E/4zGKVOoGe4yDyX67VXvzoYkFsX/qE7NpZE7E1RC8e6Bz8B9oG/P+MQFXikv2/BGEg==",
           },
         },
         commandCode: {

@@ -29,13 +29,10 @@ describe("reasoning effort selection boundary", () => {
     }
   });
 
-  it("keeps level discovery, ordering, and fallback out of target projection", async () => {
-    const sources = (
-      await Promise.all([
-        typescriptSources(resolve("src/protocols/openai-responses/semantic/reasoning/adapters")),
-        typescriptSources(resolve("src/protocols/anthropic/semantic/projection")),
-      ])
-    ).flat();
+  it("keeps level discovery, ordering, and fallback out of continuity codecs", async () => {
+    const sources = await typescriptSources(
+      resolve("src/protocols/openai-responses/semantic/reasoning/adapters"),
+    );
 
     for (const { filename, source } of sources) {
       expect(source, filename).not.toMatch(
