@@ -187,6 +187,7 @@ function completeImages(
       classification: incident.classification,
       origin: incident.origin,
       originPrecision: incident.origin === "network_os" ? "boundary" : "exact",
+      safeMessage: "The image request could not be completed.",
       location: incident.location,
     });
   }

@@ -191,6 +191,7 @@ function observeAnthropicEarlyFailure(
     classification: failure.classification,
     origin: failure.origin,
     originPrecision: "exact",
+    safeMessage: "The Messages request was rejected before provider dispatch.",
     location: failure.location,
   });
 
@@ -1225,6 +1226,7 @@ async function handleAnthropicMessages(
         classification: failedStep.classification,
         origin: "Token",
         originPrecision: "exact",
+        safeMessage: "Token could not prepare the Messages response.",
         location: failedStep.location,
       });
       const response = toResponse(

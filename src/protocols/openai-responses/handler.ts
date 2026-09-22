@@ -205,6 +205,7 @@ function observeResponsesEarlyFailure(
     classification: failure.classification,
     origin: failure.origin,
     originPrecision: "exact",
+    safeMessage: "The Responses request was rejected before provider dispatch.",
     location: failure.location,
   });
 

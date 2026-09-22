@@ -100,10 +100,10 @@ function diagnosticsWorkerMain(): void {
   >();
   let activeArtifactBytes = 0;
   mkdirSync(data.directory, { recursive: true });
-  const fullJourneyDirectory = join(data.directory, "full-journeys");
+  const fullJourneyDirectory = join(data.directory, "full-journeys-v4");
   const inflightDirectory = join(fullJourneyDirectory, ".inflight");
   mkdirSync(inflightDirectory, { recursive: true });
-  const database = new DatabaseSync(join(data.directory, "diagnostics-v3.sqlite3"));
+  const database = new DatabaseSync(join(data.directory, "diagnostics-v4.sqlite3"));
   const permanentStartupFailure = (): void => {
     database.close();
     port.postMessage({
@@ -136,7 +136,7 @@ function diagnosticsWorkerMain(): void {
     const existingVersion = database
       .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
       .get() as { readonly value: number } | undefined;
-    if (existingVersion === undefined || Number(existingVersion.value) !== 3) {
+    if (existingVersion === undefined || Number(existingVersion.value) !== 4) {
       permanentStartupFailure();
       return;
     }
@@ -189,7 +189,7 @@ function diagnosticsWorkerMain(): void {
   }
   database.exec(`
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_name', 'TOKEN_diagnostics');
-    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 3);
+    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 4);
     CREATE TABLE IF NOT EXISTS records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       record_kind TEXT NOT NULL,
@@ -316,7 +316,7 @@ function diagnosticsWorkerMain(): void {
     requestId: string,
   ): string =>
     join(
-      "full-journeys",
+      "full-journeys-v4",
       ".inflight",
       opaqueSegment("runtime", runtimeId),
       opaqueSegment("request", requestId),
@@ -477,7 +477,7 @@ function diagnosticsWorkerMain(): void {
       .toISOString()
       .slice(0, 10);
     const finalRelative = join(
-      "full-journeys",
+      "full-journeys-v4",
       date,
       opaqueSegment("request", requestId),
     );
@@ -711,7 +711,7 @@ function diagnosticsWorkerMain(): void {
     readonly requestId: string;
     readonly bodyPath: string;
   }>;
-  const inflightPrefix = `${join("full-journeys", ".inflight")}${sep}`;
+  const inflightPrefix = `${join("full-journeys-v4", ".inflight")}${sep}`;
   for (const requestId of new Set(
     recoverableArtifacts
       .filter((row) => row.bodyPath.startsWith(inflightPrefix))
@@ -759,6 +759,34 @@ function diagnosticsWorkerMain(): void {
         ? undefined
         : (JSON.parse(row.primaryFailureJson) as Record<string, unknown>);
     const primaryFailureLocation = primaryFailure?.location;
+    const diagnosis =
+      row.outcome !== "running" &&
+      row.outcome !== "success" &&
+      primaryFailure !== undefined &&
+      isSafeFact(primaryFailure.classification, 256) &&
+      isSafeFact(primaryFailure.safeMessage, 1_024) &&
+      (primaryFailure.origin === "client" ||
+        primaryFailure.origin === "Token" ||
+        primaryFailure.origin === "provider" ||
+        primaryFailure.origin === "network_os" ||
+        primaryFailure.origin === "unknown") &&
+      (primaryFailure.originPrecision === "exact" ||
+        primaryFailure.originPrecision === "boundary" ||
+        primaryFailure.originPrecision === "external_boundary") &&
+      isRecord(primaryFailureLocation)
+        ? {
+            evidence:
+              primaryFailure.classification ===
+              "request_failed_without_specific_cause"
+                ? "fallback"
+                : "observed",
+            classification: primaryFailure.classification,
+            safeMessage: primaryFailure.safeMessage,
+            origin: primaryFailure.origin,
+            originPrecision: primaryFailure.originPrecision,
+            location: primaryFailureLocation,
+          }
+        : undefined;
     let usage: Record<string, unknown> | undefined;
     if (
       row.usageTerminalClass !== null &&
@@ -816,10 +844,7 @@ function diagnosticsWorkerMain(): void {
       completeness: row.completeness,
       createdAt: Number(row.createdAt),
       ...(row.closedAt === null ? {} : { closedAt: Number(row.closedAt) }),
-      ...(typeof primaryFailureLocation === "object" &&
-      primaryFailureLocation !== null
-        ? { primaryFailureLocation }
-        : {}),
+      ...(diagnosis === undefined ? {} : { diagnosis }),
       ...(usage === undefined ? {} : { usage }),
     };
   };
@@ -1022,12 +1047,32 @@ function diagnosticsWorkerMain(): void {
     }
     if (message.messageKind === "observation") {
       const location = message.payload.location;
-      return typeof message.payload.kind === "string" &&
-        isRecord(location) &&
-        typeof location.phase === "string" &&
-        typeof location.step === "string"
-        ? undefined
-        : "invalid_append_observation";
+      if (
+        typeof message.payload.kind !== "string" ||
+        !isRecord(location) ||
+        typeof location.phase !== "string" ||
+        typeof location.step !== "string"
+      ) {
+        return "invalid_append_observation";
+      }
+      if (message.payload.kind === "failure_detected") {
+        return isSafeFact(message.payload.failureId, 256) &&
+          (message.payload.role === "primary" ||
+            message.payload.role === "supporting") &&
+          isSafeFact(message.payload.classification, 256) &&
+          (message.payload.origin === "client" ||
+            message.payload.origin === "Token" ||
+            message.payload.origin === "provider" ||
+            message.payload.origin === "network_os" ||
+            message.payload.origin === "unknown") &&
+          (message.payload.originPrecision === "exact" ||
+            message.payload.originPrecision === "boundary" ||
+            message.payload.originPrecision === "external_boundary") &&
+          isSafeFact(message.payload.safeMessage, 1_024)
+          ? undefined
+          : "invalid_append_failure";
+      }
+      return undefined;
     }
     return typeof message.payload.outcome === "string"
       ? undefined
@@ -2117,6 +2162,138 @@ function diagnosticsWorkerMain(): void {
             if (requestId === undefined) {
               throw new Error("request journey identity is missing");
             }
+            const outcome = String(payload.outcome);
+            const abnormalOutcome = outcome !== "success";
+            const observedPrimary = database
+              .prepare(
+                `SELECT payload_json AS payloadJson
+                   FROM request_journey_events
+                  WHERE request_id = ? AND kind = 'failure_detected'
+                    AND json_extract(payload_json, '$.role') = 'primary'
+                  ORDER BY sequence
+                  LIMIT 1`,
+              )
+              .get(requestId) as
+              | { readonly payloadJson: string }
+              | undefined;
+            let primaryFailure = observedPrimary === undefined
+              ? undefined
+              : JSON.parse(observedPrimary.payloadJson) as Record<string, unknown>;
+            if (
+              primaryFailure !== undefined &&
+              (!isSafeFact(primaryFailure.failureId, 256) ||
+                primaryFailure.role !== "primary" ||
+                !isSafeFact(primaryFailure.classification, 256) ||
+                (primaryFailure.origin !== "client" &&
+                  primaryFailure.origin !== "Token" &&
+                  primaryFailure.origin !== "provider" &&
+                  primaryFailure.origin !== "network_os" &&
+                  primaryFailure.origin !== "unknown") ||
+                (primaryFailure.originPrecision !== "exact" &&
+                  primaryFailure.originPrecision !== "boundary" &&
+                  primaryFailure.originPrecision !== "external_boundary") ||
+                !isSafeFact(primaryFailure.safeMessage, 1_024) ||
+                !isRecord(primaryFailure.location))
+            ) {
+              primaryFailure = undefined;
+            }
+            let effectiveCompleteness =
+              payload.completeness === "degraded" ? "degraded" : "complete";
+            if (abnormalOutcome && primaryFailure === undefined) {
+              const storedLocation = isRecord(payload.lastKnownLocation)
+                ? payload.lastKnownLocation
+                : undefined;
+              const latestLocation = database
+                .prepare(
+                  `SELECT phase, lane, direction, step, subject, source_path AS sourcePath,
+                          attempt
+                     FROM request_journey_events
+                    WHERE request_id = ?
+                    ORDER BY sequence DESC
+                    LIMIT 1`,
+                )
+                .get(requestId) as
+                | Readonly<{
+                    phase: string;
+                    lane: string | null;
+                    direction: string | null;
+                    step: string;
+                    subject: string | null;
+                    sourcePath: string | null;
+                    attempt: number | null;
+                  }>
+                | undefined;
+              const location = storedLocation !== undefined &&
+                isSafeFact(storedLocation.phase, 128) &&
+                isSafeFact(storedLocation.step, 256)
+                ? storedLocation
+                : latestLocation === undefined
+                  ? { phase: "outcome_commit", step: "commit_request_outcome" }
+                  : {
+                      phase: latestLocation.phase,
+                      step: latestLocation.step,
+                      ...(latestLocation.lane === null
+                        ? {}
+                        : { lane: latestLocation.lane }),
+                      ...(latestLocation.direction === null
+                        ? {}
+                        : { direction: latestLocation.direction }),
+                      ...(latestLocation.subject === null
+                        ? {}
+                        : { subject: latestLocation.subject }),
+                      ...(latestLocation.sourcePath === null
+                        ? {}
+                        : { sourcePath: latestLocation.sourcePath }),
+                      ...(latestLocation.attempt === null
+                        ? {}
+                        : { attempt: latestLocation.attempt }),
+                    };
+              const failureId = `${requestId}:request_failed_without_specific_cause`;
+              primaryFailure = {
+                kind: "failure_detected",
+                failureId,
+                role: "primary",
+                classification: "request_failed_without_specific_cause",
+                origin: "unknown",
+                originPrecision: "boundary",
+                safeMessage:
+                  "The request failed, but no more specific cause was recorded.",
+                location,
+              };
+              const nextSequence = database
+                .prepare(
+                  `SELECT COALESCE(MAX(sequence), -1) + 1 AS sequence
+                     FROM request_journey_events
+                    WHERE request_id = ?`,
+                )
+                .get(requestId) as { readonly sequence: number };
+              database
+                .prepare(
+                  `INSERT INTO request_journey_events
+                     (runtime_id, request_id, sequence, time, kind, phase, lane,
+                      direction, step, subject, source_path, attempt, payload_json)
+                   VALUES (?, ?, ?, ?, 'failure_detected', ?, ?, ?, ?, ?, ?, ?, ?)`,
+                )
+                .run(
+                  runtimeId,
+                  requestId,
+                  Number(nextSequence.sequence),
+                  time,
+                  String(location.phase),
+                  typeof location.lane === "string" ? location.lane : null,
+                  typeof location.direction === "string"
+                    ? location.direction
+                    : null,
+                  String(location.step),
+                  typeof location.subject === "string" ? location.subject : null,
+                  typeof location.sourcePath === "string"
+                    ? location.sourcePath
+                    : null,
+                  typeof location.attempt === "number" ? location.attempt : null,
+                  JSON.stringify(primaryFailure),
+                );
+              effectiveCompleteness = "degraded";
+            }
             database
               .prepare(
                 `UPDATE records
@@ -2126,7 +2303,7 @@ function diagnosticsWorkerMain(): void {
               )
               .run(
                 time,
-                payload.completeness === "degraded" ? "degraded" : "complete",
+                effectiveCompleteness,
                 `request_journey:${requestId}`,
               );
             database
@@ -2140,11 +2317,11 @@ function diagnosticsWorkerMain(): void {
                  WHERE request_id = ? AND outcome = 'running'`,
               )
               .run(
-                String(payload.outcome),
-                typeof payload.primaryFailureId === "string"
-                  ? payload.primaryFailureId
+                outcome,
+                abnormalOutcome && primaryFailure !== undefined
+                  ? String(primaryFailure.failureId)
                   : null,
-                String(payload.outcome),
+                outcome,
                 requestId,
               );
           }

@@ -12,17 +12,25 @@ let root: Root;
 const status: StatusSnapshot = { sequence: 1, modelDataPlane: "running", provider: "configured", dataPlane: { configuredOrigin: "http://127.0.0.1:4317", configuredPort: 4317 } };
 const today = new Date();
 today.setHours(12, 0, 0, 0);
+const failureLocation = {
+  phase: "upstream_execution" as const,
+  lane: "provider_native" as const,
+  step: "send_provider_request",
+  attempt: 2,
+};
 
 function summary(
   id: number,
   outcome: RequestJourneySummary["outcome"],
   usage?: RequestJourneySummary["usage"],
 ): RequestJourneySummary {
-  return { id, runtimeId: "runtime-1", requestId: `request-${id}`, operation: "model_generation", protocol: "anthropic-messages", lane: "provider_native", outcome, completeness: "complete", createdAt: today.getTime() + id, ...(outcome === "running" ? {} : { closedAt: today.getTime() + 1_000 + id }), ...(usage === undefined ? {} : { usage }) };
+  const abnormal =
+    outcome === "failed" || outcome === "aborted" || outcome === "interrupted";
+  return { id, runtimeId: "runtime-1", requestId: `request-${id}`, operation: "model_generation", protocol: "anthropic-messages", lane: "provider_native", outcome, completeness: "complete", createdAt: today.getTime() + id, ...(outcome === "running" ? {} : { closedAt: today.getTime() + 1_000 + id }), ...(abnormal ? { diagnosis: { evidence: "observed", classification: "provider_timeout", safeMessage: "The provider timed out", origin: "provider", originPrecision: "external_boundary", location: failureLocation } as const } : {}), ...(usage === undefined ? {} : { usage }) };
 }
 
 function detail(base: RequestJourneySummary): RequestJourneyRecord {
-  const location = { phase: "upstream_execution" as const, lane: "provider_native" as const, step: "send_provider_request", attempt: 2 };
+  const location = failureLocation;
   return {
     ...base,
     requestedModel: "commandcode-goat/deepseek-v4-pro",
@@ -33,7 +41,7 @@ function detail(base: RequestJourneySummary): RequestJourneyRecord {
     profileId: "profile-1",
     profileDisplayName: "Production",
     httpStatus: 504,
-    primaryFailureLocation: location,
+    diagnosis: { evidence: "observed", classification: "provider_timeout", safeMessage: "The provider timed out", origin: "provider", originPrecision: "external_boundary", location },
     admission: { operationCandidate: "model_generation", transport: "http", method: "POST", path: "/v1/messages", acceptedAt: base.createdAt, cancellation: { caller: "active", shutdown: "active" } },
     timeline: [{ runtimeId: base.runtimeId, requestId: base.requestId, sequence: 1, time: base.createdAt, observation: { kind: "profile_attributed", location, profileId: "profile-1", displayName: "Production" } }],
     artifacts: [{ artifactId: "client_response_wire", artifactKind: "client_response_wire", state: "captured", mediaType: "application/json", capturedBytes: 17, redaction: "applied", truncated: false }],
@@ -223,6 +231,11 @@ describe("Overview Request Journeys", () => {
     await act(async () => root.render(<App api={api} />));
     await flush();
     expect(container.textContent).toContain("request-10");
+    const collapsedRow = container.querySelector('tr[data-request-id="request-10"]');
+    expect(collapsedRow?.textContent).toContain("The provider timed out");
+    expect(collapsedRow?.textContent).toContain(
+      "Upstream execution · Send provider request · Provider native · Attempt 2",
+    );
     expect(getRequestJourney).not.toHaveBeenCalled();
     await act(async () => { (container.querySelector('button[aria-label="Show details for request request-10"]') as HTMLButtonElement).click(); });
     await flush();
@@ -525,5 +538,60 @@ describe("Overview Request Journeys", () => {
 
     expect(container.querySelector('tr[data-request-id="request-17"]')).not.toBeNull();
     expect(container.textContent).toContain("Showing the last successful snapshot.");
+    });
   });
-});
+
+  it("labels fallback diagnosis as the last observed boundary", async () => {
+    const base = summary(13, "failed");
+    const location = {
+      phase: "outcome_commit" as const,
+      step: "commit_request_outcome",
+    };
+    const diagnosis = {
+      evidence: "fallback" as const,
+      classification: "request_failed_without_specific_cause",
+      safeMessage:
+        "The request failed, but no more specific cause was recorded.",
+      origin: "unknown" as const,
+      originPrecision: "boundary" as const,
+      location,
+    };
+    const failed = { ...base, completeness: "degraded" as const, diagnosis };
+    const record: RequestJourneyRecord = {
+      ...detail(failed),
+      completeness: "degraded",
+      diagnosis,
+      incident: {
+        primaryFailureId: "fallback-failure",
+        failures: [{
+          kind: "failure_detected",
+          failureId: "fallback-failure",
+          role: "primary",
+          classification: diagnosis.classification,
+          safeMessage: diagnosis.safeMessage,
+          origin: diagnosis.origin,
+          originPrecision: diagnosis.originPrecision,
+          location,
+        }],
+      },
+    };
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [failed], hasMore: false } }),
+      getRequestJourney: async () => ({ outcome: "ok", result: record }),
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    await act(async () => {
+      (container.querySelector('button[aria-label="Show details for request request-13"]') as HTMLButtonElement).click();
+    });
+    await flush();
+
+    expect(container.textContent).toContain("Last observed at");
+    expect(container.textContent).toContain(
+      "No more specific cause was captured; this location is the last confirmed request boundary.",
+    );
+    expect(container.textContent).toContain("request_failed_without_specific_cause");
+  });

@@ -22,6 +22,15 @@ const NOOP_ARTIFACT_RECORDER: ArtifactRecorder = Object.freeze({
   abandon: () => undefined,
 });
 
+interface JourneyDiagnosticState {
+  primaryFailureObserved: boolean;
+}
+
+const JOURNEY_DIAGNOSTIC_STATE = new WeakMap<
+  RequestJourneyObserver,
+  JourneyDiagnosticState
+>();
+
 function containArtifactRecorder(recorder: ArtifactRecorder): ArtifactRecorder {
   return Object.freeze({
     captureJson(value: unknown): void {
@@ -131,6 +140,9 @@ export function beginRequestJourney(
     if (observer.requestId !== input.requestId) {
       safeObserver = createNoopJourneyObserver(input.requestId);
     } else {
+      const diagnosticState: JourneyDiagnosticState = {
+        primaryFailureObserved: false,
+      };
       safeObserver = Object.freeze({
         requestId: input.requestId,
         ...(observer.openArtifact === undefined
@@ -147,6 +159,12 @@ export function beginRequestJourney(
         observe(observation: RequestJourneyObservationInput): void {
           try {
             observer.observe(observation);
+            if (
+              observation.kind === "failure_detected" &&
+              observation.role === "primary"
+            ) {
+              diagnosticState.primaryFailureObserved = true;
+            }
           } catch {
             // Diagnostics must never affect request serving.
           }
@@ -159,6 +177,7 @@ export function beginRequestJourney(
           }
         },
       });
+      JOURNEY_DIAGNOSTIC_STATE.set(safeObserver, diagnosticState);
     }
   } catch {
     safeObserver = createNoopJourneyObserver(input.requestId);
@@ -410,6 +429,7 @@ export async function handleHttpRequest(
         classification: "unmatched_route",
         origin: "client",
         originPrecision: "exact",
+        safeMessage: "No Token route accepts this request.",
         location: failureLocation,
       });
       const presentationLocation = {
@@ -494,6 +514,23 @@ export async function handleHttpRequest(
       location: protocolHandlerLocation,
     });
     protocolHandlerStepActive = false;
+    if (
+      response.status >= 400 &&
+      JOURNEY_DIAGNOSTIC_STATE.get(context.journey)?.primaryFailureObserved ===
+        false
+    ) {
+      observeRequestJourney(context, {
+        kind: "failure_detected",
+        failureId: `${requestId}:request_failed_without_specific_cause`,
+        role: "primary",
+        classification: "request_failed_without_specific_cause",
+        origin: "unknown",
+        originPrecision: "boundary",
+        safeMessage:
+          "The request failed, but no more specific cause was recorded.",
+        location: protocolHandlerLocation,
+      });
+    }
     assertWritable(lifecycle);
     lifecycle.markDelivered();
     // A transport edge assigns the authoritative request identity at P0.
@@ -543,6 +580,9 @@ export async function handleHttpRequest(
           : "protocol_handler_failed",
         origin: aborted && request.signal.aborted ? "client" : "Token",
         originPrecision: "boundary",
+        safeMessage: aborted
+          ? "The request was cancelled before processing completed."
+          : "The protocol handler could not complete the request.",
         location: protocolHandlerLocation,
       });
       protocolHandlerStepActive = false;

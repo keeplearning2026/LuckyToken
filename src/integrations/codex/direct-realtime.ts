@@ -493,6 +493,7 @@ function completeRealtimeHttp(
       classification: incident.classification,
       origin: incident.origin,
       originPrecision: incident.origin === "network_os" ? "boundary" : "exact",
+      safeMessage: "The realtime request could not be completed.",
       location: incident.location,
     });
   }
@@ -729,6 +730,7 @@ async function rejectRealtimeUpgrade(
     classification,
     origin: status === 401 ? "client" : "Token",
     originPrecision: "exact",
+    safeMessage: message,
     location: failureLocation,
   });
   const presentationLocation = realtimeLocation(
@@ -825,6 +827,7 @@ function createCodexDirectRealtimeWebSocketUpgradeHandler(
       classification,
       origin,
       originPrecision: origin === "network_os" ? "boundary" : "exact",
+      safeMessage: "The realtime connection ended before the request completed.",
       location,
     });
   };

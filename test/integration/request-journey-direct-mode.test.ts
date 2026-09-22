@@ -203,7 +203,7 @@ describe("Direct Mode Request Journey", () => {
       protocol: "openai-responses",
       lane: "direct",
       outcome: "failed",
-      primaryFailureLocation: FAILURE_LOCATION,
+      diagnosis: { evidence: "observed", location: FAILURE_LOCATION },
     });
 
     const detail = await authority.getRequestJourney({ requestId: REQUEST_ID });

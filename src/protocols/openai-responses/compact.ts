@@ -368,6 +368,7 @@ async function providerCompact(
       classification: "provider_native_alias_projection_failed",
       origin: "Token",
       originPrecision: "exact",
+      safeMessage: "Token could not safely prepare the provider response.",
       location: projectionLocation,
     });
     const failureResponse = errorResponse(
@@ -395,6 +396,7 @@ async function providerCompact(
         classification: "provider_native_alias_projection_failed",
         origin: "Token",
         originPrecision: "exact",
+        safeMessage: "Token could not safely prepare the provider response.",
         location: projectionLocation,
       });
       const failureResponse = errorResponse(

@@ -243,7 +243,7 @@ describe("Request Journey semantic response degradation", () => {
     });
 
     expect(detail.incident).toBeUndefined();
-    expect(detail.primaryFailureLocation).toBeUndefined();
+    expect(detail.diagnosis).toBeUndefined();
     const observations = detail.timeline.map((event) => event.observation);
     expect(observations).toEqual(
       expect.arrayContaining([

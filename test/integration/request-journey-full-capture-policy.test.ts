@@ -181,7 +181,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     );
     expect(
       await readdir(
-        join(root, "diagnostics", "full-journeys", ".inflight"),
+        join(root, "diagnostics", "full-journeys-v4", ".inflight"),
         { recursive: true },
       ),
     ).toEqual([]);
@@ -199,7 +199,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
 
     await authority.getRequestJourney({ requestId });
 
-    const fullJourneyRoot = join(root, "diagnostics", "full-journeys");
+    const fullJourneyRoot = join(root, "diagnostics", "full-journeys-v4");
     const dates = (await readdir(fullJourneyRoot, { withFileTypes: true })).filter(
       (entry) => entry.isDirectory() && entry.name !== ".inflight",
     );
@@ -241,7 +241,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       await readFile(join(journeyDirectory, manifest.artifacts[0]!.file!), "utf8"),
     ).toBe('{\n  "marker": "folder-artifact"\n}');
     expect(await readdir(join(root, "diagnostics"))).toContain(
-      "diagnostics-v3.sqlite3",
+      "diagnostics-v4.sqlite3",
     );
   });
 

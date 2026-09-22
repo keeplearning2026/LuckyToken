@@ -32,13 +32,13 @@ export const REQUEST_COLUMN_DEFINITIONS: readonly RequestColumnDefinition[] = [
   { id: "tokenSpeed", label: "Token speed", defaultWidth: 148, minWidth: 116, maxWidth: 250 },
   { id: "time", label: "Time", defaultWidth: 88, minWidth: 70, maxWidth: 160 },
   { id: "model", label: "Model", defaultWidth: 180, minWidth: 130, maxWidth: 380 },
-  { id: "status", label: "Status", defaultWidth: 128, minWidth: 100, maxWidth: 240 },
+  { id: "status", label: "Status / diagnosis", defaultWidth: 320, minWidth: 240, maxWidth: 520 },
 ];
 
 export type RequestColumnWidths = Readonly<Record<RequestColumnId, number>>;
 
 export const REQUEST_COLUMN_WIDTHS_STORAGE_KEY =
-  "Token.overview.request-column-widths.v1";
+  "Token.overview.request-column-widths.v2";
 
 export const DEFAULT_REQUEST_COLUMN_WIDTHS: RequestColumnWidths = Object.fromEntries(
   REQUEST_COLUMN_DEFINITIONS.map((column) => [column.id, column.defaultWidth]),

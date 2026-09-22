@@ -44,14 +44,21 @@ const JOURNEY_SUMMARY: RequestJourneySummary = Object.freeze({
   completeness: "complete",
   createdAt: 1_787_558_400_000,
   closedAt: 1_787_558_400_100,
-  primaryFailureLocation: Object.freeze({
-    phase: "upstream_execution",
-    lane: "semantic_conversion",
-    direction: "provider_to_pi",
-    step: "decode_provider_events",
-    subject: "tool_call",
-    sourcePath: "event[37]",
-    attempt: 2,
+  diagnosis: Object.freeze({
+    evidence: "observed",
+    classification: "provider_stream_decode_failed",
+    safeMessage: "Provider stream ended with malformed tool input",
+    origin: "provider",
+    originPrecision: "external_boundary",
+    location: Object.freeze({
+      phase: "upstream_execution",
+      lane: "semantic_conversion",
+      direction: "provider_to_pi",
+      step: "decode_provider_events",
+      subject: "tool_call",
+      sourcePath: "event[37]",
+      attempt: 2,
+    }),
   }),
 });
 
@@ -74,7 +81,7 @@ const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
       observation: Object.freeze({
         kind: "step_entered",
         stepInstanceId: "provider-read-2",
-        location: JOURNEY_SUMMARY.primaryFailureLocation!,
+        location: JOURNEY_SUMMARY.diagnosis!.location,
       }),
     }),
   ]),
@@ -101,7 +108,7 @@ const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
         origin: "provider",
         originPrecision: "external_boundary",
         safeMessage: "Provider stream ended with malformed tool input",
-        location: JOURNEY_SUMMARY.primaryFailureLocation!,
+        location: JOURNEY_SUMMARY.diagnosis!.location,
       }),
     ]),
   }),
@@ -109,7 +116,7 @@ const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
     outcome: "failed",
     requestOutcome: "failed",
     terminalAuthority: "pi_execution",
-    location: JOURNEY_SUMMARY.primaryFailureLocation!,
+    location: JOURNEY_SUMMARY.diagnosis!.location,
   }),
   clientPresentation: Object.freeze({
     status: 502,
@@ -233,7 +240,7 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
       originPrecision: "external_boundary",
       safeMessage: "Provider stream ended with malformed tool input",
       exceptionFingerprint: "sha256:failure",
-      location: JOURNEY_SUMMARY.primaryFailureLocation!,
+      location: JOURNEY_SUMMARY.diagnosis!.location,
     },
     {
       kind: "work_outcome_committed",
@@ -268,8 +275,8 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
   ]);
 
 describe("unified request diagnostics Control Plane contract", () => {
-  it("publishes the unified diagnostics contract through Control Plane v4", () => {
-    expect(controlPlaneVersion).toBe(4);
+  it("publishes the unified diagnostics contract through Control Plane v5", () => {
+    expect(controlPlaneVersion).toBe(5);
   });
 
   it("strictly decodes the bounded Request Journey query", () => {
@@ -313,9 +320,12 @@ describe("unified request diagnostics Control Plane contract", () => {
     expect(
       decodeRequestJourneySummary({
         ...JOURNEY_SUMMARY,
-        primaryFailureLocation: {
-          ...JOURNEY_SUMMARY.primaryFailureLocation,
-          credential: "secret",
+        diagnosis: {
+          ...JOURNEY_SUMMARY.diagnosis,
+          location: {
+            ...JOURNEY_SUMMARY.diagnosis!.location,
+            credential: "secret",
+          },
         },
       }),
     ).toBeUndefined();
@@ -335,10 +345,41 @@ describe("unified request diagnostics Control Plane contract", () => {
       decodeRequestJourneySummary({ ...JOURNEY_SUMMARY, closedAt: undefined }),
     ).toBeUndefined();
     expect(
+      decodeRequestJourneySummary({ ...JOURNEY_SUMMARY, diagnosis: undefined }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({
+        ...JOURNEY_SUMMARY,
+        outcome: "success",
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeRequestJourneySummary({
+        ...JOURNEY_SUMMARY,
+        completeness: "degraded",
+        diagnosis: {
+          evidence: "fallback",
+          classification: "request_failed_without_specific_cause",
+          safeMessage:
+            "The request failed, but no more specific cause was recorded.",
+          origin: "unknown",
+          originPrecision: "boundary",
+          location: {
+            phase: "outcome_commit",
+            step: "commit_request_outcome",
+          },
+        },
+      }),
+    ).toMatchObject({
+      completeness: "degraded",
+      diagnosis: { evidence: "fallback", origin: "unknown" },
+    });
+    expect(
       decodeRequestJourneySummary({
         ...JOURNEY_SUMMARY,
         outcome: "running",
         closedAt: undefined,
+        diagnosis: undefined,
       }),
     ).toMatchObject({ outcome: "running" });
   });

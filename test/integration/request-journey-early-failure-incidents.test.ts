@@ -277,7 +277,10 @@ describe("Request Journey early failure incidents", () => {
 
       const summary = await published;
       expect(summary).toMatchObject({ requestId, outcome: "failed" });
-      expect(summary.primaryFailureLocation).toEqual(testCase.location);
+      expect(summary.diagnosis).toMatchObject({
+        evidence: "observed",
+        location: testCase.location,
+      });
       expect(summary).not.toHaveProperty("lane");
 
       const detail = await authority.getRequestJourney({ requestId });
@@ -384,9 +387,12 @@ describe("Request Journey early failure incidents", () => {
     expect(summary).toMatchObject({
       requestId: drainingRequestId,
       outcome: "failed",
-      primaryFailureLocation: {
-        phase: "http_admission",
-        step: "reject_server_draining",
+      diagnosis: {
+        evidence: "observed",
+        location: {
+          phase: "http_admission",
+          step: "reject_server_draining",
+        },
       },
     });
     expect(summary).not.toHaveProperty("lane");

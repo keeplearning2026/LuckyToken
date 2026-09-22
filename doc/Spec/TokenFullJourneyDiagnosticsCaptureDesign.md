@@ -26,7 +26,7 @@ The first switch defaults to `false` and retains complete available scene bodies
 Captured files are owned by the Diagnostics Module and stored below the resolved diagnostics root:
 
 ```text
-<diagnostics.directory>/full-journeys/
+<diagnostics.directory>/full-journeys-v4/
 ```
 
 The resolved absolute folder is exposed read-only through the Application Control Plane and displayed in Settings. It is not chosen by a handler, lane, Client Protocol, renderer, current working directory, environment fallback, or user-owned Codex state. The folder and index are opened only by an independent Diagnostics child process, so a diagnostics JavaScript exception, fatal exit, or diagnostics-process memory exhaustion cannot terminate the Backend process.
@@ -35,7 +35,7 @@ The 64 MiB limit is a diagnostics JSON-artifact limit. It does not change semant
 
 ## 2. Review baseline and disposition
 
-The pre-implementation review proved that this contract could not be met by increasing one constant: capture was one-shot and 256 KiB-limited, the per-Journey budget was 4 MiB, bodies were SQLite BLOBs, semantic snapshots were lossy, safe HTTP envelopes and desktop body inspection were absent, and only one limited non-interference case existed. Those Token-owned gaps are now addressed by the artifact recorder, independent process, v3 index/file tree, complete protocol-owned snapshots, safe envelope artifacts, system-viewer inspection, and cross-lane tests.
+The pre-implementation review proved that this contract could not be met by increasing one constant: capture was one-shot and 256 KiB-limited, the per-Journey budget was 4 MiB, bodies were SQLite BLOBs, semantic snapshots were lossy, safe HTTP envelopes and desktop body inspection were absent, and only one limited non-interference case existed. Those Token-owned gaps are now addressed by the artifact recorder, independent process, v4 index/file tree, complete protocol-owned snapshots, safe envelope artifacts, system-viewer inspection, and cross-lane tests.
 
 Two ownership limits remain deliberately truthful:
 
@@ -139,8 +139,8 @@ Persistence uses a new diagnostics schema and a Diagnostics-process-owned file t
 
 ```text
 <diagnostics.directory>/
-  diagnostics-v3.sqlite3
-  full-journeys/
+  diagnostics-v4.sqlite3
+  full-journeys-v4/
     .inflight/<runtime-id>/<request-id>/
     YYYY-MM-DD/<request-id>/
       manifest.json

@@ -36,6 +36,7 @@ import {
   type RequestIdentityEstablishedPersistedObservation,
   type RequestIncident,
   type RequestJourneyDirection,
+  type RequestJourneyDiagnosis,
   type RequestJourneyDetailReadResult,
   type RequestJourneyGetInput,
   type RequestJourneyAdmission,
@@ -317,6 +318,45 @@ function decodeRequestJourneyLocation(
   });
 }
 
+function decodeRequestJourneyDiagnosis(
+  value: unknown,
+): RequestJourneyDiagnosis | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "evidence",
+      "classification",
+      "safeMessage",
+      "origin",
+      "originPrecision",
+      "location",
+    ]) ||
+    (value.evidence !== "observed" && value.evidence !== "fallback") ||
+    !boundedText(value.classification, 256) ||
+    !boundedText(value.safeMessage, MAX_SAFE_TEXT) ||
+    (value.origin !== "client" &&
+      value.origin !== "Token" &&
+      value.origin !== "provider" &&
+      value.origin !== "network_os" &&
+      value.origin !== "unknown") ||
+    (value.originPrecision !== "exact" &&
+      value.originPrecision !== "boundary" &&
+      value.originPrecision !== "external_boundary")
+  ) {
+    return undefined;
+  }
+  const location = decodeRequestJourneyLocation(value.location);
+  if (location === undefined) return undefined;
+  return Object.freeze({
+    evidence: value.evidence,
+    classification: value.classification,
+    safeMessage: value.safeMessage,
+    origin: value.origin,
+    originPrecision: value.originPrecision,
+    location,
+  });
+}
+
 function decodeCancellation(
   value: unknown,
 ): RequestCancellationSnapshot | undefined {
@@ -443,12 +483,12 @@ function decodeFailureObservation(
     (value.origin !== "client" &&
       value.origin !== "Token" &&
       value.origin !== "provider" &&
-      value.origin !== "network_os") ||
+      value.origin !== "network_os" &&
+      value.origin !== "unknown") ||
     (value.originPrecision !== "exact" &&
       value.originPrecision !== "boundary" &&
       value.originPrecision !== "external_boundary") ||
-    (value.safeMessage !== undefined &&
-      !boundedText(value.safeMessage, MAX_SAFE_TEXT)) ||
+    !boundedText(value.safeMessage, MAX_SAFE_TEXT) ||
     (value.exceptionFingerprint !== undefined &&
       !boundedText(value.exceptionFingerprint, 256))
   ) {
@@ -461,7 +501,7 @@ function decodeFailureObservation(
     classification: value.classification,
     origin: value.origin,
     originPrecision: value.originPrecision,
-    ...(value.safeMessage === undefined ? {} : { safeMessage: value.safeMessage }),
+    safeMessage: value.safeMessage,
     ...(value.exceptionFingerprint === undefined
       ? {}
       : { exceptionFingerprint: value.exceptionFingerprint }),
@@ -940,7 +980,7 @@ export function decodeRequestJourneySummary(
       "completeness",
       "createdAt",
       "closedAt",
-      "primaryFailureLocation",
+      "diagnosis",
       "usage",
     ]) ||
     !Number.isSafeInteger(value.id) ||
@@ -979,13 +1019,18 @@ export function decodeRequestJourneySummary(
   ) {
     return undefined;
   }
-  const primaryFailureLocation =
-    value.primaryFailureLocation === undefined
+  const diagnosis =
+    value.diagnosis === undefined
       ? undefined
-      : decodeRequestJourneyLocation(value.primaryFailureLocation);
+      : decodeRequestJourneyDiagnosis(value.diagnosis);
+  const abnormalOutcome =
+    value.outcome === "failed" ||
+    value.outcome === "aborted" ||
+    value.outcome === "interrupted";
   if (
-    value.primaryFailureLocation !== undefined &&
-    primaryFailureLocation === undefined
+    (value.diagnosis !== undefined && diagnosis === undefined) ||
+    (abnormalOutcome && diagnosis === undefined) ||
+    (!abnormalOutcome && diagnosis !== undefined)
   ) {
     return undefined;
   }
@@ -1023,7 +1068,7 @@ export function decodeRequestJourneySummary(
     completeness: value.completeness,
     createdAt: value.createdAt,
     ...(value.closedAt === undefined ? {} : { closedAt: value.closedAt as number }),
-    ...(primaryFailureLocation === undefined ? {} : { primaryFailureLocation }),
+    ...(diagnosis === undefined ? {} : { diagnosis }),
     ...(usage === undefined ? {} : { usage }),
   });
 }
@@ -1052,7 +1097,7 @@ export function decodeRequestJourneyRecord(
       "completeness",
       "createdAt",
       "closedAt",
-      "primaryFailureLocation",
+      "diagnosis",
       "usage",
       "admission",
       "timeline",
@@ -1096,9 +1141,9 @@ export function decodeRequestJourneyRecord(
     completeness: value.completeness,
     createdAt: value.createdAt,
     ...(value.closedAt === undefined ? {} : { closedAt: value.closedAt }),
-    ...(value.primaryFailureLocation === undefined
+    ...(value.diagnosis === undefined
       ? {}
-      : { primaryFailureLocation: value.primaryFailureLocation }),
+      : { diagnosis: value.diagnosis }),
     ...(value.usage === undefined ? {} : { usage: value.usage }),
   });
   const admission = decodeAdmission(value.admission);
@@ -1141,6 +1186,27 @@ export function decodeRequestJourneyRecord(
     (value.workOutcome !== undefined && workOutcome === undefined) ||
     (value.clientPresentation !== undefined && clientPresentation === undefined) ||
     (value.handoffOutcome !== undefined && handoffOutcome === undefined)
+  ) {
+    return undefined;
+  }
+  const abnormalOutcome =
+    summary.outcome === "failed" ||
+    summary.outcome === "aborted" ||
+    summary.outcome === "interrupted";
+  const primaryFailure = incident?.failures.find(
+    (failure) => failure.failureId === incident.primaryFailureId,
+  );
+  if (
+    (abnormalOutcome &&
+      (summary.diagnosis === undefined ||
+        incident === undefined ||
+        primaryFailure === undefined ||
+        primaryFailure.role !== "primary" ||
+        primaryFailure.classification !== summary.diagnosis.classification ||
+        primaryFailure.safeMessage !== summary.diagnosis.safeMessage ||
+        primaryFailure.origin !== summary.diagnosis.origin ||
+        primaryFailure.originPrecision !== summary.diagnosis.originPrecision)) ||
+    (!abnormalOutcome && incident !== undefined)
   ) {
     return undefined;
   }

@@ -241,6 +241,7 @@ async function executeCodexDirectRequest(
       classification: "direct_upstream_transport_failed",
       origin: "network_os",
       originPrecision: "boundary",
+      safeMessage: "Token could not connect to the upstream provider.",
       location: dispatchLocation,
     });
     throw new CodexDirectResponsesTransportError(error);
@@ -307,6 +308,7 @@ async function executeCodexDirectRequest(
       classification: "direct_upstream_response_body_read_failed",
       origin: "network_os",
       originPrecision: "boundary",
+      safeMessage: "Token could not finish reading the provider response.",
       location: readLocation,
     });
     throw new CodexDirectResponsesBodyReadError(error);

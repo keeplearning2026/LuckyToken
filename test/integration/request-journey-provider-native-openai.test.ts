@@ -435,7 +435,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         operation: "model_generation",
         protocol: "openai-responses",
         outcome: "failed",
-        primaryFailureLocation: PRIMARY_LOCATION,
+        diagnosis: { evidence: "observed", location: PRIMARY_LOCATION },
       });
 
       const detail = await authority.getRequestJourney({ requestId: REQUEST_ID });

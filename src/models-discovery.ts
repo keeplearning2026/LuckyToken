@@ -49,6 +49,7 @@ function renderProjectionFailure(
     classification: "model_list_projection_failed",
     origin: "Token",
     originPrecision: "exact",
+    safeMessage: "Token could not prepare the model list response.",
     location: primaryLocation,
   });
   const presentationLocation = {

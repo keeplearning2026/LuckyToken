@@ -142,7 +142,7 @@ describe("Public Model serve wiring", () => {
       .toBe(true);
     await expect.poll(async () => {
       try {
-        await access(join(root, "state", "request-diagnostics", "diagnostics-v3.sqlite3"));
+        await access(join(root, "state", "request-diagnostics", "diagnostics-v4.sqlite3"));
         return true;
       } catch {
         return false;

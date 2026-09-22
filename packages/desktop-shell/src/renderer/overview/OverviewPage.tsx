@@ -143,7 +143,7 @@ function humanizeDiagnosticName(value: string): string {
 }
 
 function displayDiagnosticLocation(
-  location: NonNullable<RequestJourneySummary["primaryFailureLocation"]>,
+  location: NonNullable<RequestJourneySummary["diagnosis"]>["location"],
 ): string {
   const parts = [
     humanizeDiagnosticName(location.phase),
@@ -432,9 +432,6 @@ function ArtifactCaptureList({
 }
 
 function RequestDetailPanel({ api, record }: { readonly api: TokenDesktopApi; readonly record: RequestJourneyRecord }) {
-  const primaryFailure = record.incident?.failures.find(
-    (entry) => entry.failureId === record.incident?.primaryFailureId,
-  );
   const duration = record.closedAt === undefined
     ? "Still running"
     : `${Math.max(0, record.closedAt - record.createdAt)} ms`;
@@ -443,7 +440,8 @@ function RequestDetailPanel({ api, record }: { readonly api: TokenDesktopApi; re
   const resolvedTarget = record.providerId === undefined && record.realModelId === undefined
     ? undefined
     : `${record.providerId ?? "Unknown provider"} / ${record.realModelId ?? "Unknown model"}`;
-  const location = primaryFailure?.location ?? record.primaryFailureLocation;
+  const diagnosis = record.diagnosis;
+  const location = diagnosis?.location;
   const abnormalOutcome =
     record.outcome !== "success" && record.outcome !== "running";
   const stages = [
@@ -518,18 +516,20 @@ function RequestDetailPanel({ api, record }: { readonly api: TokenDesktopApi; re
       <div><span>Model target</span><strong>{resolvedTarget ?? "Not recorded"}</strong><small>{record.requestedModel}</small></div>
     </section>
 
-    {(primaryFailure !== undefined || abnormalOutcome) ? (
+    {abnormalOutcome ? (
       <section className="request-primary-failure" aria-label="Primary failure">
         <div>
           <span>{record.outcome === "failed" ? "Why this request failed" : "Why this request ended"}</span>
-          <h3>{primaryFailure?.safeMessage ?? "No supported primary cause was recorded."}</h3>
-          <p>{primaryFailure === undefined
-            ? `The terminal outcome is ${record.outcome}, but the diagnostic record does not identify one primary failure.`
-            : `${humanizeDiagnosticName(primaryFailure.origin)} source · ${humanizeDiagnosticName(primaryFailure.originPrecision)}`}</p>
+          <h3>{diagnosis?.safeMessage ?? "Diagnostics are unavailable for this request."}</h3>
+          <p>{diagnosis === undefined
+            ? `The terminal outcome is ${record.outcome}, but no diagnosis could be loaded.`
+            : diagnosis.evidence === "fallback"
+              ? "No more specific cause was captured; this location is the last confirmed request boundary."
+              : `${humanizeDiagnosticName(diagnosis.origin)} source · ${humanizeDiagnosticName(diagnosis.originPrecision)}`}</p>
         </div>
         <dl>
-          <div><dt>Classification</dt><dd><code>{primaryFailure?.classification ?? "Not recorded"}</code></dd></div>
-          <div><dt>Detected at</dt><dd>{location === undefined ? "Not recorded" : displayDiagnosticLocation(location)}</dd></div>
+          <div><dt>Classification</dt><dd><code>{diagnosis?.classification ?? "Not recorded"}</code></dd></div>
+          <div><dt>{diagnosis?.evidence === "fallback" ? "Last observed at" : "Failed at"}</dt><dd>{location === undefined ? "Not recorded" : displayDiagnosticLocation(location)}</dd></div>
         </dl>
       </section>
     ) : null}
@@ -673,11 +673,17 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDes
           const protocol = record.protocol ?? "-";
           const model = record.requestedModel ?? "-";
           const status = displayStatus(record);
+          const diagnosisLocation = record.diagnosis === undefined
+            ? undefined
+            : displayDiagnosticLocation(record.diagnosis.location);
+          const statusTitle = [status, record.diagnosis?.safeMessage, diagnosisLocation]
+            .filter((part): part is string => part !== undefined)
+            .join(" · ");
           return <Fragment key={record.id}>
             <tr data-request-id={record.requestId} className={expanded ? "expanded" : undefined}>
               <td className="request-column request-column-startTime" title={startTime}><button type="button" className="request-disclosure" aria-label={`${expanded ? "Hide" : "Show"} details for request ${record.requestId}`} aria-expanded={expanded} onClick={() => void toggleDetails(record.requestId)}>{expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}<span>{startTime}</span></button></td>
               <td className="request-column request-column-session" title={session}>{session}</td><td className="request-column request-column-requestId" title={record.requestId}><code>{record.requestId}</code></td><td className="request-column request-column-protocol" title={protocol}>{protocol}</td>
-              <RequestUsageCells record={record} /><td className="request-column request-column-time" title={duration}>{duration}</td><td className="request-column request-column-model" title={model}>{model}</td><td className="request-column request-column-status" title={status}><span className={`overview-status ${statusTone(record)}`} aria-label={`${status}; request outcome ${displayOutcome(record.outcome)}`}><span aria-hidden="true" />{status}</span></td>
+              <RequestUsageCells record={record} /><td className="request-column request-column-time" title={duration}>{duration}</td><td className="request-column request-column-model" title={model}>{model}</td><td className="request-column request-column-status" title={statusTitle}><div className="request-row-status"><span className={`overview-status ${statusTone(record)}`} aria-label={`${status}; request outcome ${displayOutcome(record.outcome)}`}><span aria-hidden="true" />{status}</span>{record.diagnosis === undefined ? null : <><strong>{record.diagnosis.safeMessage}</strong><small>{diagnosisLocation}</small></>}</div></td>
             </tr>
             {expanded ? <tr className="overview-detail-row"><td colSpan={12}>
               {detail === undefined ? <div className="request-detail-loading"><p>Loading request details…</p></div> : detail === "unavailable" ? <div className="request-detail-loading"><p className="error-text">Request details are temporarily unavailable.</p></div> : <RequestDetailPanel api={api} record={detail} />}

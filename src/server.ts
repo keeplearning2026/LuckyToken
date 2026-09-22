@@ -110,6 +110,7 @@ function rejectWebSocketUpgrade(
     classification: "unsupported_websocket_transport",
     origin: "client",
     originPrecision: "exact",
+    safeMessage: "This route does not support a WebSocket connection.",
     location: primaryLocation,
   });
 
@@ -516,6 +517,7 @@ export async function startTokenHttpServer(
         classification: "server_draining",
         origin: "Token",
         originPrecision: "exact",
+        safeMessage: "Token is shutting down and cannot accept this request.",
         location: failureLocation,
       });
       observeRequestJourney(context, {
@@ -576,6 +578,10 @@ export async function startTokenHttpServer(
         classification,
         origin: classification === "http_connection_aborted" ? "client" : "network_os",
         originPrecision: "boundary",
+        safeMessage:
+          classification === "http_connection_aborted"
+            ? "The client connection closed before the response completed."
+            : "Token could not finish sending the response.",
         location: handoffLocation,
       });
     };
@@ -827,6 +833,7 @@ export async function startTokenHttpServer(
             classification: "websocket_upgrade_handler_failed",
             origin: "Token",
             originPrecision: "boundary",
+            safeMessage: "Token could not establish the WebSocket connection.",
             location,
           });
           observeRequestJourney(context, {

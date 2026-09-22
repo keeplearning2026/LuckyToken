@@ -127,7 +127,7 @@ describe("Request Journey unmatched HTTP routes", () => {
       requestId: REQUEST_ID,
       operation: "unmatched_request",
       outcome: "failed",
-      primaryFailureLocation: FAILURE_LOCATION,
+      diagnosis: { evidence: "observed", location: FAILURE_LOCATION },
     });
     expect(publishedSummary).not.toHaveProperty("protocol");
     expect(publishedSummary).not.toHaveProperty("lane");

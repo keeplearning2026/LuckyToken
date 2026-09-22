@@ -51,6 +51,7 @@ function createSaturatedReserveHarness(): {
   readonly factory: DiagnosticsWorkerFactory;
   readonly closeSealPosts: () => number;
   readonly closeSealPayload: () => Readonly<Record<string, unknown>> | undefined;
+  readonly fallbackPosts: () => readonly WorkerEnvelope[];
   readonly artifactPosts: () => readonly WorkerEnvelope[];
   readonly artifactChunks: () => readonly WorkerEnvelope[];
   readonly releaseHeld: () => void;
@@ -61,6 +62,7 @@ function createSaturatedReserveHarness(): {
   let sealPayload: Readonly<Record<string, unknown>> | undefined;
   const artifacts: WorkerEnvelope[] = [];
   const artifactChunks: WorkerEnvelope[] = [];
+  const fallbacks: WorkerEnvelope[] = [];
 
   const acknowledge = (message: WorkerEnvelope): void => {
     const identity = appendIdentity(message);
@@ -79,6 +81,13 @@ function createSaturatedReserveHarness(): {
             envelope.payload?.kind === "artifact_observed"
           ) {
             artifacts.push(envelope);
+          }
+          if (
+            envelope.messageKind === "observation" &&
+            envelope.payload?.classification ===
+              "request_failed_without_specific_cause"
+          ) {
+            fallbacks.push(envelope);
           }
           if (envelope.messageKind === "begin") {
             acknowledge(envelope);
@@ -117,6 +126,7 @@ function createSaturatedReserveHarness(): {
     factory,
     closeSealPosts: () => closeSealPostCount,
     closeSealPayload: () => sealPayload,
+    fallbackPosts: () => fallbacks,
     artifactPosts: () => artifacts,
     artifactChunks: () => artifactChunks,
     releaseHeld: () => {
@@ -128,7 +138,7 @@ function createSaturatedReserveHarness(): {
 }
 
 describe("Request Journey close-seal reserve", () => {
-  it("admits one bounded close seal even when terminal observations saturate their shared pool", async () => {
+  it("admits a fallback diagnosis and close seal when ordinary observations saturate their pool", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-seal-reserve-"));
     const harness = createSaturatedReserveHarness();
     const authority = await createDiagnosticsAuthority({
@@ -157,16 +167,13 @@ describe("Request Journey close-seal reserve", () => {
       ];
       for (const [index, messageSize] of messageSizes.entries()) {
         observer.observe({
-          kind: "failure_detected",
-          failureId: `supporting-${index}`,
-          role: "supporting",
-          classification: "reserve_saturation_probe",
-          origin: "Token",
-          originPrecision: "exact",
-          safeMessage: "x".repeat(messageSize),
+          kind: "step_completed",
+          stepInstanceId: `detail-${index}`,
+          completion: "success",
           location: {
             phase: "outcome_commit",
             step: "saturate_terminal_reserve",
+            sourcePath: "x".repeat(messageSize),
           },
         });
       }
@@ -183,9 +190,17 @@ describe("Request Journey close-seal reserve", () => {
       ).not.toThrow();
 
       expect(harness.closeSealPosts()).toBe(1);
+      expect(harness.fallbackPosts()).toHaveLength(1);
+      expect(harness.fallbackPosts()[0]?.payload).toMatchObject({
+        kind: "failure_detected",
+        role: "primary",
+        classification: "request_failed_without_specific_cause",
+        origin: "unknown",
+      });
       expect(harness.closeSealPayload()).toMatchObject({
         outcome: "failed",
         completeness: "degraded",
+        primaryFailureId: `${REQUEST_ID}:request_failed_without_specific_cause`,
       });
     } finally {
       harness.releaseHeld();

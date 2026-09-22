@@ -301,10 +301,13 @@ describe("Request Journey early HTTP client disconnect", () => {
         expect.objectContaining({
           requestId,
           outcome: "failed",
-          primaryFailureLocation: {
-            phase: "protocol_ingress",
-            step: "invoke_protocol_handler",
-          },
+          diagnosis: expect.objectContaining({
+            evidence: "observed",
+            location: {
+              phase: "protocol_ingress",
+              step: "invoke_protocol_handler",
+            },
+          }),
         }),
       );
       const journey = await authority.getRequestJourney({ requestId });

@@ -464,7 +464,7 @@ describe("diagnostics child-process crash non-interference", () => {
     const blockedFinalPath = join(
       root,
       "diagnostics",
-      "full-journeys",
+      "full-journeys-v4",
       ".inflight",
       opaque("runtime", runtimeId),
       opaque("request", REQUEST_ID),

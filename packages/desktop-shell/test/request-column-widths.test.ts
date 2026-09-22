@@ -19,7 +19,7 @@ describe("request column width preferences", () => {
     });
     expect(widths.startTime).toBe(168);
     expect(widths.model).toBe(380);
-    expect(widths.status).toBe(176);
+    expect(widths.status).toBe(240);
     expect(widths.session).toBe(DEFAULT_REQUEST_COLUMN_WIDTHS.session);
   });
 

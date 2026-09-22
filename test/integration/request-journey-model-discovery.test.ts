@@ -255,7 +255,7 @@ describe("Request Journey model discovery", () => {
       operation: "model_discovery",
       protocol: "openai-responses",
       outcome: "failed",
-      primaryFailureLocation: PRIMARY_LOCATION,
+      diagnosis: { evidence: "observed", location: PRIMARY_LOCATION },
     });
     expect(publishedSummary).not.toHaveProperty("lane");
 

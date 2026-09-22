@@ -140,6 +140,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .overview-status.running > span { background: var(--blue); }
 .overview-status.warning > span { background: var(--amber); }
 .overview-status.error > span { background: var(--danger); }
+.overview-request-table td.request-column-status { white-space: normal; }
+.request-row-status { display: grid; gap: 4px; min-width: 0; }
+.request-row-status > strong { overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.request-row-status > small { overflow: hidden; color: var(--text-secondary); font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .overview-empty { height: 110px; text-align: center; color: var(--text-tertiary) !important; }
 .overview-detail-row > td { padding: 0 8px 16px 32px; border-bottom: 0; }
 .request-detail-loading, .request-detail-panel { padding: 24px 28px; border: 1px solid var(--hairline); border-radius: 16px; background: var(--surface-soft); white-space: normal; }

@@ -466,6 +466,7 @@ export function createProviderNativeResponses(
                       classification: "provider_native_transport_failed",
                       origin: "network_os",
                       originPrecision: "boundary",
+                      safeMessage: "Token could not connect to the upstream provider.",
                       location: {
                         phase: "upstream_execution",
                         lane: "provider_native",
@@ -514,6 +515,7 @@ export function createProviderNativeResponses(
                     classification: "provider_http_429",
                     origin: "provider",
                     originPrecision: "external_boundary",
+                    safeMessage: "The provider rate-limited the request.",
                     location: classifyLocation,
                   });
                 }
@@ -643,6 +645,7 @@ export function createProviderNativeResponses(
               "provider_profile_attempt_limit_exhausted_after_final_429",
             origin: "Token",
             originPrecision: "exact",
+            safeMessage: "No provider profile remained after rate limiting.",
             location: advanceLocation,
           });
           return finishObservedResponse(
@@ -684,6 +687,7 @@ export function createProviderNativeResponses(
               classification: "provider_profile_transition_failed",
               origin: "Token",
               originPrecision: "exact",
+              safeMessage: "Token could not switch to another provider profile.",
               location: advanceLocation,
             });
           }
@@ -707,6 +711,7 @@ export function createProviderNativeResponses(
             classification,
             origin: "Token",
             originPrecision: "exact",
+            safeMessage: "No usable provider profile remained for this request.",
             location: advanceLocation,
           });
           return finishObservedResponse(

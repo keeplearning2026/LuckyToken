@@ -171,9 +171,14 @@ export interface FailureDetectedObservation extends LocatedObservation {
   readonly failureId: string;
   readonly role: "primary" | "supporting";
   readonly classification: string;
-  readonly origin: "client" | "Token" | "provider" | "network_os";
+  readonly origin:
+    | "client"
+    | "Token"
+    | "provider"
+    | "network_os"
+    | "unknown";
   readonly originPrecision: "exact" | "boundary" | "external_boundary";
-  readonly safeMessage?: string;
+  readonly safeMessage: string;
   readonly exceptionFingerprint?: string;
 }
 

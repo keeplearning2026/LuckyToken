@@ -56,7 +56,7 @@ const STEP_DETAIL_PENDING_BYTES = 8 * 1_024 * 1_024;
 const NOTICE_ATTEMPT_PENDING_BYTES = 12 * 1_024 * 1_024;
 const FAILURE_ARTIFACT_PENDING_BYTES = 14 * 1_024 * 1_024;
 const MAX_RESERVED_PENDING_BYTES = 4 * 1_024 * 1_024;
-const CLOSE_SEAL_RESERVATION_BYTES = 4 * 1_024;
+const CLOSE_SEAL_RESERVATION_BYTES = 8 * 1_024;
 const RESTART_BACKOFF_MS = [100, 500, 2_000, 10_000, 30_000] as const;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
 
@@ -258,14 +258,20 @@ interface JourneyState {
   degraded: boolean;
   artifactBytes: number;
   closeSealReservationBytes: number;
+  closeFallbackBytes: number;
   primaryFailureId?: string;
+  lastKnownLocation?: RequestJourneyLocation;
   finalOutcome?: RequestJourneyOutcome;
   readonly allRequestsCaptureEnabled: boolean;
   readonly failedRequestsCaptureEnabled: boolean;
   readonly artifacts: Map<string, ArtifactFlight>;
 }
 
-type PendingCapacity = "ordinary" | "reserved" | "close_seal";
+type PendingCapacity =
+  | "ordinary"
+  | "reserved"
+  | "close_fallback"
+  | "close_seal";
 
 interface PendingAppend {
   readonly message: PendingMessage;
@@ -405,6 +411,18 @@ const CLOSE_SUBJECTS = new Set<
   "usage",
   "stop_reason",
 ]);
+const FAILURE_ORIGINS = new Set([
+  "client",
+  "Token",
+  "provider",
+  "network_os",
+  "unknown",
+] as const);
+const FAILURE_ORIGIN_PRECISIONS = new Set([
+  "exact",
+  "boundary",
+  "external_boundary",
+] as const);
 
 function projectCloseLocation(
   value: unknown,
@@ -498,7 +516,7 @@ function projectCloseSeal(
       (value.completeness !== undefined && value.completeness !== "complete");
     const closeReason = boundedUtf8(value.closeReason, 512);
     const failureId = boundedUtf8(
-      value.primaryFailureId ?? state.primaryFailureId,
+      state.primaryFailureId ?? value.primaryFailureId,
       256,
     );
     const location = projectCloseLocation(value.lastKnownLocation);
@@ -562,6 +580,23 @@ function copyObservation(
         !isBoundedFact(copied.displayName, 512))
     ) {
       return undefined;
+    }
+    if (copied.kind === "failure_detected") {
+      const location = projectCloseLocation(copied.location);
+      if (
+        !isBoundedFact(copied.failureId, 256) ||
+        (copied.role !== "primary" && copied.role !== "supporting") ||
+        !isBoundedFact(copied.classification, 256) ||
+        !FAILURE_ORIGINS.has(copied.origin) ||
+        !FAILURE_ORIGIN_PRECISIONS.has(copied.originPrecision) ||
+        !isBoundedFact(copied.safeMessage, 1_024) ||
+        (copied.exceptionFingerprint !== undefined &&
+          !isBoundedFact(copied.exceptionFingerprint, 256)) ||
+        location.location === undefined ||
+        location.degraded
+      ) {
+        return undefined;
+      }
     }
     if (
       copied.kind === "work_outcome_committed" &&
@@ -770,12 +805,16 @@ export async function createDiagnosticsAuthority(
   };
 
   const releaseJourneyCloseSeal = (state: JourneyState): void => {
-    if (state.closeSealReservationBytes === 0) return;
+    if (state.closeSealReservationBytes === 0) {
+      state.closeFallbackBytes = 0;
+      return;
+    }
     closeSealReservedBytes = Math.max(
       0,
       closeSealReservedBytes - state.closeSealReservationBytes,
     );
     state.closeSealReservationBytes = 0;
+    state.closeFallbackBytes = 0;
   };
 
   const clearPendingCapacity = (): void => {
@@ -959,7 +998,7 @@ export async function createDiagnosticsAuthority(
               0,
               reservedPendingBytes - entry.bytes,
             );
-          } else {
+          } else if (entry.capacity === "close_seal") {
             closeSealReservedBytes = Math.max(
               0,
               closeSealReservedBytes - CLOSE_SEAL_RESERVATION_BYTES,
@@ -1103,7 +1142,7 @@ export async function createDiagnosticsAuthority(
     const key = appendKey(message);
     if (
       bytes === undefined ||
-      bytes > CLOSE_SEAL_RESERVATION_BYTES ||
+      bytes + state.closeFallbackBytes > CLOSE_SEAL_RESERVATION_BYTES ||
       pending.has(key)
     ) {
       state.degraded = true;
@@ -1111,6 +1150,34 @@ export async function createDiagnosticsAuthority(
     }
     pending.set(key, { message, bytes, capacity: "close_seal" });
     state.closeSealReservationBytes = 0;
+    if (ready && worker !== undefined) postToDiagnostics(worker, message);
+    return true;
+  };
+
+  const admitCloseFallback = (
+    message: RequestJourneyAppendMessage,
+    state: JourneyState,
+  ): boolean => {
+    if (
+      message.messageKind !== "observation" ||
+      state.closeSealReservationBytes !== CLOSE_SEAL_RESERVATION_BYTES ||
+      state.closeFallbackBytes !== 0
+    ) {
+      state.degraded = true;
+      return false;
+    }
+    const bytes = messageByteLength(message);
+    const key = appendKey(message);
+    if (
+      bytes === undefined ||
+      bytes >= CLOSE_SEAL_RESERVATION_BYTES ||
+      pending.has(key)
+    ) {
+      state.degraded = true;
+      return false;
+    }
+    pending.set(key, { message, bytes, capacity: "close_fallback" });
+    state.closeFallbackBytes = bytes;
     if (ready && worker !== undefined) postToDiagnostics(worker, message);
     return true;
   };
@@ -1165,6 +1232,7 @@ export async function createDiagnosticsAuthority(
         degraded: false,
         artifactBytes: 0,
         closeSealReservationBytes: 0,
+        closeFallbackBytes: 0,
         allRequestsCaptureEnabled,
         failedRequestsCaptureEnabled,
         artifacts: new Map(),
@@ -1522,6 +1590,9 @@ export async function createDiagnosticsAuthority(
               },
               state,
             );
+            if (admitted) {
+              state.lastKnownLocation = snapshot.location;
+            }
             if (
               admitted &&
               snapshot.kind === "failure_detected" &&
@@ -1529,6 +1600,12 @@ export async function createDiagnosticsAuthority(
             ) {
               if (state.primaryFailureId === undefined) {
                 state.primaryFailureId = snapshot.failureId;
+                if (
+                  snapshot.classification ===
+                  "request_failed_without_specific_cause"
+                ) {
+                  state.degraded = true;
+                }
               } else {
                 state.degraded = true;
               }
@@ -1546,6 +1623,57 @@ export async function createDiagnosticsAuthority(
             let closePayload = projectCloseSeal(closeInput, state);
             state.finalOutcome = closePayload.outcome;
             const abnormalOutcome = closePayload.outcome !== "success";
+            if (abnormalOutcome && state.primaryFailureId === undefined) {
+              state.degraded = true;
+              const fallbackLocation =
+                (closePayload.lastKnownLocation as
+                  | RequestJourneyLocation
+                  | undefined) ??
+                state.lastKnownLocation ??
+                Object.freeze({
+                  phase: "outcome_commit" as const,
+                  step: "commit_request_outcome",
+                });
+              const failureId = `${copied.requestId}:request_failed_without_specific_cause`;
+              const fallback = Object.freeze({
+                kind: "failure_detected" as const,
+                failureId,
+                role: "primary" as const,
+                classification: "request_failed_without_specific_cause",
+                origin: "unknown" as const,
+                originPrecision: "boundary" as const,
+                safeMessage:
+                  "The request failed, but no more specific cause was recorded.",
+                location: fallbackLocation,
+              });
+              state.sequence += 1;
+              state.observations += 1;
+              if (
+                admitCloseFallback(
+                  {
+                    type: "append",
+                    runtimeId,
+                    requestId: copied.requestId,
+                    sequence: state.sequence,
+                    time: now(),
+                    messageKind: "observation",
+                    payload: fallback,
+                  },
+                  state,
+                )
+              ) {
+                state.primaryFailureId = failureId;
+                state.lastKnownLocation = fallbackLocation;
+                closePayload = projectCloseSeal(
+                  {
+                    ...closePayload,
+                    primaryFailureId: failureId,
+                    completeness: "degraded",
+                  },
+                  state,
+                );
+              }
+            }
             const captureEnabled =
               state.allRequestsCaptureEnabled ||
               (abnormalOutcome && state.failedRequestsCaptureEnabled);

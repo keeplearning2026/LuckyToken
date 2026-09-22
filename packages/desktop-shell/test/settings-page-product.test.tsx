@@ -82,7 +82,7 @@ describe("Settings product slice", () => {
             provider: "configured" as const,
             diagnostics: {
               available: true,
-              fullJourneyDirectory: "D:\\TokenData\\state\\request-diagnostics\\full-journeys",
+              fullJourneyDirectory: "D:\\TokenData\\state\\request-diagnostics\\full-journeys-v4",
               maxJsonArtifactBytes: 67_108_864,
               maxJourneyArtifactBytes: 536_870_912,
               isolation: "process" as const,
@@ -95,7 +95,7 @@ describe("Settings product slice", () => {
 
     expect(container.textContent).toContain("Full journey capture");
     expect(container.textContent).toContain(
-      "D:\\TokenData\\state\\request-diagnostics\\full-journeys",
+      "D:\\TokenData\\state\\request-diagnostics\\full-journeys-v4",
     );
     expect(container.textContent).toContain("64 MiB per JSON file");
     expect(container.textContent).toContain("Force capture when a request fails");

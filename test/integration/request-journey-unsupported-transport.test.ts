@@ -199,7 +199,7 @@ describe("Request Journey unsupported HTTP transport", () => {
       requestId: REQUEST_ID,
       operation: "unsupported_transport",
       outcome: "failed",
-      primaryFailureLocation: PRIMARY_LOCATION,
+      diagnosis: { evidence: "observed", location: PRIMARY_LOCATION },
     });
     expect(publishedSummary).not.toHaveProperty("protocol");
     expect(publishedSummary).not.toHaveProperty("lane");

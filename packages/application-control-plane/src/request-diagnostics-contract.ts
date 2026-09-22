@@ -86,6 +86,20 @@ export interface RequestJourneyLocation {
   readonly attempt?: number;
 }
 
+export interface RequestJourneyDiagnosis {
+  readonly evidence: "observed" | "fallback";
+  readonly classification: string;
+  readonly safeMessage: string;
+  readonly origin:
+    | "client"
+    | "Token"
+    | "provider"
+    | "network_os"
+    | "unknown";
+  readonly originPrecision: "exact" | "boundary" | "external_boundary";
+  readonly location: RequestJourneyLocation;
+}
+
 export interface RequestJourneySummary {
   /** Global diagnostics-record cursor. */
   readonly id: number;
@@ -108,7 +122,8 @@ export interface RequestJourneySummary {
   readonly completeness: "complete" | "degraded";
   readonly createdAt: number;
   readonly closedAt?: number;
-  readonly primaryFailureLocation?: RequestJourneyLocation;
+  /** Present for every closed failed, aborted, or interrupted Journey. */
+  readonly diagnosis?: RequestJourneyDiagnosis;
   readonly usage?: RequestJourneyUsageSummary;
 }
 
@@ -219,9 +234,14 @@ export interface FailureDetectedPersistedObservation
   readonly failureId: string;
   readonly role: "primary" | "supporting";
   readonly classification: string;
-  readonly origin: "client" | "Token" | "provider" | "network_os";
+  readonly origin:
+    | "client"
+    | "Token"
+    | "provider"
+    | "network_os"
+    | "unknown";
   readonly originPrecision: "exact" | "boundary" | "external_boundary";
-  readonly safeMessage?: string;
+  readonly safeMessage: string;
   readonly exceptionFingerprint?: string;
 }
 

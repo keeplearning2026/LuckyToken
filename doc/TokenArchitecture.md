@@ -2067,8 +2067,8 @@ flowchart LR
 │   ├── openai-responses.json
 │   │   owner: Responses session-state capability
 │   └── request-diagnostics/
-│       ├── diagnostics-v3.sqlite3
-│       └── full-journeys/<date>/<opaque-request-id>/
+│       ├── diagnostics-v4.sqlite3
+│       └── full-journeys-v4/<date>/<opaque-request-id>/
 │           owner: RequestJourneyDiagnosticsAuthority child process
 │
 └── pi/

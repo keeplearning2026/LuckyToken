@@ -450,7 +450,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
         protocol: "openai-responses",
         lane: "semantic_conversion",
         outcome: "failed",
-        primaryFailureLocation: PRIMARY_LOCATION,
+        diagnosis: { evidence: "observed", location: PRIMARY_LOCATION },
       });
 
       const detail = await authority.getRequestJourney({ requestId: REQUEST_ID });

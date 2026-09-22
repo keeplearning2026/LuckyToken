@@ -285,7 +285,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
       protocol: "openai-responses",
       lane: "provider_native",
       outcome: "failed",
-      primaryFailureLocation: PRIMARY_LOCATION,
+      diagnosis: { evidence: "observed", location: PRIMARY_LOCATION },
     });
     const page = await authority.queryRequestJourneys({ limit: 10 });
     expect(page.records).toEqual([publishedSummary]);

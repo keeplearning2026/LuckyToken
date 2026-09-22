@@ -1,9 +1,9 @@
 # Token Request Journey Diagnostics Specification
 
-- **Status:** CURRENT — full-journey capture and unified Request Journey cutover implemented
-- **Date:** 2026-08-25
+- **Status:** CURRENT — failure-diagnosis guarantee, full-journey capture, and unified Request Journey cutover implemented
+- **Date:** 2026-09-22
 - **Scope:** Data Plane request journey, failure location, investigation artifacts, fail-open observation runtime, and one diagnostics persistence authority
-- **Out of scope:** physical SQL/index tuning, final Desktop layout, and legacy data migration/import (not provided)
+- **Out of scope:** physical SQL/index tuning and legacy data migration/import (not provided)
 
 This document establishes the request-processing map and observation contract implemented by Token's unified Request Journey diagnostics system.
 
@@ -22,6 +22,10 @@ Normative sources:
 ### 1.1 One request record, one diagnostics authority
 
 Every admitted Data Plane request has one authoritative `RequestJourneyRecord` identified by one Token request ID. A non-successful journey attaches one `RequestIncident` to that record. Timeline events, failure facts, attempts, request/response evidence, and capture-integrity facts are sections of that record rather than independently correlated persistence authorities.
+
+While the Diagnostics Authority is healthy, every normally closed `failed`, `aborted`, or `interrupted` Journey has one directly displayable `RequestJourneyDiagnosis`. An observed diagnosis contains the first primary failure's stable classification, bounded safe message, origin and precision, and detection location. If no valid primary failure reached the Authority, it records `request_failed_without_specific_cause` with `evidence=fallback`, `origin=unknown`, `originPrecision=boundary`, the last confirmed request boundary, and `completeness=degraded`. The fallback is a coverage alarm, not an inferred root cause.
+
+This health-period guarantee is observation-only. When the Authority cannot admit a request, its process is unavailable, or the Backend/OS loses power before an asynchronous commit, per-request diagnostic coverage may be absent. That gap is exposed as diagnostics health/attention and never changes request routing, timing, wire bytes, status, cancellation, or terminal outcome.
 
 The record is an observation model, not a request execution abstraction and not a second semantic IR.
 
@@ -347,7 +351,7 @@ write_http_response / response_body
 1. One admitted request has one request ID and one Request Journey Record.
 2. Every observer and artifact section uses that same request ID; no subsystem mints a second correlation ID.
 3. A request has at most one committed Data Plane Lane. No failure after lane commitment changes the lane or falls through.
-4. A non-successful journey has one primary Failure Location. Retry/attempt failures remain ordered supporting events.
+4. A normally closed non-successful journey has one primary diagnosis. The first valid primary failure wins; retry/attempt failures remain ordered supporting events. If no primary was observed, the Authority and Worker seal the bounded degraded fallback rather than claiming a complete record without an Incident.
 5. Artifact absence is explicit and reasoned; missing data is never silently presented as complete capture.
 6. Redaction and truncation are permanent artifact facts and cannot be hidden by the UI.
 7. Semantic Conversion Provider request payload and response metadata come only from the selected Pi Provider's public `onPayload`/`onResponse` lifecycle as observed by Neutral Core execution; decoded response IR comes from the same Core execution boundary. Raw Provider response events are not a required artifact.
@@ -416,12 +420,12 @@ type RequestJourneyObservationInput =
 | `attempt_observed` | attempt number, safe Profile attribution, transition/response facts | cannot decide retry or Profile advancement |
 | `conversion_notice_observed` | direction, step, subject, stable notice code and severity; optional bounded user-readable message | message is observation-only and cannot repair, reinterpret, select, retry, or otherwise influence semantics |
 | `artifact_observed` | declared artifact kind, media type, bounded bytes/chunk, byte counts and capture status | cannot read a stream or fetch missing evidence |
-| `failure_detected` | origin precision, detection location, safe failure classification and exception fingerprint | cannot replace the request error or terminal outcome |
+| `failure_detected` | stable classification, bounded redacted `safeMessage`, origin and precision, detection location, and optional exception fingerprint | cannot expose raw exceptions, credentials, request bodies, or unredacted Provider text; cannot replace the request error or terminal outcome |
 | `work_outcome_committed` | semantic/native work outcome and terminal authority | distinct from Client rendering and HTTP handoff |
 | `client_response_prepared` | status, safe headers/body artifact reference and presentation facts | does not assert that HTTP wrote or the client consumed it |
 | `handoff_observed` | P8 write/finish/close facts | does not revise the committed model work outcome |
 
-`RequestJourneyCloseInput` seals the Journey outcome, primary Incident when any, last-known active step, artifact completeness, and close reason. `close` is idempotent; the first valid close wins. Later observations are discarded and may raise diagnostics-health attention, but never affect the request.
+`RequestJourneyCloseInput` seals the Journey outcome, primary Incident, last-known active step, artifact completeness, and close reason. `close` is idempotent; the first valid close wins. For an abnormal outcome without a valid primary failure, the Authority synchronously enqueues the bounded fallback from dedicated close capacity before the seal. Later observations are discarded and may raise diagnostics-health attention, but never affect the request.
 
 Each `step_entered` is emitted immediately before the owned work begins. Each successful or truthfully terminated step emits its matching `step_completed`. A `step_entered` without completion is meaningful evidence of a hang, interruption, timeout, process termination, or unavailable observation. A request owner supplies a request-local opaque `stepInstanceId`; at most one unmatched instance with that ID may exist. The diagnostics reducer pairs the two events and never infers completion from entry into a later step.
 
@@ -464,7 +468,7 @@ The full-capture revision uses the following independent defaults. Configuration
 | failure/terminal/seal metadata reserve | 4 MiB |
 | retained artifact files | explicit configured byte, age, and Journey-count ceilings |
 
-The 4 MiB reserve accepts only compact `failure_detected`, work outcome, response/handoff terminal facts, completeness changes, and the final close seal. Artifact bodies never consume the reserve. The seal repeats the primary/last-active location and final completeness, so queue loss cannot be mistaken for a complete timeline.
+The 4 MiB reserve accepts only compact `failure_detected`, work outcome, response/handoff terminal facts, completeness changes, and terminal sealing. Each admitted Journey separately reserves a fixed 8 KiB close budget shared only by one fallback primary failure and the final close seal. Artifact bodies never consume either reserve. The seal repeats the primary/last-active location and final completeness, so queue loss cannot be mistaken for a complete timeline.
 
 When capacity is exhausted, shedding order is deterministic:
 
@@ -472,7 +476,7 @@ When capacity is exhausted, shedding order is deterministic:
 2. successful-Journey non-terminal step detail;
 3. nonessential notices and repeated attempt detail;
 4. failure artifact bodies, recorded as `unavailable:queue_capacity_exhausted`;
-5. ordinary failure timeline events, with the reserved close seal retaining the primary location and explicit completeness degradation.
+5. ordinary failure timeline events, with the dedicated fallback-and-close reservation retaining a minimal primary diagnosis, its location, and explicit completeness degradation.
 
 No capacity condition blocks, throws into, cancels, delays for persistence, or modifies the observed work. If even the reserved seal cannot be admitted, the request still proceeds unchanged and diagnostics exposes only process-level degraded health when possible. The system does not open a secondary request log or persistence fallback.
 
@@ -501,9 +505,9 @@ Normal Backend shutdown drains Data Plane work first, then gives diagnostics at 
 The full-capture revision uses one Diagnostics Authority and one child process owning an index plus a managed artifact tree:
 
 ```text
-state/request-diagnostics/diagnostics-v3.sqlite3
-state/request-diagnostics/full-journeys/
-logical schema: TOKEN_diagnostics v3
+state/request-diagnostics/diagnostics-v4.sqlite3
+state/request-diagnostics/full-journeys-v4/
+logical schema: TOKEN_diagnostics v4
 ```
 
 Former diagnostics database and capture files are not read, migrated, rewritten, or deleted. Version selection is expressed by the file name and schema together; there is no dual reader or compatibility projection.
@@ -533,7 +537,7 @@ diagnostics.fullJourneyCapture.enabled = false
 diagnostics.failedJourneyCapture.enabled = true
 ```
 
-They are hot-applied and persisted by the Settings Authority. The resolved artifact folder is `<diagnostics.directory>/full-journeys`, is exposed read-only by the Control Plane, and is displayed beside the switches in Settings.
+They are hot-applied and persisted by the Settings Authority. The resolved artifact folder is `<diagnostics.directory>/full-journeys-v4`, is exposed read-only by the Control Plane, and is displayed beside the switches in Settings.
 
 Its logical tables are:
 
@@ -547,7 +551,9 @@ Its logical tables are:
 | `runtime_events` | requestless startup, store-health, catalog and application diagnostics |
 | `meta` | logical schema version and persistence metadata |
 
-Events and artifacts are child sections of a Journey, not independent persistence authorities. SQLite WAL/SHM and the managed file tree are implementation storage owned by the same child process, not additional authorities. Sanitized bodies are written below `full-journeys/.inflight/<runtimeId>/<requestId>` using opaque hashed runtime/request path segments. Artifact file names use a bounded allowlisted artifact-ID slug plus a short collision-resistant hash and the truthful `.json`, `.jsonl`, or `.sse` extension, so a finalized file remains recognizable without trusting an identifier as a path. The child commits the closed index row/provisional references, then atomically writes the manifest and renames the directory into `full-journeys/YYYY-MM-DD/<requestId>` outside the SQLite transaction. On restart, a closed row still pointing into `.inflight` is finalized idempotently before unreferenced `.inflight` orphans are removed. Request/artifact IDs are never unchecked path fragments and every path is verified below the managed root. Queries use the SQLite relationship and never scan caller-selected paths. Deletion removes index references transactionally and then garbage-collects unreferenced directories. History count, deletion, and retention exclude active Journeys whose close seal has not committed, so a concurrent management operation cannot turn later observations into orphan facts.
+Events and artifacts are child sections of a Journey, not independent persistence authorities. SQLite WAL/SHM and the managed file tree are implementation storage owned by the same child process, not additional authorities. Sanitized bodies are written below `full-journeys-v4/.inflight/<runtimeId>/<requestId>` using opaque hashed runtime/request path segments. Artifact file names use a bounded allowlisted artifact-ID slug plus a short collision-resistant hash and the truthful `.json`, `.jsonl`, or `.sse` extension, so a finalized file remains recognizable without trusting an identifier as a path. The child commits the closed index row/provisional references, then atomically writes the manifest and renames the directory into `full-journeys-v4/YYYY-MM-DD/<requestId>` outside the SQLite transaction. On restart, a closed row still pointing into `.inflight` is finalized idempotently before unreferenced `.inflight` orphans are removed. Request/artifact IDs are never unchecked path fragments and every path is verified below the managed root. Queries use the SQLite relationship and never scan caller-selected paths. Deletion removes index references transactionally and then garbage-collects unreferenced directories. History count, deletion, and retention exclude active Journeys whose close seal has not committed, so a concurrent management operation cannot turn later observations into orphan facts.
+
+Within the same transaction that closes an abnormal Journey, the Worker verifies that the chosen primary ID references a stored `failure_detected` event whose role is `primary` and whose safe diagnosis fields are valid. A missing, incorrect, supporting-only, or malformed reference is replaced transactionally by the same bounded fallback and the record is marked `degraded`; the Worker never commits an abnormal record as complete without an Incident.
 
 Request Journey structure and Runtime Events remain until explicit user deletion. Artifact bodies expire when any configured byte, age, or Journey-count ceiling requires eviction. Eviction preserves the descriptor, safe counts/hash, redaction/truncation facts, and changes its state to `unavailable:expired`; it never makes a previously partial artifact appear complete.
 
@@ -561,7 +567,7 @@ The independent diagnostics process applies centralized bounded complete-documen
 
 ### 14.8 Control Plane and compatibility contract
 
-The Application Control Plane is the only management seam into the running diagnostics authority. Its current wire contract is version 4 and provides typed operations equivalent to:
+The Application Control Plane is the only management seam into the running diagnostics authority. Its current wire contract is version 5 and provides typed operations equivalent to:
 
 - `queryRequestJourneys(query)`;
 - `getRequestJourney({ requestId })`;
@@ -570,6 +576,8 @@ The Application Control Plane is the only management seam into the running diagn
 - `subscribeRequestJourneys(listener)`;
 - `queryRuntimeEvents(query)` and `subscribeRuntimeEvents(listener)`;
 - `getAnalytics(query)`, preserving current product analytics semantics while sourcing them from Journeys.
+
+Every closed abnormal `RequestJourneySummary` carries `diagnosis: RequestJourneyDiagnosis`; `primaryFailureLocation` no longer exists. The diagnosis contains `evidence`, `classification`, `safeMessage`, `origin` (including `unknown`), `originPrecision`, and the full location. `observed` identifies a captured primary failure. `fallback` identifies only the last confirmed boundary and must be rendered without implying a more precise cause. The Overview row displays HTTP/terminal status, safe message, and human-readable phase/lane/step without requiring expansion; stable classification remains in technical detail.
 
 Each `queryRequestJourneys` result and closed-Journey subscription may include
 one bounded row-level usage projection. The authoritative Semantic Conversion
@@ -605,7 +613,7 @@ An undefined derived value is omitted from the wire contract and rendered as
 
 Generic artifact reads return at most 256 KiB of base64 per call. The desktop Renderer requests one named open action and receives neither artifact bytes nor a filesystem path. The diagnostics authority resolves `requestId + artifactId`, verifies that the indexed existing file is a regular file below the managed root, and returns that one absolute path through the authenticated local Control Plane to trusted Electron Main. Main opens the original sanitized file directly with the system default viewer and falls back to the platform application chooser when no association exists; it does not read or copy the body. Subscriber, query, file-reference, file-read, desktop-open, and renderer failure is contained in its owning observation/management module and cannot affect the diagnostics child process or Data Plane. When the child/database/file is unavailable, reads and file references return a typed `unavailable` result with diagnostics-health facts; they do not fabricate a path or empty-complete body and do not open SQLite or scan the capture directory directly.
 
-The production cutover replaces the v2 artifact BLOB/configuration shape atomically. It does not dual-write. The new config contract, Control Plane contract, and `TOKEN_diagnostics v3` schema do not read deprecated fields, command aliases, journals, databases, or capture directories. Legacy data is not migrated, imported, modified, or deleted. A new run creates only the new diagnostics database and managed folder; incompatible or corrupt new-schema storage raises operational attention while Data Plane serving remains fail-open.
+The production cutover is atomic and does not dual-write. Control Plane v5 and `TOKEN_diagnostics v4` do not read deprecated fields, aliases, v3 databases, or earlier capture directories. Legacy data is not migrated, imported, modified, or deleted. A new run creates only the v4 diagnostics database and managed folder; incompatible or corrupt v4 storage raises operational attention while Data Plane serving remains fail-open.
 
 ### 14.9 Runtime certification requirements
 

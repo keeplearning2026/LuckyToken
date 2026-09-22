@@ -85,7 +85,7 @@ function expectPhysicalRedaction(
   phase: "running" | "closed",
 ): void {
   expect.soft([...files.keys()], `${phase}: diagnostics files`).toContain(
-    "diagnostics-v3.sqlite3",
+    "diagnostics-v4.sqlite3",
   );
   const bytes = combinedBytes(files);
   expect.soft(bytes.includes(Buffer.from(SAFE_MARKER)), `${phase}: safe marker`).toBe(
@@ -114,7 +114,7 @@ describe("Request Journey failure artifact redaction", () => {
   it("persists useful failed request evidence without writing credential canaries to the index or artifact files", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-artifact-redaction-"));
     const diagnosticsDirectory = join(root, "diagnostics");
-    const databasePath = join(diagnosticsDirectory, "diagnostics-v3.sqlite3");
+    const databasePath = join(diagnosticsDirectory, "diagnostics-v4.sqlite3");
     let authority: DiagnosticsAuthority | undefined;
     let server: RunningTokenHttpServer | undefined;
     let providerCalls = 0;

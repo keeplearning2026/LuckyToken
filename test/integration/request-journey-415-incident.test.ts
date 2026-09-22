@@ -112,7 +112,10 @@ describe("Request Journey protocol incidents", () => {
       protocol: "anthropic-messages",
       outcome: "failed",
     });
-    expect(summary.primaryFailureLocation).toEqual(FAILURE_LOCATION);
+    expect(summary.diagnosis).toMatchObject({
+      evidence: "observed",
+      location: FAILURE_LOCATION,
+    });
     expect(summary).not.toHaveProperty("lane");
 
     const detail = await authority.getRequestJourney({ requestId: REQUEST_ID });
