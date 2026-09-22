@@ -2,13 +2,13 @@
 
 **日期：** 2026-08-21  
 **范围：** 本机 npm 安装、仓库内 Pi Agent 0.84.2 源码/文档、Token 当前模型状态代码。未修改产品代码，未读取或输出任何凭据值。
-**状态：** 本文记录外部工具 `@earendil-works/pi-coding-agent@0.84.2` 的 `models.json` schema 与本机实测事实，和 Token 的运行时 Pi 依赖不是同一个 artifact。Token 运行时依赖 `@earendil-works/pi-ai@0.86.1`；下文 0.84.2 均指外部 Pi Agent，或 Token 中保留的 `pi-coding-agent` 参考兼容基线。当前语义转换边界见 `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md` 与 `doc/Spec/TokenSemanticConversionArchitectureSpec.md`。
+**状态：** 本文记录外部工具 `@earendil-works/pi-coding-agent@0.84.2` 的 `models.json` schema 与本机实测事实，和 Token 的运行时 Pi 依赖不是同一个 artifact。Token 当前运行时依赖 clean upstream `@earendil-works/pi-ai@0.87.0`；下文 0.84.2 均指外部 Pi Agent，或 Token 中保留的 `pi-coding-agent` 参考兼容基线。当前语义转换边界见 `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md` 与 `doc/Spec/TokenSemanticConversionArchitectureSpec.md`。
 
 ## 结论
 
 1. 本机安装的是 `@earendil-works/pi-coding-agent@0.84.2`，入口为 `C:\Users\huich\AppData\Roaming\npm\pi.cmd`，包目录为 `C:\Users\huich\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent`。`pi --version` 实测返回 `0.84.2`；当时仓库内版本相同（`pi-agent/packages/coding-agent/package.json:2-10`）。该 vendored `pi-agent/` 树是参考材料，现已更新到 `0.86.1` 快照，与本机安装的外部 Pi Agent 不再是同一版本。
 2. Pi Agent 的用户模型文件是 `~/.pi/agent/models.json`；Windows 本机实际路径为 `C:\Users\huich\.pi\agent\models.json`。包配置决定 `.pi` 目录名，代码允许用 `PI_CODING_AGENT_DIR` 覆盖 Agent 目录（`pi-agent/packages/coding-agent/src/config.ts:487-520`），`models.json` 固定放在该目录下（`pi-agent/packages/coding-agent/src/config.ts:528-531`）。
-3. Token 的 Provider 配置 `models.json` 与 Pi 0.84.2 **schema 兼容**，但不是同一个文件，也不是同一种产品状态。Token 明确把自己的文件放在配置文件旁，绝不放进 Pi Agent 的 `~/.pi/agent/models.json`（`README.md:225-230`）；当前兼容基线常量记录 vendored `pi-coding-agent` 0.84.2 参考身份（`src/providers/pi-baseline.ts:3-19`），而 Token 的运行时 Pi 依赖是 `@earendil-works/pi-ai@0.86.1`。复制 Token 的 Provider 配置到外部 Pi 会让 Pi 直接配置上游 Provider，绕过 Token，且可能跨越凭据边界。
+3. Token 的 Provider 配置 `models.json` 与 Pi 0.84.2 **schema 兼容**，但不是同一个文件，也不是同一种产品状态。Token 明确把自己的文件放在配置文件旁，绝不放进 Pi Agent 的 `~/.pi/agent/models.json`（`README.md:225-230`）；当前兼容基线常量记录 vendored `pi-coding-agent` 0.84.2 参考身份（`src/providers/pi-baseline.ts:3-19`），而 Token 当前运行时 Pi 依赖是 clean upstream `@earendil-works/pi-ai@0.87.0`。复制 Token 的 Provider 配置到外部 Pi 会让 Pi 直接配置上游 Provider，绕过 Token，且可能跨越凭据边界。
 4. `favorite` **不属于 Pi 的 `models.json` 契约**。当前 0.84.2 的宽松 TypeBox 校验会接受未知字段，并把它保留在原始配置快照中；但组成有效 `Model` 时只复制显式支持字段，因此 `favorite` 被忽略。这个偶然宽松行为不能作为集成协议，未来 Pi 收紧 schema 时可能直接拒绝。
 5. 全局 `favorite` 应只保存在 Token 自有状态（最合适的现有所有者是 `public-models.json` / `PublicModelAuthority`），同步到 Pi 时生成一个只包含收藏模型、且只使用 Pi 文档字段的干净投影。Pi 文件中不应出现 `favorite`。
 6. Pi 的 `models.json` 是用户共享配置文件，本机现有文件已包含 4 个 Provider、43 个模型，并由已安装 0.84.2 的 `ModelConfig` 只读验证通过。因此实现不能覆盖整份文件；必须只管理一个专用 Provider 子树，检测外部修改，原子写入，并在关闭集成时只恢复该子树。

@@ -107,28 +107,37 @@ shape-validated; its presence may produce a bounded fail-open warning.
 
 For a consumed fact:
 
-1. map to a neutral Pi semantic when one exists;
-2. consider a Pi public-contract extension only for stable cross-Provider semantics;
-3. omit/warn or require Native Preservation for optional private controls;
+1. map to a neutral Pi semantic when one exists in the pinned upstream public contract;
+2. if no neutral Pi representation exists and the fact is a non-structural control
+   preference, omit it with a bounded Client-owned warning and retain Pi/Provider defaults;
+3. require Native Preservation when exact retention of such a control is necessary;
 4. fail before dispatch when loss would invalidate the request, remove model-visible
    content, alter permission/security/residency meaning, or break tool relationships.
+
+Token does not patch or fork the installed Pi package to widen this boundary. A future
+upstream Pi release may widen the public contract, at which point the Client mapping can
+be reconsidered against that accepted release.
 
 No raw Client body, Provider request, credentials, transport, retry state, or mutable
 lifecycle object may be carried through semantic state.
 
 ### Reasoning
 
-Pinned Pi distinguishes:
+Token uses the unmodified upstream Pi public contract. In the current pinned Pi runtime:
 
 ```text
 reasoning omitted → Provider/model default
-reasoning "off"  → explicit disable
-reasoning level  → enabled level
+reasoning level   → enabled level
 ```
 
+If a Client Protocol consumes an explicit reasoning-disable control that Pi cannot
+represent neutrally, Semantic Conversion omits that non-structural preference, emits a
+bounded Client-owned warning, and retains the Pi/Provider default. It must not patch Pi,
+map disable to an enabled level, or write Provider-native reasoning fields.
+
 `Model.thinkingLevelMap` is the level-data authority. Pi public
-`getSupportedThinkingLevels()` and `clampThinkingLevel()` own selection. Provider-native
-reasoning fields belong only to Pi Provider/API adapters.
+`getSupportedThinkingLevels()` and `clampThinkingLevel()` own enabled-level selection.
+Provider-native reasoning fields belong only to Pi Provider/API adapters.
 
 ### Continuity
 

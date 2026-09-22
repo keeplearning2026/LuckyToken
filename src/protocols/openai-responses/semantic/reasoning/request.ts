@@ -226,11 +226,13 @@ export function prepareResponsesReasoning<TApi extends string>(input: {
   );
   delete options.reasoning;
   if (effortPlan.kind === "disabled") {
-    options.reasoning = "off";
     outcomes.push(
       Object.freeze({
         subject: "effort",
-        outcome: Object.freeze({ kind: "pi-native" }),
+        outcome: Object.freeze({
+          kind: "omitted" as const,
+          warning: "Pi common options do not expose explicit reasoning disable; Provider default retained",
+        }),
       }),
     );
   } else if (effortPlan.kind === "enabled") {

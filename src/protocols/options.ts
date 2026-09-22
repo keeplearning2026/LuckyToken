@@ -42,7 +42,6 @@ export interface ClientPiOptions {
   readonly temperature?: ModelsSimpleStreamOptions["temperature"];
   readonly reasoning?: ModelsSimpleStreamOptions["reasoning"];
   readonly toolChoice?: ModelsSimpleStreamOptions["toolChoice"];
-  readonly parallelToolCalls?: ModelsSimpleStreamOptions["parallelToolCalls"];
   readonly samplingParams?: Readonly<Record<string, unknown>>;
   readonly cacheRetention?: ModelsSimpleStreamOptions["cacheRetention"];
   readonly thinkingBudgets?: Readonly<
@@ -75,7 +74,6 @@ const PROTOCOL_OPTION_KEYS = new Set([
   "temperature",
   "reasoning",
   "toolChoice",
-  "parallelToolCalls",
   "samplingParams",
   "cacheRetention",
   "thinkingBudgets",
@@ -99,7 +97,6 @@ const INFRASTRUCTURE_KEYS = new Set([
   "transformHeaders",
 ]);
 const THINKING_LEVELS = new Set([
-  "off",
   "minimal",
   "low",
   "medium",
@@ -236,28 +233,13 @@ function validateProtocolOptions(options: ClientPiOptions): void {
       "Client Protocol reasoning must be a known thinking level",
     );
   }
-  if (options.toolChoice !== undefined) {
-    const choice = options.toolChoice;
-    const validString =
-      choice === "auto" || choice === "none" || choice === "required";
-    const validNamed =
-      isRecord(choice) &&
-      choice.type === "tool" &&
-      typeof choice.name === "string" &&
-      choice.name.length > 0 &&
-      Object.keys(choice).every((key) => key === "type" || key === "name");
-    if (!validString && !validNamed) {
-      throw new InvocationCompositionFailure(
-        "Client Protocol toolChoice must be auto, none, required, or one named tool",
-      );
-    }
-  }
   if (
-    options.parallelToolCalls !== undefined &&
-    typeof options.parallelToolCalls !== "boolean"
+    options.toolChoice !== undefined &&
+    options.toolChoice !== "auto" &&
+    options.toolChoice !== "none"
   ) {
     throw new InvocationCompositionFailure(
-      "Client Protocol parallelToolCalls must be boolean",
+      "Client Protocol toolChoice must be auto or none",
     );
   }
   if (options.samplingParams !== undefined) {
@@ -456,12 +438,7 @@ export function composeOptions(
     effective.reasoning = protocolOptions.reasoning;
   }
   if (protocolOptions.toolChoice !== undefined) {
-    effective.toolChoice = cloneAndFreezeValue(
-      protocolOptions.toolChoice,
-    ) as NonNullable<ModelsSimpleStreamOptions["toolChoice"]>;
-  }
-  if (protocolOptions.parallelToolCalls !== undefined) {
-    effective.parallelToolCalls = protocolOptions.parallelToolCalls;
+    effective.toolChoice = protocolOptions.toolChoice;
   }
   if (protocolOptions.samplingParams !== undefined) {
     effective.samplingParams = cloneAndFreezeValue(

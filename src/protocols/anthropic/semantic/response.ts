@@ -257,7 +257,7 @@ const CONTINUITY_CERTIFIED_PI_APIS = new Set([
 /**
  * These Provider response grammars expose Pi `toolCall` only for ordinary
  * Client-declared functions. Anthropic Messages is deliberately absent: its
- * wire can attach a server caller to the same tool-use shape and Pi 0.86.1
+ * wire can attach a server caller to the same tool-use shape and Pi 0.87.0
  * discards that caller field.
  */
 function hasCertifiedBedrockContinuity(message: AssistantMessage): boolean {

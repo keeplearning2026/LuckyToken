@@ -76,7 +76,7 @@ describe("serving composition certification", () => {
 
     expect(manifest).toMatchObject({
       schemaVersion: "Token-serving-certification-manifest-v2",
-      certificationBasis: "offline-and-online",
+      certificationBasis: "offline-current-runtime-with-historical-online-evidence",
       result: "CERTIFIED",
       failures: [],
       identity: {
@@ -106,9 +106,9 @@ describe("serving composition certification", () => {
           },
           runtime: {
             package: "@earendil-works/pi-ai",
-            version: "0.86.1",
+            version: "0.87.0",
             integrity:
-              "sha512-1XHhI6D/fyQdsBieHC/E/4zGKVOoGe4yDyX67VXvzoYkFsX/qE7NpZE7E1RC8e6Bz8B9oG/P+MQFXikv2/BGEg==",
+              "sha512-lbRm+EMY6Jx3l+HLpbqbm9Yrhkc5u7EffLk2id+zJQEoBuR5I+tijGiZU8zlnuuCclmQOgH0PVjL9PLbeqJ9MQ==",
           },
         },
         commandCode: {
@@ -171,14 +171,14 @@ describe("serving composition certification", () => {
         servingReadinessAndIsolation: "verified",
         localLoopbackHttpBoundary: "verified",
         piConfigurationCredentialCli: "verified",
-        realProviderOnlineConformance: "verified",
+        realProviderOnlineConformance: "historical-only",
       },
       profiles: {
         anthropicConversion: {
           id: "anthropic-conversion",
           seam: "POST /v1/messages conversion",
           offlineResult: "CERTIFIED",
-          onlineStatus: "online-passed",
+          onlineStatus: "historical-online-passed",
         },
         anthropicProviderNative: {
           id: "anthropic-provider-native",
@@ -190,7 +190,7 @@ describe("serving composition certification", () => {
           id: "responses-conversion",
           seam: "POST /v1/responses conversion",
           offlineResult: "CERTIFIED",
-          onlineStatus: "online-passed",
+          onlineStatus: "historical-online-passed",
         },
         responsesDirectMode: {
           id: "responses-direct-mode",
@@ -208,7 +208,7 @@ describe("serving composition certification", () => {
           id: "commandcode-provider",
           seam: "Pi Provider commandcode-private",
           offlineResult: "CERTIFIED",
-          onlineStatus: "online-passed",
+          onlineStatus: "historical-online-passed",
         },
       },
       verification: {
@@ -221,7 +221,8 @@ describe("serving composition certification", () => {
           "git diff --check",
         ],
         onlineEvidence: {
-          status: "online-passed",
+          status: "historical-online-passed",
+          appliesToCurrentRuntime: false,
           attempted: true,
           executedAt: "2026-08-14",
           repositoryRevision: "22ed328a5b6d00189d6086c580c4d288246b8e39",

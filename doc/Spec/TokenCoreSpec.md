@@ -3055,16 +3055,17 @@ Model Resolution 由 Chapter 6 定义。
 max token request
 temperature
 reasoning level
-toolChoice
-parallelToolCalls
+toolChoice auto / none
 ```
 
-但只有当这些 semantics 与 Pi neutral common option 完全一致时，才形成对应 mapping。
-Client Protocol 完整保留它消费的 neutral intent，不因某个 concrete Provider 不支持下述
+但只有当这些 semantics 与当前 pinned upstream Pi neutral common option 完全一致时，才形成对应 mapping。
+Client Protocol 完整保留 Pi 能表达的 neutral intent，不因某个 concrete Provider 不支持下述
 capability 而提前降级；selected Pi Provider/API adapter 独占 apply / safe
-ignore-or-omit / optional Provider-owned notice / reject 决策。`samplingParams`、generic `metadata`、
-Provider-native controls 与 callbacks 不属于此 mapping。Provider ID 只用于 registration /
-model resolution，不能用于协议分支。
+ignore-or-omit / optional Provider-owned notice / reject 决策。Client 已消费但 Pi public contract
+不能表达的非结构性控制偏好（例如当前的 explicit reasoning-off、required/named tool choice、
+parallel-tool intent）由 Client Protocol omit + bounded warning，并保留 Pi/Provider default；
+不得 patch Pi 或借 `samplingParams`、generic `metadata`、Provider-native controls 与 callbacks
+绕过该边界。Provider ID 只用于 registration / model resolution，不能用于协议分支。
 
 概念上：
 
@@ -4098,13 +4099,13 @@ const protocolOptions = {
   temperature,
   reasoning,
   toolChoice,
-  parallelToolCalls,
 }
 ```
 
-但这个 object 的 semantic authority 仍来自 `ModelsSimpleStreamOptions`。
+但这个 object 的 semantic authority 仍来自当前 upstream `ModelsSimpleStreamOptions`。
 这里的 fields 必须具有 exact neutral Pi semantics；selected Provider/API adapter 再决定
-apply、安全 ignore/omit、可选发布 Provider-owned notice 或 reject。
+apply、安全 ignore/omit、可选发布 Provider-owned notice 或 reject。Pi 当前不能表示的
+非结构性 Client controls 不得进入该 object，只能由所属 Client Protocol omit + warning。
 
 不得自然演化成：
 
@@ -7140,8 +7141,11 @@ Options.signal
 Options.sessionId
 → Models may be transparent transit to a session-aware Provider
 
-Options.toolChoice / Options.parallelToolCalls
-→ model-visible neutral intent; the selected Provider/API adapter is the capability consumer
+Options.toolChoice
+→ 当前仅承载 upstream Pi 可表达的 auto/none neutral intent；selected Provider/API adapter is the capability consumer
+
+Client required/named tool choice / parallel-tool intent
+→ 当前 upstream Pi common options 不可表示；Client Protocol omit + bounded warning，不进入 Options
 ```
 
 `Model<Api>` 同样是 structured carrier，但在 architecture-level map 中可以整体标记 `Models` 为 semantic consumer，因为 current Pi runtime 明确读取其中的 runtime-relevant fields：

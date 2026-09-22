@@ -18,6 +18,33 @@ const openAICompletionsModel: Model<"openai-completions"> = {
 };
 
 describe("target-aware reasoning preparation", () => {
+  it("omits explicit reasoning-off intent from upstream Pi options with a warning", () => {
+    const converted = convertResponsesRequest(
+      {
+        model: "client-selector",
+        input: "hello",
+        reasoning: { effort: "none" },
+      },
+      1,
+    );
+    const prepared = prepareReasoning({
+      model: openAICompletionsModel,
+      context: converted.invocation.pi.context,
+      options: converted.invocation.pi.options,
+      semantics: converted.invocation.reasoning,
+    });
+
+    expect(prepared.effortPlan).toEqual({ kind: "disabled" });
+    expect(prepared.options.reasoning).toBeUndefined();
+    expect(prepared.outcomes).toContainEqual({
+      subject: "effort",
+      outcome: {
+        kind: "omitted",
+        warning: "Pi common options do not expose explicit reasoning disable; Provider default retained",
+      },
+    });
+  });
+
   it("writes the model-selected effort into Pi options", () => {
     const converted = convertResponsesRequest(
       {

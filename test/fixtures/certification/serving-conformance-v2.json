@@ -1,6 +1,6 @@
 {
   "schemaVersion": "token-serving-conformance-v2",
-  "certificationBasis": "offline-and-online",
+  "certificationBasis": "offline-current-runtime-with-historical-online-evidence",
   "scope": "all-frozen-conversion-preservation-and-commandcode-profiles",
   "authorities": [
     {
@@ -11,17 +11,17 @@
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:536c1c1b67de387a88008952f4d691ddcea5cfb77b6a8a47dec1f251ebbe0383"
+      "sha256": "sha256:4fc13c70e0f730439351c0b26af85adea2e9ff4db90c0e789656049b589279fa"
     },
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:11d3e87b7c0f9a929c403452c8247264728003df604791a287bf7d0eac5cf75c"
+      "sha256": "sha256:b2c2ee733c8fd9196b773e6426a07a62df307cf289d723c8d4cdca120ec05702"
     },
     {
       "id": "pi-commandcode-conversion",
       "path": "doc/Protocols/PI AI IR-Commandcode Private Conversion.md",
-      "sha256": "sha256:105be615ce65af6496b0106f71cc10b3856a82eae97f72437c597bfb1c235827"
+      "sha256": "sha256:f3610b9721cb82c1a3b8fda22c3ddd13ef7c62b854a2274abba044dc9825ff57"
     }
   ],
   "profiles": [
@@ -242,7 +242,8 @@
     "git diff --check"
   ],
   "onlineEvidence": {
-    "status": "ONLINE_PASSED",
+    "status": "HISTORICAL_ONLINE_PASSED",
+    "appliesToCurrentRuntime": false,
     "attempted": true,
     "executedAt": "2026-08-21",
     "repositoryState": "working-tree",

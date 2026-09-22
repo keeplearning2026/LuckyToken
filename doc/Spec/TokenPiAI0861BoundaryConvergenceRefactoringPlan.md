@@ -1,8 +1,10 @@
 # LuckyToken Pi AI 0.86.1 Boundary Convergence Refactoring Plan
 
-Status: **IMPLEMENTED AND CERTIFIED**
+Status: **SUPERSEDED HISTORICAL PLAN — implemented/certified for 0.86.1, replaced by the clean upstream Pi 0.87.0 boundary on 2026-09-22**
 
 Date: **2026-09-21**
+
+The projector deletion, Provider ownership, and central Pi Context compatibility seam remain current. The 0.86.1 `patch-package` common-option extensions and hard-output-ceiling rules recorded below are historical and are not part of the current 0.87.0 runtime.
 
 Pinned dependency:
 

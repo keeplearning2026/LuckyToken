@@ -1,6 +1,6 @@
 # Anthropic Messages Semantic Conversion Architecture
 
-Status: **CURRENT — projector-free Pi AI 0.86.1 boundary**
+Status: **CURRENT — projector-free clean upstream Pi AI 0.87.0 boundary**
 
 ## 1. Contract
 
@@ -36,8 +36,9 @@ The invocation contains:
 
 - Pi `Context` with the initial system prompt, messages, initial executable tool catalog,
   tool calls/results, images, and supported visible content;
-- Pi common options: `maxTokens`, `temperature`, the neutral `toolChoice` union
-  (`auto`, `none`, `required`, `{ type: "tool", name }`), and `parallelToolCalls`;
+- Pi common options representable by upstream Pi 0.87: `maxTokens`, `temperature`,
+  selectable reasoning levels, and `toolChoice` `auto` / `none`; unsupported
+  non-structural controls are omitted with bounded Client-owned warnings;
 - Anthropic-owned thinking activation/effort/history and attachment-local continuity;
 - Anthropic response state: selector, stream mode, direct tool names, and display policy;
 - bounded notices.
@@ -61,13 +62,14 @@ converter.
 | legal message-level system text | `pi-context` | validate Anthropic placement, then preserve as same-position Pi `SystemMessage`; target compatibility handled after model resolution |
 | ordinary messages and supported images | `pi-context` | preserve model-visible content |
 | tools, tool-use IDs, tool results | `pi-context` | invalid identity/relationship fails |
-| `max_tokens` | `pi-common-option` | hard total output ceiling |
+| `max_tokens` | `pi-common-option` | map to Pi `maxTokens`; Pi owns downstream output/reasoning budgeting |
 | `temperature` | `pi-common-option` | direct neutral Pi semantic |
-| thinking disabled | `pi-common-option` | `reasoning: "off"` |
+| thinking disabled | `client-warning-omit` | Pi 0.87 common options have no explicit off value; omit and retain Provider default |
 | enabled/adaptive thinking and effort | `pi-common-option` | select from resolved model metadata; optional Pi budget map |
 | thinking signatures/redacted state | `client-render-or-continuity-state` + Pi content fields | provenance-compatible replay only |
-| tool choice `auto`/`none`/`any`/named | `pi-common-option` | exact neutral control; the Provider adapter applies, safely ignores/omits, optionally reports a Provider-owned notice, or rejects if validity requires it |
-| `disable_parallel_tool_use` | `pi-common-option` | neutral Pi `parallelToolCalls`; the Provider adapter applies or safely ignores/omits it, with a Provider-owned notice only when that adapter exposes one |
+| tool choice `auto`/`none` | `pi-common-option` | preserve through upstream Pi |
+| tool choice `any`/named | `client-warning-omit` | retain tool catalog, omit the unsupported selection constraint, warn, and use Pi/Provider default |
+| `disable_parallel_tool_use` | `client-warning-omit` | omit unsupported parallelism constraint with a bounded warning |
 | ordinary tool definitions | `pi-context` | source-only extensions omitted with warning |
 | typed server tools | `provider-private-omit-warning` | never misrepresented as Client-executable tools |
 | URL image or unresolved binary document | `provider-private-omit-warning` when optional, otherwise `critical-failure` | never fabricate fetched content |
@@ -84,8 +86,9 @@ diagnostics, or a raw extension bag.
 ## 5. Reasoning and continuity
 
 Reasoning preparation operates only on cloned Pi Context/options. Omitted reasoning
-preserves Provider default, disabled maps to `"off"`, and enabled levels are chosen from
-the resolved model through Pi public helpers and `thinkingLevelMap`.
+preserves Provider default; explicit disabled reasoning is omitted with a bounded warning
+because upstream Pi 0.87 has no common off value; enabled levels are chosen from the
+resolved model through Pi public helpers and `thinkingLevelMap`.
 
 Opaque continuity is restored only when Provider/API/model provenance matches. On model
 switch, opaque state is discarded while visible reasoning is retained through thinking

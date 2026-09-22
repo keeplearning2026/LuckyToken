@@ -1,6 +1,6 @@
 # OpenAI Responses Semantic Conversion Implementation Record
 
-Status: **IMPLEMENTED — Pi AI 0.86.1 boundary convergence**
+Status: **IMPLEMENTED HISTORICAL PLAN — current runtime boundary is clean upstream Pi AI 0.87.0**
 
 ## Delivered structure
 

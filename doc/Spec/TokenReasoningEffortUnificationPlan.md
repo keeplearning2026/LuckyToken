@@ -1,6 +1,6 @@
 # Token Reasoning Effort Unification Plan
 
-Status: **SUPERSEDED by the Pi AI 0.86.1 boundary convergence**
+Status: **SUPERSEDED — current runtime boundary is clean upstream Pi AI 0.87.0**
 
 This document is retained only as a decision record. Its former Client Protocol target
 projectors, Provider payload repair, and semantic `onPayload` lifecycle are not part of

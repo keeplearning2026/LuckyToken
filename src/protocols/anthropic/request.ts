@@ -95,6 +95,10 @@ export const UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE =
   "anthropic_unrepresentable_content_omitted";
 export const CONTENT_METADATA_OMITTED_NOTICE_CODE =
   "anthropic_content_metadata_omitted";
+export const TOOL_CHOICE_OMITTED_NOTICE_CODE =
+  "anthropic_tool_choice_omitted";
+export const PARALLEL_TOOL_CALLS_OMITTED_NOTICE_CODE =
+  "anthropic_parallel_tool_calls_omitted";
 
 const INCOMPLETE_TOOL_CALL_RESULT_TEXT =
   "No result — the tool call did not complete (interrupted or lost).";
@@ -1490,20 +1494,35 @@ export function convertValidatedAnthropicRequestWithPolicy(
         options.toolChoice = "none";
         break;
       case "any":
-        options.toolChoice = "required";
+        notices.push(
+          requestNotice(
+            TOOL_CHOICE_OMITTED_NOTICE_CODE,
+            "degrade",
+            "$.tool_choice",
+          ),
+        );
         break;
       case "named":
-        options.toolChoice = Object.freeze({
-          type: "tool",
-          name: request.toolChoice.name,
-        });
+        notices.push(
+          requestNotice(
+            TOOL_CHOICE_OMITTED_NOTICE_CODE,
+            "degrade",
+            "$.tool_choice",
+          ),
+        );
         break;
     }
     if (
       request.toolChoice.kind !== "none" &&
       request.toolChoice.disableParallelToolUse
     ) {
-      options.parallelToolCalls = false;
+      notices.push(
+        requestNotice(
+          PARALLEL_TOOL_CALLS_OMITTED_NOTICE_CODE,
+          "degrade",
+          "$.tool_choice.disable_parallel_tool_use",
+        ),
+      );
     }
   }
   if (request.reasoning.activation.kind === "enabled") {

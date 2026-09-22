@@ -4,7 +4,7 @@
 **Token baseline:** `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575`
 **Vendored Pi baseline:** `pi-agent@914cf1472e715297caa30db4b9535d534a9eb718` (`v0.84.2`)
 **Upgrade under review:** `@earendil-works/pi-ai` `0.84.1` → `0.84.2`
-**Status:** **SUPERSEDED historical upgrade audit.** Token's runtime dependency is now `@earendil-works/pi-ai@0.86.1`, and the checked-in `pi-agent/` tree (reference material only, not the runtime dependency) has since been updated to the `0.86.1` snapshot. Keep this document's 0.84.2 actions, versions, and measurements scoped to this historical upgrade. The compatibility baseline constant for Token's extracted `models.json`/effective catalog still records the `pi-coding-agent` 0.84.2 reference identity; treat that constant, not this audit, as the schema/composition identity authority. Current Semantic Conversion authority is `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md` and `doc/Spec/TokenSemanticConversionArchitectureSpec.md`; the current boundary deletes projector and Supplement architecture and prohibits Client Protocol/execution ownership of `onPayload`.
+**Status:** **SUPERSEDED historical upgrade audit.** Token's runtime dependency is now clean upstream `@earendil-works/pi-ai@0.87.0`, while the checked-in `pi-agent/` tree remains reference material at the `0.86.1` snapshot. Keep this document's 0.84.2 actions, versions, and measurements scoped to this historical upgrade. The compatibility baseline constant for Token's extracted `models.json`/effective catalog still records the `pi-coding-agent` 0.84.2 reference identity; treat that constant, not this audit, as the schema/composition identity authority. Current Semantic Conversion authority is `doc/Spec/TokenPiAI0861BoundaryConvergenceRefactoringPlan.md` and `doc/Spec/TokenSemanticConversionArchitectureSpec.md`; the current boundary deletes projector and Supplement architecture and prohibits Client Protocol/execution ownership of `onPayload`.
 
 ## 1. Conclusion
 
@@ -457,7 +457,7 @@ The upgrade was implemented without changing Token's three-lane architecture. Pr
 
 ### Dependency result
 
-- At the 2026-08-20 upgrade outcome, `@earendil-works/pi-ai` was pinned to `0.84.2` at the root and in both Token Provider peer contracts. The current runtime dependency is `@earendil-works/pi-ai@0.86.1`.
+- At the 2026-08-20 upgrade outcome, `@earendil-works/pi-ai` was pinned to `0.84.2` at the root and in both Token Provider peer contracts. The current runtime dependency is clean upstream `@earendil-works/pi-ai@0.87.0`.
 - Pi-owned transitive dependencies resolve to `@earendil-works/pi-telemetry@0.84.2` and `openai@6.40.0`.
 - `@anthropic-ai/sdk` remains `0.91.1`.
 - `@mistralai/mistralai` is no longer present in Token's resolved dependency tree.

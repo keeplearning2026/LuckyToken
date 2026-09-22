@@ -1,6 +1,6 @@
 # Token Semantic Conversion Architecture
 
-Status: **CURRENT — Pi AI 0.86.1 boundary**
+Status: **CURRENT — clean upstream Pi AI 0.87.0 boundary**
 
 ## 1. Scope
 
@@ -74,9 +74,10 @@ is not parsed or shape-validated. Its presence may produce a bounded fail-open w
 For every consumed fact:
 
 1. map it to an existing neutral Pi semantic;
-2. if it is a stable cross-Provider semantic, extend the Pi public contract separately;
-3. if it is Client/Provider-private and non-critical, omit it with a warning or require
-   Native Preservation for exact retention;
+2. if upstream Pi has no public representation and the fact is a non-critical control
+   preference, omit it with a bounded warning and retain Pi/Provider defaults;
+3. if exact retention of such a control is required, use Native Preservation rather
+   than modifying or patching Pi;
 4. if loss would invalidate the request, alter role/permission/security/residency
    meaning, remove model-visible content, or break tool relationships, fail before
    dispatch.
@@ -86,48 +87,42 @@ is named for that purpose and is never a Provider-write candidate.
 
 ## 5. Common option contracts
 
-The production runtime applies Token's minimal, reviewed Pi patch
-(`patches/@earendil-works+pi-ai+0.86.1.patch`, applied by the `patch-package`
-postinstall) to the installed `@earendil-works/pi-ai@0.86.1`. The three reasoning
-states, the hard output ceiling, and the neutral `toolChoice`/`parallelToolCalls`
-contract described below are part of that patched common contract; the unmodified
-upstream package does not provide all of them. The checked-in `pi-agent/` tree is
-reference material at the `0.86.1` snapshot and is not what executes. Remove the
-patch when an accepted pinned Pi release provides the same contract.
+The production runtime pins the **unmodified upstream**
+`@earendil-works/pi-ai@0.87.0`. Token has no `patch-package` postinstall and carries no
+Pi patch artifact. Semantic Conversion is therefore bounded by the public Pi 0.87
+`Context` and `ModelsSimpleStreamOptions` contracts.
 
 ### 5.1 Reasoning
 
-Pinned Pi exposes:
-
-```ts
-reasoning?: ModelThinkingLevel
-```
-
-Its three states are:
-
-- omitted: preserve Provider/model default;
-- `"off"`: explicit disable;
-- enabled level: select using `getSupportedThinkingLevels()` and
-  `clampThinkingLevel()`, with `Model.thinkingLevelMap` as the mapping authority.
+Upstream Pi exposes selectable reasoning levels through `SimpleStreamOptions.reasoning`.
+Omission preserves the Provider/model default. If a Client Protocol explicitly requests
+reasoning disabled but Pi has no neutral public representation for that request, Token
+omits the control, emits a bounded Client-owned warning, and retains the Pi/Provider
+default. Enabled levels continue to use `getSupportedThinkingLevels()` and
+`clampThinkingLevel()`, with `Model.thinkingLevelMap` as the mapping authority.
 
 Providers choose their own legal wire representation. Client Protocol code never writes
 `reasoning_effort`, `thinking`, `output_config`, or `thinkingConfig` to Provider payloads.
 
 ### 5.2 Output limit
 
-`maxTokens` is a hard upper bound on total Provider output, including hidden reasoning.
-An adapter must not widen it. A Provider minimum above the bound fails before dispatch;
-Token does not locally truncate output.
+Client `max_tokens` / `max_output_tokens` map to Pi `maxTokens`. From that boundary
+onward, Provider-side output budgeting, including reasoning-budget and Provider-minimum
+adjustment, belongs to Pi. Token does not patch Pi's budgeting algorithm or impose a
+second Provider-output ceiling.
 
 ### 5.3 Other controls
 
-Only Pi public options with a single neutral meaning may cross the boundary. In the
-current contract this includes `temperature`, `cacheRetention`, session identity,
-`parallelToolCalls`, and the full neutral `toolChoice` union (`auto`, `none`,
-`required`, and `{ type: "tool", name }`). A Client Protocol maps every form it consumes
-onto that union; it does not pre-degrade a form because one Provider cannot express it.
-The selected Pi Provider/API adapter either maps the control, safely ignores or omits
-it, optionally reports that disposition through a Provider-owned notice channel, or
+Only controls representable by the upstream Pi public contract cross the semantic
+boundary. In Pi 0.87 this includes `temperature`, `cacheRetention`, session identity,
+and `toolChoice` values `auto` / `none`. Consumed non-structural controls without a Pi
+representation — currently explicit reasoning-off, required/named tool choice, and
+`parallel_tool_calls` intent — are omitted with a bounded Client-owned warning while
+messages and the full applicable tool catalog are retained. Exact preservation belongs
+to Local Native or Provider Native Preservation.
+
+The selected Pi Provider/API adapter then maps the remaining Pi semantic controls to its
+Provider wire representation, safely ignores or omits unsupported Provider details, or
 rejects the request when omission would invalidate it. A control with no neutral Pi
 contract yet, such as a hosted-tool choice, is omitted with a bounded Client warning by
 the owning protocol specification; exact wire retention requires Native Preservation.

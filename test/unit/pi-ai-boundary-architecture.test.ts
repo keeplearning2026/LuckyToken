@@ -25,6 +25,20 @@ async function expectPathAbsent(path: string): Promise<void> {
 }
 
 describe("Pi AI semantic boundary architecture", () => {
+  it("uses clean upstream Pi 0.87 without patch-package", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      scripts?: Record<string, string>;
+    };
+    expect(packageJson.dependencies?.["@earendil-works/pi-ai"]).toBe("0.87.0");
+    expect(packageJson.devDependencies?.["patch-package"]).toBeUndefined();
+    expect(packageJson.scripts?.postinstall).toBeUndefined();
+
+    const patches = await readdir("patches").catch(() => [] as string[]);
+    expect(patches.filter((name) => name.includes("pi-ai"))).toEqual([]);
+  });
+
   it("has no Client Protocol Provider-payload projection or supplement directory", async () => {
     for (const root of protocolRoots) {
       await expectPathAbsent(join(root, "semantic", "projection"));

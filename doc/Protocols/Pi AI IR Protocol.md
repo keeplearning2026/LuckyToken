@@ -3,7 +3,7 @@
 **Version:** 0.10.0
 **Status:** Frozen
 
-**Runtime Package:** `@earendil-works/pi-ai` `0.86.1` (exact production pin)
+**Runtime Package:** `@earendil-works/pi-ai` `0.87.0` (exact clean-upstream production pin)
 **Runtime Module:** the installed `@earendil-works/pi-ai` package
 **Vendored Reference Tree:** `pi-agent/packages/ai`, reference material only, currently
 the `0.86.1` snapshot; Token-specific code does not modify it
@@ -58,7 +58,7 @@ AssistantMessageEventStream
 AssistantMessage
 ```
 
-**Token Semantic Conversion runtime boundary.** Token's production runtime pins `@earendil-works/pi-ai` `0.86.1` exactly. The checked-in `pi-agent/` tree is the current v0.86.1 reference snapshot; it is not the runtime dependency. The v0.84.2 commit above is the original extraction provenance, not the current vendored tree version.
+**Token Semantic Conversion runtime boundary.** Token's production runtime pins the unmodified upstream `@earendil-works/pi-ai` `0.87.0` exactly. The checked-in `pi-agent/` tree remains a v0.86.1 reviewed reference snapshot; it is not the runtime dependency or current runtime authority. The v0.84.2 commit above is the original extraction provenance.
 
 The fixed Semantic Conversion call path is:
 
@@ -91,7 +91,7 @@ Pi Provider/API adapter
 Provider Wire
 ```
 
-At this boundary, the Pi neutral common request controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Pi Provider/API adapter alone decides whether each control is applied, safely ignored or omitted, optionally reported through a Provider-owned notice channel, or rejected.
+At this boundary, the installed upstream Pi 0.87 neutral common request controls include enabled `reasoning` levels, `maxTokens`, `temperature`, `cacheRetention`, and `toolChoice` values `auto` / `none`. Client controls with no common Pi representation — currently explicit reasoning-off, required/named tool choice, and parallel-tool intent — are omitted by the owning Client Protocol with a bounded warning before Pi execution. The selected Pi Provider/API adapter alone decides how the remaining Pi controls are applied, safely ignored or omitted, or rejected.
 
 The composition root is the only layer that sees Private/Goat factories and registers them with Pi Models. Client Protocol and runtime execution receive a resolved `Model` with Pi `Context` and Pi options; they do not receive a concrete `Provider` and do not call Provider/Goat `stream()` or `streamSimple()` directly. Provider IDs are model-resolution and registration facts only, not Client Protocol branching conditions.
 
@@ -713,7 +713,7 @@ ThinkingLevel
 ModelThinkingLevel
 ```
 
-At the installed `0.86.1` runtime boundary, `SimpleStreamOptions.reasoning` accepts `ModelThinkingLevel`: omitted means the Provider default, `"off"` explicitly disables reasoning, and every enabled level is resolved through `Model.thinkingLevelMap` plus `getSupportedThinkingLevels()`/`clampThinkingLevel()`.
+At the installed clean upstream `0.87.0` runtime boundary, `SimpleStreamOptions.reasoning` accepts `ThinkingLevel`, not `ModelThinkingLevel`: omission means the Provider default, and enabled levels are resolved through `Model.thinkingLevelMap` plus `getSupportedThinkingLevels()`/`clampThinkingLevel()`. `ModelThinkingLevel` still includes `"off"` for model capability maps, but Semantic Conversion cannot send explicit off through the common option surface.
 
 **ThinkingLevelMap**
 
@@ -1983,9 +1983,7 @@ interface SimpleStreamOptions
   extends StreamOptions {
   toolChoice?: ToolChoice
 
-  parallelToolCalls?: boolean
-
-  reasoning?: ModelThinkingLevel
+  reasoning?: ThinkingLevel
 
   deferred?:
     | boolean
@@ -2005,11 +2003,11 @@ interface SimpleStreamOptions
 }
 ```
 
-The installed `@earendil-works/pi-ai` `0.86.1` declaration at `node_modules/@earendil-works/pi-ai/dist/types.d.ts` is the authority for this runtime option shape. The current vendored snapshot at `pi-agent/packages/ai/src/types.ts` is narrower: it declares `ToolChoice = "auto" | "none"`, omits `parallelToolCalls` from `SimpleStreamOptions`, and types `reasoning` as `ThinkingLevel`.
+The installed unmodified `@earendil-works/pi-ai` `0.87.0` declaration at `node_modules/@earendil-works/pi-ai/dist/types.d.ts` is the authority for this runtime option shape. `ToolChoice` is `"auto" | "none"`; `SimpleStreamOptions` has no `parallelToolCalls`, required/named tool selection, or explicit reasoning-off value.
 
-This provides a provider-neutral simplified request surface.
+This provides the provider-neutral simplified request surface Token actually consumes.
 
-The neutral common controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Provider/API adapter alone decides whether each control is applied, safely ignored or omitted, optionally reported through a Provider-owned notice channel, or rejected.
+The neutral common controls include selectable `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, and `toolChoice` `auto` / `none`. Client controls outside that public surface are omitted with bounded warnings when they are non-structural; structural semantic loss still fails before dispatch.
 
 ---
 
@@ -4966,7 +4964,7 @@ Token's production runtime dependency is separate from this reference extraction
 
 ```text
 Runtime Package:
-@earendil-works/pi-ai 0.86.1
+@earendil-works/pi-ai 0.87.0
 
 Pin:
 exact, in the root package and every workspace package
@@ -4991,7 +4989,7 @@ version:
 0.86.1
 ```
 
-The original upstream commit/tag and `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575` identify the extraction baseline. The checked-in `pi-agent/` tree has since been updated to the `0.86.1` reference package snapshot. Both remain reference material and neither replaces Token's exact installed `@earendil-works/pi-ai` `0.86.1` production pin.
+The original upstream commit/tag and `fd7601d78aaed3fb0aca0ee9479faf5bcf2c5575` identify the extraction baseline. The checked-in `pi-agent/` tree remains the `0.86.1` reference package snapshot. Both remain reference material and neither replaces Token's exact clean-upstream `@earendil-works/pi-ai` `0.87.0` production pin.
 
 All `pi-agent/...` paths in this section identify that reference tree. They are not runtime dependency paths for Token Semantic Conversion.
 
@@ -5041,17 +5039,13 @@ StreamFunction
 AssistantMessageEvent
 ```
 
-The installed `0.86.1` declaration at `node_modules/@earendil-works/pi-ai/dist/types.d.ts` declares:
+The installed clean upstream `0.87.0` declaration at `node_modules/@earendil-works/pi-ai/dist/types.d.ts` declares:
 
 ```ts
-type ToolChoice =
-  | "auto"
-  | "none"
-  | "required"
-  | { type: "tool"; name: string }
+type ToolChoice = "auto" | "none"
 ```
 
-Its `SimpleStreamOptions` carries `toolChoice`, `parallelToolCalls`, and `reasoning?: ModelThinkingLevel`.
+Its `SimpleStreamOptions` carries `toolChoice` and `reasoning?: ThinkingLevel`; it has no common `parallelToolCalls`, required/named tool choice, or explicit reasoning-off value.
 
 The current vendored source at `pi-agent/packages/ai/src/types.ts` differs: `ToolChoice` there is only `"auto" | "none"`; `SimpleStreamOptions` carries `toolChoice` and `reasoning?: ThinkingLevel` but does not declare `parallelToolCalls`. Use that file only for the narrower contract it actually contains.
 
@@ -5492,7 +5486,7 @@ requires a new protocol version.
 
 The phrase `"current source"` must not be used to reinterpret this frozen version after the reference commit changes.
 
-This versioning rule applies to this frozen protocol version. The original extraction provenance remains v0.84.2; the checked-in `pi-agent/` tree is now the `0.86.1` reference snapshot and remains reference material only. Neither changes Token's separate production runtime pin: the installed `@earendil-works/pi-ai` `0.86.1` package is the runtime dependency.
+This versioning rule applies to this frozen protocol version. The original extraction provenance remains v0.84.2; the checked-in `pi-agent/` tree remains the `0.86.1` reference snapshot and remains reference material only. Neither changes Token's separate production runtime pin: the unmodified installed `@earendil-works/pi-ai` `0.87.0` package is the runtime dependency.
 
 ---
 

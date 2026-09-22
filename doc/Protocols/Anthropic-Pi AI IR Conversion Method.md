@@ -70,16 +70,16 @@ Interrupted ordinary Client ToolCall repair, exact-only cache-control dispositio
 | `system` TextBlock[] | `Context.systemPrompt` | Concatenate block text in order with `\n` between blocks. Citations and local cache breakpoint metadata do not enter the string. |
 | `max_tokens` | `options.maxTokens` | Positive integer. Reject zero/negative at Client conversion as invalid request, not later as 500. |
 | `temperature` | `options.temperature` | Finite numeric value accepted by the target contract. |
-| `top_p` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
-| `top_k` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
-| `metadata.user_id` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in generic `metadata`. Provider Native Preservation may retain the exact input. |
+| `top_p` | protocol-private omit/warn | Not a Pi 0.87.0 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
+| `top_k` | protocol-private omit/warn | Not a Pi 0.87.0 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
+| `metadata.user_id` | protocol-private omit/warn | Not a Pi 0.87.0 common option. Omit with a bounded notice; never hide it in generic `metadata`. Provider Native Preservation may retain the exact input. |
 | `thinking` | `options.reasoning` + `thinkingBudgets` | Use §4. |
 | `output_config.effort` | `options.reasoning` | Use §4. |
 | `output_config.format` | none | Drop and document. Do not borrow Tool.constrainedSampling. |
 | `cache_control` | protocol-private cache handling | Use §8. Do not create a protocol-owned auxiliary request carrier. Never promote a local marker to request-wide Pi cache retention. |
 | `stop_sequences` | none | Drop; no generic Pi option. |
-| `tool_choice` | `options.toolChoice` + `options.parallelToolCalls` | `auto`→`auto`, `none`→`none`, `any`→`required`, explicit tool→`{type:"tool", name}`; `disable_parallel_tool_use:true`→`parallelToolCalls:false`. Preserve the control completely; only the selected Pi Provider/API adapter may omit or reject an unsupported capability. |
-| `container`, `inference_geo`, `service_tier` | protocol-private omit/warn; Native Preservation | Not Pi 0.86.1 common options. Omit each with a bounded notice; never hide it in `samplingParams` or generic `metadata`. Provider Native Preservation may retain exact fields. |
+| `tool_choice` | upstream Pi `options.toolChoice` when representable; otherwise omit/warn | `auto`→`auto`, `none`→`none`; `any`, explicit tool selection, and `disable_parallel_tool_use` have no neutral Pi 0.87 common representation, so retain the tool catalog, omit those control preferences, and emit bounded Client-owned warnings. |
+| `container`, `inference_geo`, `service_tier` | protocol-private omit/warn; Native Preservation | Not Pi 0.87.0 common options. Omit each with a bounded notice; never hide it in `samplingParams` or generic `metadata`. Provider Native Preservation may retain exact fields. |
 | `stream` | render state | `true` selects atomic Anthropic SSE; otherwise JSON. |
 | unknown property on known request | none | Ignore unless it violates a security/authority closed-world boundary. |
 
@@ -92,7 +92,7 @@ Source absence never creates a synthetic option. Pi/Provider defaults apply.
 1. If `output_config.effort` is present and non-null, it determines `options.reasoning`.
 2. Otherwise `thinking.type="enabled"` selects a level from `budget_tokens` using the adapter's documented deterministic budget ladder.
 3. `thinking.type="adaptive"` without effort requests no independent Pi field; drop the adaptive marker.
-4. `thinking.type="disabled"` maps to `options.reasoning="off"`. Pi preserves this as an explicit disable, distinct from omission.
+4. `thinking.type="disabled"` has no explicit disable value in upstream Pi 0.87 common options. Omit the reasoning control, emit a bounded warning, and retain the Pi/Provider default.
 5. `display` has no generic Pi control and is dropped.
 
 ### 4.2 Effort mapping
@@ -261,7 +261,7 @@ Bash/code execution/web search/web fetch/editor/tool search/container/server too
 - Preserve independently representable returned text/image content in order without claiming server execution.
 - Preserve only facts with an exact Pi neutral representation; omit every other server-specific field with a bounded notice or leave the exact request to Provider Native Preservation.
 - Drop pure lifecycle metadata. Do not invent a placeholder transcript merely to stand in for unavailable execution.
-- Preserve every representable source tool choice in Pi `options.toolChoice`; do not rewrite it to `auto`, drop it, or otherwise pre-degrade it for a concrete Provider. The selected Provider/API adapter owns capability handling.
+- Preserve upstream-representable source tool choices (`auto` / `none`) in Pi `options.toolChoice`. For `any`, named selection, or serial-only intent, retain the tool catalog, omit the unsupported control preference, and emit a bounded warning; never invent a Provider-specific field.
 
 ### 7.3 defer_loading and tool_reference
 
@@ -296,7 +296,7 @@ Pi exposes only request-wide `cacheRetention`; Anthropic block-local cache break
 | `stop_sequence` | null/default; Pi has no source fact |
 | `usage` | §9.4 |
 
-`responseModel`, diagnostics, rawStopReason, `endTurn`, cost, internal timestamps, notices, and credentials are not exposed unless the target protocol has an explicit safe field. Pi 0.86.1 `AssistantMessage.endTurn` is diagnostic-only here and does not alter Anthropic stop-reason rendering.
+`responseModel`, diagnostics, rawStopReason, `endTurn`, cost, internal timestamps, notices, and credentials are not exposed unless the target protocol has an explicit safe field. Pi 0.87.0 `AssistantMessage.endTurn` is diagnostic-only here and does not alter Anthropic stop-reason rendering.
 
 ### 9.2 Content projection
 

@@ -80,8 +80,8 @@ describe("closed-world Pi option composition", () => {
     ).toThrow(InvocationCompositionFailure);
   });
 
-  it.each(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)(
-    "preserves Pi thinking level %s",
+  it.each(["minimal", "low", "medium", "high", "xhigh", "max"] as const)(
+    "preserves upstream Pi thinking level %s",
     (reasoning) => {
       const signal = new AbortController().signal;
       expect(
@@ -90,8 +90,8 @@ describe("closed-world Pi option composition", () => {
     },
   );
 
-  it.each(["auto", "none", "required"] as const)(
-    "preserves neutral Pi tool choice %s",
+  it.each(["auto", "none"] as const)(
+    "preserves upstream Pi tool choice %s",
     (toolChoice) => {
       const signal = new AbortController().signal;
       expect(
@@ -100,22 +100,19 @@ describe("closed-world Pi option composition", () => {
     },
   );
 
-  it("preserves and snapshots named tool choice plus parallel execution intent", () => {
+  it.each([
+    ["explicit reasoning off", { reasoning: "off" }],
+    ["required tool choice", { toolChoice: "required" }],
+    ["named tool choice", { toolChoice: { type: "tool", name: "lookup" } }],
+    ["parallel tool calls", { parallelToolCalls: false }],
+  ] as const)("rejects non-upstream option shape: %s", (_name, protocol) => {
     const signal = new AbortController().signal;
-    const toolChoice = { type: "tool" as const, name: "lookup" };
-    const effective = composeOptions(
-      { toolChoice, parallelToolCalls: false },
-      { sessionId, signal },
-    );
-
-    toolChoice.name = "mutated";
-    expect(effective).toMatchObject({
-      toolChoice: { type: "tool", name: "lookup" },
-      parallelToolCalls: false,
-      sessionId,
-      signal,
-    });
-    expect(Object.isFrozen(effective.toolChoice)).toBe(true);
+    expect(() =>
+      composeOptions(
+        protocol as unknown as ModelsSimpleStreamOptions,
+        { sessionId, signal },
+      ),
+    ).toThrow(InvocationCompositionFailure);
   });
 
   it("preserves all public semantic option families without inventing absence", () => {

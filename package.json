@@ -79,11 +79,10 @@
     "test:distribution": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:distribution:inner",
     "test:distribution:inner": "npm run build && node --test test/distribution/*.test.mjs && npm test --workspace @token/desktop-shell && npm run test:product-e2e:run --workspace @token/desktop-shell",
     "test:unit": "node scripts/run-with-codex-test-sandbox.mjs -- vitest run test/unit --passWithNoTests",
-    "test:integration": "node scripts/run-with-codex-test-sandbox.mjs -- vitest run test/integration",
-    "postinstall": "patch-package"
+    "test:integration": "node scripts/run-with-codex-test-sandbox.mjs -- vitest run test/integration"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.86.1",
+    "@earendil-works/pi-ai": "0.87.0",
     "@token/provider-contract": "1.0.4",
     "@token/application-control-plane": "1.0.4",
     "jsonc-parser": "3.3.1",
@@ -99,7 +98,6 @@
     "@types/proper-lockfile": "4.1.4",
     "@types/ws": "8.18.1",
     "eslint": "10.8.1",
-    "patch-package": "8.0.1",
     "tsx": "4.23.12",
     "typescript": "6.0.3",
     "typescript-eslint": "8.67.0",

@@ -812,8 +812,15 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(invocation.client.renderState.stream).toBe(true);
     expect(invocation.invocation.pi.options.samplingParams).toBeUndefined();
     expect(invocation.invocation.pi.options.cacheRetention).toBeUndefined();
-    expect(invocation.invocation.pi.options.parallelToolCalls).toBe(false);
+    expect(invocation.invocation.pi.options).not.toHaveProperty("parallelToolCalls");
     expect(invocation.client.renderState.parallelToolCalls).toBe(false);
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "openai-responses_parallel_tool_calls_omitted",
+        jsonPath: "$.parallel_tool_calls",
+        action: "degrade",
+      }),
+    );
     expect(invocation.invocation.pi.context.tools).toBeUndefined();
     expect(invocation.invocation).not.toHaveProperty("supplement");
     for (const jsonPath of [
@@ -988,7 +995,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(allowed.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["b"]);
   });
 
-  it("preserves a named tool_choice in the Pi common contract", () => {
+  it("omits a named tool_choice from Pi while retaining the tool catalog", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -999,11 +1006,14 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.options.toolChoice).toEqual({
-      type: "tool",
-      name: "a",
-    });
+    expect(invocation.invocation.pi.options.toolChoice).toBeUndefined();
     expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual(["a"]);
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "openai-responses_tool_choice_omitted",
+        action: "degrade",
+      }),
+    );
   });
 
   it("errors on a forced tool_choice requiring a tool absent from the catalog", () => {
@@ -1435,7 +1445,7 @@ describe("13 recheck: resolver receives explicit limits", () => {
 });
 
 describe("13 recheck: tool_choice uses only the Pi common contract", () => {
-  it("preserves a named choice without projecting Provider wire", () => {
+  it("omits a named choice without projecting Provider wire", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -1446,11 +1456,13 @@ describe("13 recheck: tool_choice uses only the Pi common contract", () => {
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.options.toolChoice).toEqual({
-      type: "tool",
-      name: "a",
-    });
-    expect(invocation.client.notices).toEqual([]);
+    expect(invocation.invocation.pi.options.toolChoice).toBeUndefined();
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "openai-responses_tool_choice_omitted",
+        action: "degrade",
+      }),
+    );
   });
 
   it("emits no notice for tool_choice none/auto/allowed", () => {
@@ -1964,16 +1976,25 @@ describe("13 recheck: tool_choice full combination matrix", () => {
     ).toThrow(/non-empty array/u);
   });
 
-  it("named choice with an available tool is preserved in Pi", () => {
+  it("omits named tool choice from Pi with a bounded warning while retaining tools", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: { type: "function", name: "a" } },
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.options.toolChoice).toEqual({
-      type: "tool",
-      name: "a",
-    });
+    expect(invocation.invocation.pi.options.toolChoice).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "openai-responses_tool_choice_omitted",
+        jsonPath: "$.tool_choice",
+        action: "degrade",
+      }),
+    );
   });
 
   it("forced with an unavailable tool errors", () => {
@@ -1986,13 +2007,25 @@ describe("13 recheck: tool_choice full combination matrix", () => {
     ).toThrow(/undeclared tool/u);
   });
 
-  it("required string is preserved in Pi", () => {
+  it("omits required tool choice from Pi with a bounded warning while retaining tools", () => {
     const invocation = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: "required" },
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.options.toolChoice).toBe("required");
+    expect(invocation.invocation.pi.options.toolChoice).toBeUndefined();
+    expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual([
+      "a",
+      "b",
+      "apply_patch",
+    ]);
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "openai-responses_tool_choice_omitted",
+        jsonPath: "$.tool_choice",
+        action: "degrade",
+      }),
+    );
   });
 });
 

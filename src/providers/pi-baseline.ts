@@ -16,7 +16,7 @@ import type { EffectiveCatalogBaseline } from "@token/application-control-plane/
  *
  * The checked-in `pi-agent/` tree is reference material only and has been
  * updated to the `0.86.1` snapshot. Runtime Provider execution uses the
- * separate npm package `@earendil-works/pi-ai@0.86.1`. Re-extracting this
+ * separate clean upstream npm package `@earendil-works/pi-ai@0.87.0`. Re-extracting this
  * identity from the updated tree is separate work owned by the
  * providers/models.json schema owner.
  */

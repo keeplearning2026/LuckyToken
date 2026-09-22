@@ -139,6 +139,8 @@ export const ADDITIONAL_UNCONSUMED_REQUEST_FIELDS_IGNORED_NOTICE_CODE =
   "openai-responses_additional_unconsumed_request_fields_ignored";
 export const TOOL_CHOICE_OMITTED_NOTICE_CODE =
   "openai-responses_tool_choice_omitted";
+export const PARALLEL_TOOL_CALLS_OMITTED_NOTICE_CODE =
+  "openai-responses_parallel_tool_calls_omitted";
 
 /** Separator for the reversible Responses-owned namespace flattening scheme.
  *  A flattened name is `<namespace>__<child>`; the separator stays inside the
@@ -2569,9 +2571,19 @@ function applyToolChoiceFilter(
       effectiveTools === undefined
         ? undefined
         : effectiveTools.filter((tool) => names.has(tool.name));
-    piToolChoice = (effectiveTools?.length ?? 0) === 0
-      ? undefined
-      : toolChoice.mode;
+    if ((effectiveTools?.length ?? 0) > 0) {
+      if (toolChoice.mode === "auto") {
+        piToolChoice = "auto";
+      } else {
+        notices.push(
+          requestNotice(
+            TOOL_CHOICE_OMITTED_NOTICE_CODE,
+            "degrade",
+            "$.tool_choice.mode",
+          ),
+        );
+      }
+    }
     effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "named") {
     if (effectiveTools?.some((tool) => tool.name === toolChoice.name) !== true) {
@@ -2579,10 +2591,22 @@ function applyToolChoiceFilter(
         `tool_choice names an undeclared tool: ${toolChoice.name}`,
       );
     }
-    piToolChoice = Object.freeze({ type: "tool", name: toolChoice.name });
+    notices.push(
+      requestNotice(
+        TOOL_CHOICE_OMITTED_NOTICE_CODE,
+        "degrade",
+        "$.tool_choice",
+      ),
+    );
     effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "required") {
-    piToolChoice = "required";
+    notices.push(
+      requestNotice(
+        TOOL_CHOICE_OMITTED_NOTICE_CODE,
+        "degrade",
+        "$.tool_choice",
+      ),
+    );
     effectiveToolChoice = "required";
   } else if (toolChoice?.kind === "hosted") {
     notices.push(
@@ -2657,7 +2681,13 @@ function buildInvocation(
     options.toolChoice = filtered.piToolChoice;
   }
   if (validated.parallelToolCalls !== undefined) {
-    options.parallelToolCalls = validated.parallelToolCalls;
+    notices.push(
+      requestNotice(
+        PARALLEL_TOOL_CALLS_OMITTED_NOTICE_CODE,
+        "degrade",
+        "$.parallel_tool_calls",
+      ),
+    );
   }
   return Object.freeze({
     selector: validated.selector,

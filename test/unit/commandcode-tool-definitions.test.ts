@@ -91,28 +91,6 @@ describe("CommandCode Pi tool definitions", () => {
     expect((build(tools).body.params as { tools: unknown[] }).tools).toHaveLength(1);
   });
 
-  it.each([
-    ["required", { toolChoice: "required" }],
-    ["named", { toolChoice: { type: "tool", name: "lookup" } }],
-    ["serial", { parallelToolCalls: false }],
-  ] as const)("keeps the catalog and reports Provider-owned omission for %s", (_name, options) => {
-    const tools: Tool[] = [{
-      name: "lookup",
-      description: "Exact description",
-      parameters: { type: "object", properties: {} },
-    }];
-    const built = build(tools, options);
-
-    expect((built.body.params as { tools: unknown[] }).tools).toHaveLength(1);
-    expect(built.notices).toContainEqual(expect.objectContaining({
-      adapter: "commandcode-private",
-      direction: "request",
-      code: _name === "serial"
-        ? "parallel_tool_calls_unsupported_omitted"
-        : "tool_choice_unsupported_omitted",
-      action: "ignore",
-    }));
-  });
 
   it("degrades required JSON-schema enforcement to an ordinary tool and notice", () => {
     const built = build([

@@ -30,7 +30,7 @@ import type {
  * The semantics mirror the vendored `pi-agent/` reference tree
  * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts`, whose
  * reference identity is `@earendil-works/pi-coding-agent` 0.84.2), not the
- * runtime `@earendil-works/pi-ai@0.86.1` Provider execution dependency:
+ * runtime `@earendil-works/pi-ai@0.87.0` Provider execution dependency:
  *
  * - a custom Provider is created with the pinned required fields and
  *   defaults (`modelFromJson`): name falls back to id, reasoning to false,
@@ -76,6 +76,7 @@ export interface EffectiveModelFacts {
   readonly reasoning: boolean;
   readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   readonly input: readonly ("text" | "image")[];
+  readonly inputLimits?: Model<Api>["inputLimits"];
   readonly cost: {
     readonly input: number;
     readonly output: number;
@@ -251,6 +252,9 @@ function modelFromConfig(
       ? {}
       : { thinkingLevelMap: definition.thinkingLevelMap }),
     input: Object.freeze([...(definition.input ?? ["text"])]),
+    ...(layer === "upserted" && defaults?.inputLimits !== undefined
+      ? { inputLimits: defaults.inputLimits }
+      : {}),
     cost: Object.freeze(
       definition.cost
         ? {
@@ -288,6 +292,9 @@ function baseModelFacts(model: Model<Api>): EffectiveModelFacts {
       ? {}
       : { thinkingLevelMap: model.thinkingLevelMap }),
     input: Object.freeze([...model.input]),
+    ...(model.inputLimits === undefined
+      ? {}
+      : { inputLimits: model.inputLimits }),
     cost: Object.freeze({ ...model.cost }),
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,

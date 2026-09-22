@@ -180,8 +180,7 @@ Pi tool controls are Provider capability decisions, not Client Protocol branches
 
 - `toolChoice:"none"` is implemented exactly by sending an empty current tool catalog;
 - `toolChoice:"auto"` or omission keeps the complete current tool catalog and sends no extra wire control;
-- `toolChoice:"required"`, a named-tool choice, and `parallelToolCalls:false` have no CommandCode wire representation. Keep the tool catalog and omit only the unsupported constraint inside the Provider with a bounded Provider-owned request notice;
-- `parallelToolCalls:true` is the target default and requires no extra wire field.
+- the clean upstream Pi 0.87 common contract does not deliver required/named tool choice or `parallelToolCalls` to this Provider. Client Protocols that consume those non-structural controls omit them with bounded Client-owned warnings before Pi execution, so CommandCode Private neither reconstructs nor reports them at the Provider boundary.
 
 Map target-backed options such as timeout/retry, signal, callbacks, session identity, telemetry, fetch, and safe headers according to their runtime ownership.
 
@@ -209,7 +208,7 @@ This decision does not trust malformed content:
 
 - text and ordinary thinking convert normally;
 - ToolCall ID/name/arguments must remain valid;
-- Pi 0.86.1 `ToolCall.namespace` is not representable by the CommandCode request contract and therefore causes conversion failure rather than silent identity loss;
+- Pi 0.87.0 `ToolCall.namespace` is not representable by the CommandCode request contract and therefore causes conversion failure rather than silent identity loss;
 - lossless JSON object validation still applies;
 - unsupported signatures/provenance are dropped or rejected according to their actual content rule;
 - redacted thinking has no CommandCode representation and is dropped while preserving other content;
@@ -366,7 +365,7 @@ Pi required `timestamp` remains the request/response-lifetime timestamp chosen b
 - CommandCode text → Pi TextContent;
 - CommandCode reasoning → Pi ThinkingContent, even if the model catalog says `reasoning:false`; already received representable content is not rejected by request capability metadata;
 - CommandCode final tool call → Pi ToolCall with preserved ID/name and lossless JSON object arguments; CommandCode supplies no authoritative namespace, so Pi `ToolCall.namespace` is omitted;
-- provider signatures/provenance with no installed Pi 0.86.1 slot are omitted or retained only in Pi fields that actually exist;
+- provider signatures/provenance with no installed Pi 0.87.0 slot are omitted or retained only in Pi fields that actually exist;
 - Pi `AssistantMessage.endTurn` remains undefined because CommandCode supplies no authoritative equivalent; never invent it from finish reason.
 
 ### 10.4 Stop reason normalization

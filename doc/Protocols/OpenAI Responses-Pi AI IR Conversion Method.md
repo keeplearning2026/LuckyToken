@@ -99,9 +99,9 @@ Model capability and never sees Provider Wire or Profile retry state.
 | `instructions` | `Context.systemPrompt` | Exact top-level system prompt. `null` means absent. Input-derived system/developer text is not promoted here. |
 | `max_output_tokens` | `options.maxTokens` | Positive integer; zero/negative is Client invalid request, never an internal 500. |
 | `temperature` | `options.temperature` | `null`/absence means target default. Validate source range. |
-| `top_p` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
+| `top_p` | protocol-private omit/warn | Not a Pi 0.87.0 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
 | `prompt_cache_retention` | `options.cacheRetention` | `in-memory→short`, `24h→long`, null/absence→Pi default. |
-| `safety_identifier` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in generic `metadata`. Provider Native Preservation may retain the exact input. |
+| `safety_identifier` | protocol-private omit/warn | Not a Pi 0.87.0 common option. Omit with a bounded notice; never hide it in generic `metadata`. Provider Native Preservation may retain the exact input. |
 | deprecated `user` | protocol-private omit/warn | Use this disposition only when `safety_identifier` is absent. Never hide it in generic `metadata`. Provider Native Preservation may retain the exact input. |
 | `reasoning.effort` | `options.reasoning` | Use §4.2. |
 | `tools` | `Context.tools` | Use §8. |
@@ -115,7 +115,7 @@ Model capability and never sees Provider Wire or Profile retry state.
 | Source | Pi reasoning | Notice |
 |---|---|---|
 | absent/null | omitted | no |
-| `none` | `"off"` | no |
+| `none` | omitted (Pi/Provider default) | bounded omission warning |
 | `minimal` | `minimal` | no |
 | `low` | `low` | no |
 | `medium` | `medium` | no |
@@ -125,7 +125,7 @@ Model capability and never sees Provider Wire or Profile retry state.
 | Lucky extension `max` | `max` | no |
 | future unknown | policy | max/omit emits notice; error rejects |
 
-Only absent/null effort maps to Pi omission. Explicit `none` maps to Pi `"off"` and remains distinct from omission. The Pi/Provider model may apply its own default or clamp an omitted reasoning value.
+Absent/null effort maps to Pi omission without warning. Explicit `none` is also omitted because upstream Pi 0.87 common options have no explicit disable value; Token emits a bounded warning and retains the Pi/Provider default. Enabled levels remain distinct and may be clamped by Pi model metadata.
 
 ### 4.3 Local controls with partial implementation
 
@@ -134,9 +134,10 @@ Only absent/null effort maps to Pi omission. Explicit `none` maps to Pi `"off"` 
 | `tool_choice:"none"` | Set `options.toolChoice="none"` and keep the Pi tool catalog. |
 | `tool_choice:"auto"` | Set `options.toolChoice="auto"`. |
 | `tool_choice:null`/absence | Leave tool choice omitted and use the normal complete executable catalog. |
-| `allowed_tools` in auto or required mode | Filter the Pi catalog deterministically and preserve the requested mode in `options.toolChoice`. |
-| forced/required/named tool choice | Map `required` to `"required"` and a named tool to `{type:"tool", name}`. Preserve the control on the Pi common contract; a Provider may omit an unsupported capability with a bounded Provider notice. |
-| `parallel_tool_calls` | Map to `options.parallelToolCalls`; a Provider may omit an unsupported preference with a bounded Provider notice. |
+| `allowed_tools` in auto mode | Filter the Pi catalog deterministically and set `options.toolChoice="auto"` when tools remain. |
+| `allowed_tools` in required mode | Filter the Pi catalog deterministically, omit the unsupported required mode, and emit a bounded warning. |
+| forced/required/named tool choice | Retain the complete applicable tool catalog, omit the unsupported selection constraint, and emit a bounded warning. |
+| `parallel_tool_calls` | Omit the unsupported parallelism preference and emit a bounded warning. |
 | `text.format`, `text.verbosity` | Drop; no top-level Pi format contract. Do not create a synthetic Tool. |
 | `truncation` | Drop unless a future Client-owned truncator is explicitly installed; do not claim truncation occurred. |
 | `context_management` | Drop unless a Client-owned semantic resolver implements it. |
@@ -303,9 +304,9 @@ Do not drop grammar when Pi can carry it.
 
 ### 8.3 Namespace
 
-Pi 0.86.1 distinguishes the declaration and call contracts: Pi `Tool` still has no namespace field, while Pi `ToolCall` has optional `namespace`. Namespace tool declarations therefore continue to use the reversible adapter-owned `<namespace>.<child>` flattening scheme with collision detection and request-local reverse metadata.
+Pi 0.87.0 distinguishes the declaration and call contracts: Pi `Tool` still has no namespace field, while Pi `ToolCall` has optional `namespace`. Namespace tool declarations therefore continue to use the reversible adapter-owned `<namespace>.<child>` flattening scheme with collision detection and request-local reverse metadata.
 
-For historical call items, if a wire `namespace + name` pair matches a flattened declaration owned by this request, the Pi ToolCall uses that flattened name and omits `namespace` so `Context.tools`, ToolCall, and ToolResult share one canonical identity. If no matching flattened declaration exists, the Client Wire → Pi IR conversion preserves the wire namespace in Pi `ToolCall.namespace` rather than erasing a representable Pi 0.86.1 fact, but Core v1 then rejects that surviving namespace before Pi Provider execution. Token has no certified Provider replay identity for such unmatched namespaced history, and allowing a Provider adapter to omit it could change tool identity.
+For historical call items, if a wire `namespace + name` pair matches a flattened declaration owned by this request, the Pi ToolCall uses that flattened name and omits `namespace` so `Context.tools`, ToolCall, and ToolResult share one canonical identity. If no matching flattened declaration exists, the Client Wire → Pi IR conversion preserves the wire namespace in Pi `ToolCall.namespace` rather than erasing a representable Pi 0.87.0 fact, but Core v1 then rejects that surviving namespace before Pi Provider execution. Token has no certified Provider replay identity for such unmatched namespaced history, and allowing a Provider adapter to omit it could change tool identity.
 
 On Pi → Responses rendering, request-local reverse metadata restores a flattened declaration identity. A direct Pi `ToolCall.namespace` returned by a Pi Provider is emitted when no reverse entry exists. If both are present they must agree on namespace; disagreement is an outbound fidelity failure rather than an arbitrary precedence rule.
 
@@ -463,7 +464,7 @@ Echo **effective normalized state**, not raw caller intent:
 
 - Pi text → assistant message/output_text content.
 - Pi reasoning → reasoning item summary/content; verified Responses signature may restore encrypted_content.
-- Pi ToolCall → function/custom call using request-local reversible family metadata and, where no flattened declaration owns the identity, the Pi 0.86.1 `ToolCall.namespace` field.
+- Pi ToolCall → function/custom call using request-local reversible family metadata and, where no flattened declaration owns the identity, the Pi 0.87.0 `ToolCall.namespace` field.
 - Pi `AssistantMessage.endTurn` is diagnostic-only and has no standard Responses wire field in this profile; it does not change status or stop-reason rendering.
 - Unknown Pi content follows `unknownPiContent`, default error. Ignore emits notice.
 - Redacted/opaque content is never guessed into a Responses family without verified provenance.

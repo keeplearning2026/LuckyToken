@@ -89,11 +89,13 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
   const outcomes: AnthropicReasoningOutcome[] = [];
   const activation = input.invocation.reasoning.activation;
   if (activation.kind === "disabled") {
-    options.reasoning = "off";
     delete options.thinkingBudgets;
     outcomes.push(Object.freeze({
       candidateId: "reasoning.activation",
-      outcome: Object.freeze({ kind: "pi-native" as const }),
+      outcome: Object.freeze({
+        kind: "omitted" as const,
+        warning: "Pi common options do not expose explicit reasoning disable; Provider default retained",
+      }),
     }));
   } else if (!input.model.reasoning && (
     activation.kind === "enabled" ||

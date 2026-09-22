@@ -29,7 +29,10 @@ test("binds the serving manifest to the immutable conformance record", async () 
 
   assert.equal(boundRevision, actualRevision);
   assert.equal(record.schemaVersion, "token-serving-conformance-v2");
-  assert.equal(record.certificationBasis, "offline-and-online");
+  assert.equal(
+    record.certificationBasis,
+    "offline-current-runtime-with-historical-online-evidence",
+  );
   assert.equal(record.result, "CERTIFIED");
   assert.deepEqual(record.commands, [
     "npm test",
@@ -73,7 +76,7 @@ test("binds the shared policy and all three conversion authorities by content", 
   }
 });
 
-test("certifies six named profiles and records complete online evidence", async () => {
+test("certifies six named profiles offline and retains historical online evidence", async () => {
   const record = JSON.parse(await readFile(recordUrl, "utf8"));
   assert.deepEqual(
     record.profiles.map(({ id, route, offlineResult }) => [id, route, offlineResult]),
@@ -89,7 +92,8 @@ test("certifies six named profiles and records complete online evidence", async 
   for (const profile of record.profiles) {
     assert.ok(profile.tests.length > 0, `profile has no evidence: ${profile.id}`);
   }
-  assert.equal(record.onlineEvidence.status, "ONLINE_PASSED");
+  assert.equal(record.onlineEvidence.status, "HISTORICAL_ONLINE_PASSED");
+  assert.equal(record.onlineEvidence.appliesToCurrentRuntime, false);
   assert.equal(record.onlineEvidence.attempted, true);
   assert.equal(record.onlineEvidence.executedAt, "2026-08-21");
   assert.equal(record.onlineEvidence.repositoryState, "working-tree");
@@ -194,11 +198,11 @@ test("binds the installed Pi runtime and every governing specification revision"
   const lock = JSON.parse(lockText);
   const piLock = lock.packages["node_modules/@earendil-works/pi-ai"];
 
-  assert.equal(packageJson.dependencies["@earendil-works/pi-ai"], "0.86.1");
-  assert.equal(piLock.version, "0.86.1");
+  assert.equal(packageJson.dependencies["@earendil-works/pi-ai"], "0.87.0");
+  assert.equal(piLock.version, "0.87.0");
   assert.equal(
     piLock.integrity,
-    "sha512-1XHhI6D/fyQdsBieHC/E/4zGKVOoGe4yDyX67VXvzoYkFsX/qE7NpZE7E1RC8e6Bz8B9oG/P+MQFXikv2/BGEg==",
+    "sha512-lbRm+EMY6Jx3l+HLpbqbm9Yrhkc5u7EffLk2id+zJQEoBuR5I+tijGiZU8zlnuuCclmQOgH0PVjL9PLbeqJ9MQ==",
   );
   assert.ok(source.includes(piLock.integrity));
 

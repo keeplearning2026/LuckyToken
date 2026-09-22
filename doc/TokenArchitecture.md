@@ -1,7 +1,7 @@
 # Token 实现架构说明
 
 **文档性质：** 当前实现的维护者地图（implementation architecture map）<br>
-**对应代码：** `src/` Backend/Core、`packages/desktop-shell/` Electron Desktop、`packages/` Provider/Control Plane 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.86.1<br>
+**对应代码：** `src/` Backend/Core、`packages/desktop-shell/` Electron Desktop、`packages/` Provider/Control Plane 生产路径，Node.js 22.19+，TypeScript，Pi AI 0.87.0（clean upstream）<br>
 **源码基线：** commit `590cd77`（2026-08-26，Release version 1.0.0）<br>
 **架构规范：** [Token Core Architecture Specification](./Spec/TokenCoreSpec.md)<br>
 **Desktop 架构：** [Token Electron Product Architecture Specification](./Spec/TokenElectronArchitectureSpec.md)（已实现；Windows packaged lifecycle 已认证，macOS/Linux 仍待真实平台认证）<br>
@@ -168,9 +168,9 @@ WHATWG Response → Node ServerResponse → Agent
   Responses 可配置 omit/error）；
 - 支持 Claude Code 等真实 Anthropic Agent 接入；recognized fields 按冻结转换方法
   直接转换或显式 omit/degrade，例如 thinking budget 进入 Pi；
-  `tool_choice` 的 `auto`/`any`/`none`/named 与 `disable_parallel_tool_use`
-  完整映射到 Pi `toolChoice`/`parallelToolCalls`，由 selected Provider 决定应用、
-  省略并 warning；
+  `tool_choice` 的 `auto`/`none` 映射到 upstream Pi `toolChoice`，而 `any`/named 与
+  `disable_parallel_tool_use` 当前没有 Pi 0.87 common representation，因此保留 tool catalog、
+  omit 这些非结构性约束并发布 bounded Client-owned warning；
 - 支持请求超时、客户端断开、服务关闭、Provider retry 与取消传播；
 - Provider 通过受信任的 neutral Pi diagnostic 提供有界 upstream failure facts；
   Execution 把已验证 fact 保存在 `ExecutionFailure.failure`，Anthropic/Responses
@@ -452,7 +452,7 @@ flowchart LR
 | Anthropic 未声明字段（`context_management` 及未知顶层字段） | Anthropic handler | 读取所需字段时 | 无消费者声明、不读取、不进入 Pi 状态；仅生成 bounded unclaimed 警告 |
 | Anthropic `top_p`/`top_k` 等未消费顶层字段 | Anthropic handler | 无 Pi 消费者 | 不读取、不进入 Pi 状态；仅生成 bounded unclaimed 警告 |
 | Anthropic `thinking` budget | Anthropic handler | Pi options `thinkingBudgets` | Pi invocation terminal 后 |
-| Anthropic `tool_choice` / `disable_parallel_tool_use` | Anthropic handler | Pi options `toolChoice` / `parallelToolCalls` | Provider 根据能力应用或安全忽略/省略；仅在该 Provider 提供通知通道时产生 Provider-owned notice |
+| Anthropic `tool_choice` / `disable_parallel_tool_use` | Anthropic handler | `auto`/`none` 可进入 Pi `toolChoice`；`any`/named/parallel constraint 在 Client boundary 终止 | Pi 0.87 无 neutral representation 的控制项 omit + bounded Client warning；tool catalog 保留 |
 | CommandCode non-content 事件（`start`、`start-step`、`finish-step`、`provider-metadata`、`tool-result`） | CommandCode assembler | validate-then-drop；仅 finish-step last id/modelId 成为 response identity | committed result 建立前，其余 metadata/header/body 销毁 |
 | CommandCode `providerExecuted`/`dynamic` 元数据 | CommandCode assembler | 无（字段从未被读取/校验，assembler 无消费声明） | 不进入任何状态；事件到达即结束 |
 
@@ -867,9 +867,9 @@ policy，production 默认 policy 当前不认证 image path，因此不会仅�
 unsupported-field registry）。conversion 读取 `model`、`system`、`messages`、
 `tools`、`max_tokens`、`temperature`、`output_config.effort`、
 `stream`、`thinking` 和 `tool_choice`。其中 `thinking` budget 进入
-`options.thinkingBudgets`；`tool_choice` 的 `auto`/`any`/`none`/named 分别映射到
-Pi `options.toolChoice` 的 `auto`/`required`/`none`/named tool，且
-`disable_parallel_tool_use` 映射到 `options.parallelToolCalls = false`。
+`options.thinkingBudgets`；`tool_choice` 的 `auto`/`none` 映射到 Pi 0.87
+`options.toolChoice`，`any`/named 以及 `disable_parallel_tool_use` 因 upstream Pi
+common options 无对应表示而 omit + bounded warning，且不会缩减 Client tool catalog。
 `top_p`/`top_k`、`stop_sequences`、顶层 `cache_control`、`output_config.format`、
 `service_tier`、`inference_geo`、`container` 等没有 Pi neutral 合同，按 bounded
 unclaimed 警告处理；若调用方必须逐字保留，只能选择 Native Preservation。它们不生成
@@ -996,7 +996,7 @@ composeOptions(
 
 | Fact owner | 输入字段 | Pi carrier |
 | --- | --- | --- |
-| Anthropic protocol | `maxTokens`, `temperature?`, `reasoning?`, `toolChoice?`, `parallelToolCalls?`, `thinkingBudgets?` | 对应 Pi semantic option |
+| Anthropic protocol | `maxTokens`, `temperature?`, enabled `reasoning?`, `toolChoice?` (`auto`/`none`), `thinkingBudgets?` | 对应 upstream Pi semantic option；不可表示的控制偏好在 Protocol boundary omit + warning |
 | Request Identity | `effectiveSessionId` | `sessionId` |
 | HTTP lifecycle | `AbortSignal` | `signal` |
 | Runtime/composition infrastructure | typed headers/env/transport/timeout/retry callbacks when explicitly owned | matching Pi infrastructure option |
@@ -1007,8 +1007,9 @@ composeOptions(
 Protocol 已拥有的 semantic option。输出建立后，各输入来源分类结束，只剩 Pi options fields。
 
 Anthropic protocol 现在直接拥有的 Pi option keys 为：`maxTokens`、`temperature`、
-`toolChoice`、`parallelToolCalls` 与 `thinkingBudgets`（effort 先映射为
-`thinkingBudgets`）。`reasoning` Pi option 由 Anthropic reasoning 准备层
+`toolChoice`（仅 upstream Pi 可表达的 `auto`/`none`）与 `thinkingBudgets`（effort 先映射为
+`thinkingBudgets`）。显式 reasoning-disable、required/named tool choice 与 parallel constraint
+不进入 Pi options，而由 Protocol omit + bounded warning。`reasoning` Pi option 由 Anthropic reasoning 准备层
 （`semantic/reasoning/request.ts`）设置，Router defaults 不能注入 `reasoning`
 （它不属于 Router 的已分类 v1 policy）。
 
@@ -1208,9 +1209,9 @@ Composition 可以理解为“开门前装配员”：它读取文件、造好�
 它自己不维护 client token，也不做协议翻译。
 
 Pi 是 Token 的共享 runtime/IR contract，但 Pi Agent 不是 Token 的应用
-架构。生产代码依赖 npm package `@earendil-works/pi-ai@0.86.1`；仓库中的
-`pi-agent/packages/ai` 是与生产依赖对应的 `0.86.1` reference/source snapshot，
-用于 source review，不被 Token-specific 代码修改。Token-owned 模块只补上文件
+架构。生产代码依赖未修改的 npm package `@earendil-works/pi-ai@0.87.0`；仓库中的
+`pi-agent/packages/ai` 仍是独立的 `0.86.1` reviewed reference/source snapshot，
+用于 source review，不作为当前 runtime authority，也不被 Token-specific 代码修改。Token-owned 模块只补上文件
 加载、Profile persistence/binding、Provider construction 和 CLI shell。
 
 ## 6.1 Pi public runtime contract
@@ -1220,7 +1221,7 @@ Pi 是 Token 的共享 runtime/IR contract，但 Pi Agent 不是 Token 的应用
 > Protocol 只把任务递给总服务台，不会越过 Pi 直接联系某个供应商。
 
 Token 直接使用以下 Pi public interfaces（为文档精简的公共接口子集；完整定义以
-`@earendil-works/pi-ai@0.86.1` 的 `dist/models.d.ts` 为准）：
+`@earendil-works/pi-ai@0.87.0` 的 `dist/models.d.ts` 为准）：
 
 ```ts
 interface Provider {
@@ -2210,8 +2211,8 @@ flowchart TB
 
 > **小白理解：** 这组模块把 Token 接到 Pi 的标准接口，并管理 Pi 所需的
 > Provider 凭证。CommandCode 的模型与上游地址由其 Provider Package 拥有，无需
-> `models.json`。仓库里的 `pi-agent/` 是当前 `0.86.1` 生产依赖对应的 reference/source
-> snapshot，供人核对上游行为，正式运行依赖 npm 包；该整棵 reference tree 不可修改
+> `models.json`。仓库里的 `pi-agent/` 是独立的 `0.86.1` reviewed reference/source
+> snapshot，供人核对历史上游行为；正式运行依赖 clean upstream `pi-ai@0.87.0` npm 包；该整棵 reference tree 不可修改
 > （见 AGENTS.md），Token 只通过 Pi 公共接口消费，不在参考源码里打任何补丁。
 
 | 模块 | 主要接口/输出 | 上游 caller | 下游 dependency | 配套验证 |
@@ -2220,7 +2221,7 @@ flowchart TB
 | `src/execution.ts` | Pi terminal → atomic success 或 `ExecutionFailure`；验证 neutral diagnostic 并保存在 `.failure` | Client handlers | Pi public event/diagnostic contracts、execution facts sink | execution unit + provider-boundary integration |
 | `packages/provider-contract/src/diagnostics.ts` | shared diagnostic contracts 与 trusted runtime identity | Providers、Execution、Client renderers | Pi `AssistantMessageDiagnostic` | upstream-failure + provider-boundary tests |
 | `src/providers/models-json.ts` | 最小 models.json 解析；构建 Pi Model 与 apiKey auth | catalog（`registerTokenProviders`） | Pi Model/ApiKeyAuth types、Node fs | `test/unit/models-json.test.ts`、`models-json-provider` integration |
-| `@earendil-works/pi-ai@0.86.1` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | its own upstream-clean runtime | Pi runtime fidelity + certification |
+| `@earendil-works/pi-ai@0.87.0` | `Model/Context/Options/Models/Provider/EventStream` | both Client adapter and Provider adapter | unmodified upstream runtime | Pi runtime fidelity + certification |
 | `pi-agent/packages/ai` | `0.86.1` reviewed reference/source snapshot | maintainers/certification review | upstream Pi source | 不作为 Token production import |
 
 ## 9.3 Anthropic Client Protocol
@@ -2528,9 +2529,9 @@ registration 和 provider-neutral certification，没有 message/content/usage/t
 
 7. **Recognized 与 future-unknown 必须分开处理。** 已识别 Anthropic 字段按冻结方法
    direct map、omit+notice/degrade 或 fail；例如 thinking budget 进入 Pi，
-   `tool_choice` 与 `disable_parallel_tool_use` 完整映射到 Pi
-   `toolChoice`/`parallelToolCalls`，再只由 selected Provider 在自己的 adapter 内决定
-   应用或省略并发出 bounded notice。未来未知字段只按 owning Client Protocol 的
+   `tool_choice:auto/none` 进入 upstream Pi `toolChoice`，而 `any`/named 与
+   `disable_parallel_tool_use` 当前不可表示，因此在 Client Protocol boundary omit 并发出
+   bounded warning。未来未知字段只按 owning Client Protocol 的
    unknown-family policy 处理，不能猜语义或借 Provider 行为反推。CommandCode 响应侧
    同理：只有规范定义的 content 生命周期进入 content，no-op/未知事件按 Provider-owned
    policy 处理。

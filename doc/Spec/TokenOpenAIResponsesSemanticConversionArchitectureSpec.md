@@ -1,6 +1,6 @@
 # OpenAI Responses Semantic Conversion Architecture
 
-Status: **CURRENT — projector-free Pi AI 0.86.1 boundary**
+Status: **CURRENT — projector-free clean upstream Pi AI 0.87.0 boundary**
 
 ## 1. Contract
 
@@ -39,9 +39,9 @@ The invocation contains:
 - Pi `Context` with top-level `instructions` as `systemPrompt`, input-level
   `system`/`developer` messages preserved in transcript order as Pi `SystemMessage`,
   executable tools, tool calls, and results;
-- Pi common options such as `maxTokens`, `temperature`, `cacheRetention`,
-  `parallelToolCalls`, and the full neutral `toolChoice` union (`auto`, `none`,
-  `required`, `{ type: "tool", name }`);
+- upstream Pi 0.87 common options such as `maxTokens`, `temperature`,
+  `cacheRetention`, selectable reasoning levels, and `toolChoice` `auto` / `none`;
+  consumed non-structural controls without a Pi representation are omitted with warning;
 - Responses-owned reasoning intent and attachment-local continuity candidates;
 - Responses-owned response state: Client model, stream mode, metadata echo, reversible
   namespace names, freeform tool family, normalized Client tool-choice echo, and
@@ -57,16 +57,18 @@ was written. It exists solely to construct a protocol-valid Responses result.
 | --- | --- | --- |
 | input messages, instructions, images | `pi-context` | preserve model-visible content; unresolved opaque references fail or warn only under the declared resolver policy |
 | tools, call IDs, results | `pi-context` | identity/relationship loss fails |
-| reasoning effort `none` | `pi-common-option` | `reasoning: "off"` |
+| reasoning effort `none` | `client-warning-omit` | omit explicit disable, warn, retain Pi/Provider default |
 | enabled reasoning effort | `pi-common-option` | resolved model map + public Pi selection helpers |
 | reasoning summary preference | `provider-private-omit-warning` | Pi common contract has no summary selector |
 | historical reasoning and signatures | `client-render-or-continuity-state` + Pi content fields | restore only for compatible provenance; otherwise visible fallback/omit warning |
-| `max_output_tokens` | `pi-common-option` | hard total output ceiling; never widened |
+| `max_output_tokens` | `pi-common-option` | map to Pi `maxTokens`; Pi owns downstream output/reasoning budgeting |
 | `temperature` | `pi-common-option` + Client echo | direct Pi semantic |
 | `prompt_cache_retention` | `pi-common-option` | coarse Pi retention semantic |
-| tool choice `auto`/`none`/`required`/named | `pi-common-option` | exact neutral Pi control; the Provider adapter applies, safely ignores/omits, optionally reports a Provider-owned notice, or rejects if validity requires it |
+| tool choice `auto`/`none` | `pi-common-option` | preserve through upstream Pi |
+| tool choice `required`/named | `client-warning-omit` | retain the tool catalog, omit unsupported selection constraint, warn, and use Pi/Provider default |
 | `allowed_tools` mode `auto` | `pi-context` + Pi `auto` + Client echo | filter executable catalog before dispatch |
-| `parallel_tool_calls` | `pi-common-option` | neutral Pi `parallelToolCalls`; the Provider adapter applies or safely ignores/omits it, with a Provider-owned notice only when that adapter exposes one |
+| `allowed_tools` mode `required` | `pi-context` + Client warning | filter executable catalog, omit unsupported required mode, warn |
+| `parallel_tool_calls` | `client-warning-omit` | omit unsupported parallelism constraint with a bounded warning |
 | hosted-tool choice | `provider-private-omit-warning` | no neutral Pi contract; exact wire retention requires Native Preservation |
 | namespace declarations | `pi-context` + Client reverse map | reversible flattening; collision fails |
 | unmatched historical namespace | `critical-failure` before Provider dispatch | prevents tool identity drift |

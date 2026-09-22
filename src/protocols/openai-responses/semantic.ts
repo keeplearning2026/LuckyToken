@@ -529,7 +529,6 @@ export async function executeSemanticResponses(
               temperature: piOptions.temperature,
               reasoning: piOptions.reasoning,
               toolChoice: piOptions.toolChoice,
-              parallelToolCalls: piOptions.parallelToolCalls,
               samplingParams: piOptions.samplingParams,
               cacheRetention: piOptions.cacheRetention,
               thinkingBudgets: piOptions.thinkingBudgets,

@@ -884,9 +884,7 @@ describe("08: Anthropic known content and tools", () => {
   it.each([
     ["auto", { type: "auto" }, "auto"],
     ["none", { type: "none" }, "none"],
-    ["any", { type: "any" }, "required"],
-    ["named", { type: "tool", name: "lookup" }, { type: "tool", name: "lookup" }],
-  ] as const)("preserves %s tool_choice in Pi while retaining the tool catalog", (
+  ] as const)("preserves upstream-representable %s tool_choice in Pi", (
     _name,
     toolChoice,
     expected,
@@ -910,7 +908,33 @@ describe("08: Anthropic known content and tools", () => {
     expect(invocation.client.notices).toEqual([]);
   });
 
-  it("preserves disable_parallel_tool_use as neutral Pi parallel intent", () => {
+  it.each([
+    ["any", { type: "any" }],
+    ["named", { type: "tool", name: "lookup" }],
+  ] as const)("omits unsupported %s tool_choice with a warning while retaining tools", (
+    _name,
+    toolChoice,
+  ) => {
+    const invocation = parseAnthropicTextInvocation(
+      body([{ role: "user", content: "hi" }], {
+        tools: [{ name: "lookup", input_schema: { type: "object" } }],
+        tool_choice: toolChoice,
+      }),
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual(["lookup"]);
+    expect(invocation.invocation.pi.options.toolChoice).toBeUndefined();
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "anthropic_tool_choice_omitted",
+        jsonPath: "$.tool_choice",
+        action: "degrade",
+      }),
+    );
+  });
+
+  it("omits disable_parallel_tool_use with a bounded warning", () => {
     const invocation = parseAnthropicTextInvocation(
       body([{ role: "user", content: "hi" }], {
         tools: [{ name: "lookup", input_schema: { type: "object" } }],
@@ -919,10 +943,14 @@ describe("08: Anthropic known content and tools", () => {
       1,
     );
 
-    expect(invocation.invocation.pi.options).toMatchObject({
-      toolChoice: { type: "tool", name: "lookup" },
-      parallelToolCalls: false,
-    });
+    expect(invocation.invocation.pi.options).not.toHaveProperty("parallelToolCalls");
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "anthropic_parallel_tool_calls_omitted",
+        jsonPath: "$.tool_choice.disable_parallel_tool_use",
+        action: "degrade",
+      }),
+    );
   });
 
   it("fails a named tool_choice whose tool relationship is invalid", () => {

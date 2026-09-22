@@ -313,39 +313,6 @@ function mappedReasoningLevel(
     : undefined;
 }
 
-function commandCodeToolControlNotices(
-  options: SimpleStreamOptions | undefined,
-): readonly ConversionNotice[] {
-  const notices: ConversionNotice[] = [];
-  if (
-    options?.toolChoice === "required" ||
-    (typeof options?.toolChoice === "object" &&
-      options.toolChoice.type === "tool")
-  ) {
-    notices.push(
-      Object.freeze({
-        adapter: PROVIDER_ID,
-        direction: "request",
-        code: "tool_choice_unsupported_omitted",
-        jsonPath: "$.toolChoice",
-        action: "ignore",
-      }),
-    );
-  }
-  if (options?.parallelToolCalls === false) {
-    notices.push(
-      Object.freeze({
-        adapter: PROVIDER_ID,
-        direction: "request",
-        code: "parallel_tool_calls_unsupported_omitted",
-        jsonPath: "$.parallelToolCalls",
-        action: "ignore",
-      }),
-    );
-  }
-  return notices;
-}
-
 function resolveReasoning(
   model: Model<typeof API_ID>,
   options: SimpleStreamOptions | undefined,
@@ -356,7 +323,7 @@ function resolveReasoning(
     const mapped = mappedReasoningLevel(model, level);
     if (mapped !== undefined) supportedEfforts.add(mapped);
   }
-  if (options?.reasoning === undefined || options.reasoning === "off") {
+  if (options?.reasoning === undefined) {
     return { supportedEfforts };
   }
   const effort = mappedReasoningLevel(model, options.reasoning);
@@ -780,7 +747,6 @@ export function buildCommandCodeBody(
     notices: Object.freeze([
       ...conversion.notices,
       ...toolConversion.notices,
-      ...commandCodeToolControlNotices(options),
     ]),
     supportedReasoningEfforts: reasoning.supportedEfforts,
     body: {

@@ -1,6 +1,6 @@
 # Token Full-Journey Diagnostics Capture Design
 
-Status: reviewed and implemented, updated for the pinned Pi 0.86.1 Semantic evidence boundary on 2026-09-21. Raw Provider response events are intentionally outside the required diagnostic scene.
+Status: reviewed and implemented, updated for the clean upstream Pi 0.87.0 Semantic evidence boundary on 2026-09-22. Raw Provider response events are intentionally outside the required diagnostic scene.
 
 ## 1. Decision
 
@@ -40,7 +40,7 @@ The pre-implementation review proved that this contract could not be met by incr
 Two ownership limits remain deliberately truthful:
 
 - an intermediate Provider Native OpenAI 429 body that the normal profile-switch path does not read remains `unavailable:response_body_not_read_before_profile_switch`; diagnostics cannot add a reader, clone, tee, or await;
-- the pinned Pi 0.86.1 public contract exposes the complete Provider-native request payload through `onPayload`, response status/headers through `onResponse`, and the decoded `AssistantMessage`. Neutral Core execution observation may copy these required Semantic Provider boundary artifacts without changing them. Client Protocol modules do not own the callback or the payload. SDK/Adapter-internal HTTP serialization and raw Provider response events are not required, and Token does not inject transport to obtain them.
+- the clean upstream Pi 0.87.0 public contract exposes the complete Provider-native request payload through `onPayload`, response status/headers through `onResponse`, and the decoded `AssistantMessage`. Neutral Core execution observation may copy these required Semantic Provider boundary artifacts without changing them. Client Protocol modules do not own the callback or the payload. SDK/Adapter-internal HTTP serialization and raw Provider response events are not required, and Token does not inject transport to obtain them.
 
 ## 3. Required diagnostic vocabulary
 
@@ -227,9 +227,9 @@ For an intermediate OpenAI 429 whose body is not normally read before profile sw
 
 OpenAI and Anthropic own their protocol invocation and response artifact serializers and stage definitions. They may share the neutral Pi execution observation mechanism, recorder, chunking, redaction, hashing, and storage facilities. No common Semantic Invocation, reasoning request model, Client response state, outcome union, or semantic error may be introduced. No Supplement or projector registry exists.
 
-## 8. Pinned Pi 0.86.1 Semantic evidence boundary
+## 8. Clean upstream Pi 0.87.0 Semantic evidence boundary
 
-The required Semantic Provider request artifact is an immutable copy of the complete Provider-native payload exposed through Pi `onPayload`. This is Pi 0.86.1's public request-construction boundary: the selected Pi Provider/API adapter has constructed the payload it owns. Neutral Core execution observation copies that value and returns the original unchanged. No Client Protocol projector, repair, assertion, or mutation runs at this seam. Credentials, URL/header transport assembly, SDK serialization, signing, and fixed transport framing that an Adapter adds later are outside this artifact and must not be reconstructed or guessed.
+The required Semantic Provider request artifact is an immutable copy of the complete Provider-native payload exposed through Pi `onPayload`. This is Pi 0.87.0's public request-construction boundary: the selected Pi Provider/API adapter has constructed the payload it owns. Neutral Core execution observation copies that value and returns the original unchanged. No Client Protocol projector, repair, assertion, or mutation runs at this seam. Credentials, URL/header transport assembly, SDK serialization, signing, and fixed transport framing that an Adapter adds later are outside this artifact and must not be reconstructed or guessed.
 
 The required Semantic response scene deliberately stops at the public Pi boundary. Raw Provider response events are not required. Token records safe status/headers when Pi calls `onResponse`, then records the complete decoded Pi `AssistantMessage` and protocol-owned continuity provenance. A failure before either callback receives an explicit unavailable descriptor for that required public-boundary artifact; it does not create a raw-wire placeholder.
 
@@ -291,7 +291,7 @@ Keep generic artifact retrieval paged and add metadata-first inspection. The ren
 2. Add red Settings, storage-directory, non-interference, and boundary tests before production wiring.
 3. Implement the policy snapshot Adapter, chunked recorder, isolated complete-document redaction, bounded IPC queue/process supervisor, provisional v3 file storage/index, health reporting, and paged read contract.
 4. Wire Direct Mode and both Provider Native implementations at their lane-owned seams.
-5. Wire `pi_provider_request_payload` and safe response metadata through neutral Core execution observation over official Pi 0.86.1 public callbacks; retain independently serialized decoded response IR for OpenAI Responses and Anthropic Messages.
+5. Wire `pi_provider_request_payload` and safe response metadata through neutral Core execution observation over official Pi 0.87.0 public callbacks; retain independently serialized decoded response IR for OpenAI Responses and Anthropic Messages.
 6. Replace lossy semantic snapshots with complete protocol-owned artifacts while retaining optional summaries only as explicitly labelled convenience artifacts.
 7. Add the Settings toggle/directory display, system-viewer desktop open flow, and the full cross-lane certification matrix.
 

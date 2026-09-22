@@ -198,7 +198,7 @@ Envelope artifacts contain only safe HTTP metadata; wire/payload artifacts
 contain the bounded, redacted body available at that ownership seam. Attempt
 suffixes let retries or Profile transitions be compared in order.
 
-For Semantic Conversion, Pi 0.86.1 exposes the Provider-built request payload,
+For Semantic Conversion, clean upstream Pi 0.87.0 exposes the Provider-built request payload,
 safe response status/headers, and decoded Pi `AssistantMessage`. Neutral Core
 execution observation copies these facts without modifying the payload; Client
 Protocol conversion neither owns nor repairs Provider Wire. Adapter- or

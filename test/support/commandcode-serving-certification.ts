@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options
 import type { CommandCodeCompatibilityPolicy } from "../../packages/provider-commandcode-private/src/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:092e550420037aab4efe022788521597d845e5957c1017f5f22703180de2fb95";
+  "sha256:32e0f3fc3673a887d31d05c31280f49efd0f7fb242fd5b10be7f6e1fe143545e";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -69,7 +69,7 @@ export type ServingCertificationResult = "CERTIFIED" | "FAILED";
 
 export interface ServingCertificationManifest {
   readonly schemaVersion: "Token-serving-certification-manifest-v2";
-  readonly certificationBasis: "offline-and-online";
+  readonly certificationBasis: "offline-current-runtime-with-historical-online-evidence";
   readonly result: ServingCertificationResult;
   readonly failures: readonly string[];
   readonly identity: Readonly<Record<string, unknown>>;
@@ -97,12 +97,13 @@ export interface ServingCertificationManifest {
     readonly responsesProviderNative: ServingCertificationProfile;
     readonly commandCodeProvider: ServingCertificationProfile;
   };
-  readonly coverage: Readonly<Record<string, "verified">>;
+  readonly coverage: Readonly<Record<string, "verified" | "historical-only">>;
   readonly verification: {
     readonly commands: readonly string[];
     readonly conformanceRecord: string;
     readonly onlineEvidence: {
-      readonly status: "online-passed";
+      readonly status: "historical-online-passed";
+      readonly appliesToCurrentRuntime: false;
       readonly attempted: true;
       readonly executedAt: "2026-08-14";
       readonly repositoryRevision: "22ed328a5b6d00189d6086c580c4d288246b8e39";
@@ -122,7 +123,7 @@ export interface ServingCertificationProfile {
   readonly id: string;
   readonly seam: string;
   readonly offlineResult: "CERTIFIED";
-  readonly onlineStatus: "online-passed" | "not-applicable";
+  readonly onlineStatus: "historical-online-passed" | "not-applicable";
 }
 
 export interface ServingCertificationOnlineRun {
@@ -273,7 +274,7 @@ export function certifyServingComposition(
     failures.length === 0 ? "CERTIFIED" : "FAILED";
   const manifest: ServingCertificationManifest = {
     schemaVersion: "Token-serving-certification-manifest-v2",
-    certificationBasis: "offline-and-online",
+    certificationBasis: "offline-current-runtime-with-historical-online-evidence",
     result,
     failures,
     identity: {
@@ -304,9 +305,9 @@ export function certifyServingComposition(
         },
         runtime: {
           package: "@earendil-works/pi-ai",
-          version: "0.86.1",
+          version: "0.87.0",
           integrity:
-            "sha512-1XHhI6D/fyQdsBieHC/E/4zGKVOoGe4yDyX67VXvzoYkFsX/qE7NpZE7E1RC8e6Bz8B9oG/P+MQFXikv2/BGEg==",
+            "sha512-lbRm+EMY6Jx3l+HLpbqbm9Yrhkc5u7EffLk2id+zJQEoBuR5I+tijGiZU8zlnuuCclmQOgH0PVjL9PLbeqJ9MQ==",
         },
       },
       commandCode: {
@@ -376,7 +377,7 @@ export function certifyServingComposition(
         id: "anthropic-conversion",
         seam: "POST /v1/messages conversion",
         offlineResult: "CERTIFIED",
-        onlineStatus: "online-passed",
+        onlineStatus: "historical-online-passed",
       },
       anthropicProviderNative: {
         id: "anthropic-provider-native",
@@ -388,7 +389,7 @@ export function certifyServingComposition(
         id: "responses-conversion",
         seam: "POST /v1/responses conversion",
         offlineResult: "CERTIFIED",
-        onlineStatus: "online-passed",
+        onlineStatus: "historical-online-passed",
       },
       responsesDirectMode: {
         id: "responses-direct-mode",
@@ -406,7 +407,7 @@ export function certifyServingComposition(
         id: "commandcode-provider",
         seam: "Pi Provider commandcode-private",
         offlineResult: "CERTIFIED",
-        onlineStatus: "online-passed",
+        onlineStatus: "historical-online-passed",
       },
     },
     coverage: {
@@ -419,13 +420,14 @@ export function certifyServingComposition(
       servingReadinessAndIsolation: "verified",
       localLoopbackHttpBoundary: "verified",
       piConfigurationCredentialCli: "verified",
-      realProviderOnlineConformance: "verified",
+      realProviderOnlineConformance: "historical-only",
     },
     verification: {
       commands: [...VERIFICATION_COMMANDS],
       conformanceRecord: SERVING_CONFORMANCE_REVISION,
       onlineEvidence: {
-        status: "online-passed",
+        status: "historical-online-passed",
+        appliesToCurrentRuntime: false,
         attempted: true,
         executedAt: "2026-08-14",
         repositoryRevision: "22ed328a5b6d00189d6086c580c4d288246b8e39",

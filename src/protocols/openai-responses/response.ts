@@ -602,7 +602,7 @@ function convertOutput(
       );
     }
     // A namespace-flattened declaration reverses to the SDK child identity.
-    // Pi 0.86.1 can also carry a namespace directly on ToolCall. When both
+    // Pi 0.87.0 can also carry a namespace directly on ToolCall. When both
     // authorities are present they must agree; choosing one would silently
     // rewrite tool identity.
     const reverse = namespaceReverse[name];
