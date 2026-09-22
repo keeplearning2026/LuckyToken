@@ -27,8 +27,9 @@ independent data-plane lanes.
 6. Optional controls that a Provider cannot implement may be ignored by that Provider.
    Invalid tool relationships, lost model-visible content, and security, permission, or
    residency violations still fail explicitly.
-7. Production Semantic Conversion creates no `onPayload` callback and remains correct
-   without one.
+7. Client Protocol production modules create no `onPayload` callback and remain correct
+   without one. Neutral Core execution may install a diagnostics-owned, non-mutating
+   observation callback.
 8. CommandCode Private and CommandCode Goat expose only their versioned
    `providerPackage` registration contract from the package root. Concrete factories
    remain internal. Runtime invocation occurs only through Pi `Models`.
@@ -253,9 +254,9 @@ CommandCode Goat online execution is excluded at the user's direction because th
 plan does not include Goat API access. Goat registration, Pi adapter use, catalog,
 auth, transport, reasoning, response, and distribution behavior remain covered offline.
 
-## 10. Token 1.0.2 release record
+## 10. Token 1.0.3 release record
 
-The root and every shipped workspace now report version `1.0.2`. The release gate was
+The root and every shipped workspace now report version `1.0.3`. The release gate was
 also corrected so its assembled-Backend certification always rebuilds root output and
 cannot accidentally certify a stale version.
 
@@ -263,8 +264,8 @@ An unsigned Windows Squirrel candidate was built once and certified from the wor
 tree after the version bump:
 
 ```text
-artifacts/release-candidates/1.0.2-dced5d0fdfb5/Token-Setup.exe
-SHA-256: 0f5ec6fa8422a587f89c18b38d23906edce47fcce3ff29fa32fa8079ca9e8fd2
+artifacts/release-candidates/1.0.3-dced5d0fdfb5/Token-Setup.exe
+SHA-256: a69016314890bf386313d448ceac86d9a31eb23e5e164647ee4bbae91fda2083
 ```
 
 Its release gates passed:
@@ -291,7 +292,8 @@ an official signed release.
    capability.
 6. Provider adapters alone map, degrade, omit, validate, and construct Provider Wire.
 7. Projector and Supplement production trees are absent.
-8. Semantic execution creates no `onPayload` callback.
+8. Client Protocol semantic modules create no `onPayload` callback; optional Neutral
+   Core diagnostics observation is non-mutating and semantically removable.
 9. Reasoning default/off/level and tool auto/none/required/named/parallel intent are
    unambiguous in the common contract.
 10. Provider-private facts do not enter Pi IR or generic escape-hatch bags.

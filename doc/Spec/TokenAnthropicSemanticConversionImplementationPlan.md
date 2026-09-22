@@ -34,9 +34,10 @@ The converter emits Pi `Context`, Pi public options, and Anthropic-owned respons
 continuity state. It maps initial system text, supported messages/images, ordinary tools,
 tool relationships, max output, temperature, basic tool choice, and reasoning.
 
-Provider-private preferences warn and remain outside Pi. Required/named/serial tool
-constraints, tool references that imply mid-conversation catalog changes, invalid tool
-relationships, and non-degradable content fail before dispatch.
+Provider-private preferences warn and remain outside Pi. Required, named, and serial
+tool constraints map to Pi's neutral `toolChoice`/`parallelToolCalls` contract. Tool
+references that imply mid-conversation catalog changes, invalid tool relationships, and
+non-degradable content fail before dispatch.
 
 ## Reasoning behavior
 

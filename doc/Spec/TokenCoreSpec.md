@@ -1339,7 +1339,8 @@ extension bag 都不是 Client → Provider carrier。
 
 没有 neutral Pi representation 时，可选 Client field 应 omit with a bounded notice；
 要求 exact wire retention 时必须选择 Provider Native Preservation。Provider/API adapter
-再根据自身能力决定 apply、omit-with-bounded-notice 或 reject。Credential/request-identity
+再根据自身能力决定 apply、安全 ignore/omit、可选发布 Provider-owned notice 或
+reject。Credential/request-identity
 authority 也不能生成 arbitrary metadata。
 
 ### Whole Request Object
@@ -3060,8 +3061,8 @@ parallelToolCalls
 
 但只有当这些 semantics 与 Pi neutral common option 完全一致时，才形成对应 mapping。
 Client Protocol 完整保留它消费的 neutral intent，不因某个 concrete Provider 不支持下述
-capability 而提前降级；selected Pi Provider/API adapter 独占 apply /
-omit-with-bounded-notice / reject 决策。`samplingParams`、generic `metadata`、
+capability 而提前降级；selected Pi Provider/API adapter 独占 apply / safe
+ignore-or-omit / optional Provider-owned notice / reject 决策。`samplingParams`、generic `metadata`、
 Provider-native controls 与 callbacks 不属于此 mapping。Provider ID 只用于 registration /
 model resolution，不能用于协议分支。
 
@@ -3180,7 +3181,7 @@ rejected
 没有 neutral Pi representation 的 extension 不能通过 `samplingParams`、generic `metadata`、
 diagnostics 或 untyped bag 进入 Pi。要求 exact wire retention 时必须选择 Provider Native
 Preservation；Provider/API adapter 可对其 Provider-specific extension 做 apply、
-omit-with-bounded-notice 或 reject。
+安全 ignore/omit、可选发布 Provider-owned notice 或 reject。
 
 Architecture 不为所有 Client Protocol 强制一个统一 forward-compatibility policy。
 
@@ -3254,7 +3255,7 @@ source-valid
 Conversion 必须 loss-aware，但 Provider/API capability 不是 Client Protocol 的
 representability input。Client Protocol 只判断 Pi public `Context`/选项是否能承载
 source semantics，并保留完整 neutral intent；selected Pi Provider/API adapter 再决定
-apply、omit-with-bounded-notice 或 reject。
+apply、安全 ignore/omit、可选发布 Provider-owned notice 或 reject。
 
 Pi public model capability 可以参与 Pi-neutral representability，例如：
 
@@ -4103,7 +4104,7 @@ const protocolOptions = {
 
 但这个 object 的 semantic authority 仍来自 `ModelsSimpleStreamOptions`。
 这里的 fields 必须具有 exact neutral Pi semantics；selected Provider/API adapter 再决定
-apply、omit-with-bounded-notice 或 reject。
+apply、安全 ignore/omit、可选发布 Provider-owned notice 或 reject。
 
 不得自然演化成：
 
@@ -4281,7 +4282,8 @@ Client Protocol 只能写入 semantics 与 Pi option 完全一致的 neutral com
 `samplingParams`、generic `metadata`、diagnostics 与 untyped extension bag 都不得承载
 unrepresentable Client fields。没有 neutral Pi representation 的可选 field 应 omit with a
 bounded notice；exact retention 只能通过 Provider Native Preservation。selected
-Provider/API adapter 独占 apply、omit-with-bounded-notice 或 reject 决策。
+Provider/API adapter 独占 apply、安全 ignore/omit、可选发布 Provider-owned notice 或
+reject 决策。
 
 除此之外仍不得把 `metadata`、`samplingParams`、`headers` 或其他 Pi options 当作
 generic state bag。
@@ -5288,7 +5290,7 @@ Token 进入 Pi `Models` 时使用 composed `ModelsSimpleStreamOptions`。Pi `Mo
 Client Protocol-specific 或没有 neutral Pi semantics 的 Client field 不通过 composed
 Options 传递；runtime/infrastructure owner 仍可按自己的 closed contract 写入其专属
 infrastructure fields。selected Provider/API adapter 对到达该边界的 semantic option
-独立决定 apply、omit-with-bounded-notice 或 reject。
+独立决定 apply、安全 ignore/omit、可选发布 Provider-owned notice 或 reject。
 
 Provider 只 owns upstream-specific part。
 

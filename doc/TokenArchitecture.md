@@ -452,7 +452,7 @@ flowchart LR
 | Anthropic 未声明字段（`context_management` 及未知顶层字段） | Anthropic handler | 读取所需字段时 | 无消费者声明、不读取、不进入 Pi 状态；仅生成 bounded unclaimed 警告 |
 | Anthropic `top_p`/`top_k` 等未消费顶层字段 | Anthropic handler | 无 Pi 消费者 | 不读取、不进入 Pi 状态；仅生成 bounded unclaimed 警告 |
 | Anthropic `thinking` budget | Anthropic handler | Pi options `thinkingBudgets` | Pi invocation terminal 后 |
-| Anthropic `tool_choice` / `disable_parallel_tool_use` | Anthropic handler | Pi options `toolChoice` / `parallelToolCalls` | Provider 应用或省略后；省略事实仅保留 bounded notice |
+| Anthropic `tool_choice` / `disable_parallel_tool_use` | Anthropic handler | Pi options `toolChoice` / `parallelToolCalls` | Provider 根据能力应用或安全忽略/省略；仅在该 Provider 提供通知通道时产生 Provider-owned notice |
 | CommandCode non-content 事件（`start`、`start-step`、`finish-step`、`provider-metadata`、`tool-result`） | CommandCode assembler | validate-then-drop；仅 finish-step last id/modelId 成为 response identity | committed result 建立前，其余 metadata/header/body 销毁 |
 | CommandCode `providerExecuted`/`dynamic` 元数据 | CommandCode assembler | 无（字段从未被读取/校验，assembler 无消费声明） | 不进入任何状态；事件到达即结束 |
 
@@ -1624,7 +1624,7 @@ Provider factory/configuration dependency 注入 fixture upstream，而不是 am
 | 项目 | 内容 |
 | --- | --- |
 | 功能 | 实现 Pi Provider auth/model/stream contract；编排 request preparation、attempt、semantic commit、Pi replay |
-| 输入 | Pi `Model + Context + SimpleStreamOptions`；构造期 bound dependencies |
+| 输入 | Pi `Model + TranscriptContext + SimpleStreamOptions`；构造期 bound dependencies |
 | 输出 | Pi `AssistantMessageEventStream` |
 | 持有状态 | frozen model/catalog、compatibility、trace/transport capabilities、stream functions；无 conversation store |
 | 配套文件 | 自己不直接读取业务文件；Provider credential 由 Pi auth path 注入，runtime compatibility config 固定构造 |
@@ -1640,7 +1640,7 @@ Provider auth 通过 Pi `Provider.auth.apiKey` 暴露：
 - Provider credential 只存于对应 Provider Profile record，并只通过 request-bound Pi
   CredentialStore adapter 进入 Provider invocation；从不进入代码或 public projection。
 
-## 7.2 Pi Context → CommandCode messages/tools — `provider.ts`
+## 7.2 Pi TranscriptContext → CommandCode messages/tools — `provider.ts`
 
 > **小白理解：** 这是“下单翻译”。它把 Pi 的对话、图片、思考、工具调用和工具结果
 > 逐项换成 CommandCode 表格；无法准确表达的内容会拒绝，而不是删除。工具调用 ID
@@ -1652,7 +1652,7 @@ Provider auth 通过 Pi `Provider.auth.apiKey` 暴露：
 convertCommandCodeMessages(model, context)
   → CommandCode wire messages[]
 
-convertCommandCodeTools(context.tools)
+convertCommandCodeTools(getCurrentTools(context.messages))
   → CommandCode wire tools[]
 
 buildCommandCodeBody(model, context, options, config, sessionId, compatibility, requestPolicy)

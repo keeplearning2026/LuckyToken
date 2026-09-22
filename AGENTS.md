@@ -151,9 +151,10 @@ Client Protocol a Provider Wire owner.
 ### `onPayload`
 
 Pi `onPayload` is allowed only for Provider tests, bounded diagnostics, and explicit
-low-level infrastructure observation. Production Semantic Conversion does not create or
-depend on it. Observation copies immutable bounded facts, returns the original payload
-unchanged, contains failures, and is semantically removable.
+low-level infrastructure observation. Client Protocol production modules do not create
+or depend on it. Neutral Core execution may install a diagnostics-owned callback that
+copies immutable bounded facts, returns the original payload unchanged, contains
+failures, and is semantically removable.
 
 ## Diagnostics non-interference
 

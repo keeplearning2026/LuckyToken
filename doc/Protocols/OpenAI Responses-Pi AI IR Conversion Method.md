@@ -443,7 +443,7 @@ Echo **effective normalized state**, not raw caller intent:
 - only tools actually offered to Pi;
 - effective/default tool_choice;
 - effective temperature/top_p when known;
-- no claim that an omitted hosted tool, format, tier, or truncation took effect; Provider-owned omission of a preserved tool-control preference remains visible through its bounded notice.
+- no claim that an omitted hosted tool, format, tier, or truncation took effect; a Provider-owned omission of preserved tool-control intent is reported only when that Provider exposes a notice channel.
 
 ### 11.2 Output items
 

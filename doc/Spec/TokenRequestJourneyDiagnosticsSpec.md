@@ -258,10 +258,10 @@ Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_a
 | Direct Mode outbound request wire | Direct Mode | yes | n/a | n/a | yes when constructed |
 | Provider Native outbound request wire | Provider Native | n/a | yes | n/a | yes when constructed |
 | Complete protocol-owned invocation/Pi IR | Client Protocol adapter | n/a | n/a | yes | yes when finalized |
-| Pi Provider request payload at the public `onPayload` seam | owning Client Protocol semantic executor | n/a | n/a | yes | yes when assembled |
+| Pi Provider request payload at the public `onPayload` seam | Neutral Core execution observation | n/a | n/a | yes | yes when assembled |
 | Upstream response wire | owning preservation-lane transport | yes | yes | n/a | yes when observed |
-| Pi response metadata and decoded response IR | owning Client Protocol semantic executor | n/a | n/a | yes | yes when observed/decoded |
-| Complete Pi terminal IR | owning Client Protocol semantic module | n/a | n/a | yes | yes when any event was observed |
+| Pi response metadata and decoded response IR | Neutral Core execution observation | n/a | n/a | yes | yes when observed/decoded |
+| Complete Pi terminal IR | Neutral Core execution | n/a | n/a | yes | yes when any event was observed |
 | Client Response Wire | Client Protocol edge / HTTP transport | yes | yes | yes | yes when constructed |
 | Timeline and attempts | Journey observation | yes | yes | yes | yes |
 | Failure and exception chain | failing owner + redaction choke point | yes | yes | yes | yes |
@@ -350,7 +350,7 @@ write_http_response / response_body
 4. A non-successful journey has one primary Failure Location. Retry/attempt failures remain ordered supporting events.
 5. Artifact absence is explicit and reasoned; missing data is never silently presented as complete capture.
 6. Redaction and truncation are permanent artifact facts and cannot be hidden by the UI.
-7. Semantic Conversion Provider request payload, response metadata, and decoded response IR come only from the selected Pi Provider's public `onPayload`/`onResponse` lifecycle and the owning protocol executor; raw Provider response events are not a required artifact.
+7. Semantic Conversion Provider request payload and response metadata come only from the selected Pi Provider's public `onPayload`/`onResponse` lifecycle as observed by Neutral Core execution; decoded response IR comes from the same Core execution boundary. Raw Provider response events are not a required artifact.
 8. Preservation-lane artifacts do not enter Pi AI IR, and Semantic Conversion artifacts do not reuse either Direct Mode or Provider Native transport or credential implementation.
 9. Observation and persistence failure cannot become the primary Request Incident or replace or modify the model-serving response. Record the completeness degradation when possible; if the single authority is unavailable, expose operational health/attention without creating a secondary request store.
 10. Semantic outcome commit, Client response preparation, HTTP handoff, and client consumption are distinct lifecycle facts.
@@ -434,7 +434,7 @@ Artifacts are copied only where their owning module already has the bytes:
 - the Client Protocol edge copies from the body bytes it already reads;
 - a Direct Mode or Provider Native lane copies from the outbound envelope or response bytes it already constructs or consumes;
 - the Semantic Conversion path asks the Flight Recorder for a strictly bounded own-data JSON snapshot of its finalized invocation and terminal message at their ownership seams;
-- the Semantic Provider request payload is observed only from the value returned by the owning protocol's `onPayload`; response metadata comes only from Pi `onResponse`, and response IR only from the completed Pi `AssistantMessage`; the Flight Recorder does not retain any of those objects;
+- the Semantic Provider request payload is observed only from the value supplied to the diagnostics-owned `onPayload` callback installed by Neutral Core execution; response metadata comes only from Pi `onResponse`, and response IR only from the completed Pi `AssistantMessage`; the Flight Recorder does not retain any of those objects;
 - P6/P8 copies from the already prepared or materialized Client response bytes.
 
 Diagnostics must not clone or re-read a consumed body, add a second stream consumer, retain a live stream, wrap or replace `fetch`, inject a transport, or reconstruct evidence from a different representation. Capture failure changes only the artifact descriptor.

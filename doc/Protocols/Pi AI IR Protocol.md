@@ -91,7 +91,7 @@ Pi Provider/API adapter
 Provider Wire
 ```
 
-At this boundary, the Pi neutral common request controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Pi Provider/API adapter alone decides whether each control is applied, omitted with a bounded notice, or rejected.
+At this boundary, the Pi neutral common request controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Pi Provider/API adapter alone decides whether each control is applied, safely ignored or omitted, optionally reported through a Provider-owned notice channel, or rejected.
 
 The composition root is the only layer that sees Private/Goat factories and registers them with Pi Models. Client Protocol and runtime execution receive a resolved `Model` with Pi `Context` and Pi options; they do not receive a concrete `Provider` and do not call Provider/Goat `stream()` or `streamSimple()` directly. Provider IDs are model-resolution and registration facts only, not Client Protocol branching conditions.
 
@@ -2009,7 +2009,7 @@ The installed `@earendil-works/pi-ai` `0.86.1` declaration at `node_modules/@ear
 
 This provides a provider-neutral simplified request surface.
 
-The neutral common controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Provider/API adapter alone decides whether each control is applied, omitted with a bounded notice, or rejected.
+The neutral common controls are `reasoning`, `maxTokens`, `temperature`, `cacheRetention`, `toolChoice`, and `parallelToolCalls`. The selected Provider/API adapter alone decides whether each control is applied, safely ignored or omitted, optionally reported through a Provider-owned notice channel, or rejected.
 
 ---
 
@@ -5543,7 +5543,7 @@ Terminal
                     └── Promise<void>
 ```
 
-The `onPayload` stage is optional Pi Provider/API adapter behavior. Token Semantic Conversion does not create the callback, and the lifecycle is semantically identical when the stage is absent.
+The `onPayload` stage is optional Pi Provider/API adapter behavior. Client Protocol production modules do not create the callback; Neutral Core execution may install a diagnostics-owned, non-mutating callback. The lifecycle is semantically identical when the stage is absent.
 
 The Frozen protocol preserves the following boundaries:
 

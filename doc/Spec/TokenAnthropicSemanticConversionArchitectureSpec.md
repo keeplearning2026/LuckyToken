@@ -58,8 +58,8 @@ as a Client-created `SystemMessage`.
 | thinking disabled | `pi-common-option` | `reasoning: "off"` |
 | enabled/adaptive thinking and effort | `pi-common-option` | select from resolved model metadata; optional Pi budget map |
 | thinking signatures/redacted state | `client-render-or-continuity-state` + Pi content fields | provenance-compatible replay only |
-| tool choice `auto`/`none`/`any`/named | `pi-common-option` | exact neutral control; the Provider adapter applies or omits with a bounded notice |
-| `disable_parallel_tool_use` | `pi-common-option` | neutral Pi `parallelToolCalls`; the Provider adapter applies or omits with a bounded notice |
+| tool choice `auto`/`none`/`any`/named | `pi-common-option` | exact neutral control; the Provider adapter applies, safely ignores/omits, optionally reports a Provider-owned notice, or rejects if validity requires it |
+| `disable_parallel_tool_use` | `pi-common-option` | neutral Pi `parallelToolCalls`; the Provider adapter applies or safely ignores/omits it, with a Provider-owned notice only when that adapter exposes one |
 | ordinary tool definitions | `pi-context` | source-only extensions omitted with warning |
 | typed server tools | `provider-private-omit-warning` | never misrepresented as Client-executable tools |
 | URL image or unresolved binary document | `provider-private-omit-warning` when optional, otherwise `critical-failure` | never fabricate fetched content |

@@ -12,7 +12,7 @@ Boundary: Pi public Provider contracts ↔ CommandCode private wire.
 ## 1. Independence and authority
 
 ```text
-Pi Context / SimpleStreamOptions
+Pi TranscriptContext / SimpleStreamOptions
   ↕ CommandCode Provider adapter
 CommandCode GenerateRequest / JSONL response
 ```
@@ -80,12 +80,12 @@ Transport timing/retry limits are not semantic conversion policies. Reserved sec
 ## 3. Request pipeline
 
 ```text
-Pi model + Context + SimpleStreamOptions
+Pi model + TranscriptContext + SimpleStreamOptions
 → snapshot logical request facts
 → convert messages and tools
 → convert scalar options
 → build closed-world GenerateRequest
-→ optional Pi onPayload observation hook (never created by Semantic Conversion)
+→ optional Pi `onPayload` hook (Provider tests or Neutral Core diagnostics only)
 → JSON serialize/parse
 → repeat closed-world authority and schema validation
 → prepare retry-stable logical request
@@ -193,7 +193,7 @@ Drop Pi options with no CommandCode wire counterpart, including generic sampling
 
 ### 6.1 Source order
 
-Process `Context.messages` in order. Preserve text, reasoning, tool calls, and results as far as the CommandCode schema permits. Before an event that would violate CommandCode's immediate call/result adjacency, flush synthetic missing results using §6.5.
+Process `TranscriptContext.messages` in order. Preserve text, reasoning, tool calls, and results as far as the CommandCode schema permits. Before an event that would violate CommandCode's immediate call/result adjacency, flush synthetic missing results using §6.5.
 
 ### 6.2 UserMessage
 

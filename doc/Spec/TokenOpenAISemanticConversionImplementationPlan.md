@@ -29,9 +29,10 @@ The converter emits Pi `Context`, Pi public options, and Responses-owned render 
 continuity state. It maps messages, tools, reasoning, max output, temperature, cache
 retention, and basic tool choice only where Pi has a neutral contract.
 
-Unrepresentable optional controls warn and remain outside Pi. Required/named/hosted tool
-choice and critical tool identity/history failures reject before dispatch. Client
-metadata remains response echo/state only.
+Unrepresentable optional controls warn and remain outside Pi. Required and named tool
+choice map to Pi's neutral `toolChoice`; hosted tool choice has no neutral contract and
+is omitted with a bounded Client notice. Invalid tool identity/history relationships
+reject before dispatch. Client metadata remains response echo/state only.
 
 ## Reasoning behavior
 

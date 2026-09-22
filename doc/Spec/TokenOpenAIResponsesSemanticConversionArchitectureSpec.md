@@ -24,7 +24,7 @@ The main converter consumes only:
 
 ```text
 model, input, instructions, stream, metadata, previous_response_id, store,
-reasoning, tools, tool_choice, max_output_tokens, temperature,
+reasoning, tools, tool_choice, parallel_tool_calls, max_output_tokens, temperature,
 prompt_cache_retention
 ```
 
@@ -63,9 +63,9 @@ was written. It exists solely to construct a protocol-valid Responses result.
 | `max_output_tokens` | `pi-common-option` | hard total output ceiling; never widened |
 | `temperature` | `pi-common-option` + Client echo | direct Pi semantic |
 | `prompt_cache_retention` | `pi-common-option` | coarse Pi retention semantic |
-| tool choice `auto`/`none`/`required`/named | `pi-common-option` | exact neutral Pi control; the Provider adapter applies or omits with a bounded notice |
+| tool choice `auto`/`none`/`required`/named | `pi-common-option` | exact neutral Pi control; the Provider adapter applies, safely ignores/omits, optionally reports a Provider-owned notice, or rejects if validity requires it |
 | `allowed_tools` mode `auto` | `pi-context` + Pi `auto` + Client echo | filter executable catalog before dispatch |
-| `parallel_tool_calls` | `pi-common-option` | neutral Pi `parallelToolCalls`; the Provider adapter applies or omits with a bounded notice |
+| `parallel_tool_calls` | `pi-common-option` | neutral Pi `parallelToolCalls`; the Provider adapter applies or safely ignores/omits it, with a Provider-owned notice only when that adapter exposes one |
 | hosted-tool choice | `provider-private-omit-warning` | no neutral Pi contract; exact wire retention requires Native Preservation |
 | namespace declarations | `pi-context` + Client reverse map | reversible flattening; collision fails |
 | unmatched historical namespace | `critical-failure` before Provider dispatch | prevents tool identity drift |

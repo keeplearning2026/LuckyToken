@@ -126,11 +126,11 @@ current contract this includes `temperature`, `cacheRetention`, session identity
 `parallelToolCalls`, and the full neutral `toolChoice` union (`auto`, `none`,
 `required`, and `{ type: "tool", name }`). A Client Protocol maps every form it consumes
 onto that union; it does not pre-degrade a form because one Provider cannot express it.
-The selected Pi Provider/API adapter either maps the control, omits it with a bounded
-notice, or rejects the request when omission would invalidate it. A control with no
-neutral Pi contract yet, such as a hosted-tool choice, is omitted with a bounded
-warning by the owning protocol specification; exact wire retention requires Native
-Preservation.
+The selected Pi Provider/API adapter either maps the control, safely ignores or omits
+it, optionally reports that disposition through a Provider-owned notice channel, or
+rejects the request when omission would invalidate it. A control with no neutral Pi
+contract yet, such as a hosted-tool choice, is omitted with a bounded Client warning by
+the owning protocol specification; exact wire retention requires Native Preservation.
 
 Client response echo is Client-owned state. It reports the normalized Client contract,
 not a claim about a Provider-native field. Provider application is never inferred from
@@ -165,9 +165,9 @@ options, diagnostic sinks, and an optional infrastructure observation capability
 contains no Client field mapping or target selection.
 
 Pi `onPayload` remains legal for Provider tests, bounded diagnostics, and explicit
-low-level infrastructure hooks. Production Semantic Conversion does not create it.
-Infrastructure observation must return the original payload unchanged, fail open, and
-remain semantically removable.
+low-level infrastructure hooks. Client Protocol production modules do not create it.
+Neutral Core execution may install it for diagnostics; that observation must return the
+original payload unchanged, fail open, and remain semantically removable.
 
 ## 8. Testing
 

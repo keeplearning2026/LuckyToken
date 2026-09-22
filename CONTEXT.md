@@ -49,7 +49,7 @@ A validated Client Protocol fact represented through public Pi `Context`, common
 _Avoid_: Projection candidate, Provider payload hint
 
 **Provider Capability Disposition**:
-The selected Pi Provider's decision to apply, safely omit with a bounded notice, or reject a Pi common intent according to its real capabilities and validity constraints.
+The selected Pi Provider's decision to apply, safely ignore or omit, optionally report through a Provider-owned notice channel, or reject a Pi common intent according to its real capabilities and validity constraints.
 _Avoid_: Client-side payload repair, target projection outcome
 
 ## Investigation
