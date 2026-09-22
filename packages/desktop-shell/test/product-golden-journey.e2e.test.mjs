@@ -191,7 +191,6 @@ async function createProductFixture(home, upstreamOrigin, dataPlanePort) {
             stateFile: "state/openai-responses.json",
             conversion: {
               request: {
-                privilegedMessages: "first",
                 unknownInputItem: "error",
                 orphanToolOutput: "error",
                 unresolvedToolCall: "xrepair",

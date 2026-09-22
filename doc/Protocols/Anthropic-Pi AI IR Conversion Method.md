@@ -140,16 +140,15 @@ Empty ordinary fragments are not emitted. Adjacent Pi messages of the same role 
 
 ### 5.2 Non-standard message `role="system"`
 
-Although the installed Anthropic SDK places system content at the top level, Token supports a compatibility extension in `messages[]`:
+Although the installed Anthropic SDK places system content at the top level, Token supports a compatibility extension in `messages[]`.
 
-1. Preserve existing top-level system text first.
-2. Find message-level `role="system"` entries in source order.
-3. Append every text block from the first such message to `Context.systemPrompt` in block order, separated from existing top-level system text by one `\n`; do not trim source text.
-4. Convert non-text content from that first system message as ordinary Pi user content at the source message position.
-5. Convert every later message-level system entry entirely as Pi user content.
-6. No non-text block receives system privilege, empty ordinary fragments are omitted, and Token emits at most one request-local degradation notice.
+1. Top-level `system` alone maps to `Context.systemPrompt`.
+2. Every message-level `role="system"` entry is preserved at its source position as a Pi `SystemMessage`.
+3. String content maps to Pi system text; a text-block array maps to `TextContent[]` without trimming or promotion.
+4. Non-text message-level system content such as images is a Client→Pi representability failure because Pi `SystemMessage` cannot carry it safely.
+5. The converter does not inspect model/provider capability and emits no ingress degradation warning merely because a message-level system exists.
 
-This is a deliberate availability-oriented semantic degradation.
+After reasoning preparation and model resolution, the shared Pi Context compatibility seam handles target support. A mid-system message is one that appears after any non-system Pi message. Verified support preserves it unchanged; false/undefined support degrades a pure-text mid-system to a same-position `UserMessage` and emits `pi_mid_system_degraded_to_user`. `sections`, `toolsAdded`, or `toolsRemoved` cannot be role-degraded safely and therefore fail before dispatch. `Context.systemPrompt` remains unchanged.
 
 ### 5.3 User content
 

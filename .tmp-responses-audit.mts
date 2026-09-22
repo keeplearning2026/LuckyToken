@@ -1,6 +1,6 @@
 import { convertResponsesRequest, convertResponsesRequestAsync } from './src/protocols/openai-responses/request.js';
 const image = (data: string) => ({type:'input_image',image_url:`data:image/png;base64,${data}`,detail:'auto'});
-const policy = { privilegedMessages:'first',unknownInputItem:'error',orphanToolOutput:'error',unresolvedToolCall:'xrepair',futureReasoningEffort:'max'} as const;
+const policy = {unknownInputItem:'error',orphanToolOutput:'error',unresolvedToolCall:'xrepair',futureReasoningEffort:'max'} as const;
 const run = (label: string, request: unknown) => {
   try { const r=convertResponsesRequest(request,1); console.log(label,JSON.stringify({pi:r.invocation.pi,notices:r.client.notices})); }
   catch (e) { console.log(label, String(e)); }

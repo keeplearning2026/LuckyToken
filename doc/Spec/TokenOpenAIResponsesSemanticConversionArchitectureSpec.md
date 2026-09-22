@@ -36,8 +36,9 @@ unparsed and produces a bounded request-local warning.
 
 The invocation contains:
 
-- Pi `Context` with messages, promoted instructions, executable tools, tool calls and
-  results;
+- Pi `Context` with top-level `instructions` as `systemPrompt`, input-level
+  `system`/`developer` messages preserved in transcript order as Pi `SystemMessage`,
+  executable tools, tool calls, and results;
 - Pi common options such as `maxTokens`, `temperature`, `cacheRetention`,
   `parallelToolCalls`, and the full neutral `toolChoice` union (`auto`, `none`,
   `required`, `{ type: "tool", name }`);
@@ -88,10 +89,19 @@ The reasoning adapter registry is a continuity codec over Pi fields. It has no
 
 ## 6. Execution
 
-The protocol execution coordinator prepares reasoning and invokes the neutral execution
-operation. Its options contain no Provider callbacks. Provider request observation is an
-optional infrastructure capability passed separately; it copies a payload and never
-returns a replacement.
+The protocol execution coordinator prepares reasoning, then applies the shared
+`preparePiContextForModel(model, context)` compatibility seam before immutable freeze
+and neutral execution. The seam reads only Pi public Model/Context facts. For a
+mid-conversation `SystemMessage`, verified model support preserves it exactly;
+unsupported pure-text messages become same-position `UserMessage` entries with a
+bounded `pi_mid_system_degraded_to_user` warning. Mid-system prompt-section or tool-state
+patches fail before dispatch because role conversion cannot preserve their semantics.
+Leading system messages are not degraded.
+
+The neutral `src/execution.ts` module remains policy-free and only invokes
+`Models.streamSimple()`. Protocol execution options contain no Provider callbacks.
+Provider request observation is an optional infrastructure capability passed separately;
+it copies a payload and never returns a replacement.
 
 Removing observation must leave request bytes, Provider selection, response, and
 terminal outcome unchanged.

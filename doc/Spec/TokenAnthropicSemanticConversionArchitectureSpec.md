@@ -42,15 +42,18 @@ The invocation contains:
 - Anthropic response state: selector, stream mode, direct tool names, and display policy;
 - bounded notices.
 
-The Client converter produces public `Context`, not `TranscriptContext`. Mid-conversation
-system/tool state that Pi Context cannot safely express is rejected rather than encoded
-as a Client-created `SystemMessage`.
+The Client converter produces public `Context`, not `TranscriptContext`. Top-level
+`system` remains `Context.systemPrompt`. Token-compatible message-level `system` text is
+preserved at its original transcript position as Pi `SystemMessage`; content such as
+images that Pi `SystemMessage` cannot represent remains a Client→Pi representability
+failure. Model-dependent support is not inspected by the converter.
 
 ## 4. Field disposition ledger
 
 | Source fact | Destination | Behavior |
 | --- | --- | --- |
-| system text | `pi-context` | initial system prompt |
+| top-level system text | `pi-context` | initial system prompt |
+| Token-compatible message-level system text | `pi-context` | same-position Pi `SystemMessage`; target compatibility handled after model resolution |
 | ordinary messages and supported images | `pi-context` | preserve model-visible content |
 | tools, tool-use IDs, tool results | `pi-context` | invalid identity/relationship fails |
 | `max_tokens` | `pi-common-option` | hard total output ceiling |
@@ -86,7 +89,14 @@ block.
 
 ## 6. Execution and response
 
-The Anthropic semantic coordinator invokes the neutral execution operation without
+After Anthropic reasoning preparation, the semantic coordinator applies the shared
+`preparePiContextForModel(model, context)` compatibility seam before freeze. Supported
+mid-system text passes through unchanged. Unsupported pure-text mid-system entries
+become same-position Pi `UserMessage` entries and emit
+`pi_mid_system_degraded_to_user`; mid-system prompt/tool-state patch fields fail before
+dispatch. Leading system messages are left intact.
+
+The Anthropic semantic coordinator then invokes the neutral execution operation without
 Provider callbacks in its options. Optional Provider request/response observation is
 infrastructure-only, immutable, fail-open, and non-mutating.
 

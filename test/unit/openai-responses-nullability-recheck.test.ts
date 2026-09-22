@@ -7,7 +7,6 @@ import {
 
 function policy(): ResponseRequestConversionPolicy {
   return {
-    privilegedMessages: "first",
     unknownInputItem: "error",
     orphanToolOutput: "error",
     unresolvedToolCall: "xrepair",

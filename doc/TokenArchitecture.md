@@ -1373,7 +1373,6 @@ loadTokenCliConfig(path): Promise<TokenCliConfig>
       },
       "conversion": {
         "request": {
-          "privilegedMessages": "first",
           "unknownInputItem": "error",
           "orphanToolOutput": "error",
           "unresolvedToolCall": "xrepair",

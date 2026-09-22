@@ -54,7 +54,6 @@ async function writeIsolatedFirstUseConfig(stateRoot, port) {
           stateFile: "state/openai-responses.json",
           conversion: {
             request: {
-              privilegedMessages: "first",
               unknownInputItem: "error",
               orphanToolOutput: "error",
               unresolvedToolCall: "xrepair",

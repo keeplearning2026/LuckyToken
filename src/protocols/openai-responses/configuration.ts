@@ -1,7 +1,6 @@
 export interface OpenAIResponsesConfiguration {
   readonly conversion: {
     readonly request: {
-      readonly privilegedMessages: "full" | "first" | "user";
       readonly unknownInputItem: "error" | "ignore";
       readonly orphanToolOutput: "error" | "ignore";
       readonly unresolvedToolCall: "error" | "xrepair";
@@ -19,10 +18,10 @@ function keys(value: Record<string, unknown>, allowed: readonly string[], path: 
 function choice<T extends string>(value: unknown, fallback: T, allowed: readonly T[], path: string): T { if (value === undefined) return fallback; if (typeof value !== "string" || !allowed.includes(value as T)) throw new Error(`${path} must be one of: ${allowed.join(", ")}`); return value as T; }
 export function parseOpenAIResponsesConfiguration(value: unknown = {}, path = "clientProtocols.openai-responses"): OpenAIResponsesConfiguration {
   const root=record(value,path); keys(root,["conversion"],path); const conversion=record(root.conversion===undefined?{}:root.conversion,`${path}.conversion`); keys(conversion,["request","response"],`${path}.conversion`);
-  const request=record(conversion.request===undefined?{}:conversion.request,`${path}.conversion.request`); keys(request,["privilegedMessages","unknownInputItem","orphanToolOutput","unresolvedToolCall","futureReasoningEffort"],`${path}.conversion.request`);
+  const request=record(conversion.request===undefined?{}:conversion.request,`${path}.conversion.request`); keys(request,["unknownInputItem","orphanToolOutput","unresolvedToolCall","futureReasoningEffort"],`${path}.conversion.request`);
   const response=record(conversion.response===undefined?{}:conversion.response,`${path}.conversion.response`); keys(response,["unknownPiContent","storeFalse"],`${path}.conversion.response`);
   const snapshot = Object.freeze({conversion:Object.freeze({request:Object.freeze({
-    privilegedMessages:choice(request.privilegedMessages,"first",["full","first","user"],`${path}.conversion.request.privilegedMessages`), unknownInputItem:choice(request.unknownInputItem,"error",["error","ignore"],`${path}.conversion.request.unknownInputItem`), orphanToolOutput:choice(request.orphanToolOutput,"error",["error","ignore"],`${path}.conversion.request.orphanToolOutput`), unresolvedToolCall:choice(request.unresolvedToolCall,"xrepair",["error","xrepair"],`${path}.conversion.request.unresolvedToolCall`), futureReasoningEffort:choice(request.futureReasoningEffort,"max",["max","omit","error"],`${path}.conversion.request.futureReasoningEffort`)}), response:Object.freeze({unknownPiContent:choice(response.unknownPiContent,"error",["error","ignore"],`${path}.conversion.response.unknownPiContent`),storeFalse:choice(response.storeFalse,"honor",["honor","memory","persist"],`${path}.conversion.response.storeFalse`)})})});
+    unknownInputItem:choice(request.unknownInputItem,"error",["error","ignore"],`${path}.conversion.request.unknownInputItem`), orphanToolOutput:choice(request.orphanToolOutput,"error",["error","ignore"],`${path}.conversion.request.orphanToolOutput`), unresolvedToolCall:choice(request.unresolvedToolCall,"xrepair",["error","xrepair"],`${path}.conversion.request.unresolvedToolCall`), futureReasoningEffort:choice(request.futureReasoningEffort,"max",["max","omit","error"],`${path}.conversion.request.futureReasoningEffort`)}), response:Object.freeze({unknownPiContent:choice(response.unknownPiContent,"error",["error","ignore"],`${path}.conversion.response.unknownPiContent`),storeFalse:choice(response.storeFalse,"honor",["honor","memory","persist"],`${path}.conversion.response.storeFalse`)})})});
   snapshots.add(snapshot);
   return snapshot;
 }

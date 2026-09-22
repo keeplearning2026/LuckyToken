@@ -10,7 +10,6 @@ function policy(
   overrides: Partial<ResponseRequestConversionPolicy> = {},
 ): ResponseRequestConversionPolicy {
   return {
-    privilegedMessages: "first",
     unknownInputItem: "error",
     orphanToolOutput: "error",
     unresolvedToolCall: "xrepair",
@@ -189,6 +188,86 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       { type: "thinking", thinking: "thinking hard" },
       { type: "text", text: "answer" },
     ]);
+  });
+
+  it("flushes pending reasoning before a following system message so source order is preserved", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "reasoning", summary: [{ type: "summary_text", text: "thinking hard" }] },
+          { type: "message", role: "system", content: "later rule" },
+          { type: "message", role: "user", content: "next" },
+        ],
+      },
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "system",
+      "user",
+    ]);
+  });
+
+  it("preserves a system message between a tool call and its result", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          {
+            type: "function_call",
+            call_id: "call_1",
+            name: "lookup",
+            arguments: "{}",
+          },
+          { type: "message", role: "system", content: "mid-tool rule" },
+          {
+            type: "function_call_output",
+            call_id: "call_1",
+            output: "done",
+          },
+        ],
+      },
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "system",
+      "toolResult",
+    ]);
+  });
+
+  it("keeps a leading system before reasoning that attaches to the next assistant", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: [
+          { type: "message", role: "system", content: "rule" },
+          { type: "reasoning", summary: [{ type: "summary_text", text: "thought" }] },
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "answer" }],
+          },
+        ],
+      },
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.messages.map((message) => message.role)).toEqual([
+      "system",
+      "assistant",
+    ]);
+    const assistantMessage = invocation.invocation.pi.context.messages[1];
+    expect(assistantMessage).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "thought" },
+        { type: "text", text: "answer" },
+      ],
+    });
   });
 
   it("maps function_call and function_call_output into correlated tool turns", () => {
@@ -585,7 +664,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
 });
 
 describe("13: Responses privileged prompts, options, and handles", () => {
-  it("keeps top-level instructions as the leading Pi systemPrompt segment", () => {
+  it("keeps top-level instructions in systemPrompt and preserves developer messages as Pi SystemMessage entries", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -598,11 +677,22 @@ describe("13: Responses privileged prompts, options, and handles", () => {
       1,
       policy(),
     );
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("You are helpful\ncode rules");
-    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user"]);
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("You are helpful");
+    expect(invocation.invocation.pi.context.messages).toEqual([
+      {
+        role: "system",
+        content: [{ type: "text", text: "code rules" }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "hi" }],
+        timestamp: 1,
+      },
+    ]);
   });
 
-  it("full mode promotes every system/developer message into systemPrompt in order", () => {
+  it("preserves all system/developer messages at their original Pi positions", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -616,108 +706,21 @@ describe("13: Responses privileged prompts, options, and handles", () => {
         ],
       },
       1,
-      policy({ privilegedMessages: "full" }),
-    );
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("top\ns1\nd1\nd2");
-    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user", "user"]);
-    expect(
-      invocation.invocation.pi.context.messages.map(
-        (m) => (m.content as Array<{ text: string }>)[0]?.text,
-      ),
-    ).toEqual(["u1", "u2"]);
-  });
-
-  it("first mode (default) promotes only privileged messages before the first user", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        input: [
-          { type: "message", role: "system", content: "s1" },
-          { type: "message", role: "developer", content: "d1" },
-          { type: "message", role: "user", content: "u1" },
-          { type: "message", role: "developer", content: "later-rules" },
-          { type: "message", role: "user", content: "u2" },
-        ],
-      },
-      1,
-      policy({ privilegedMessages: "first" }),
-    );
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("s1\nd1");
-    const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
-    expect(roles).toEqual(["user", "user", "user"]);
-    expect(
-      invocation.invocation.pi.context.messages.map(
-        (m) => (m.content as Array<{ text: string }>)[0]?.text,
-      ),
-    ).toEqual(["u1", "later-rules", "u2"]);
-  });
-
-  it("user mode promotes no input system/developer messages", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        instructions: "top",
-        input: [
-          { type: "message", role: "system", content: "s1" },
-          { type: "message", role: "developer", content: "d1" },
-          { type: "message", role: "user", content: "u1" },
-        ],
-      },
-      1,
-      policy({ privilegedMessages: "user" }),
+      policy(),
     );
     expect(invocation.invocation.pi.context.systemPrompt).toBe("top");
     expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual([
+      "system",
+      "system",
       "user",
-      "user",
+      "system",
       "user",
     ]);
     expect(
-      invocation.invocation.pi.context.messages.map(
-        (m) => (m.content as Array<{ text: string }>)[0]?.text,
+      invocation.invocation.pi.context.messages.map((m) =>
+        Array.isArray(m.content) ? (m.content[0] as { text?: string } | undefined)?.text : undefined,
       ),
-    ).toEqual(["s1", "d1", "u1"]);
-  });
-
-  it("joins promoted prompt segments with exactly one newline and skips empty segments", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        input: [
-          { type: "message", role: "developer", content: "first" },
-          { type: "message", role: "developer", content: "" },
-          { type: "message", role: "system", content: "second" },
-          { type: "message", role: "user", content: "u" },
-        ],
-      },
-      1,
-      policy({ privilegedMessages: "full" }),
-    );
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("first\nsecond");
-  });
-
-  it("later privileged messages degraded to user keep source order and are never lost", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        input: [
-          { type: "message", role: "user", content: "u1" },
-          { type: "message", role: "system", content: "late-system" },
-          { type: "message", role: "developer", content: "late-dev" },
-          { type: "message", role: "user", content: "u2" },
-        ],
-      },
-      1,
-      policy({ privilegedMessages: "first" }),
-    );
-    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
-    const roles = invocation.invocation.pi.context.messages.map((m) => m.role);
-    expect(roles).toEqual(["user", "user", "user", "user"]);
-    expect(
-      invocation.invocation.pi.context.messages.map(
-        (m) => (m.content as Array<{ text: string }>)[0]?.text,
-      ),
-    ).toEqual(["u1", "late-system", "late-dev", "u2"]);
+    ).toEqual(["s1", "d1", "u1", "d2", "u2"]);
   });
 
   it("maps Pi-native output controls and warns for unrepresented top_p", () => {
@@ -1336,8 +1339,8 @@ describe("13: Responses privileged prompts, options, and handles", () => {
   });
 });
 
-describe("13 recheck: resolved references keep privileged promotion", () => {
-  it("promotes system/developer items returned by the resolver in full mode", async () => {
+describe("13 recheck: resolved references preserve privileged message positions", () => {
+  it("keeps system/developer items returned by the resolver as Pi SystemMessage entries", async () => {
     const invocation = await convertResponsesRequestAsync(
       {
         model: "m",
@@ -1351,15 +1354,18 @@ describe("13 recheck: resolved references keep privileged promotion", () => {
         ],
       },
       1,
-      policy({ privilegedMessages: "full" }),
+      policy(),
       {
         resolveItemReference: async () => [
           { type: "message", role: "system", content: "resolved rules" },
         ],
       },
     );
-    expect(invocation.invocation.pi.context.systemPrompt).toContain("resolved rules");
-    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user"]);
+    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual([
+      "system",
+      "user",
+    ]);
   });
 });
 
@@ -1727,8 +1733,8 @@ describe("13 recheck: resolver failure branches", () => {
   });
 });
 
-describe("13 recheck: privileged mode extreme combinations", () => {
-  it("promotes all system/developer when there is no user message (first mode)", () => {
+describe("13 recheck: system/developer position preservation", () => {
+  it("keeps consecutive privileged messages as consecutive Pi SystemMessage entries", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -1739,31 +1745,17 @@ describe("13 recheck: privileged mode extreme combinations", () => {
         ],
       },
       1,
-      policy({ privilegedMessages: "first" }),
+      policy(),
     );
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("s1\nd1\ns2");
-    expect(invocation.invocation.pi.context.messages).toHaveLength(0);
+    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual([
+      "system",
+      "system",
+      "system",
+    ]);
   });
 
-  it("joins consecutive system messages with single newlines (no blank lines)", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        input: [
-          { type: "message", role: "system", content: "a" },
-          { type: "message", role: "system", content: "b" },
-          { type: "message", role: "system", content: "c" },
-          { type: "message", role: "user", content: "u" },
-        ],
-      },
-      1,
-      policy({ privilegedMessages: "full" }),
-    );
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("a\nb\nc");
-    expect(invocation.invocation.pi.context.systemPrompt).not.toContain("\n\n");
-  });
-
-  it("preserves exact segment text including internal newlines", () => {
+  it("preserves exact privileged text including internal newlines", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -1773,31 +1765,12 @@ describe("13 recheck: privileged mode extreme combinations", () => {
         ],
       },
       1,
-      policy({ privilegedMessages: "first" }),
+      policy(),
     );
-    // Exact segment text is not rewritten; segments join with one newline.
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("line1\nline2\n\nline4");
-  });
-
-  it("degrades every system/developer to user in user mode even without user messages", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        input: [
-          { type: "message", role: "system", content: "s1" },
-          { type: "message", role: "developer", content: "d1" },
-        ],
-      },
-      1,
-      policy({ privilegedMessages: "user" }),
-    );
-    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
-    expect(invocation.invocation.pi.context.messages.map((m) => m.role)).toEqual(["user", "user"]);
-    expect(
-      invocation.invocation.pi.context.messages.map(
-        (m) => (m.content as Array<{ text: string }>)[0]?.text,
-      ),
-    ).toEqual(["s1", "d1"]);
+    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
+      role: "system",
+      content: [{ type: "text", text: "line1\nline2\n\nline4" }],
+    });
   });
 });
 

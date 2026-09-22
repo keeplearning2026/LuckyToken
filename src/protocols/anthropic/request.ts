@@ -89,8 +89,6 @@ export const UNCLAIMED_REQUEST_FIELD_NOTICE_CODE =
   "anthropic_unclaimed_request_field";
 export const UNKNOWN_EFFORT_FALLBACK_NOTICE_CODE =
   "anthropic_unknown_effort_fallback";
-export const MESSAGE_SYSTEM_DEGRADED_NOTICE_CODE =
-  "anthropic_message_system_degraded";
 export const UNRESOLVED_TOOL_CALL_REPAIRED_NOTICE_CODE =
   "anthropic_unresolved_tool_call_repaired";
 export const UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE =
@@ -418,10 +416,15 @@ function validateMessages(
           `$.messages[${messageIndex}].content[${contentIndex}]`,
         );
       }
-      const role = message.role === "system"
-        ? "user"
-        : message.role as "user" | "assistant";
-      validateContentBlock(block, facts, role);
+      if (message.role === "system") {
+        if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
+          throw new InvalidRequest(
+            "system message content must contain only text blocks",
+          );
+        }
+      } else {
+        validateContentBlock(block, facts, message.role as "user" | "assistant");
+      }
       if (isAssistantTurn && isRecord(block) && block.type === "tool_use") {
         const id = block.id as string;
         if (assistantCallIds.has(id)) {
@@ -1207,58 +1210,34 @@ export function convertValidatedAnthropicRequestWithPolicy(
   if (request.systemPrompt !== undefined) {
     context.systemPrompt = request.systemPrompt;
   }
-  let hasMessageLevelSystem = false;
-
-  const appendSystemPrompt = (text: string): void => {
-    context.systemPrompt = context.systemPrompt === undefined
-      ? text
-      : `${context.systemPrompt}\n${text}`;
-  };
-
   for (const [messageIndex, message] of request.messages.entries()) {
     const sourceRole = message.role as "user" | "assistant" | "system";
     const rawContent = message.content;
-    const isFirstMessageLevelSystem =
-      sourceRole === "system" && !hasMessageLevelSystem;
-    if (isFirstMessageLevelSystem) {
-      hasMessageLevelSystem = true;
-      notices.push(
-        requestNotice(
-          MESSAGE_SYSTEM_DEGRADED_NOTICE_CODE,
-          "degrade",
-          "$.messages",
-        ),
-      );
-      if (typeof rawContent === "string") {
-        appendSystemPrompt(rawContent);
-        continue;
-      }
+    if (sourceRole === "system") {
+      const content: TextContent[] =
+        typeof rawContent === "string"
+          ? rawContent.length === 0
+            ? []
+            : [{ type: "text", text: rawContent }]
+          : (rawContent as Array<Record<string, unknown>>).map((block) => ({
+              type: "text" as const,
+              text: block.text as string,
+            }));
+      messages.push({
+        role: "system",
+        content,
+        timestamp: receivedAt,
+      });
+      continue;
     }
     const role = sourceRole === "assistant" ? "assistant" : "user";
     const blocks: ConvertedBlock[] =
-      typeof rawContent === "string" &&
-        !(sourceRole === "system" && rawContent.length === 0)
+      typeof rawContent === "string"
         ? [{ type: "text", text: rawContent }]
         : [];
     const blockSourceIndexes: number[] = blocks.length === 0 ? [] : [-1];
     if (Array.isArray(rawContent)) {
       for (const [blockIndex, block] of rawContent.entries()) {
-        if (
-          isFirstMessageLevelSystem &&
-          isRecord(block) &&
-          block.type === "text"
-        ) {
-          appendSystemPrompt(block.text as string);
-          continue;
-        }
-        if (
-          sourceRole === "system" &&
-          isRecord(block) &&
-          block.type === "text" &&
-          block.text === ""
-        ) {
-          continue;
-        }
         const converted = convertBlock(
           block as Record<string, unknown>,
           pendingCalls,
@@ -1442,12 +1421,9 @@ export function convertValidatedAnthropicRequestWithPolicy(
     flushOrdinary();
     if (sourceContentWasEmpty) {
       repairCallsMissingFromThisMessage();
-      if (sourceRole !== "system") {
-        // An explicitly empty source user message is preserved as an empty
-        // UserMessage (frozen grammar boundary). Compatibility system turns
-        // have no ordinary fragment after promotion and therefore disappear.
-        messages.push({ role: "user", content: [], timestamp: receivedAt });
-      }
+      // An explicitly empty source user message is preserved as an empty
+      // UserMessage (frozen grammar boundary).
+      messages.push({ role: "user", content: [], timestamp: receivedAt });
     }
   }
 

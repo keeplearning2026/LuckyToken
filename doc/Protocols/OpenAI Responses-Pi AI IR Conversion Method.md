@@ -37,7 +37,6 @@ Suggested shape:
       "stateFile": "state/openai-responses.json",
       "conversion": {
         "request": {
-          "privilegedMessages": "first",
           "unknownInputItem": "error",
           "orphanToolOutput": "error",
           "unresolvedToolCall": "xrepair",
@@ -57,7 +56,6 @@ Frozen defaults:
 
 | Key | Values | Default |
 |---|---|---|
-| `privilegedMessages` | `full | first | user` | `first` |
 | `unknownInputItem` | `error | ignore` | `error` |
 | `orphanToolOutput` | `error | ignore` | `error` |
 | `unresolvedToolCall` | `error | xrepair` | `xrepair` |
@@ -73,14 +71,20 @@ Every configurable ignore/xrepair/future-value fallback emits a request-local no
 2. Authenticate and resolve the opaque model selector through the full Pi model catalog.
 3. Resolve/expand local state such as a known `previous_response_id`.
 4. Resolve only trusted Client-owned handles explicitly allowed by §10.
-5. Convert input items in source order, maintaining tool correlation.
-6. Build the unique Pi system prompt according to §5.
-7. Convert tools and options.
-8. Apply unresolved-call repair at semantic history boundaries.
-9. Freeze render state and notices.
-10. Execute Pi; render JSON or atomic SSE.
+5. Convert input items in source order, maintaining tool correlation. Top-level
+   `instructions` becomes `Context.systemPrompt`; input-level `system`/`developer`
+   becomes same-position Pi `SystemMessage`.
+6. Convert tools and options.
+7. Apply unresolved-call repair at semantic history boundaries.
+8. Prepare protocol-owned reasoning against the resolved Model.
+9. Apply the shared Pi Context compatibility seam: supported mid-system passes through;
+   unsupported pure-text mid-system becomes same-position `UserMessage`; complex
+   prompt/tool-state patches fail before dispatch.
+10. Freeze the final Pi invocation, execute Pi, then render JSON or atomic SSE.
 
-No conversion step may inspect the selected concrete Provider's protocol or capabilities.
+The Client converter never inspects the selected concrete Provider's protocol or
+capabilities. The post-resolution Pi Context compatibility seam reads only the public Pi
+Model capability and never sees Provider Wire.
 
 ## 4. Top-level create fields
 
@@ -90,7 +94,7 @@ No conversion step may inspect the selected concrete Provider's protocol or capa
 |---|---|---|
 | `model` | selector | Required by Token conversion profile. Preserve opaquely for response echo. |
 | `input` | `Context.messages` | Convert using §§5–8. An omitted input becomes an empty message list when top-level instructions alone are accepted by the active profile. |
-| `instructions` | `Context.systemPrompt` | Exact text, always privileged, before input-derived system/developer text. `null` means absent. |
+| `instructions` | `Context.systemPrompt` | Exact top-level system prompt. `null` means absent. Input-derived system/developer text is not promoted here. |
 | `max_output_tokens` | `options.maxTokens` | Positive integer; zero/negative is Client invalid request, never an internal 500. |
 | `temperature` | `options.temperature` | `null`/absence means target default. Validate source range. |
 | `top_p` | protocol-private omit/warn | Not a Pi 0.86.1 common option. Omit with a bounded notice; never hide it in `samplingParams`. Provider Native Preservation may retain the exact input. |
@@ -142,33 +146,29 @@ Omit with a bounded notice: `prompt_cache_key`, `service_tier`, ordinary Respons
 
 `background=true` is different: it requests an asynchronous response lifecycle. Core v1 does not implement submit/poll/cancel, so it is a conversion error. `false`/null/absence executes synchronously.
 
-## 5. Privileged messages and prefix stability
+## 5. System/developer messages and prefix stability
 
-Top-level `instructions` always enters `Context.systemPrompt` first.
+Top-level `instructions` alone maps to `Context.systemPrompt`.
 
-Input message roles `system` and `developer` use `privilegedMessages`:
+Every input message with role `system` or `developer` is converted at its original source
+position to a Pi `SystemMessage`. The converter does not promote it into `systemPrompt`
+and does not pre-emptively degrade it based on a target model.
 
-### 5.1 `full`
+After reasoning preparation and model resolution, LuckyToken applies one shared Pi
+Context compatibility rule. A `SystemMessage` is "mid" only after at least one non-system
+message has already appeared. Leading system messages remain system messages.
 
-All system/developer text is removed from ordinary history and appended to Pi systemPrompt in input order.
+For a mid-system message:
 
-### 5.2 `first` (default)
+- `model.compat?.supportsMidConvoSystemMessages === true` preserves the exact Pi message;
+- false/undefined converts a pure-text message to `UserMessage` at the same index,
+  preserving content and timestamp, and emits `pi_mid_system_degraded_to_user`;
+- `sections`, `toolsAdded`, or `toolsRemoved` make simple role degradation unsafe and
+  therefore fail before dispatch.
 
-- Scan input in source order until the first `role="user"` message.
-- System/developer messages before that first user are appended to Pi systemPrompt.
-- System/developer messages at or after that point are converted as Pi user messages in their original position.
-
-This keeps the stable initial prefix privileged while preventing later changing instructions from invalidating the whole system-prefix cache.
-
-### 5.3 `user`
-
-All input system/developer messages are converted as Pi user messages in source order. Only top-level instructions remain privileged.
-
-### 5.4 Joining
-
-Each promoted prompt segment is joined with one newline (`\n`) to denote another prompt segment. Exact segment text is not rewritten. Empty segments are skipped.
-
-Role degradation is a configured semantic choice. It does not inject labels such as “system said” unless that text existed in the source.
+`Context.systemPrompt` is never rewritten by this compatibility step. This prevents Pi's
+unsupported-target fallback from folding a later system instruction into the leading
+prompt and changing its effective timing or cache prefix.
 
 ## 6. Message content
 

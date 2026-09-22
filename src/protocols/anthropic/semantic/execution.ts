@@ -7,6 +7,11 @@ import {
   type ExecutionObservation,
   type ExecutionOperation,
 } from "../../../execution.js";
+import {
+  PiContextCompatibilityError,
+  preparePiContextForModel,
+} from "../../../pi-context-compatibility.js";
+import { InvalidRequest } from "../failures.js";
 import type { AnthropicSemanticInvocation } from "./invocation.js";
 import type { AnthropicReasoningOutcome } from "./reasoning/contract.js";
 import { prepareAnthropicReasoning } from "./reasoning/request.js";
@@ -14,6 +19,24 @@ import { prepareAnthropicReasoning } from "./reasoning/request.js";
 export interface AnthropicSemanticExecutionResult {
   readonly message: Awaited<ReturnType<ExecutionOperation>>;
   readonly outcomes: readonly AnthropicReasoningOutcome[];
+}
+
+function publishCompatibilityWarnings(
+  outcomes: readonly { readonly code: "pi_mid_system_degraded_to_user" }[],
+  factsSink: ExecutionFactsSink | undefined,
+): void {
+  for (const outcome of outcomes) {
+    try {
+      factsSink?.notice({
+        adapter: "anthropic",
+        direction: "request",
+        code: outcome.code,
+        action: "degrade",
+      });
+    } catch {
+      // Diagnostics are fail-open and cannot affect semantic execution.
+    }
+  }
 }
 
 function publishReasoningWarnings(
@@ -57,9 +80,23 @@ export async function executeAnthropicSemanticInvocation(input: {
   });
   publishReasoningWarnings(prepared.outcomes, input.execution.factsSink);
 
+  let compatible;
+  try {
+    compatible = preparePiContextForModel(
+      input.model,
+      prepared.invocation.pi.context,
+    );
+  } catch (error) {
+    if (error instanceof PiContextCompatibilityError) {
+      throw new InvalidRequest(error.message);
+    }
+    throw error;
+  }
+  publishCompatibilityWarnings(compatible.outcomes, input.execution.factsSink);
+
   freezePiInvocation(
     input.model,
-    prepared.invocation.pi.context,
+    compatible.context,
     prepared.invocation.pi.options,
   );
   const providerEvidence = input.execution.providerEvidence;
@@ -75,7 +112,7 @@ export async function executeAnthropicSemanticInvocation(input: {
   const message = await (input.execution.executeOperation ?? execute)(
     input.models,
     input.model,
-    prepared.invocation.pi.context,
+    compatible.context,
     prepared.invocation.pi.options,
     input.execution.factsSink,
     observation,

@@ -11,7 +11,6 @@ function policy(
   overrides: Partial<ResponseRequestConversionPolicy> = {},
 ): ResponseRequestConversionPolicy {
   return {
-    privilegedMessages: "first",
     unknownInputItem: "error",
     orphanToolOutput: "error",
     unresolvedToolCall: "xrepair",

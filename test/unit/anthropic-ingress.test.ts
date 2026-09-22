@@ -142,14 +142,15 @@ describe("Anthropic message-role validation", () => {
       minimalBody({ messages: [{ role: "system", content: "runtime hint" }] }),
       1,
     );
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("runtime hint");
-    expect(invocation.client.notices).toContainEqual({
-      adapter: "anthropic-messages",
-      direction: "request",
-      code: "anthropic_message_system_degraded",
-      jsonPath: "$.messages",
-      action: "degrade",
-    });
+    expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
+    expect(invocation.invocation.pi.context.messages).toEqual([
+      {
+        role: "system",
+        content: [{ type: "text", text: "runtime hint" }],
+        timestamp: 1,
+      },
+    ]);
+    expect(invocation.client.notices).toEqual([]);
   });
 
   it("rejects unknown role values that are not user/assistant", () => {

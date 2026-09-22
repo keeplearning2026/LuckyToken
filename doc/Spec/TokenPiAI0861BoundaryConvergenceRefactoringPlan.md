@@ -20,24 +20,32 @@ independent data-plane lanes.
    callbacks, semantic `pi-execution.ts` wrappers, and projector-only tests are deleted.
 3. Client Protocol conversion preserves every stable neutral fact that the Pi public
    contract can express. It does not decide whether a selected Provider supports it.
-4. Pi `Models` owns Provider resolution, authentication application, `Context`
+4. After model resolution and before immutable freeze, LuckyToken's Pi Context
+   compatibility seam may repair a Pi-semantic incompatibility only when passing it to
+   Pi unchanged would itself alter Client-visible semantics. The current rule is
+   limited to mid-conversation `SystemMessage`: verified support passes through;
+   unsupported pure-text messages degrade in place to `UserMessage`; prompt/tool-state
+   patch messages fail before dispatch.
+5. Pi `Models` owns Provider resolution, authentication application, `Context`
    normalization, and dispatch.
-5. A Pi Provider/API adapter owns capability-dependent application, degradation, or
-   omission and all Provider-native request construction.
-6. Optional controls that a Provider cannot implement may be ignored by that Provider.
+6. A Pi Provider/API adapter owns all Provider-native request construction and every
+   remaining Provider capability application, degradation, or omission.
+7. Optional controls that a Provider cannot implement may be ignored by that Provider.
    Invalid tool relationships, lost model-visible content, and security, permission, or
    residency violations still fail explicitly.
-7. Client Protocol production modules create no `onPayload` callback and remain correct
+8. Client Protocol production modules create no `onPayload` callback and remain correct
    without one. Neutral Core execution may install a diagnostics-owned, non-mutating
    observation callback.
-8. CommandCode Private and CommandCode Goat expose only their versioned
+9. CommandCode Private and CommandCode Goat expose only their versioned
    `providerPackage` registration contract from the package root. Concrete factories
    remain internal. Runtime invocation occurs only through Pi `Models`.
 
 The ownership rule is:
 
 > Client Protocol owns Client semantics. Pi common Context/options preserve portable
-> intent. The selected Pi Provider owns Provider capabilities and Provider Wire.
+> intent. LuckyToken Pi Context compatibility repairs the narrow set of model-dependent
+> Pi IR cases where Pi's generic fallback would change semantic timing. The selected Pi
+> Provider owns Provider Wire and all remaining Provider capability mapping.
 
 ## 2. Final architecture
 
@@ -290,14 +298,18 @@ an official signed release.
 4. Registered custom Providers are hidden behind Pi `Models` at runtime.
 5. Client Protocols preserve portable Pi semantics without inspecting Provider
    capability.
-6. Provider adapters alone map, degrade, omit, validate, and construct Provider Wire.
-7. Projector and Supplement production trees are absent.
-8. Client Protocol semantic modules create no `onPayload` callback; optional Neutral
+6. The shared Pi Context compatibility seam reads only resolved Pi Model capability and
+   may repair only Pi IR itself; it never reads or writes Provider Wire.
+7. Unsupported pure-text mid-system messages are degraded at their original transcript
+   position before Pi Models can collapse them; complex prompt/tool-state patches fail.
+8. Provider adapters own Provider Wire and all remaining capability mapping.
+9. Projector and Supplement production trees are absent.
+10. Client Protocol semantic modules create no `onPayload` callback; optional Neutral
    Core diagnostics observation is non-mutating and semantically removable.
-9. Reasoning default/off/level and tool auto/none/required/named/parallel intent are
+11. Reasoning default/off/level and tool auto/none/required/named/parallel intent are
    unambiguous in the common contract.
-10. Provider-private facts do not enter Pi IR or generic escape-hatch bags.
-11. Critical content, relationship, permission, and request-validity facts never
+12. Provider-private facts do not enter Pi IR or generic escape-hatch bags.
+13. Critical content, relationship, permission, and request-validity facts never
     disappear silently.
-12. Client, Provider, response, continuity, architecture, distribution, and available
+14. Client, Provider, response, continuity, architecture, distribution, and available
     online suites pass under guarded isolation.

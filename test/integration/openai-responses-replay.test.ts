@@ -46,7 +46,6 @@ interface FixtureSample {
 }
 
 const replayPolicy: ResponseRequestConversionPolicy = {
-  privilegedMessages: "first",
   unknownInputItem: "error",
   orphanToolOutput: "error",
   unresolvedToolCall: "xrepair",
@@ -72,27 +71,43 @@ function sourceTextParts(content: unknown): string[] {
 function sourceSystemPrompt(body: Record<string, unknown>): string {
   const parts: string[] = [];
   if (typeof body.instructions === "string") parts.push(body.instructions);
+  let seenNonSystem = false;
   for (const item of Array.isArray(body.input) ? body.input : []) {
     const candidate = record(item);
-    if (candidate.type !== "message") continue;
-    if (candidate.role !== "developer" && candidate.role !== "system") continue;
-    parts.push(sourceTextParts(candidate.content).join(""));
+    if (candidate.type !== "message") {
+      seenNonSystem = true;
+      continue;
+    }
+    if (candidate.role === "developer" || candidate.role === "system") {
+      if (!seenNonSystem) parts.push(sourceTextParts(candidate.content).join("\n"));
+      continue;
+    }
+    seenNonSystem = true;
   }
-  return parts.filter((part) => part.length > 0).join("\n");
+  return parts.filter((part) => part.length > 0).join("\n\n");
 }
 
 function sourceConversationProjection(body: Record<string, unknown>): string[] {
   const events: string[] = [];
+  let seenNonSystem = false;
   for (const item of Array.isArray(body.input) ? body.input : []) {
     const candidate = record(item);
     const type = candidate.type ?? "message";
     if (type === "message") {
-      if (candidate.role === "developer" || candidate.role === "system") continue;
+      if (candidate.role === "developer" || candidate.role === "system") {
+        if (!seenNonSystem) continue;
+        for (const text of sourceTextParts(candidate.content)) {
+          events.push(`user:text:${text}`);
+        }
+        continue;
+      }
+      seenNonSystem = true;
       for (const text of sourceTextParts(candidate.content)) {
         events.push(`${String(candidate.role)}:text:${text}`);
       }
       continue;
     }
+    seenNonSystem = true;
     if (type === "reasoning") {
       const summary = sourceTextParts(candidate.summary).join("");
       const content = sourceTextParts(candidate.content).join("");
@@ -245,8 +260,9 @@ describe("Codex CLI request sample replay", () => {
       const lastUpstream = record(upstreamBodies.at(-1));
       const params = record(lastUpstream.params);
 
-      // Developer/system authority is delivered through the Pi systemPrompt
-      // and reaches the Provider's dedicated system field, not message text.
+      // Top-level instructions plus only leading system/developer messages
+      // form the Provider system field. Once conversation history starts,
+      // later system/developer messages must remain in place as user text.
       expect(params.system).toBe(sourceSystemPrompt(sample.body));
 
       // The effective executable catalog is exact and ordered. Hosted

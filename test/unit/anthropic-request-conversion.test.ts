@@ -78,56 +78,37 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
     expect(roles).toEqual(["user", "assistant", "toolResult"]);
   });
 
-  it("promotes the first message-level system text after top-level system", () => {
+  it("keeps top-level system separate and preserves every message-level system in source order", () => {
     const invocation = parseAnthropicTextInvocation(
       body(
         [
           { role: "system", content: "message instruction" },
           { role: "user", content: "hello" },
+          { role: "system", content: [{ type: "text", text: "later" }] },
         ],
         { system: "top instruction" },
       ),
       1,
     );
 
-    expect(invocation.invocation.pi.context.systemPrompt).toBe(
-      "top instruction\nmessage instruction",
-    );
-    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
-    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
-      role: "user",
-      content: [{ type: "text", text: "hello" }],
-    });
-    expect(invocation.client.notices).toContainEqual({
-      adapter: "anthropic-messages",
-      direction: "request",
-      code: "anthropic_message_system_degraded",
-      jsonPath: "$.messages",
-      action: "degrade",
-    });
+    expect(invocation.invocation.pi.context.systemPrompt).toBe("top instruction");
+    expect(invocation.invocation.pi.context.messages).toEqual([
+      {
+        role: "system",
+        content: [{ type: "text", text: "message instruction" }],
+        timestamp: 1,
+      },
+      { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
+      {
+        role: "system",
+        content: [{ type: "text", text: "later" }],
+        timestamp: 1,
+      },
+    ]);
+    expect(invocation.client.notices).toEqual([]);
   });
 
-  it("does not emit an empty user turn when a system block array is fully promoted", () => {
-    const invocation = parseAnthropicTextInvocation(
-      body([
-        {
-          role: "system",
-          content: [
-            { type: "text", text: "first" },
-            { type: "text", text: "second" },
-          ],
-        },
-      ]),
-      1,
-    );
-
-    expect(invocation.invocation.pi.context).toMatchObject({
-      systemPrompt: "first\nsecond",
-      messages: [],
-    });
-  });
-
-  it("omits empty ordinary fragments from later compatibility system turns", () => {
+  it("preserves empty message-level system text as an empty Pi SystemMessage", () => {
     const invocation = parseAnthropicTextInvocation(
       body([
         { role: "system", content: "system" },
@@ -136,48 +117,33 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
       1,
     );
 
-    expect(invocation.invocation.pi.context.messages).toEqual([]);
+    expect(invocation.invocation.pi.context.messages).toEqual([
+      { role: "system", content: [{ type: "text", text: "system" }], timestamp: 1 },
+      { role: "system", content: [], timestamp: 1 },
+    ]);
   });
 
-  it("keeps first-system non-text in user history and degrades later systems to user", () => {
-    const invocation = parseAnthropicTextInvocation(
-      body([
-        {
-          role: "system",
-          content: [
-            { type: "text", text: "first" },
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: "image/png",
-                data: "AQ==",
+  it("rejects message-level system image content because Pi SystemMessage cannot represent it", () => {
+    expect(() =>
+      parseAnthropicTextInvocation(
+        body([
+          {
+            role: "system",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: "AQ==",
+                },
               },
-            },
-            { type: "text", text: "second" },
-          ],
-        },
-        { role: "user", content: "hello" },
-        { role: "system", content: "later instruction" },
-      ]),
-      1,
-    );
-
-    expect(invocation.invocation.pi.context.systemPrompt).toBe("first\nsecond");
-    expect(invocation.invocation.pi.context.messages).toHaveLength(1);
-    expect(invocation.invocation.pi.context.messages[0]).toMatchObject({
-      role: "user",
-      content: [
-        { type: "image", mimeType: "image/png" },
-        { type: "text", text: "hello" },
-        { type: "text", text: "later instruction" },
-      ],
-    });
-    expect(
-      invocation.client.notices.filter(
-        (notice) => notice.code === "anthropic_message_system_degraded",
+            ],
+          },
+        ]),
+        1,
       ),
-    ).toHaveLength(1);
+    ).toThrow("system message content must contain only text blocks");
   });
 
   it("accepts a final assistant prefill as historical content with a notice", () => {

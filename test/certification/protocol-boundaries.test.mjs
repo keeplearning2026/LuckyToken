@@ -31,6 +31,10 @@ const commandCodeCatalogRoot = path.join(
 const CLIENT_SHARED_SEAMS = new Set([
   "request-identity.ts",
   "execution.ts",
+  // Model-resolved Pi IR compatibility only. This seam accepts Pi Model +
+  // Context, returns Pi Context/outcomes, and cannot observe Provider Wire,
+  // transport, credentials, routing, or sibling Client Protocol semantics.
+  "pi-context-compatibility.ts",
   "http.ts",
   "model-resolution.ts",
   // Request Journey observation is a protocol-neutral, synchronous no-throw

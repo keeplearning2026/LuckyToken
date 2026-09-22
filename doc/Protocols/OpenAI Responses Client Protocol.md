@@ -127,19 +127,23 @@ Recognition does not imply exact Pi mapping. Each known family is classified by 
 
 The adapter preserves source order and ToolCall/ToolResult correlation.
 
-## 5. Privileged input mode
+## 5. System/developer input
 
-Top-level `instructions` always becomes the leading Pi system prompt segment.
+Top-level `instructions` becomes `Context.systemPrompt`.
 
-Configured `privilegedMessages`:
+Input messages with role `system` or `developer` are preserved at their original source
+position as Pi `SystemMessage`. The Client adapter does not own a target-specific
+promotion/degradation policy and no longer exposes the legacy privileged-message configuration.
 
-| Mode | Input system/developer behavior |
-|---|---|
-| `full` | All enter Pi systemPrompt in source order. |
-| `first` (default) | Only system/developer items before the first user message enter systemPrompt; later ones become user messages in place. |
-| `user` | All input system/developer items become user messages. |
+After model resolution, the shared Pi Context compatibility seam handles only the
+model-dependent mid-system case. A pure-text mid-system passes through unchanged when
+`supportsMidConvoSystemMessages` is true; otherwise it becomes a same-position Pi user
+message with `pi_mid_system_degraded_to_user`. Complex prompt/tool-state patches cannot
+be safely role-degraded and fail before dispatch. Leading system messages are not
+considered mid-system.
 
-Promoted prompt segments are separated with `\n`. This explicit mode exists because repeatedly changing a Pi system prefix invalidates prefix caches; the default retains the stable initial privileged prefix without discarding later content.
+This preserves instruction timing and prevents unsupported-target Pi fallback from
+moving a later instruction into the leading system prefix.
 
 ## 6. Tools
 

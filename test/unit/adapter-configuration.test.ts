@@ -45,7 +45,6 @@ describe("adapter-owned configuration", () => {
     expect(responses).toEqual({
       conversion: {
         request: {
-          privilegedMessages: "first",
           unknownInputItem: "error",
           orphanToolOutput: "error",
           unresolvedToolCall: "xrepair",
@@ -128,13 +127,6 @@ describe("adapter-owned configuration", () => {
         parseOpenAIResponsesConfiguration({
           conversion: { request: { unresolvedToolCall: value } },
         }).conversion.request.unresolvedToolCall,
-      ).toBe(value);
-    }
-    for (const value of ["full", "first", "user"] as const) {
-      expect(
-        parseOpenAIResponsesConfiguration({
-          conversion: { request: { privilegedMessages: value } },
-        }).conversion.request.privilegedMessages,
       ).toBe(value);
     }
     for (const value of ["max", "omit", "error"] as const) {
@@ -380,13 +372,6 @@ describe("adapter-owned configuration", () => {
           conversion: { response: { unknownPiContent: "error" } },
         }),
       "clientProtocols.anthropic-messages.conversion.response",
-    ],
-    [
-      () =>
-        parseOpenAIResponsesConfiguration({
-          conversion: { request: { privilegedMessages: "last" } },
-        }),
-      "clientProtocols.openai-responses.conversion.request.privilegedMessages",
     ],
     [
       () =>
@@ -698,7 +683,6 @@ describe("adapter-owned configuration", () => {
               stateFile: "state/responses.json",
               conversion: {
                 request: {
-                  privilegedMessages: "full",
                   unknownInputItem: "ignore",
                   orphanToolOutput: "ignore",
                   unresolvedToolCall: "error",
@@ -785,7 +769,6 @@ describe("adapter-owned configuration", () => {
       ).toEqual({
         conversion: {
           request: {
-            privilegedMessages: "full",
             unknownInputItem: "ignore",
             orphanToolOutput: "ignore",
             unresolvedToolCall: "error",

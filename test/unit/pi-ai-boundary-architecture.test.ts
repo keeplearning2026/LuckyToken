@@ -62,6 +62,28 @@ describe("Pi AI semantic boundary architecture", () => {
     }
   });
 
+  it("keeps mid-system capability policy out of Client converters and neutral execution", async () => {
+    for (const root of protocolRoots) {
+      for (const file of await collectTypeScriptFiles(root)) {
+        if (!file.endsWith("request.ts")) continue;
+        const source = await readFile(file, "utf8");
+        expect(source, relative(process.cwd(), file)).not.toContain(
+          "supportsMidConvoSystemMessages",
+        );
+      }
+    }
+    const execution = await readFile("src/execution.ts", "utf8");
+    expect(execution).not.toContain("preparePiContextForModel");
+  });
+
+  it("keeps Pi Context compatibility model-agnostic apart from the public capability", async () => {
+    const source = await readFile("src/pi-context-compatibility.ts", "utf8");
+    expect(source).not.toMatch(/model\.provider/u);
+    expect(source).not.toMatch(/model\.id/u);
+    expect(source).not.toMatch(/model\.api/u);
+    expect(source).not.toMatch(/provider\s*===/u);
+  });
+
   it("makes CommandCode Private consume TranscriptContext and own its wire", async () => {
     const source = await readFile(
       "packages/provider-commandcode-private/src/provider.ts",

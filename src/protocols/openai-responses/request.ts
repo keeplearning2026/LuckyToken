@@ -46,7 +46,6 @@ export class InvalidRequest extends Error {
 
 /** Responses-owned frozen request conversion policy (from the adapter config). */
 export interface ResponseRequestConversionPolicy {
-  readonly privilegedMessages: "full" | "first" | "user";
   readonly unknownInputItem: "error" | "ignore";
   readonly orphanToolOutput: "error" | "ignore";
   readonly unresolvedToolCall: "error" | "xrepair";
@@ -157,7 +156,6 @@ export interface ResponsesTextSignatureV1 {
 }
 
 const DEFAULT_POLICY: ResponseRequestConversionPolicy = Object.freeze({
-  privilegedMessages: "first",
   unknownInputItem: "error",
   orphanToolOutput: "error",
   unresolvedToolCall: "xrepair",
@@ -1300,8 +1298,6 @@ function convertMessages(
   const assistantIndex = new Map<string, string>();
   const resolvedCallIds = new Set<string>();
   const failedCallIds = new Set<string>();
-  let seenFirstUser = false;
-  const privilegedMode = policy.privilegedMessages;
 
   const flushAssistant = (
     content: Array<TextContent | ThinkingContent | ToolCall>,
@@ -1460,20 +1456,22 @@ function convertMessages(
         const content = parseContentParts(rawItem.content, wireTextParts);
         const images = parseInlineImages(rawItem.content);
         if (role === "system" || role === "developer") {
-          const text = content.map((part) => part.text).join("");
-          const promote =
-            privilegedMode === "full" ||
-            (privilegedMode === "first" && !seenFirstUser);
-          if (!promote) {
-            // Degraded to a user message, preserving source order.
-            pushUser(text);
+          if (images.length > 0) {
+            throw new InvalidRequest(
+              `${String(role)} message image content cannot be represented in Pi SystemMessage`,
+            );
           }
-          // A privileged/degraded message does not consume pending reasoning
-          // from a preceding turn; it survives as a reasoning-only assistant.
+          // Preserve source order: pending reasoning belongs before this
+          // privileged message rather than being deferred until the next user.
+          flushPendingReasoning();
+          messages.push({
+            role: "system",
+            content,
+            timestamp: receivedAt,
+          });
           continue;
         }
         if (role === "user") {
-          seenFirstUser = true;
           // A semantic history boundary: any call opened earlier that never
           // received a result is closed now (or errors under the frozen
           // policy).
@@ -2614,8 +2612,6 @@ function buildInvocation(
   messages: Message[],
   reasoning: ResponsesReasoningSemantics,
   notices: ConversionNotice[],
-  policy: ResponseRequestConversionPolicy,
-  inputForPromotion: unknown = validated.input,
   namespaceReverse: Record<string, { namespace: string; child: string }> =
     Object.create(null),
 ): ResponsesInvocation {
@@ -2623,23 +2619,10 @@ function buildInvocation(
   // Source metadata is retained only for request-local response echo; it is
   // never placed into model context.
   const metadataEcho = collectMetadataEcho(value);
-  // Top-level instructions always lead the Pi systemPrompt; promoted input
-  // privileged segments follow in source order, joined by one newline.
-  // `inputForPromotion` is the already-resolved item list so privileged
-  // segments materialized through the resolver are promoted too.
-  const promptParts: string[] = [];
+  // Top-level instructions are the leading Pi system prompt. Input-level
+  // system/developer messages stay in transcript order as Pi SystemMessage.
   if (validated.instructions !== undefined) {
-    promptParts.push(validated.instructions);
-  }
-  const promoted = collectPromotedSegments(
-    inputForPromotion,
-    policy.privilegedMessages,
-  );
-  for (const segment of promoted) {
-    if (segment.length > 0) promptParts.push(segment);
-  }
-  if (promptParts.length > 0) {
-    context.systemPrompt = promptParts.join("\n");
+    context.systemPrompt = validated.instructions;
   }
   // Namespace flattening already happened during validation; the reverse map
   // is retained only for request-local response echo.
@@ -2805,8 +2788,6 @@ export function convertResponsesRequest(
     messages,
     reasoning,
     notices,
-    policy,
-    validated.input,
     namespaceReverse,
   );
 }
@@ -2896,8 +2877,6 @@ export async function convertResponsesRequestAsync(
     messages,
     reasoning,
     notices,
-    policy,
-    expandedItems,
     namespaceReverse,
   );
 }
@@ -2980,35 +2959,4 @@ function collectExecutableNames(
     }
   }
   return names;
-}
-
-function collectPromotedSegments(
-  input: unknown,
-  mode: "full" | "first" | "user",
-): string[] {
-  const segments: string[] = [];
-  const items: unknown[] =
-    typeof input === "string"
-      ? [{ role: "user", content: input }]
-      : (input as unknown[]);
-  let seenFirstUser = false;
-  for (const rawItem of items) {
-    if (!isRecord(rawItem)) continue;
-    const type =
-      rawItem.type ?? (typeof rawItem.role === "string" ? "message" : undefined);
-    if (type !== "message") continue;
-    const role = rawItem.role;
-    if (role === "user") {
-      seenFirstUser = true;
-      continue;
-    }
-    if (role !== "system" && role !== "developer") continue;
-    if (mode === "user") continue;
-    if (mode === "first" && seenFirstUser) continue;
-    const text = parseContentParts(rawItem.content)
-      .map((part) => part.text)
-      .join("");
-    if (text.length > 0) segments.push(text);
-  }
-  return segments;
 }
