@@ -100,6 +100,7 @@ describe("unified Request Journey tracer", () => {
       body: JSON.stringify({
         model: "claude-fixture",
         max_tokens: 32,
+        output_config: { effort: "future-level" },
         messages: [{ role: "user", content: "diagnose this request" }],
       }),
     });
@@ -180,6 +181,16 @@ describe("unified Request Journey tracer", () => {
       ]),
     );
     const observations = detail.timeline.map((event) => event.observation);
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        kind: "conversion_notice_observed",
+        code: "anthropic_unknown_effort_fallback",
+        severity: "warning",
+        message: expect.stringContaining(
+          'Unknown Anthropic reasoning effort "future-level" was normalized to "max".',
+        ),
+      }),
+    );
     expect(
       Array.from(
         new Set(observations.map((observation) => observation.location.phase)),

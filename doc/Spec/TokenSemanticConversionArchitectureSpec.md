@@ -95,11 +95,13 @@ Pi patch artifact. Semantic Conversion is therefore bounded by the public Pi 0.8
 ### 5.1 Reasoning
 
 Upstream Pi exposes selectable reasoning levels through `SimpleStreamOptions.reasoning`.
-Omission preserves the Provider/model default. If a Client Protocol explicitly requests
-reasoning disabled but Pi has no neutral public representation for that request, Token
-omits the control, emits a bounded Client-owned warning, and retains the Pi/Provider
-default. Enabled levels continue to use `getSupportedThinkingLevels()` and
-`clampThinkingLevel()`, with `Model.thinkingLevelMap` as the mapping authority.
+Omission means Token requested no reasoning level through the common Pi simple surface;
+the selected Pi adapter determines the resulting thinking/off/default behavior. If a
+Client Protocol explicitly requests reasoning disabled but Pi has no neutral public
+representation for that request, Token omits the control and emits a bounded Client-owned
+warning without claiming a Provider default. Enabled levels continue to use
+`getSupportedThinkingLevels()` and `clampThinkingLevel()`, with
+`Model.thinkingLevelMap` as the mapping authority.
 
 Providers choose their own legal wire representation. Client Protocol code never writes
 `reasoning_effort`, `thinking`, `output_config`, or `thinkingConfig` to Provider payloads.

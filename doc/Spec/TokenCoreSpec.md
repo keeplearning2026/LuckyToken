@@ -3063,9 +3063,11 @@ Client Protocol 完整保留 Pi 能表达的 neutral intent，不因某个 concr
 capability 而提前降级；selected Pi Provider/API adapter 独占 apply / safe
 ignore-or-omit / optional Provider-owned notice / reject 决策。Client 已消费但 Pi public contract
 不能表达的非结构性控制偏好（例如当前的 explicit reasoning-off、required/named tool choice、
-parallel-tool intent）由 Client Protocol omit + bounded warning，并保留 Pi/Provider default；
-不得 patch Pi 或借 `samplingParams`、generic `metadata`、Provider-native controls 与 callbacks
-绕过该边界。Provider ID 只用于 registration / model resolution，不能用于协议分支。
+parallel-tool intent）由 Client Protocol omit + bounded warning；不再声称保留某个通用
+Pi/Provider default。对应 Pi control 不被设置，最终目标行为由 selected Pi adapter 的
+公开语义决定。不得 patch Pi 或借 `samplingParams`、generic `metadata`、Provider-native
+controls 与 callbacks 绕过该边界。Provider ID 只用于 registration / model resolution，
+不能用于协议分支。
 
 概念上：
 

@@ -231,7 +231,7 @@ export function prepareResponsesReasoning<TApi extends string>(input: {
         subject: "effort",
         outcome: Object.freeze({
           kind: "omitted" as const,
-          warning: "Pi common options do not expose explicit reasoning disable; Provider default retained",
+          warning: "explicit reasoning disable has no neutral Pi simple option; no reasoning level was requested and the target Pi adapter determines the resulting thinking behavior",
         }),
       }),
     );
@@ -265,7 +265,7 @@ export function prepareResponsesReasoning<TApi extends string>(input: {
             warning:
               effortPlan.selection.kind === "non-reasoning"
                 ? "target model does not support reasoning; ordinary generation retained"
-                : "target model exposes no selectable reasoning level; Provider default retained",
+                : "target model exposes no selectable reasoning level; no Pi reasoning level was requested and the target Pi adapter determines the resulting thinking behavior",
           }),
         }),
       );

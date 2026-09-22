@@ -155,6 +155,7 @@ function observeClientConversionNotice(
       isUnconsumedRequestFieldWarning || notice.action !== "ignore"
         ? "warning"
         : "info",
+    ...(notice.message === undefined ? {} : { message: notice.message }),
     location: {
       phase: requestDirection
         ? "lane_request_preparation"
@@ -180,6 +181,7 @@ function observeProviderConversionNotice(
     kind: "conversion_notice_observed",
     code: notice.code,
     severity: notice.action === "ignore" ? "info" : "warning",
+    ...(notice.message === undefined ? {} : { message: notice.message }),
     location: {
       phase: "upstream_execution",
       lane: "semantic_conversion",

@@ -126,14 +126,16 @@ lifecycle object may be carried through semantic state.
 Token uses the unmodified upstream Pi public contract. In the current pinned Pi runtime:
 
 ```text
-reasoning omitted → Provider/model default
+reasoning omitted → no reasoning level requested through Pi simple options; target Pi adapter decides resulting thinking behavior
 reasoning level   → enabled level
 ```
 
 If a Client Protocol consumes an explicit reasoning-disable control that Pi cannot
-represent neutrally, Semantic Conversion omits that non-structural preference, emits a
-bounded Client-owned warning, and retains the Pi/Provider default. It must not patch Pi,
-map disable to an enabled level, or write Provider-native reasoning fields.
+represent neutrally, Semantic Conversion omits that non-structural preference and emits
+a bounded Client-owned warning. It does not claim a Provider default: no reasoning level
+is requested through the common Pi surface, and the selected Pi adapter determines the
+resulting thinking/off/default behavior. It must not patch Pi, map disable to an enabled
+level, or write Provider-native reasoning fields.
 
 `Model.thinkingLevelMap` is the level-data authority. Pi public
 `getSupportedThinkingLevels()` and `clampThinkingLevel()` own enabled-level selection.

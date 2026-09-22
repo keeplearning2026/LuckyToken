@@ -18,6 +18,8 @@ export interface ConversionNotice extends JsonObject {
   readonly code: string;
   readonly jsonPath?: string;
   readonly action: "ignore" | "degrade" | "xrepair";
+  /** Bounded user-readable diagnostic context. Never participates in semantics. */
+  readonly message?: string;
 }
 
 export interface InvocationAttempt extends JsonObject {

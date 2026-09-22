@@ -64,8 +64,9 @@ converter.
 | tools, tool-use IDs, tool results | `pi-context` | invalid identity/relationship fails |
 | `max_tokens` | `pi-common-option` | map to Pi `maxTokens`; Pi owns downstream output/reasoning budgeting |
 | `temperature` | `pi-common-option` | direct neutral Pi semantic |
-| thinking disabled | `client-warning-omit` | Pi 0.87 common options have no explicit off value; omit and retain Provider default |
-| enabled/adaptive thinking and effort | `pi-common-option` | select from resolved model metadata; optional Pi budget map |
+| thinking disabled | `client-warning-omit` | Pi 0.87 common options have no explicit off value; omit, warn, request no Pi reasoning level, and let the selected Pi adapter determine resulting thinking behavior |
+| enabled/adaptive thinking and known effort | `pi-common-option` | select from resolved model metadata; optional Pi budget map |
+| unknown effort string | `client-warning-degrade` | normalize to `max` for availability, defer the warning until model resolution, report original/fallback/selected Pi level (or no selection), and let the target Pi adapter own final Provider representation |
 | thinking signatures/redacted state | `client-render-or-continuity-state` + Pi content fields | provenance-compatible replay only |
 | tool choice `auto`/`none` | `pi-common-option` | preserve through upstream Pi |
 | tool choice `any`/named | `client-warning-omit` | retain tool catalog, omit the unsupported selection constraint, warn, and use Pi/Provider default |
@@ -85,10 +86,17 @@ diagnostics, or a raw extension bag.
 
 ## 5. Reasoning and continuity
 
-Reasoning preparation operates only on cloned Pi Context/options. Omitted reasoning
-preserves Provider default; explicit disabled reasoning is omitted with a bounded warning
-because upstream Pi 0.87 has no common off value; enabled levels are chosen from the
-resolved model through Pi public helpers and `thinkingLevelMap`.
+Reasoning preparation operates only on cloned Pi Context/options. Omitted reasoning means
+no reasoning level is requested through Pi simple options; the selected Pi adapter owns
+the resulting thinking/off/default behavior. Explicit disabled reasoning is omitted with
+a bounded warning because upstream Pi 0.87 has no common off value; enabled levels are
+chosen from the resolved model through Pi public helpers and `thinkingLevelMap`.
+Unknown source effort strings are normalized to `max` for availability, but the warning is
+emitted only after model resolution so it can truthfully report the original bounded value,
+the `max` fallback, and the selected Pi level or absence of one. This diagnostic fact is
+observation-only and cannot affect selection, dispatch, retry, or Provider payload creation.
+The final Provider request representation remains owned by the selected Pi adapter and,
+when captured, is evidenced only by the existing `pi_provider_request_payload` artifact.
 
 Opaque continuity is restored only when Provider/API/model provenance matches. On model
 switch, opaque state is discarded while visible reasoning is retained through thinking

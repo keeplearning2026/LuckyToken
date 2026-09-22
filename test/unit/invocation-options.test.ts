@@ -109,10 +109,9 @@ describe("Anthropic Pi invocation controls", () => {
       level: "max",
       normalizedFromUnknown: "super",
     });
-    expect(invocation.client.notices).toContainEqual(
+    expect(invocation.client.notices).not.toContainEqual(
       expect.objectContaining({
         code: "anthropic_unknown_effort_fallback",
-        action: "degrade",
       }),
     );
   });

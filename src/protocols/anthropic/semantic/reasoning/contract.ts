@@ -89,6 +89,10 @@ export type AnthropicReasoningDisposition =
 export interface AnthropicReasoningOutcome {
   readonly candidateId: AnthropicReasoningOutcomeId;
   readonly outcome: AnthropicReasoningDisposition;
+  readonly notice?: Readonly<{
+    readonly code: string;
+    readonly jsonPath?: string;
+  }>;
 }
 import type {
   AnthropicContinuityAttachment,

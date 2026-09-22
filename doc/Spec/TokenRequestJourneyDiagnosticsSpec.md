@@ -414,7 +414,7 @@ type RequestJourneyObservationInput =
 | `step_completed` | matching `stepInstanceId`, completion class, safe summary | does not change the work outcome |
 | `lane_committed` | exactly one selected lane and selection facts | cannot request fallback or select another lane |
 | `attempt_observed` | attempt number, safe Profile attribution, transition/response facts | cannot decide retry or Profile advancement |
-| `conversion_notice_observed` | direction, step, subject, notice code and severity | cannot repair or reinterpret semantics |
+| `conversion_notice_observed` | direction, step, subject, stable notice code and severity; optional bounded user-readable message | message is observation-only and cannot repair, reinterpret, select, retry, or otherwise influence semantics |
 | `artifact_observed` | declared artifact kind, media type, bounded bytes/chunk, byte counts and capture status | cannot read a stream or fetch missing evidence |
 | `failure_detected` | origin precision, detection location, safe failure classification and exception fingerprint | cannot replace the request error or terminal outcome |
 | `work_outcome_committed` | semantic/native work outcome and terminal authority | distinct from Client rendering and HTTP handoff |

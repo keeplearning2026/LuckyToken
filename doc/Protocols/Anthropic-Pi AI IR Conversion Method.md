@@ -92,7 +92,7 @@ Source absence never creates a synthetic option. Pi/Provider defaults apply.
 1. If `output_config.effort` is present and non-null, it determines `options.reasoning`.
 2. Otherwise `thinking.type="enabled"` selects a level from `budget_tokens` using the adapter's documented deterministic budget ladder.
 3. `thinking.type="adaptive"` without effort requests no independent Pi field; drop the adaptive marker.
-4. `thinking.type="disabled"` has no explicit disable value in upstream Pi 0.87 common options. Omit the reasoning control, emit a bounded warning, and retain the Pi/Provider default.
+4. `thinking.type="disabled"` has no explicit disable value in upstream Pi 0.87 common options. Omit the reasoning control and emit a bounded warning. Token requests no Pi reasoning level; the selected Pi adapter determines the resulting thinking/off/default behavior.
 5. `display` has no generic Pi control and is dropped.
 
 ### 4.2 Effort mapping
@@ -104,9 +104,10 @@ Source absence never creates a synthetic option. Pi/Provider defaults apply.
 | `high` | `high` |
 | `xhigh` | `xhigh` |
 | `max` | `max` |
+| unknown string | normalize source intent to `max`; after model resolution emit one bounded warning containing the original value, `max` fallback, and selected Pi reasoning level (or that no Pi level was selected) |
 | `null` / absent | omitted |
 
-Unknown future effort follows an Anthropic-adapter-local future-enum policy if one is later added. No other Client Protocol's enum policy is imported or consulted.
+Unknown effort normalization is an availability policy, not a claim that the unknown value is semantically equal to `max`. The warning is emitted only after target-model reasoning selection so it can report the resolved Pi level. The selected Pi adapter alone determines the final Provider request representation. Client Protocol code never parses Provider payloads to reinterpret that result; when diagnostics capture is enabled, `pi_provider_request_payload` is the factual Provider-request artifact.
 
 ### 4.3 Exact budget preservation
 

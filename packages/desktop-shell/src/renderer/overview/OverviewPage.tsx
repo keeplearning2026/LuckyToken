@@ -209,7 +209,10 @@ function observationText(
     case "conversion_notice_observed":
       return {
         title: `${humanizeDiagnosticName(observation.severity)} conversion notice`,
-        detail: observation.code,
+        detail:
+          observation.message === undefined
+            ? observation.code
+            : `${observation.message} · ${observation.code}`,
       };
     case "artifact_observed":
       return {

@@ -203,6 +203,7 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
       kind: "conversion_notice_observed",
       code: "optional_field_omitted",
       severity: "warning",
+      message: "Optional field was omitted without changing request execution.",
       location: {
         phase: "lane_request_preparation",
         lane: "semantic_conversion",

@@ -87,8 +87,6 @@ export const UNKNOWN_CONTENT_IGNORED_NOTICE_CODE =
   "anthropic_unknown_content_ignored";
 export const UNCLAIMED_REQUEST_FIELD_NOTICE_CODE =
   "anthropic_unclaimed_request_field";
-export const UNKNOWN_EFFORT_FALLBACK_NOTICE_CODE =
-  "anthropic_unknown_effort_fallback";
 export const UNRESOLVED_TOOL_CALL_REPAIRED_NOTICE_CODE =
   "anthropic_unresolved_tool_call_repaired";
 export const UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE =
@@ -1191,18 +1189,6 @@ export function convertValidatedAnthropicRequestWithPolicy(
   policy: AnthropicRequestConversionPolicy,
 ): AnthropicRequestConversion {
   const notices: ConversionNotice[] = [];
-  if (
-    request.reasoning.effort.kind === "specified" &&
-    request.reasoning.effort.normalizedFromUnknown !== undefined
-  ) {
-    notices.push(
-      requestNotice(
-        UNKNOWN_EFFORT_FALLBACK_NOTICE_CODE,
-        "degrade",
-        "$.output_config.effort",
-      ),
-    );
-  }
   for (const jsonPath of request.unclaimedJsonPaths) {
     notices.push(requestNotice(
       UNCLAIMED_REQUEST_FIELD_NOTICE_CODE,

@@ -85,6 +85,33 @@ describe("Anthropic reasoning history preparation", () => {
     );
   });
 
+  it("omits explicit reasoning disable and leaves the resulting behavior to the Pi adapter", () => {
+    const source = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        thinking: { type: "disabled" },
+      },
+      1,
+    ).invocation;
+
+    const prepared = prepareAnthropicReasoning({
+      model: model("gemini-target"),
+      invocation: source,
+    });
+
+    expect(prepared.invocation.pi.options.reasoning).toBeUndefined();
+    expect(prepared.invocation.pi.options.thinkingBudgets).toBeUndefined();
+    expect(prepared.outcomes).toContainEqual({
+      candidateId: "reasoning.activation",
+      outcome: {
+        kind: "omitted",
+        warning: "explicit reasoning disable has no neutral Pi simple option; no reasoning level was requested and the target Pi adapter determines the resulting thinking behavior",
+      },
+    });
+  });
+
   it("selects a real non-null Pi level once after model resolution", () => {
     const source = parseAnthropicTextInvocation(
       {
@@ -179,6 +206,264 @@ describe("Anthropic reasoning history preparation", () => {
       candidateId: "reasoning.history[0:0]",
       outcome: expect.objectContaining({ kind: "degraded" }),
     });
+  });
+
+  it("reports unknown effort normalization after model resolution without changing execution", async () => {
+    const source = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        output_config: { effort: "super" },
+      },
+      1,
+    ).invocation;
+    const target: Model<"google-generative-ai"> = {
+      ...model("gemini-target"),
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "HIGH",
+        xhigh: null,
+        max: null,
+      },
+    };
+    const notice = vi.fn();
+    const executeOperation = vi.fn(async (_models, _model, _context, options) => {
+      expect(options.reasoning).toBe("high");
+      return {
+        role: "assistant" as const,
+        api: target.api,
+        provider: target.provider,
+        model: target.id,
+        content: [{ type: "text" as const, text: "done" }],
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop" as const,
+        timestamp: 2,
+      };
+    });
+
+    await executeAnthropicSemanticInvocation({
+      models: {} as Models,
+      model: target,
+      invocation: source,
+      execution: {
+        factsSink: { notice, attempt: vi.fn() },
+        executeOperation,
+      },
+    });
+
+    expect(notice).toHaveBeenCalledWith({
+      adapter: "anthropic",
+      direction: "request",
+      code: "anthropic_unknown_effort_fallback",
+      jsonPath: "$.output_config.effort",
+      action: "degrade",
+      message:
+        'Unknown Anthropic reasoning effort "super" was normalized to "max". Pi selected reasoning level "high". The target Pi adapter determines the final Provider request representation. When captured, the Provider request payload diagnostic is the factual final adapter representation.',
+    });
+    expect(executeOperation).toHaveBeenCalledOnce();
+  });
+
+  it("reports when unknown effort normalization cannot select a Pi reasoning level", async () => {
+    const source = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        output_config: { effort: "future-level" },
+      },
+      1,
+    ).invocation;
+    const target: Model<"google-generative-ai"> = {
+      ...model("gemini-target"),
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    };
+    const notice = vi.fn();
+    const executeOperation = vi.fn(async (_models, _model, _context, options) => {
+      expect(options.reasoning).toBeUndefined();
+      return {
+        role: "assistant" as const,
+        api: target.api,
+        provider: target.provider,
+        model: target.id,
+        content: [{ type: "text" as const, text: "done" }],
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop" as const,
+        timestamp: 2,
+      };
+    });
+
+    await executeAnthropicSemanticInvocation({
+      models: {} as Models,
+      model: target,
+      invocation: source,
+      execution: {
+        factsSink: { notice, attempt: vi.fn() },
+        executeOperation,
+      },
+    });
+
+    expect(notice).toHaveBeenCalledWith({
+      adapter: "anthropic",
+      direction: "request",
+      code: "anthropic_unknown_effort_fallback",
+      jsonPath: "$.output_config.effort",
+      action: "degrade",
+      message:
+        'Unknown Anthropic reasoning effort "future-level" was normalized to "max". No Pi reasoning level was selected for the target model. The target Pi adapter determines the resulting thinking behavior. When captured, the Provider request payload diagnostic is the factual final adapter representation.',
+    });
+    expect(executeOperation).toHaveBeenCalledOnce();
+  });
+
+  it("bounds user-controlled unknown effort text in diagnostics while preserving execution", async () => {
+    const unknownEffort = "x".repeat(2_000);
+    const source = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        output_config: { effort: unknownEffort },
+      },
+      1,
+    ).invocation;
+    const target: Model<"google-generative-ai"> = {
+      ...model("gemini-target"),
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "HIGH",
+        xhigh: null,
+        max: null,
+      },
+    };
+    const notice = vi.fn();
+    const executeOperation = vi.fn(async (_models, _model, _context, options) => {
+      expect(options.reasoning).toBe("high");
+      return {
+        role: "assistant" as const,
+        api: target.api,
+        provider: target.provider,
+        model: target.id,
+        content: [{ type: "text" as const, text: "done" }],
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop" as const,
+        timestamp: 2,
+      };
+    });
+
+    await executeAnthropicSemanticInvocation({
+      models: {} as Models,
+      model: target,
+      invocation: source,
+      execution: {
+        factsSink: { notice, attempt: vi.fn() },
+        executeOperation,
+      },
+    });
+
+    const published = notice.mock.calls[0]?.[0] as { message?: string } | undefined;
+    expect(published?.message).toBeDefined();
+    expect(published!.message!.length).toBeLessThanOrEqual(512);
+    expect(published!.message).not.toContain(unknownEffort);
+    expect(published!.message).toContain('normalized to "max"');
+    expect(executeOperation).toHaveBeenCalledOnce();
+  });
+
+  it("keeps execution unchanged when the diagnostics notice sink throws", async () => {
+    const source = parseAnthropicTextInvocation(
+      {
+        model: "client-model",
+        max_tokens: 2_048,
+        messages: [{ role: "user", content: "hello" }],
+        output_config: { effort: "future-level" },
+      },
+      1,
+    ).invocation;
+    const target: Model<"google-generative-ai"> = {
+      ...model("gemini-target"),
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: "HIGH",
+        xhigh: null,
+        max: null,
+      },
+    };
+    const terminal: AssistantMessage = {
+      role: "assistant",
+      api: target.api,
+      provider: target.provider,
+      model: target.id,
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    };
+    const executeOperation = vi.fn(async (_models, _model, _context, options) => {
+      expect(options.reasoning).toBe("high");
+      return terminal;
+    });
+
+    const result = await executeAnthropicSemanticInvocation({
+      models: {} as Models,
+      model: target,
+      invocation: source,
+      execution: {
+        factsSink: {
+          notice: () => {
+            throw new Error("diagnostics unavailable");
+          },
+          attempt: vi.fn(),
+        },
+        executeOperation,
+      },
+    });
+
+    expect(result.message).toBe(terminal);
+    expect(executeOperation).toHaveBeenCalledOnce();
   });
 
   it("publishes a fail-open notice when incompatible continuity is omitted", async () => {

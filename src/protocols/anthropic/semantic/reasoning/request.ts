@@ -66,6 +66,38 @@ function acceptsNativeAnthropicHistory(model: Model<string>): boolean {
   return model.api === "anthropic-messages";
 }
 
+const MAX_UNKNOWN_EFFORT_DIAGNOSTIC_CHARS = 96;
+
+function boundedDiagnosticValue(value: string): string {
+  const characters = [...value];
+  const bounded =
+    characters.length <= MAX_UNKNOWN_EFFORT_DIAGNOSTIC_CHARS
+      ? value
+      : `${characters
+          .slice(0, MAX_UNKNOWN_EFFORT_DIAGNOSTIC_CHARS - 3)
+          .join("")}...`;
+  return JSON.stringify(bounded);
+}
+
+const UNKNOWN_EFFORT_NOTICE = Object.freeze({
+  code: "anthropic_unknown_effort_fallback",
+  jsonPath: "$.output_config.effort",
+});
+
+function unknownEffortOutcome(
+  originalEffort: string,
+  resolution: string,
+): AnthropicReasoningOutcome {
+  return Object.freeze({
+    candidateId: "reasoning.effort",
+    outcome: Object.freeze({
+      kind: "degraded" as const,
+      warning: `Unknown Anthropic reasoning effort ${boundedDiagnosticValue(originalEffort)} was normalized to "max". ${resolution} When captured, the Provider request payload diagnostic is the factual final adapter representation.`,
+    }),
+    notice: UNKNOWN_EFFORT_NOTICE,
+  });
+}
+
 function reasoningLevelForBudget(
   budget: number,
 ): "minimal" | "low" | "medium" | "high" {
@@ -88,13 +120,17 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
   delete options.reasoning;
   const outcomes: AnthropicReasoningOutcome[] = [];
   const activation = input.invocation.reasoning.activation;
+  const normalizedFromUnknown =
+    input.invocation.reasoning.effort.kind === "specified"
+      ? input.invocation.reasoning.effort.normalizedFromUnknown
+      : undefined;
   if (activation.kind === "disabled") {
     delete options.thinkingBudgets;
     outcomes.push(Object.freeze({
       candidateId: "reasoning.activation",
       outcome: Object.freeze({
         kind: "omitted" as const,
-        warning: "Pi common options do not expose explicit reasoning disable; Provider default retained",
+        warning: "explicit reasoning disable has no neutral Pi simple option; no reasoning level was requested and the target Pi adapter determines the resulting thinking behavior",
       }),
     }));
   } else if (!input.model.reasoning && (
@@ -103,13 +139,20 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
     effortPlan.kind === "specified"
   )) {
     delete options.thinkingBudgets;
-    outcomes.push(Object.freeze({
-      candidateId: "reasoning.activation",
-      outcome: Object.freeze({
-        kind: "degraded" as const,
-        warning: "target model does not support reasoning; ordinary generation retained",
-      }),
-    }));
+    outcomes.push(Object.freeze(
+      normalizedFromUnknown === undefined
+        ? {
+            candidateId: "reasoning.activation" as const,
+            outcome: Object.freeze({
+              kind: "degraded" as const,
+              warning: "target model does not support reasoning; ordinary generation retained",
+            }),
+          }
+        : unknownEffortOutcome(
+            normalizedFromUnknown,
+            "No Pi reasoning level was selected because the target model does not support reasoning. The target Pi adapter determines the resulting thinking behavior.",
+          ),
+    ));
   } else {
     const selectedLevel =
       effortPlan.kind === "specified" &&
@@ -122,10 +165,17 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
             : undefined;
     if (selectedLevel !== undefined) {
       options.reasoning = selectedLevel;
-      outcomes.push(Object.freeze({
-        candidateId: "reasoning.activation",
-        outcome: Object.freeze({ kind: "pi-native" as const }),
-      }));
+      outcomes.push(Object.freeze(
+        normalizedFromUnknown === undefined
+          ? {
+              candidateId: "reasoning.activation" as const,
+              outcome: Object.freeze({ kind: "pi-native" as const }),
+            }
+          : unknownEffortOutcome(
+              normalizedFromUnknown,
+              `Pi selected reasoning level ${JSON.stringify(selectedLevel)}. The target Pi adapter determines the final Provider request representation.`,
+            ),
+      ));
       if (activation.kind === "enabled") {
         const budgetLevel =
           selectedLevel === "xhigh" || selectedLevel === "max"
@@ -140,16 +190,23 @@ export function prepareAnthropicReasoning<TApi extends string>(input: {
       effortPlan.selection.kind !== "selected"
     ) {
       delete options.thinkingBudgets;
-      outcomes.push(Object.freeze({
-        candidateId: "reasoning.effort",
-        outcome: Object.freeze({
-          kind: "degraded" as const,
-          warning:
-            effortPlan.selection.kind === "non-reasoning"
-              ? "target model does not support reasoning; ordinary generation retained"
-              : "target model exposes no selectable reasoning level; Provider default retained",
-        }),
-      }));
+      outcomes.push(Object.freeze(
+        normalizedFromUnknown === undefined
+          ? {
+              candidateId: "reasoning.effort" as const,
+              outcome: Object.freeze({
+                kind: "degraded" as const,
+                warning:
+                  effortPlan.selection.kind === "non-reasoning"
+                    ? "target model does not support reasoning; ordinary generation retained"
+                    : "target model exposes no selectable reasoning level; no Pi reasoning level was requested and the target Pi adapter determines the resulting thinking behavior",
+              }),
+            }
+          : unknownEffortOutcome(
+              normalizedFromUnknown,
+              "No Pi reasoning level was selected for the target model. The target Pi adapter determines the resulting thinking behavior.",
+            ),
+      ));
     }
   }
   const continuityByBlock = new Map<string, typeof input.invocation.reasoning.continuity>();

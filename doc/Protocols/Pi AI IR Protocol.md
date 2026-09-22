@@ -713,7 +713,7 @@ ThinkingLevel
 ModelThinkingLevel
 ```
 
-At the installed clean upstream `0.87.0` runtime boundary, `SimpleStreamOptions.reasoning` accepts `ThinkingLevel`, not `ModelThinkingLevel`: omission means the Provider default, and enabled levels are resolved through `Model.thinkingLevelMap` plus `getSupportedThinkingLevels()`/`clampThinkingLevel()`. `ModelThinkingLevel` still includes `"off"` for model capability maps, but Semantic Conversion cannot send explicit off through the common option surface.
+At the installed clean upstream `0.87.0` runtime boundary, `SimpleStreamOptions.reasoning` accepts `ThinkingLevel`, not `ModelThinkingLevel`: omission means no reasoning level was requested through the simple common option surface, so the selected Pi adapter determines the resulting thinking/off/default behavior. Enabled levels are resolved through `Model.thinkingLevelMap` plus `getSupportedThinkingLevels()`/`clampThinkingLevel()`. `ModelThinkingLevel` still includes `"off"` for model capability maps, but Semantic Conversion cannot send explicit off through the common option surface.
 
 **ThinkingLevelMap**
 

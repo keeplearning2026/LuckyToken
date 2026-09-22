@@ -142,6 +142,7 @@ export interface ConversionNoticeObservedObservation
   readonly kind: "conversion_notice_observed";
   readonly code: string;
   readonly severity: "info" | "warning" | "error";
+  readonly message?: string;
 }
 
 export type RequestArtifactState =

@@ -36,8 +36,8 @@ reject before dispatch. Client metadata remains response echo/state only.
 
 ## Reasoning behavior
 
-- omitted effort: Provider default;
-- `none`: Pi `reasoning: "off"`;
+- omitted effort: no Pi reasoning level requested; the selected Pi adapter determines the resulting thinking/off/default behavior;
+- `none`: omit Pi reasoning with a bounded warning because clean Pi 0.87 exposes no neutral explicit-off value;
 - enabled effort: resolved model `thinkingLevelMap` plus Pi selection helpers;
 - historical visible reasoning and opaque continuity: Pi content/signature fields with
   provenance checks;

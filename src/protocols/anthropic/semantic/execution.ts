@@ -28,10 +28,15 @@ function publishReasoningWarnings(
         adapter: "anthropic",
         direction: "request",
         code:
-          entry.outcome.kind === "degraded"
+          entry.notice?.code ??
+          (entry.outcome.kind === "degraded"
             ? "semantic_reasoning_degraded"
-            : "semantic_reasoning_omitted",
+            : "semantic_reasoning_omitted"),
+        ...(entry.notice?.jsonPath === undefined
+          ? {}
+          : { jsonPath: entry.notice.jsonPath }),
         action: "degrade",
+        message: entry.outcome.warning,
       });
     } catch {
       // Diagnostics are fail-open and cannot affect semantic execution.

@@ -149,6 +149,53 @@ describe("Overview Request Journeys", () => {
     expect(usageCells[4]?.getAttribute("title")).toBe("Token speed is unavailable because execution timing was incomplete.");
   });
 
+  it("shows a user-readable conversion warning without hiding its stable code", async () => {
+    const failed = summary(12, "failed");
+    const record = detail(failed);
+    const location = {
+      phase: "upstream_execution" as const,
+      lane: "semantic_conversion" as const,
+      direction: "client_to_pi" as const,
+      step: "create_pi_stream",
+      subject: "reasoning" as const,
+    };
+    const withWarning: RequestJourneyRecord = {
+      ...record,
+      timeline: [{
+        runtimeId: record.runtimeId,
+        requestId: record.requestId,
+        sequence: 1,
+        time: record.createdAt,
+        observation: {
+          kind: "conversion_notice_observed",
+          code: "anthropic_unknown_effort_fallback",
+          severity: "warning",
+          message:
+            'Unknown Anthropic reasoning effort "super" was normalized to "max". Pi selected reasoning level "high". The target Pi adapter determines the final Provider request representation.',
+          location,
+        },
+      }],
+    };
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records: [failed], hasMore: false } }),
+      getRequestJourney: async () => ({ outcome: "ok", result: withWarning }),
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    await act(async () => {
+      (container.querySelector('button[aria-label="Show details for request request-12"]') as HTMLButtonElement).click();
+    });
+    await flush();
+
+    expect(container.textContent).toContain(
+      'Unknown Anthropic reasoning effort "super" was normalized to "max". Pi selected reasoning level "high".',
+    );
+    expect(container.textContent).toContain("anthropic_unknown_effort_fallback");
+  });
+
   it("shows terminal usage as pending for a running request", async () => {
     const running = summary(6, "running");
     const api = createFakeDesktopApi({ control: {

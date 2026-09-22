@@ -57,7 +57,7 @@ was written. It exists solely to construct a protocol-valid Responses result.
 | --- | --- | --- |
 | input messages, instructions, images | `pi-context` | preserve model-visible content; unresolved opaque references fail or warn only under the declared resolver policy |
 | tools, call IDs, results | `pi-context` | identity/relationship loss fails |
-| reasoning effort `none` | `client-warning-omit` | omit explicit disable, warn, retain Pi/Provider default |
+| reasoning effort `none` | `client-warning-omit` | omit explicit disable, warn, request no Pi reasoning level, and let the selected Pi adapter determine resulting thinking behavior |
 | enabled reasoning effort | `pi-common-option` | resolved model map + public Pi selection helpers |
 | reasoning summary preference | `provider-private-omit-warning` | Pi common contract has no summary selector |
 | historical reasoning and signatures | `client-render-or-continuity-state` + Pi content fields | restore only for compatible provenance; otherwise visible fallback/omit warning |

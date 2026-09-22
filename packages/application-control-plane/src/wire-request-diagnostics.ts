@@ -632,15 +632,22 @@ function decodePersistedObservation(
   }
   if (value.kind === "conversion_notice_observed") {
     if (
-      !hasOnlyKeys(value, ["kind", "location", "code", "severity"]) ||
+      !hasOnlyKeys(value, ["kind", "location", "code", "severity", "message"]) ||
       !boundedText(value.code, 256) ||
+      (value.message !== undefined && !boundedText(value.message, 1_024)) ||
       (value.severity !== "info" &&
         value.severity !== "warning" &&
         value.severity !== "error")
     ) {
       return undefined;
     }
-    return Object.freeze({ kind: "conversion_notice_observed", code: value.code, severity: value.severity, location }) satisfies ConversionNoticePersistedObservation;
+    return Object.freeze({
+      kind: "conversion_notice_observed",
+      code: value.code,
+      severity: value.severity,
+      ...(value.message === undefined ? {} : { message: value.message }),
+      location,
+    }) satisfies ConversionNoticePersistedObservation;
   }
   if (value.kind === "artifact_observed") {
     if (

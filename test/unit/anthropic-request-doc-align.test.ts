@@ -73,7 +73,7 @@ describe("Anthropic request output_config.effort conversion (doc §6.3)", () => 
     expect(withConfig.invocation.pi.options.reasoning).toBeUndefined();
   });
 
-  it("normalizes an unknown effort to max with a degraded notice", () => {
+  it("normalizes an unknown effort to max and defers the warning until model resolution", () => {
     const invocation = parseAnthropicTextInvocation(
       minimalBody({ output_config: { effort: "super" } }),
       1,
@@ -84,13 +84,9 @@ describe("Anthropic request output_config.effort conversion (doc §6.3)", () => 
       level: "max",
       normalizedFromUnknown: "super",
     });
-    expect(invocation.client.notices).toContainEqual({
-      adapter: "anthropic-messages",
-      direction: "request",
-      code: "anthropic_unknown_effort_fallback",
-      jsonPath: "$.output_config.effort",
-      action: "degrade",
-    });
+    expect(invocation.client.notices).not.toContainEqual(
+      expect.objectContaining({ code: "anthropic_unknown_effort_fallback" }),
+    );
   });
 });
 

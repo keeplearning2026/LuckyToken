@@ -41,8 +41,8 @@ non-degradable content fail before dispatch.
 
 ## Reasoning behavior
 
-- omission preserves Provider default;
-- disabled thinking maps to Pi `reasoning: "off"`;
+- omission requests no Pi reasoning level; the selected Pi adapter determines the resulting thinking/off/default behavior;
+- disabled thinking is omitted from Pi reasoning options with a bounded warning because clean Pi 0.87 exposes no neutral explicit-off value;
 - enabled/adaptive effort uses resolved model metadata and Pi selection helpers;
 - opaque thinking/text/tool signatures restore only under matching provenance;
 - incompatible opaque state is discarded while visible content is preserved.

@@ -40,7 +40,7 @@ describe("target-aware reasoning preparation", () => {
       subject: "effort",
       outcome: {
         kind: "omitted",
-        warning: "Pi common options do not expose explicit reasoning disable; Provider default retained",
+        warning: "explicit reasoning disable has no neutral Pi simple option; no reasoning level was requested and the target Pi adapter determines the resulting thinking behavior",
       },
     });
   });

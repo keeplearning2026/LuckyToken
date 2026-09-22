@@ -115,7 +115,7 @@ Model capability and never sees Provider Wire or Profile retry state.
 | Source | Pi reasoning | Notice |
 |---|---|---|
 | absent/null | omitted | no |
-| `none` | omitted (Pi/Provider default) | bounded omission warning |
+| `none` | omitted (no Pi reasoning level requested) | bounded omission warning; target Pi adapter determines resulting thinking behavior |
 | `minimal` | `minimal` | no |
 | `low` | `low` | no |
 | `medium` | `medium` | no |
@@ -125,7 +125,7 @@ Model capability and never sees Provider Wire or Profile retry state.
 | Lucky extension `max` | `max` | no |
 | future unknown | policy | max/omit emits notice; error rejects |
 
-Absent/null effort maps to Pi omission without warning. Explicit `none` is also omitted because upstream Pi 0.87 common options have no explicit disable value; Token emits a bounded warning and retains the Pi/Provider default. Enabled levels remain distinct and may be clamped by Pi model metadata.
+Absent/null effort maps to Pi omission without warning. Explicit `none` is also omitted because upstream Pi 0.87 common options have no explicit disable value; Token emits a bounded warning, requests no Pi reasoning level, and leaves the resulting thinking/off/default behavior to the selected Pi adapter. Enabled levels remain distinct and may be clamped by Pi model metadata.
 
 ### 4.3 Local controls with partial implementation
 

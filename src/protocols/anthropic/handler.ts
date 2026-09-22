@@ -841,6 +841,7 @@ async function handleAnthropicMessages(
         kind: "conversion_notice_observed",
         code: notice.code,
         severity: notice.action === "ignore" ? "info" : "warning",
+        ...(notice.message === undefined ? {} : { message: notice.message }),
         location: invocationLocation,
       });
     }
@@ -895,6 +896,7 @@ async function handleAnthropicMessages(
           kind: "conversion_notice_observed",
           code: notice.code,
           severity: notice.action === "ignore" ? "info" : "warning",
+          ...(notice.message === undefined ? {} : { message: notice.message }),
           location: executionLocation,
         });
       },
@@ -1141,6 +1143,7 @@ async function handleAnthropicMessages(
         kind: "conversion_notice_observed",
         code: notice.code,
         severity: notice.action === "ignore" ? "info" : "warning",
+        ...(notice.message === undefined ? {} : { message: notice.message }),
         location: responseProjectionLocation,
       });
     }
