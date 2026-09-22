@@ -137,13 +137,23 @@ describe("Anthropic closed-world body acceptance", () => {
 });
 
 describe("Anthropic message-role validation", () => {
-  it("accepts the Token-compatible message-level system role", () => {
+  it("accepts the Anthropic message-level system role at a legal mid-conversation placement", () => {
     const invocation = parseAnthropicTextInvocation(
-      minimalBody({ messages: [{ role: "system", content: "runtime hint" }] }),
+      minimalBody({
+        messages: [
+          { role: "user", content: "before" },
+          { role: "system", content: "runtime hint" },
+        ],
+      }),
       1,
     );
     expect(invocation.invocation.pi.context.systemPrompt).toBeUndefined();
     expect(invocation.invocation.pi.context.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "before" }],
+        timestamp: 1,
+      },
       {
         role: "system",
         content: [{ type: "text", text: "runtime hint" }],

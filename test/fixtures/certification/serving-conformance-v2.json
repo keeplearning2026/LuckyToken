@@ -11,12 +11,12 @@
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:d4d72d21e1b23abea296a0605ec1ec2670fc2c2965c1ef207100374a8dad3f6b"
+      "sha256": "sha256:536c1c1b67de387a88008952f4d691ddcea5cfb77b6a8a47dec1f251ebbe0383"
     },
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:7da8193f9746ea9c4de53ee11148f4b87258f278cf44b948e19253e7594899b4"
+      "sha256": "sha256:11d3e87b7c0f9a929c403452c8247264728003df604791a287bf7d0eac5cf75c"
     },
     {
       "id": "pi-commandcode-conversion",

@@ -77,14 +77,16 @@ Every configurable ignore/xrepair/future-value fallback emits a request-local no
 6. Convert tools and options.
 7. Apply unresolved-call repair at semantic history boundaries.
 8. Prepare protocol-owned reasoning against the resolved Model.
-9. Apply the shared Pi Context compatibility seam: supported mid-system passes through;
-   unsupported pure-text mid-system becomes same-position `UserMessage`; complex
-   prompt/tool-state patches fail before dispatch.
-10. Freeze the final Pi invocation, execute Pi, then render JSON or atomic SSE.
+9. Invoke the shared Semantic Conversion execution seam. Its Pi Context compatibility
+   wrapper runs once before Profile credential attempts: supported mid-system returns by
+   identity; unsupported pure-text mid-system degrades with warning; a message inside a
+   pending tool exchange is deferred until the minimum matching result set closes;
+   complex prompt/tool-state patches fail before dispatch.
+10. Freeze the compatibility result, execute Pi, then render JSON or atomic SSE.
 
 The Client converter never inspects the selected concrete Provider's protocol or
 capabilities. The post-resolution Pi Context compatibility seam reads only the public Pi
-Model capability and never sees Provider Wire.
+Model capability and never sees Provider Wire or Profile retry state.
 
 ## 4. Top-level create fields
 
@@ -160,11 +162,23 @@ message has already appeared. Leading system messages remain system messages.
 
 For a mid-system message:
 
-- `model.compat?.supportsMidConvoSystemMessages === true` preserves the exact Pi message;
-- false/undefined converts a pure-text message to `UserMessage` at the same index,
-  preserving content and timestamp, and emits `pi_mid_system_degraded_to_user`;
-- `sections`, `toolsAdded`, or `toolsRemoved` make simple role degradation unsafe and
-  therefore fail before dispatch.
+- `model.compat?.supportsMidConvoSystemMessages === true` returns the exact Context and
+  message array by identity, including any `sections`, `toolsAdded`, or `toolsRemoved`;
+- false/undefined converts a pure-text message to `UserMessage`, preserving content and
+  timestamp, and emits `pi_mid_system_degraded_to_user`;
+- when a pure-text mid-system occurs after an unresolved Pi ToolCall, the degraded user
+  message is held until the minimum matching ToolResult set closes, so Pi never sees a
+  user interruption that would synthesize `No result provided`; this relocation is a
+  bounded, explicitly warned availability degradation, not an exact conversion;
+- compatibility validates only the minimum tool-exchange conditions required for that
+  relocation. It does not validate the whole tool history. A user/assistant boundary or
+  end-of-input before required closure fails;
+- for unsupported targets, `sections`, `toolsAdded`, or `toolsRemoved` cannot be
+  role-degraded and therefore fail before dispatch.
+
+A Responses source sequence `function_call → system/developer → function_call_output`
+continues to map in source order to Pi `ToolCall → SystemMessage → ToolResult`; the
+Client converter does not invent an Anthropic-style placement restriction.
 
 `Context.systemPrompt` is never rewritten by this compatibility step. This prevents Pi's
 unsupported-target fallback from folding a later system instruction into the leading

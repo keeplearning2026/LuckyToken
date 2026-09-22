@@ -1,6 +1,6 @@
 {
   "name": "@token/provider-commandcode-goat",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "type": "module",
   "files": [
@@ -18,7 +18,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.86.1",
-    "@token/commandcode-model-catalog": "1.0.3",
-    "@token/provider-contract": "1.0.3"
+    "@token/commandcode-model-catalog": "1.0.4",
+    "@token/provider-contract": "1.0.4"
   }
 }

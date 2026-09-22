@@ -19,6 +19,57 @@ const parallelCalls = {
 };
 
 describe("Anthropic tool turns", () => {
+  it("rejects a content-carrying system message between tool_use and its tool_result", () => {
+    expect(() =>
+      validateAnthropicSourceRequest(
+        request([
+          { role: "user", content: "run" },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "call", name: "lookup", input: {} },
+            ],
+          },
+          { role: "system", content: "mid-tool instruction" },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "call", content: "done" }],
+          },
+        ]),
+      ),
+    ).toThrow(InvalidRequest);
+  });
+
+  it("accepts a system message after tool results and preserves it at that Pi position", () => {
+    const conversion = convertValidatedAnthropicRequest(
+      validateAnthropicSourceRequest(
+        request([
+          { role: "user", content: "run" },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "call", name: "lookup", input: {} },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "call", content: "done" }],
+          },
+          { role: "system", content: "new instruction" },
+          { role: "assistant", content: "continuing" },
+        ]),
+      ),
+      1,
+    );
+
+    expect(conversion.invocation.pi.context.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "system",
+      "assistant",
+    ]);
+  });
   it("accepts the direct caller projection on replay and discards no tool semantic", () => {
     const conversion = convertValidatedAnthropicRequest(
       validateAnthropicSourceRequest(

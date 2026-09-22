@@ -135,15 +135,22 @@ Input messages with role `system` or `developer` are preserved at their original
 position as Pi `SystemMessage`. The Client adapter does not own a target-specific
 promotion/degradation policy and no longer exposes the legacy privileged-message configuration.
 
-After model resolution, the shared Pi Context compatibility seam handles only the
-model-dependent mid-system case. A pure-text mid-system passes through unchanged when
-`supportsMidConvoSystemMessages` is true; otherwise it becomes a same-position Pi user
-message with `pi_mid_system_degraded_to_user`. Complex prompt/tool-state patches cannot
-be safely role-degraded and fail before dispatch. Leading system messages are not
+After model resolution, the shared Pi Context compatibility execution seam handles only
+the model-dependent mid-system case. `supportsMidConvoSystemMessages === true` returns
+the Context by identity. Otherwise a pure-text mid-system degrades to Pi user content
+with `pi_mid_system_degraded_to_user`. If it lies inside an unresolved tool exchange,
+the degraded user entry is delayed until the minimum matching ToolResult set closes;
+this is a bounded, explicitly warned availability degradation. Compatibility validates
+only what that relocation needs, not the whole tool history. Unsupported complex
+prompt/tool-state patches fail before dispatch. Leading system messages are not
 considered mid-system.
 
-This preserves instruction timing and prevents unsupported-target Pi fallback from
-moving a later instruction into the leading system prefix.
+A source `function_call → system/developer → function_call_output` remains legal input
+to this converter and preserves source order as Pi `ToolCall → SystemMessage →
+ToolResult`; target compatibility is applied only after conversion.
+
+This prevents unsupported-target Pi fallback from moving a later instruction into the
+leading system prefix without making the Client converter target-aware.
 
 ## 6. Tools
 

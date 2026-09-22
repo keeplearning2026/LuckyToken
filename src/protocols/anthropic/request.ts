@@ -377,6 +377,47 @@ function validateToolChoice(value: unknown): AnthropicToolChoice | undefined {
   throw new InvalidRequest(`tool_choice.type is not supported: ${value.type}`);
 }
 
+const SERVER_TOOL_RESULT_TYPES: ReadonlySet<string> = new Set([
+  "web_search_tool_result",
+  "web_fetch_tool_result",
+  "code_execution_tool_result",
+  "bash_code_execution_tool_result",
+  "text_editor_code_execution_tool_result",
+  "tool_search_tool_result",
+]);
+
+function assistantEndsInServerToolResult(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return false;
+  const last = message.content.at(-1);
+  return isRecord(last) && typeof last.type === "string" && SERVER_TOOL_RESULT_TYPES.has(last.type);
+}
+
+function validateMidConversationSystemPlacement(
+  messages: readonly Record<string, unknown>[],
+): void {
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index]?.role !== "system") continue;
+    if (index > 0 && messages[index - 1]?.role === "system") continue;
+
+    let groupEnd = index;
+    while (messages[groupEnd + 1]?.role === "system") groupEnd += 1;
+
+    const previous = messages[index - 1];
+    const next = messages[groupEnd + 1];
+    const validPrevious =
+      previous?.role === "user" ||
+      (previous !== undefined && assistantEndsInServerToolResult(previous));
+    const validNext = next === undefined || next.role === "assistant";
+
+    if (!validPrevious || !validNext) {
+      throw new InvalidRequest(
+        `mid-conversation system message placement is invalid at messages[${index}]`,
+      );
+    }
+    index = groupEnd;
+  }
+}
+
 function validateMessages(
   messages: unknown,
 ): {
@@ -435,6 +476,7 @@ function validateMessages(
     }
     normalized.push({ role: message.role, content: message.content });
   }
+  validateMidConversationSystemPlacement(normalized);
   return {
     messages: normalized,
     hasImages: facts.hasImages,

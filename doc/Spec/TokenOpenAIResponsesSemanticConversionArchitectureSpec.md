@@ -89,14 +89,27 @@ The reasoning adapter registry is a continuity codec over Pi fields. It has no
 
 ## 6. Execution
 
-The protocol execution coordinator prepares reasoning, then applies the shared
-`preparePiContextForModel(model, context)` compatibility seam before immutable freeze
-and neutral execution. The seam reads only Pi public Model/Context facts. For a
-mid-conversation `SystemMessage`, verified model support preserves it exactly;
-unsupported pure-text messages become same-position `UserMessage` entries with a
-bounded `pi_mid_system_degraded_to_user` warning. Mid-system prompt-section or tool-state
-patches fail before dispatch because role conversion cannot preserve their semantics.
-Leading system messages are not degraded.
+The protocol execution coordinator prepares Responses-owned reasoning and then invokes
+one shared Semantic Conversion execution operation. Outside the protocol tree, the
+Pi Context compatibility wrapper runs exactly once before Profile credential binding and
+retry, then freezes the final Pi invocation and delegates to raw execution.
+
+The compatibility seam reads only Pi public Model/Context facts. For a
+mid-conversation `SystemMessage`, `supportsMidConvoSystemMessages === true` returns the
+Context by identity, including `sections`, `toolsAdded`, and `toolsRemoved`, so Pi keeps
+ownership of finer Provider capability handling. For false/undefined support, pure-text
+messages degrade to `UserMessage` and emit `pi_mid_system_degraded_to_user`. If a
+mid-system lies between Pi ToolCall and the minimum matching ToolResult set needed to
+close that exchange, the degraded user message is deferred until those results arrive.
+This relocation is a bounded, explicitly warned availability degradation; compatibility
+checks only the minimum conditions needed for that relocation and does not validate the
+whole tool history. A user/assistant boundary or end-of-input before the required closure
+fails. Mid-system prompt-section or tool-state patches also fail because role conversion
+cannot preserve them. Leading system messages are not degraded.
+
+Responses source conversion deliberately keeps a `system`/`developer` item between a
+`function_call` and `function_call_output` as Pi `SystemMessage`; target compatibility is
+not a Client grammar rule.
 
 The neutral `src/execution.ts` module remains policy-free and only invokes
 `Models.streamSimple()`. Protocol execution options contain no Provider callbacks.

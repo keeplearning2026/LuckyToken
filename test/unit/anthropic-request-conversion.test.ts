@@ -78,11 +78,10 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
     expect(roles).toEqual(["user", "assistant", "toolResult"]);
   });
 
-  it("keeps top-level system separate and preserves every message-level system in source order", () => {
+  it("keeps top-level system separate and preserves a legal message-level system in source order", () => {
     const invocation = parseAnthropicTextInvocation(
       body(
         [
-          { role: "system", content: "message instruction" },
           { role: "user", content: "hello" },
           { role: "system", content: [{ type: "text", text: "later" }] },
         ],
@@ -93,11 +92,6 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
 
     expect(invocation.invocation.pi.context.systemPrompt).toBe("top instruction");
     expect(invocation.invocation.pi.context.messages).toEqual([
-      {
-        role: "system",
-        content: [{ type: "text", text: "message instruction" }],
-        timestamp: 1,
-      },
       { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
       {
         role: "system",
@@ -108,9 +102,74 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
     expect(invocation.client.notices).toEqual([]);
   });
 
-  it("preserves empty message-level system text as an empty Pi SystemMessage", () => {
+  it("rejects Anthropic mid-system placement between tool_use and its tool_result", () => {
+    expect(() =>
+      validateAnthropicSourceRequest(
+        body([
+          { role: "user", content: "run" },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "call", name: "lookup", input: {} }],
+          },
+          { role: "system", content: "new operator context" },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "call", content: "done" }],
+          },
+        ]),
+      ),
+    ).toThrow(/mid-conversation system.*placement/iu);
+  });
+
+  it("accepts Anthropic system placement after tool results and before the next assistant turn", () => {
     const invocation = parseAnthropicTextInvocation(
       body([
+        { role: "user", content: "run" },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call", name: "lookup", input: {} }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "call", content: "done" }],
+        },
+        { role: "system", content: "new operator context" },
+        { role: "assistant", content: "continuing" },
+      ]),
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "system",
+      "assistant",
+    ]);
+  });
+
+  it("rejects content-carrying Anthropic system messages at other invalid placements", () => {
+    for (const messages of [
+      [
+        { role: "system", content: "first" },
+        { role: "user", content: "hello" },
+      ],
+      [
+        { role: "user", content: "hello" },
+        { role: "system", content: "middle" },
+        { role: "user", content: "again" },
+      ],
+    ]) {
+      expect(() => validateAnthropicSourceRequest(body(messages))).toThrow(
+        /mid-conversation system.*placement/iu,
+      );
+    }
+  });
+
+  it("preserves consecutive legal message-level system entries including empty text", () => {
+    const invocation = parseAnthropicTextInvocation(
+      body([
+        { role: "user", content: "before" },
         { role: "system", content: "system" },
         { role: "system", content: "" },
       ]),
@@ -118,6 +177,7 @@ describe("05: Anthropic message order and system-prompt semantics", () => {
     );
 
     expect(invocation.invocation.pi.context.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "before" }], timestamp: 1 },
       { role: "system", content: [{ type: "text", text: "system" }], timestamp: 1 },
       { role: "system", content: [], timestamp: 1 },
     ]);

@@ -13,6 +13,7 @@ import type {
 } from "./codex-direct-seam.js";
 import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
 import { createExecutionOperation } from "./execution.js";
+import { createPiContextCompatibleExecution } from "./pi-context-compatibility-execution.js";
 import type { ProviderAuthBindingAuthority } from "./credentials/profile-contract.js";
 import { credentialActivityForExecutionFacts } from "./credentials/activity.js";
 import type { ClientProtocolHandler } from "./http.js";
@@ -117,11 +118,14 @@ export async function createConfiguredTokenDataPlane(
     : undefined;
   const now = options.now ?? Date.now;
   const createSessionId = options.createSessionId ?? randomUUID;
-  const semanticExecution = createProfileBoundPiExecution({
+  const profileBoundPiExecution = createProfileBoundPiExecution({
     bindings: options.providerAuthBindings,
     execute: createExecutionOperation(),
     resolveCredentialActivity: credentialActivityForExecutionFacts,
   });
+  const semanticExecution = createPiContextCompatibleExecution(
+    profileBoundPiExecution,
+  );
   const anthropicProviderNativeLane = createAnthropicProviderNativeLane({
     models: options.models,
     bindings: options.providerAuthBindings,

@@ -160,9 +160,19 @@ compose; it does not give the Client Protocol ownership of that request.
 
 ## 7. Execution and observation
 
-The shared execution capability accepts only Models, resolved Model, `Context`, Pi
-options, diagnostic sinks, and an optional infrastructure observation capability. It
-contains no Client field mapping or target selection.
+The shared Semantic Conversion execution capability accepts only Models, resolved Model,
+`Context`, Pi options, diagnostic sinks, and an optional infrastructure observation
+capability. It contains no Client field mapping or target selection.
+
+Before any Profile credential attempt, one Pi Context compatibility wrapper adapts only
+model-resolved Pi IR. Supported mid-conversation system semantics pass through by
+identity. Unsupported pure-text mid-system may degrade to user content; if preserving
+ToolCall/ToolResult relation requires relocation, the wrapper validates only the minimum
+tool-exchange conditions required for that move and emits an explicit degradation
+notice. It does not validate the whole tool history. Unsafe or unprovable degradation
+fails before Provider attempts. Profile retry then wraps the raw policy-free Pi execution
+operation, so one request performs compatibility once even when Provider credentials are
+retried.
 
 Pi `onPayload` remains legal for Provider tests, bounded diagnostics, and explicit
 low-level infrastructure hooks. Client Protocol production modules do not create it.

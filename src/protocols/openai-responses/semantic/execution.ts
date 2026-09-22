@@ -7,14 +7,10 @@ import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
 import {
   execute,
-  freezePiInvocation,
   type ExecutionObservation,
   type ExecutionOperation,
 } from "../../../execution.js";
-import {
-  PiContextCompatibilityError,
-  preparePiContextForModel,
-} from "../../../pi-context-compatibility.js";
+import { PiContextCompatibilityError } from "../../../pi-context-compatibility-error.js";
 import { InvalidRequest } from "../request.js";
 import type { ResponsesSemanticInvocation } from "./invocation.js";
 import { prepareResponsesReasoning } from "./reasoning/request.js";
@@ -32,24 +28,6 @@ export interface ResponsesSemanticExecutionCapabilities {
 export interface ResponsesSemanticExecutionResult {
   readonly message: AssistantMessage;
   readonly reasoningOutcomes: readonly ResponsesReasoningOutcome[];
-}
-
-function publishCompatibilityWarnings(
-  outcomes: readonly { readonly code: "pi_mid_system_degraded_to_user" }[],
-  factsSink: ExecutionFactsSink | undefined,
-): void {
-  for (const outcome of outcomes) {
-    try {
-      factsSink?.notice({
-        adapter: "openai-responses",
-        direction: "request",
-        code: outcome.code,
-        action: "degrade",
-      });
-    } catch {
-      // Diagnostics are fail-open and cannot affect semantic execution.
-    }
-  }
 }
 
 function publishReasoningWarnings(
@@ -97,18 +75,6 @@ export async function executeOpenAIResponsesSemanticInvocation(input: {
   });
   publishReasoningWarnings(prepared.outcomes, input.infrastructure.factsSink);
 
-  let compatible;
-  try {
-    compatible = preparePiContextForModel(input.model, prepared.context);
-  } catch (error) {
-    if (error instanceof PiContextCompatibilityError) {
-      throw new InvalidRequest(error.message);
-    }
-    throw error;
-  }
-  publishCompatibilityWarnings(compatible.outcomes, input.infrastructure.factsSink);
-
-  freezePiInvocation(input.model, compatible.context, prepared.options);
   const operation = input.infrastructure.executeOperation ?? execute;
   const providerEvidence = input.infrastructure.providerEvidence;
   const observation: ExecutionObservation | undefined =
@@ -120,14 +86,22 @@ export async function executeOpenAIResponsesSemanticInvocation(input: {
             ? {}
             : { providerResponse: providerEvidence.response }),
         };
-  const message = await operation(
-    input.models,
-    input.model,
-    compatible.context,
-    prepared.options,
-    input.infrastructure.factsSink,
-    observation,
-  );
+  let message: AssistantMessage;
+  try {
+    message = await operation(
+      input.models,
+      input.model,
+      prepared.context,
+      prepared.options,
+      input.infrastructure.factsSink,
+      observation,
+    );
+  } catch (error) {
+    if (error instanceof PiContextCompatibilityError) {
+      throw new InvalidRequest(error.message);
+    }
+    throw error;
+  }
   return Object.freeze({
     message,
     reasoningOutcomes: prepared.outcomes,

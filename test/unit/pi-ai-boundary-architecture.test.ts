@@ -62,18 +62,40 @@ describe("Pi AI semantic boundary architecture", () => {
     }
   });
 
-  it("keeps mid-system capability policy out of Client converters and neutral execution", async () => {
+  it("keeps mid-system compatibility out of Client Protocols and raw execution", async () => {
     for (const root of protocolRoots) {
       for (const file of await collectTypeScriptFiles(root)) {
-        if (!file.endsWith("request.ts")) continue;
         const source = await readFile(file, "utf8");
-        expect(source, relative(process.cwd(), file)).not.toContain(
-          "supportsMidConvoSystemMessages",
-        );
+        const label = relative(process.cwd(), file);
+        expect(source, label).not.toContain("supportsMidConvoSystemMessages");
+        expect(source, label).not.toContain("preparePiContextForModel");
+        expect(source, label).not.toContain("pi-context-compatibility.js");
       }
     }
     const execution = await readFile("src/execution.ts", "utf8");
     expect(execution).not.toContain("preparePiContextForModel");
+  });
+
+  it("gives Pi Context compatibility exactly one production execution caller", async () => {
+    const callers: string[] = [];
+    for (const file of await collectTypeScriptFiles("src")) {
+      if (file.endsWith("pi-context-compatibility.ts")) continue;
+      const source = await readFile(file, "utf8");
+      if (source.includes("preparePiContextForModel(")) {
+        callers.push(relative(process.cwd(), file).replaceAll("\\", "/"));
+      }
+    }
+    expect(callers).toEqual(["src/pi-context-compatibility-execution.ts"]);
+  });
+
+  it("composes compatibility once outside Profile retry and raw Pi execution", async () => {
+    const source = await readFile("src/composition.ts", "utf8");
+    expect(source).toContain(
+      "execute: createExecutionOperation(),",
+    );
+    expect(source).toContain(
+      "createPiContextCompatibleExecution(\n    profileBoundPiExecution,\n  )",
+    );
   });
 
   it("keeps Pi Context compatibility model-agnostic apart from the public capability", async () => {

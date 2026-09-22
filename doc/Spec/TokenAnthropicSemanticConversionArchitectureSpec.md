@@ -43,17 +43,22 @@ The invocation contains:
 - bounded notices.
 
 The Client converter produces public `Context`, not `TranscriptContext`. Top-level
-`system` remains `Context.systemPrompt`. Token-compatible message-level `system` text is
-preserved at its original transcript position as Pi `SystemMessage`; content such as
-images that Pi `SystemMessage` cannot represent remains a Client→Pi representability
-failure. Model-dependent support is not inspected by the converter.
+`system` remains `Context.systemPrompt`. Message-level `system` text is accepted only at
+Anthropic-valid mid-conversation placement: a consecutive system group must immediately
+follow a user turn (including a tool-result turn) or an assistant turn ending in a server
+tool result, and must be followed by an assistant turn or end the message array. In
+particular, `tool_use → system → tool_result` is Client-invalid and fails before Pi IR.
+A legal message-level system is preserved at its original transcript position as Pi
+`SystemMessage`; content such as images that Pi `SystemMessage` cannot represent remains
+a Client→Pi representability failure. Model-dependent support is not inspected by the
+converter.
 
 ## 4. Field disposition ledger
 
 | Source fact | Destination | Behavior |
 | --- | --- | --- |
 | top-level system text | `pi-context` | initial system prompt |
-| Token-compatible message-level system text | `pi-context` | same-position Pi `SystemMessage`; target compatibility handled after model resolution |
+| legal message-level system text | `pi-context` | validate Anthropic placement, then preserve as same-position Pi `SystemMessage`; target compatibility handled after model resolution |
 | ordinary messages and supported images | `pi-context` | preserve model-visible content |
 | tools, tool-use IDs, tool results | `pi-context` | invalid identity/relationship fails |
 | `max_tokens` | `pi-common-option` | hard total output ceiling |
@@ -89,12 +94,20 @@ block.
 
 ## 6. Execution and response
 
-After Anthropic reasoning preparation, the semantic coordinator applies the shared
-`preparePiContextForModel(model, context)` compatibility seam before freeze. Supported
-mid-system text passes through unchanged. Unsupported pure-text mid-system entries
-become same-position Pi `UserMessage` entries and emit
-`pi_mid_system_degraded_to_user`; mid-system prompt/tool-state patch fields fail before
-dispatch. Leading system messages are left intact.
+After Anthropic reasoning preparation, the semantic coordinator invokes the shared
+Semantic Conversion execution operation. Outside the protocol tree, one Pi Context
+compatibility wrapper runs exactly once before Profile credential binding/retry, freezes
+the final invocation, and delegates to raw execution.
+
+For `supportsMidConvoSystemMessages === true`, compatibility returns the entire Context
+by identity and leaves finer `sections`/tool-change capability handling to Pi. For
+false/undefined support, ordinary pure-text mid-system entries degrade to `UserMessage`
+and emit `pi_mid_system_degraded_to_user`; a tool-span relocation, if ever present in Pi
+IR from another source, is a bounded, explicitly warned availability degradation and
+checks only the minimum tool-exchange conditions needed for that move. Anthropic Client
+Wire itself cannot create the client-tool form `tool_use → system → tool_result`, because
+that placement is rejected during source validation. Complex prompt/tool-state patches
+fail for unsupported targets. Leading system messages are left intact.
 
 The Anthropic semantic coordinator then invokes the neutral execution operation without
 Provider callbacks in its options. Optional Provider request/response observation is

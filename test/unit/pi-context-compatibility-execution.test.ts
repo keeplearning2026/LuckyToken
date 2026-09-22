@@ -8,6 +8,7 @@ import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 import { describe, expect, it } from "vitest";
 
 import type { ExecutionOperation } from "../../src/execution.js";
+import { createPiContextCompatibleExecution } from "../../src/pi-context-compatibility-execution.js";
 import { InvalidRequest as AnthropicInvalidRequest } from "../../src/protocols/anthropic/failures.js";
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
 import { executeAnthropicSemanticInvocation } from "../../src/protocols/anthropic/semantic/execution.js";
@@ -86,7 +87,9 @@ describe("semantic execution Pi Context compatibility", () => {
       models,
       model: model("openai-responses", true),
       invocation,
-      infrastructure: { executeOperation: captureExecution(captured) },
+      infrastructure: {
+        executeOperation: createPiContextCompatibleExecution(captureExecution(captured)),
+      },
     });
 
     expect(captured).toHaveLength(1);
@@ -123,7 +126,7 @@ describe("semantic execution Pi Context compatibility", () => {
       model: model("openai-responses", false),
       invocation,
       infrastructure: {
-        executeOperation: captureExecution(captured),
+        executeOperation: createPiContextCompatibleExecution(captureExecution(captured)),
         factsSink,
       },
     });
@@ -169,13 +172,13 @@ describe("semantic execution Pi Context compatibility", () => {
     await expect(
       executeOpenAIResponsesSemanticInvocation({
         models,
-        model: model("openai-responses", true),
+        model: model("openai-responses", false),
         invocation,
         infrastructure: {
-          executeOperation: async () => {
+          executeOperation: createPiContextCompatibleExecution(async () => {
             executed = true;
             return assistant("openai-responses");
-          },
+          }),
         },
       }),
     ).rejects.toBeInstanceOf(ResponsesInvalidRequest);
@@ -190,7 +193,6 @@ describe("semantic execution Pi Context compatibility", () => {
         messages: [
           { role: "user", content: "before" },
           { role: "system", content: "later" },
-          { role: "user", content: "after" },
         ],
       },
       1,
@@ -201,11 +203,12 @@ describe("semantic execution Pi Context compatibility", () => {
       models,
       model: model("anthropic-messages", false),
       invocation: conversion.invocation,
-      execution: { executeOperation: captureExecution(captured) },
+      execution: {
+        executeOperation: createPiContextCompatibleExecution(captureExecution(captured)),
+      },
     });
 
     expect(captured[0]?.messages.map((message) => message.role)).toEqual([
-      "user",
       "user",
       "user",
     ]);
@@ -243,13 +246,13 @@ describe("semantic execution Pi Context compatibility", () => {
     await expect(
       executeAnthropicSemanticInvocation({
         models,
-        model: model("anthropic-messages", true),
+        model: model("anthropic-messages", false),
         invocation,
         execution: {
-          executeOperation: async () => {
+          executeOperation: createPiContextCompatibleExecution(async () => {
             executed = true;
             return assistant("anthropic-messages");
-          },
+          }),
         },
       }),
     ).rejects.toBeInstanceOf(AnthropicInvalidRequest);

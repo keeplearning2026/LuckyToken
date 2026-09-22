@@ -138,17 +138,19 @@ Anthropic user [text A, tool_result X, text B]
 
 Empty ordinary fragments are not emitted. Adjacent Pi messages of the same role MAY be merged only when merging cannot cross a ToolCall/ToolResult boundary or change source order.
 
-### 5.2 Non-standard message `role="system"`
+### 5.2 Message `role="system"`
 
-Although the installed Anthropic SDK places system content at the top level, Token supports a compatibility extension in `messages[]`.
+Current Anthropic Messages supports mid-conversation system messages with constrained placement, and Token validates that Client grammar before constructing Pi IR.
 
 1. Top-level `system` alone maps to `Context.systemPrompt`.
-2. Every message-level `role="system"` entry is preserved at its source position as a Pi `SystemMessage`.
-3. String content maps to Pi system text; a text-block array maps to `TextContent[]` without trimming or promotion.
-4. Non-text message-level system content such as images is a Client→Pi representability failure because Pi `SystemMessage` cannot carry it safely.
-5. The converter does not inspect model/provider capability and emits no ingress degradation warning merely because a message-level system exists.
+2. A consecutive message-level `role="system"` group must immediately follow a `user` turn (including a user turn carrying tool results) or an `assistant` turn ending in a server tool result, and must be followed by an `assistant` turn or the end of `messages`.
+3. In particular, client-tool history `assistant tool_use → system → user tool_result` is invalid Anthropic Wire and fails at the Client Protocol seam; Pi compatibility does not repair it.
+4. Every placement-valid message-level system entry is preserved at its source position as a Pi `SystemMessage`.
+5. String content maps to Pi system text; a text-block array maps to `TextContent[]` without trimming or promotion.
+6. Non-text message-level system content such as images is a Client→Pi representability failure because Pi `SystemMessage` cannot carry it safely.
+7. The converter does not inspect model/provider capability and emits no ingress degradation warning merely because a legal message-level system exists.
 
-After reasoning preparation and model resolution, the shared Pi Context compatibility seam handles target support. A mid-system message is one that appears after any non-system Pi message. Verified support preserves it unchanged; false/undefined support degrades a pure-text mid-system to a same-position `UserMessage` and emits `pi_mid_system_degraded_to_user`. `sections`, `toolsAdded`, or `toolsRemoved` cannot be role-degraded safely and therefore fail before dispatch. `Context.systemPrompt` remains unchanged.
+After reasoning preparation and model resolution, one shared Pi Context compatibility execution seam handles target support before Profile attempts. Verified support returns the Context by identity. False/undefined support degrades pure-text mid-system to `UserMessage` with `pi_mid_system_degraded_to_user`; if relocation through a pending tool exchange is necessary, compatibility validates only the minimum tool-exchange facts required for that move and emits the same degradation warning. Such relocation is bounded availability degradation, not exact conversion. For unsupported targets, `sections`, `toolsAdded`, or `toolsRemoved` cannot be role-degraded safely and therefore fail before dispatch. `Context.systemPrompt` remains unchanged.
 
 ### 5.3 User content
 

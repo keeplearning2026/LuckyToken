@@ -20,11 +20,13 @@ independent data-plane lanes.
    callbacks, semantic `pi-execution.ts` wrappers, and projector-only tests are deleted.
 3. Client Protocol conversion preserves every stable neutral fact that the Pi public
    contract can express. It does not decide whether a selected Provider supports it.
-4. After model resolution and before immutable freeze, LuckyToken's Pi Context
-   compatibility seam may repair a Pi-semantic incompatibility only when passing it to
-   Pi unchanged would itself alter Client-visible semantics. The current rule is
-   limited to mid-conversation `SystemMessage`: verified support passes through;
-   unsupported pure-text messages degrade in place to `UserMessage`; prompt/tool-state
+4. After protocol-specific semantic preparation, one model-resolved Pi Context
+   compatibility execution seam runs exactly once before Profile credential attempts.
+   For mid-conversation `SystemMessage`, verified support is identity-preserving;
+   unsupported pure-text messages degrade to `UserMessage`. If such a message lies
+   inside a pending tool exchange, degradation is delayed until the minimum observed
+   call/result set needed for that relocation closes. That relocation is a bounded,
+   explicitly warned availability degradation, not an exact conversion. Prompt/tool-state
    patch messages fail before dispatch.
 5. Pi `Models` owns Provider resolution, authentication application, `Context`
    normalization, and dispatch.
@@ -55,6 +57,14 @@ Client Wire
 Client Protocol request conversion
     ↓
 Pi Context + ModelsSimpleStreamOptions + Client render/continuity state
+    ↓
+protocol-specific reasoning / continuity preparation
+    ↓
+Pi Context compatibility execution
+    ↓
+Profile credential binding / retry
+    ↓
+raw Pi execution
     ↓
 Pi Models
     ↓ normalizeContext()
@@ -299,9 +309,14 @@ an official signed release.
 5. Client Protocols preserve portable Pi semantics without inspecting Provider
    capability.
 6. The shared Pi Context compatibility seam reads only resolved Pi Model capability and
-   may repair only Pi IR itself; it never reads or writes Provider Wire.
-7. Unsupported pure-text mid-system messages are degraded at their original transcript
-   position before Pi Models can collapse them; complex prompt/tool-state patches fail.
+   may repair only Pi IR itself; it never reads or writes Provider Wire. It is composed
+   once outside Client Protocols and outside the Profile retry loop.
+7. Supported mid-system Context is returned by identity. Unsupported pure-text
+   mid-system messages degrade in place when no tool exchange is pending; when relocation
+   is necessary, compatibility validates only the minimum tool-exchange conditions needed
+   for that move, places the degraded user message after the completed exchange, and emits
+   a warning. It does not validate the whole tool history. Complex prompt/tool-state
+   patches fail.
 8. Provider adapters own Provider Wire and all remaining capability mapping.
 9. Projector and Supplement production trees are absent.
 10. Client Protocol semantic modules create no `onPayload` callback; optional Neutral
