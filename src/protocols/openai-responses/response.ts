@@ -1,7 +1,4 @@
-import type {
-  AssistantMessage,
-  ModelsSimpleStreamOptions,
-} from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 import {
   extractResponsesReasoning,
@@ -177,10 +174,8 @@ export type ResponsesEchoTool =
   | ResponsesEchoFunctionTool
   | ResponsesEchoCustomTool;
 
-/** Tool-choice values expressible by the pinned Pi common options contract. */
-export type ResponsesResponseToolChoice = NonNullable<
-  ModelsSimpleStreamOptions["toolChoice"]
->;
+/** Legal Responses tool-choice values emitted by the current adapter profile. */
+export type ResponsesResponseToolChoice = "auto" | "none";
 
 /**
  * Immediate Responses projection derived after execution from the effective Pi

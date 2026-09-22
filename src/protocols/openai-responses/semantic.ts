@@ -48,6 +48,7 @@ import {
   type PreparedHttpResponse,
   type ResponsesEchoTool,
   type ResponsesResponseProjection,
+  type ResponsesResponseToolChoice,
   type ResponsesResponseObject,
 } from "./response.js";
 import {
@@ -350,6 +351,27 @@ function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
   return tools;
 }
 
+/** Project the Pi common semantic into the Client-owned Responses wire subset.
+ *  The exhaustive branch makes a future Pi expansion require an intentional
+ *  Responses mapping instead of silently widening the Client contract. */
+function projectToolChoice(
+  choice: ModelsSimpleStreamOptions["toolChoice"],
+): ResponsesResponseToolChoice {
+  switch (choice) {
+    case undefined:
+    case "auto":
+      return "auto";
+    case "none":
+      return "none";
+    default: {
+      const exhaustiveChoice: never = choice;
+      throw new TypeError(
+        `Unsupported effective Pi tool choice: ${String(exhaustiveChoice)}`,
+      );
+    }
+  }
+}
+
 function buildResponseProjection(
   invocation: ResponsesInvocation,
   unknownPiContent: "error" | "ignore",
@@ -367,7 +389,7 @@ function buildResponseProjection(
   const namespaceReverse = state.namespaceReverse;
   return Object.freeze({
     model: invocation.selector,
-    toolChoice: invocation.invocation.pi.options.toolChoice ?? "auto",
+    toolChoice: projectToolChoice(invocation.invocation.pi.options.toolChoice),
     temperature: invocation.invocation.pi.options.temperature ?? null,
     tools,
     ...(freeformNames === undefined || freeformNames.size === 0
