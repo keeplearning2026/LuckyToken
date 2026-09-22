@@ -27,7 +27,8 @@ export {
   type PreparedResponsesError,
   type ResponsesEchoTool,
   type ResponsesError,
-  type ResponsesRenderState,
+  type ResponsesResponseProjection,
+  type ResponsesResponseToolChoice,
   type ResponsesResponseObject,
 } from "./response.js";
 export { renderResponsesSse } from "./sse.js";

@@ -42,7 +42,6 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
     ]);
     expect(invocation.invocation.pi.options.maxTokens).toBe(100);
     expect(invocation.client.renderState).toEqual({
-      clientModel: "commandcode-private/deepseek/deepseek-v4-flash",
       stream: true,
     });
   });
@@ -813,7 +812,7 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     expect(invocation.invocation.pi.options.samplingParams).toBeUndefined();
     expect(invocation.invocation.pi.options.cacheRetention).toBeUndefined();
     expect(invocation.invocation.pi.options).not.toHaveProperty("parallelToolCalls");
-    expect(invocation.client.renderState.parallelToolCalls).toBe(false);
+    expect(invocation.client.renderState).toEqual({ stream: true });
     expect(invocation.client.notices).toContainEqual(
       expect.objectContaining({
         code: "openai-responses_parallel_tool_calls_omitted",
@@ -1286,39 +1285,29 @@ describe("13: Responses privileged prompts, options, and handles", () => {
     ).toThrow(/item_reference cannot be resolved/);
   });
 
-  it("retains valid source metadata only for request-local response echo", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        input: "x",
-        metadata: { thread: "t-1" },
+  it("leaves metadata unread and reports it as an unconsumed field", () => {
+    let reads = 0;
+    const body: Record<string, unknown> = { model: "m", input: "x" };
+    Object.defineProperty(body, "metadata", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        throw new Error("metadata must remain unread");
       },
-      1,
-      policy(),
-    );
-    expect(invocation.client.renderState.metadataEcho).toEqual({ thread: "t-1" });
+    });
+
+    const invocation = convertResponsesRequest(body, 1, policy());
+    expect(reads).toBe(0);
+    expect(invocation.client.renderState).toEqual({ stream: false });
     expect(invocation.invocation.pi.options.metadata).toBeUndefined();
     expect(invocation.invocation.pi.context).not.toHaveProperty("metadata");
-  });
-
-  it("rejects invalid metadata values and SDK count/length overflow", () => {
-    for (const metadata of [
-      { numeric: 42 },
-      { nested: { a: 1 } },
-      Object.fromEntries(
-        Array.from({ length: 17 }, (_, index) => [`key-${index}`, "value"]),
-      ),
-      { ["k".repeat(65)]: "value" },
-      { key: "v".repeat(513) },
-    ]) {
-      expect(() =>
-        convertResponsesRequest(
-          { model: "m", input: "x", metadata },
-          1,
-          policy(),
-        ),
-      ).toThrow(/metadata/u);
-    }
+    expect(invocation.client.notices).toContainEqual(
+      expect.objectContaining({
+        code: "openai-responses_unconsumed_request_field_ignored",
+        jsonPath: "$.metadata",
+        action: "ignore",
+      }),
+    );
   });
 
   it("applies unknownInputItem=error by default and ignore with a notice", () => {
@@ -1616,45 +1605,6 @@ describe("13 recheck: temperature range is validated", () => {
   });
 });
 
-describe("13 recheck: prototype pollution resistance", () => {
-  it("does not let metadata __proto__/constructor keys pollute the echo object", () => {
-    const invocation = convertResponsesRequest(
-      {
-        model: "m",
-        input: "x",
-        metadata: {
-          __proto__: { polluted: true },
-          constructor: "ctor-value",
-          normal: "safe",
-        },
-      },
-      1,
-      policy(),
-    );
-    const echo = invocation.client.renderState.metadataEcho ?? {};
-    expect(Object.keys(echo).sort()).toEqual(["constructor", "normal"]);
-    // The echo object is null-prototype: hostile keys cannot pollute it.
-    expect(Object.getPrototypeOf(echo)).toBeNull();
-    expect((echo as Record<string, unknown>).polluted).toBeUndefined();
-  });
-});
-
-describe("13 recheck: prototype pollution via JSON.parse input", () => {
-  it("does not pollute when metadata arrives from JSON.parse with __proto__ as own key", () => {
-    const raw = '{"model":"m","input":"x","metadata":{"__proto__":"proto-value","constructor":"ctor-value","normal":"safe"}}';
-    const value = JSON.parse(raw) as Record<string, unknown>;
-    const invocation = convertResponsesRequest(value, 1, policy());
-    const echo = invocation.client.renderState.metadataEcho ?? {};
-    const keys = Object.keys(echo).sort();
-    // __proto__ remains a harmless own string key on a null-prototype object.
-    expect(keys).toEqual(["__proto__", "constructor", "normal"]);
-    expect(Object.getPrototypeOf(echo)).toBeNull();
-    expect((echo as Record<string, unknown>).polluted).toBeUndefined();
-    // The source object must not have been mutated either.
-    expect((value as Record<string, unknown>).polluted).toBeUndefined();
-  });
-});
-
 describe("13 recheck: resolver failure branches", () => {
   it("resolves a failing reference to a notice while keeping later items", async () => {
     const invocation = await convertResponsesRequestAsync(
@@ -1867,7 +1817,10 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       "apply_patch",
     ]);
     expect(invocation.invocation.pi.options.toolChoice).toBe("none");
-    expect(invocation.client.renderState.toolChoice).toBe("none");
+    expect(invocation.client.renderState).toEqual({
+      stream: false,
+      freeformToolNames: new Set(["apply_patch"]),
+    });
     expect(invocation.client.notices).toEqual([]);
   });
 
@@ -1882,7 +1835,7 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       "b",
       "apply_patch",
     ]);
-    expect(invocation.client.renderState.toolChoice).toBe("auto");
+    expect(invocation.invocation.pi.options.toolChoice).toBe("auto");
   });
 
   it("absence/null keeps the full catalog with no effective choice", () => {
@@ -1896,7 +1849,7 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       "b",
       "apply_patch",
     ]);
-    expect(absent.client.renderState.toolChoice).toBeUndefined();
+    expect(absent.invocation.pi.options.toolChoice).toBeUndefined();
     const nulled = convertResponsesRequest(
       { model: "m", input: "x", tools, tool_choice: null },
       1,
@@ -1909,7 +1862,7 @@ describe("13 recheck: tool_choice full combination matrix", () => {
     ]);
   });
 
-  it("allowed filters deterministically and records the effective choice", () => {
+  it("allowed filters deterministically and records only the effective Pi choice", () => {
     const invocation = convertResponsesRequest(
       {
         model: "m",
@@ -1928,15 +1881,10 @@ describe("13 recheck: tool_choice full combination matrix", () => {
       policy(),
     );
     expect(invocation.invocation.pi.context.tools?.map((t) => t.name)).toEqual(["a", "b"]);
-    // Provider execution uses neutral Pi auto plus the filtered catalog;
-    // the Responses-owned response state retains the equivalent Client echo.
-    expect(invocation.client.renderState.toolChoice).toEqual({
-      type: "allowed_tools",
-      mode: "auto",
-      tools: [
-        { type: "function", name: "a" },
-        { type: "function", name: "b" },
-      ],
+    expect(invocation.invocation.pi.options.toolChoice).toBe("auto");
+    expect(invocation.client.renderState).toEqual({
+      stream: false,
+      freeformToolNames: new Set(["apply_patch"]),
     });
   });
 

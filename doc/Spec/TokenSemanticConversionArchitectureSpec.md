@@ -31,7 +31,7 @@ Client Protocol modules own:
 - Client Wire → Pi `Context` and Pi common options;
 - protocol-local reasoning/continuity preparation that changes only Pi semantics;
 - Pi `AssistantMessage` → Client Wire;
-- Client response echo, render, and continuity state;
+- Client response projection, irreducible render identity, and continuity state;
 - protocol-local warnings and typed Client failures.
 
 Pi Models owns Provider resolution, authentication application, `Context` normalization,
@@ -129,9 +129,12 @@ rejects the request when omission would invalidate it. A control with no neutral
 contract yet, such as a hosted-tool choice, is omitted with a bounded Client warning by
 the owning protocol specification; exact wire retention requires Native Preservation.
 
-Client response echo is Client-owned state. It reports the normalized Client contract,
-not a claim about a Provider-native field. Provider application is never inferred from
-payload inspection.
+Client response projection is Client-owned. A protocol retains only facts that cannot be
+recovered from Pi semantics but are required to restore its Client wire identity. A
+representable execution setting is projected from the effective Pi invocation rather
+than duplicated as request-local echo state. Protocol defaults fill required Client wire
+fields that have no Pi semantic. Provider application is never inferred from payload
+inspection.
 
 ## 6. Continuity
 

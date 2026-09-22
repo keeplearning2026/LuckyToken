@@ -547,12 +547,22 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
         "base64",
       ).toString("utf8");
       expect(() => JSON.parse(invocationJson)).not.toThrow();
-      expect(JSON.parse(invocationJson)).toEqual(expect.objectContaining({
+      const parsedInvocation = JSON.parse(invocationJson) as {
+        schema: string;
+        client: { renderState: Record<string, unknown> };
+      };
+      expect(parsedInvocation).toEqual(expect.objectContaining({
+        schema: "Token.openai_responses.pi_invocation.v3",
         reasoning: expect.any(Object),
         context: expect.any(Object),
         options: expect.any(Object),
-        client: expect.any(Object),
+        client: expect.objectContaining({
+          renderState: { stream: false },
+        }),
       }));
+      expect(parsedInvocation.client.renderState).not.toHaveProperty("clientModel");
+      expect(parsedInvocation.client.renderState).not.toHaveProperty("toolChoice");
+      expect(parsedInvocation.client.renderState).not.toHaveProperty("metadataEcho");
       expect(invocationJson).toContain(SAFE_INPUT_MARKER);
       expect(invocationJson).not.toContain(CLIENT_TOKEN);
       expect(invocationJson).not.toContain(PROVIDER_HEADER_SECRET);

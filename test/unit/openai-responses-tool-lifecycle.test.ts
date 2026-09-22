@@ -4,7 +4,10 @@ import {
   convertResponsesRequest,
   type ResponseRequestConversionPolicy,
 } from "../../src/protocols/openai-responses/request.js";
-import { convertAssistantMessageToResponses } from "../../src/protocols/openai-responses/response.js";
+import {
+  convertAssistantMessageToResponses,
+  type ResponsesResponseProjection,
+} from "../../src/protocols/openai-responses/response.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 function policy(
@@ -36,6 +39,20 @@ function assistantMessage(overrides?: Partial<AssistantMessage>): AssistantMessa
     },
     stopReason: "stop",
     timestamp: 1_786_400_000_000,
+    ...overrides,
+  };
+}
+
+function responseProjection(
+  overrides: Partial<ResponsesResponseProjection> = {},
+): ResponsesResponseProjection {
+  return {
+    model: "m",
+    toolChoice: "auto",
+    temperature: null,
+    tools: [],
+    unknownPiContent: "error",
+    notices: { push: () => undefined },
     ...overrides,
   };
 }
@@ -483,7 +500,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        { clientModel: "m", stream: false, freeformToolNames: new Set(["apply_patch"]) },
+        responseProjection({ freeformToolNames: new Set(["apply_patch"]) }),
         "resp_1",
         1,
         undefined,
@@ -513,7 +530,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        { clientModel: "m", stream: false },
+        responseProjection(),
         "resp_1",
         1,
         undefined,
@@ -1681,7 +1698,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        { clientModel: "m", stream: false },
+        responseProjection(),
         "resp_ns",
         1,
         undefined,
@@ -1713,11 +1730,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        {
-          clientModel: "m",
-          stream: false,
-          freeformToolNames: new Set(["query"]),
-        },
+        responseProjection({ freeformToolNames: new Set(["query"]) }),
         "resp_custom_ns",
         1,
         undefined,
@@ -1750,13 +1763,11 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
               },
             ],
           }),
-          {
-            clientModel: "m",
-            stream: false,
+          responseProjection({
             namespaceReverse: {
               "crm__read": { namespace: "crm", child: "read" },
             },
-          },
+          }),
           "resp_conflict",
           1,
           undefined,
@@ -1780,7 +1791,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       expect(() =>
         convertAssistantMessageToResponses(
           malformed,
-          { clientModel: "m", stream: false },
+          responseProjection(),
           "resp_bad_ns",
           1,
           undefined,
@@ -1831,16 +1842,14 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             },
           ],
         }),
-        {
-          clientModel: "m",
-          stream: false,
+        responseProjection({
           ...(invocation.client.renderState.freeformToolNames === undefined
             ? {}
             : { freeformToolNames: invocation.client.renderState.freeformToolNames }),
           ...(invocation.client.renderState.namespaceReverse === undefined
             ? {}
             : { namespaceReverse: invocation.client.renderState.namespaceReverse }),
-        },
+        }),
         "resp_1",
         1,
         undefined,

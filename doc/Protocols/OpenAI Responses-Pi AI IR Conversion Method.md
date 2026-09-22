@@ -17,14 +17,26 @@ The adapter owns Responses parsing, local session expansion, trusted Responses r
 ```ts
 interface ResponsesRequestConversion {
   selector: string;
-  context: Context;
-  options: Partial<SimpleStreamOptions>;
-  renderState: ResponsesRenderState;
-  notices: readonly ConversionNotice[];
+  invocation: {
+    pi: { context: Context; options: Partial<SimpleStreamOptions> };
+    reasoning: ResponsesReasoningSemantics;
+  };
+  client: {
+    renderState: {
+      stream: boolean;
+      freeformToolNames?: ReadonlySet<string>;
+      namespaceReverse?: Readonly<
+        Record<string, { namespace: string; child: string }>
+      >;
+    };
+    notices: readonly ConversionNotice[];
+  };
 }
 ```
 
-`renderState` keeps only request-local Client wire facts needed to render an honest Response. It never crosses into a Provider.
+`renderState` keeps only request-local facts that Pi cannot carry but the adapter needs to
+restore Responses tool identity, plus the JSON/SSE selection. It contains no request
+configuration echo and never crosses into a Provider.
 
 ## 2. Configuration
 
@@ -94,7 +106,7 @@ Model capability and never sees Provider Wire or Profile retry state.
 
 | Responses source | Pi/local target | Frozen action |
 |---|---|---|
-| `model` | selector | Required by Token conversion profile. Preserve opaquely for response echo. |
+| `model` | selector | Required by Token conversion profile. Response projection reads the resolved selector directly. |
 | `input` | `Context.messages` | Convert using §§5–8. An omitted input becomes an empty message list when top-level instructions alone are accepted by the active profile. |
 | `instructions` | `Context.systemPrompt` | Exact top-level system prompt. `null` means absent. Input-derived system/developer text is not promoted here. |
 | `max_output_tokens` | `options.maxTokens` | Positive integer; zero/negative is Client invalid request, never an internal 500. |
@@ -108,7 +120,7 @@ Model capability and never sees Provider Wire or Profile retry state.
 | `stream` | render state | true selects atomic Responses SSE. null/absence=false. |
 | `previous_response_id` | local state | Use §9. Mutually exclusive with conversation. |
 | `store` | local response storage policy | Use §9. |
-| `metadata` | request-local response echo | Do not place resource metadata into model context. Echo only safely retained values. |
+| `metadata` | unconsumed field | Do not read or validate its value; emit the bounded unconsumed-field notice and use `{}` in the response envelope. |
 
 ### 4.2 Reasoning effort
 
@@ -273,7 +285,7 @@ This matrix covers the installed OpenAI SDK input-item union. `status` and lifec
 | `mcp_approval_request` / `mcp_approval_response` | Pi has no approval lifecycle. Preserve model-visible decision text as deterministic transcript; drop pure lifecycle metadata. Never fabricate executable approval tools. |
 | `mcp_call` | Client-owned MCP→structured ToolCall/result semantics; provider-hosted MCP→ordered transcript. |
 | `custom_tool_call` | Structured Pi ToolCall with `{input:string}` compatibility representation. |
-| `custom_tool_call_output` | Structured Pi ToolResult, reversed to custom family using request-local metadata. |
+| `custom_tool_call_output` | Structured Pi ToolResult, reversed to custom family using request-local tool identity. |
 | `item_reference` | Lucky-owned provable reference→resolve/convert; external/unknown→error. |
 
 Token/Codex extension discriminators that are not in the installed SDK MUST have an explicit extension-profile entry. They do not become supported merely by setting `unknownInputItem=ignore`.
@@ -453,11 +465,12 @@ The Response wire object includes all required fields of the selected target pro
 
 SDK convenience `output_text` is not emitted as a wire field merely because a parser computes it locally.
 
-Echo **effective normalized state**, not raw caller intent:
+Project **effective invocation state**, never raw caller intent:
 
 - only tools actually offered to Pi;
-- effective/default tool_choice;
-- effective temperature/top_p when known;
+- `tool_choice` from effective Pi options, defaulting to `auto`;
+- `temperature` from effective Pi options, defaulting to `null`;
+- adapter defaults `parallel_tool_calls=true`, `metadata={}`, `top_p=null`, and `instructions=null`;
 - no claim that an omitted hosted tool, format, tier, or truncation took effect; a Provider-owned omission of preserved tool-control intent is reported only when that Provider exposes a notice channel.
 
 ### 11.2 Output items
@@ -557,7 +570,7 @@ The following do not block the primary conversation when no Pi target exists:
 - hosted execution declarations with no Client/Pi owner;
 - generic non-image files;
 - source presentation annotations/citations with no Pi slot;
-- resource metadata not needed for local response echo;
+- resource metadata with no accepted Client or Pi consumer;
 - remote persistence/query controls not implemented by the Client adapter.
 
 They MUST NOT be represented as having taken effect in the Response object.

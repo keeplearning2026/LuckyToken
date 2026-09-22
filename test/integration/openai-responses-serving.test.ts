@@ -921,8 +921,8 @@ describe("OpenAI Responses serving", () => {
     expect(text).toContain("data: [DONE]");
   });
 
-  it("echoes an explicit temperature of zero as effective, never as absence", async () => {
-    // temperature:0 is a legal target value and must be echoed as 0 — it is
+  it("projects an explicit Pi temperature of zero, never as absence", async () => {
+    // temperature:0 is a legal target value and must render as 0 — it is
     // not the same as an absent temperature (which renders null).
     const { runtime } = await start({
       fetch: async () => commandCodeText("answered"),
@@ -942,7 +942,7 @@ describe("OpenAI Responses serving", () => {
     expect(json.temperature).toBe(0);
   });
 
-  it("echoes effective normalized controls in the response object", async () => {
+  it("renders required configuration from effective Pi semantics and adapter defaults", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("answered"),
     });
@@ -951,10 +951,10 @@ describe("OpenAI Responses serving", () => {
         {
           model: "commandcode-private/deepseek/deepseek-v4-flash",
           input: "hello",
-          // CommandCode uses its native automatic tool policy. Its missing
-          // top-p and explicit parallel fields must not be claimed effective.
-          tool_choice: "auto",
-          parallel_tool_calls: true,
+          // Neither preference is representable in Pi common options. The
+          // response must not repeat the raw caller values as effective.
+          tool_choice: "required",
+          parallel_tool_calls: false,
           temperature: 0.5,
           top_p: 0.9,
         },
@@ -970,7 +970,7 @@ describe("OpenAI Responses serving", () => {
     expect(json.tools).toEqual([]);
   });
 
-  it("echoes the effective executable tools actually offered to Pi", async () => {
+  it("projects the effective executable tools actually offered to Pi", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("answered"),
     });
@@ -982,7 +982,7 @@ describe("OpenAI Responses serving", () => {
           tools: [
             { type: "function", name: "lookup", parameters: { type: "object" } },
             { type: "custom", name: "apply_patch" },
-            // Hosted declaration is dropped and must never be echoed.
+            // Hosted declaration is dropped and must never be projected.
             { type: "web_search", name: "web_search" },
           ],
           tool_choice: "none",
@@ -1001,11 +1001,11 @@ describe("OpenAI Responses serving", () => {
     ]);
   });
 
-  it("echoes custom tools in the SDK CustomTool shape, never inventing input_schema", async () => {
+  it("projects custom tools in the SDK CustomTool shape, never inventing input_schema", async () => {
     // The installed SDK models a custom tool as
     // {type:'custom', name, description?, format?} — there is no input_schema
-    // field on CustomTool. An effective echo must not invent wire fields the
-    // target type does not have (ticket 17: echo effective normalized tools).
+    // field on CustomTool. An effective projection must not invent wire fields
+    // the target type does not have.
     const { runtime } = await start({
       fetch: async () => commandCodeText("answered"),
     });
@@ -1049,7 +1049,7 @@ describe("OpenAI Responses serving", () => {
     });
   });
 
-  it("echoes an effective allowed_tools object with the filtered catalog", async () => {
+  it("projects allowed_tools as Pi auto with the filtered catalog", async () => {
     const { runtime } = await start({
       fetch: async () => commandCodeText("answered"),
     });
@@ -1085,14 +1085,10 @@ describe("OpenAI Responses serving", () => {
     );
     expect(response.status).toBe(200);
     const json = (await response.json()) as {
-      tool_choice: Record<string, unknown>;
+      tool_choice: string;
       tools: Array<{ name: string }>;
     };
-    expect(json.tool_choice).toEqual({
-      type: "allowed_tools",
-      mode: "auto",
-      tools: [{ type: "function", name: "lookup" }],
-    });
+    expect(json.tool_choice).toBe("auto");
     expect(json.tools.map((tool) => tool.name)).toEqual(["lookup"]);
   });
 

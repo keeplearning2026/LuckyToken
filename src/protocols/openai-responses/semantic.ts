@@ -47,7 +47,7 @@ import {
   renderResponsesErrorResponse,
   type PreparedHttpResponse,
   type ResponsesEchoTool,
-  type ResponsesRenderState,
+  type ResponsesResponseProjection,
   type ResponsesResponseObject,
 } from "./response.js";
 import {
@@ -350,7 +350,7 @@ function buildEchoTools(invocation: ResponsesInvocation): ResponsesEchoTool[] {
   return tools;
 }
 
-function buildRenderState(
+function buildResponseProjection(
   invocation: ResponsesInvocation,
   unknownPiContent: "error" | "ignore",
   notice: (notice: {
@@ -360,25 +360,22 @@ function buildRenderState(
     readonly jsonPath?: string;
     readonly action: "ignore" | "degrade" | "xrepair";
   }) => void,
-): ResponsesRenderState {
+): ResponsesResponseProjection {
   const state = invocation.client.renderState;
   const tools = buildEchoTools(invocation);
   const freeformNames = state.freeformToolNames;
   const namespaceReverse = state.namespaceReverse;
   return Object.freeze({
-    clientModel: state.clientModel,
-    stream: state.stream,
-    ...(state.toolChoice === undefined ? {} : { toolChoice: state.toolChoice }),
-    parallelToolCalls: state.parallelToolCalls ?? true,
+    model: invocation.selector,
+    toolChoice: invocation.invocation.pi.options.toolChoice ?? "auto",
+    temperature: invocation.invocation.pi.options.temperature ?? null,
+    tools,
     ...(freeformNames === undefined || freeformNames.size === 0
       ? {}
       : { freeformToolNames: freeformNames }),
     ...(namespaceReverse === undefined || Object.keys(namespaceReverse).length === 0
       ? {}
       : { namespaceReverse }),
-    ...(state.metadataEcho === undefined ? {} : { metadataEcho: state.metadataEcho }),
-    ...(tools.length === 0 ? {} : { tools }),
-    ...(state.temperature === undefined ? {} : { temperature: state.temperature }),
     unknownPiContent,
     notices: { push: notice },
   });
@@ -501,9 +498,9 @@ export async function executeSemanticResponses(
       "p3.finalize_pi_invocation",
       finalizeLocation,
     );
-    let piOptions: ModelsSimpleStreamOptions;
+    let executionInvocation: ResponsesInvocation;
     try {
-      piOptions = composeInvocationOptions(
+      const piOptions = composeInvocationOptions(
         invocation,
         {
           sessionId: options.requestIdentity.effectiveSessionId,
@@ -512,43 +509,51 @@ export async function executeSemanticResponses(
         },
         options.routerDefaults,
       );
+      executionInvocation = Object.freeze({
+        selector: invocation.selector,
+        invocation: Object.freeze({
+          ...invocation.invocation,
+          pi: Object.freeze({
+            context: invocation.invocation.pi.context,
+            options: piOptions,
+          }),
+        }),
+        client: invocation.client,
+      });
       if (options.journey !== undefined) {
         observeSemanticJsonArtifact(options.journey, {
           artifactId: "pi_invocation_snapshot",
           artifactKind: "pi_invocation_snapshot",
           value: {
-            schema: "Token.openai_responses.pi_invocation.v2",
-            selector: invocation.selector,
+            schema: "Token.openai_responses.pi_invocation.v3",
+            selector: executionInvocation.selector,
             model: {
               provider: options.model.provider,
               id: options.model.id,
               api: options.model.api,
             },
-            reasoning: invocation.invocation.reasoning,
-            context: invocation.invocation.pi.context,
+            reasoning: executionInvocation.invocation.reasoning,
+            context: executionInvocation.invocation.pi.context,
             options: {
-              maxTokens: piOptions.maxTokens,
-              temperature: piOptions.temperature,
-              reasoning: piOptions.reasoning,
-              toolChoice: piOptions.toolChoice,
-              samplingParams: piOptions.samplingParams,
-              cacheRetention: piOptions.cacheRetention,
-              thinkingBudgets: piOptions.thinkingBudgets,
-              metadata: piOptions.metadata,
-              sessionId: piOptions.sessionId,
+              maxTokens: executionInvocation.invocation.pi.options.maxTokens,
+              temperature: executionInvocation.invocation.pi.options.temperature,
+              reasoning: executionInvocation.invocation.pi.options.reasoning,
+              toolChoice: executionInvocation.invocation.pi.options.toolChoice,
+              samplingParams: executionInvocation.invocation.pi.options.samplingParams,
+              cacheRetention: executionInvocation.invocation.pi.options.cacheRetention,
+              thinkingBudgets: executionInvocation.invocation.pi.options.thinkingBudgets,
+              metadata: executionInvocation.invocation.pi.options.metadata,
+              sessionId: executionInvocation.invocation.pi.options.sessionId,
             },
             client: {
               renderState: {
-                clientModel: invocation.client.renderState.clientModel,
-                stream: invocation.client.renderState.stream,
-                toolChoice: invocation.client.renderState.toolChoice,
-                freeformToolNames: invocation.client.renderState.freeformToolNames === undefined
+                stream: executionInvocation.client.renderState.stream,
+                freeformToolNames: executionInvocation.client.renderState.freeformToolNames === undefined
                   ? undefined
-                  : [...invocation.client.renderState.freeformToolNames],
-                namespaceReverse: invocation.client.renderState.namespaceReverse,
-                metadataEcho: invocation.client.renderState.metadataEcho,
+                  : [...executionInvocation.client.renderState.freeformToolNames],
+                namespaceReverse: executionInvocation.client.renderState.namespaceReverse,
               },
-              notices: invocation.client.notices,
+              notices: executionInvocation.client.notices,
             },
           },
           location: finalizeLocation,
@@ -659,13 +664,7 @@ export async function executeSemanticResponses(
       semanticResult = await executeOpenAIResponsesSemanticInvocation({
         models: options.models,
         model: options.model,
-        invocation: Object.freeze({
-          ...invocation.invocation,
-          pi: Object.freeze({
-            context: invocation.invocation.pi.context,
-            options: piOptions,
-          }),
-        }),
+        invocation: executionInvocation.invocation,
         infrastructure: {
           executeOperation,
           factsSink: executionFacts,
@@ -790,8 +789,8 @@ export async function executeSemanticResponses(
       "p5.validate_assistant_message",
       responseProjectionLocation,
     );
-    const renderState = buildRenderState(
-      invocation,
+    const projection = buildResponseProjection(
+      executionInvocation,
       options.configuration.conversion.response.unknownPiContent,
       (notice) => {
         observeClientConversionNotice(options.journey, notice);
@@ -799,7 +798,7 @@ export async function executeSemanticResponses(
     );
     const rendered = convertAssistantMessageToResponses(
       message,
-      renderState,
+      projection,
       options.createResponseId(),
       Math.floor(options.now() / 1000),
       typeof previousResponseId === "string" ? previousResponseId : undefined,

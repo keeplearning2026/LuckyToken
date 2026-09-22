@@ -167,7 +167,7 @@ The current `pi-composition` label is too coarse. A request-side failure uses `d
 | SREQ-08 | P3 | `correlate_tool_lifecycle` | tool call, tool result/output, tool reference | call/result ID, duplicate/orphan/unresolved state |
 | SREQ-09 | P3 | `convert_reasoning_continuity` | thinking, reasoning, signatures, compaction | provenance authority, status, envelope version |
 | SREQ-10 | P3 | `apply_semantic_repairs` | unresolved calls, missing results, unknown values | repair/ignore/degrade policy and notice code |
-| SREQ-11 | P3 | `finalize_pi_invocation` | Pi Context, tools, SimpleStreamOptions, render state | frozen invocation snapshot and request-local notices |
+| SREQ-11 | P3 | `finalize_pi_invocation` | Pi Context, tools, SimpleStreamOptions, Client-private state | frozen invocation snapshot and request-local notices |
 
 Protocol-specific detail remains owned by its Client Protocol adapter. Anthropic and OpenAI Responses may use the same Lane Step names, but they do not share converter implementations, configuration, mutable correlation state, or protocol DTOs.
 
@@ -183,7 +183,7 @@ Protocol-specific detail remains owned by its Client Protocol adapter. Anthropic
 | `tool_call` | ID/name/namespace/arguments, unresolved lifecycle |
 | `tool_result` | correlation, duplicate/orphan state, error/content semantics, added tool names |
 | `reasoning` | thinking budgets, effort, visible reasoning, continuity signatures, compaction |
-| `metadata` | user/safety identity and request-local response echo |
+| `metadata` | user/safety identity when a protocol has an accepted consumer; otherwise an unread unconsumed-field notice |
 
 ## 7. Semantic Conversion execution and Provider directions
 

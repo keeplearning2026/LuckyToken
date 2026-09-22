@@ -49,9 +49,12 @@ function render(value: AssistantMessage) {
   return convertAssistantMessageToResponses(
     value,
     {
-      clientModel: "client-selector",
-      stream: false,
-      notices: [],
+      model: "client-selector",
+      toolChoice: "auto",
+      temperature: null,
+      tools: [],
+      unknownPiContent: "error",
+      notices: { push: () => undefined },
     },
     "resp_test",
     1,

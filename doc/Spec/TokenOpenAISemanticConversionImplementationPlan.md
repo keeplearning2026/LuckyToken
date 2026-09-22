@@ -25,14 +25,20 @@ Deleted:
 
 ## Request behavior
 
-The converter emits Pi `Context`, Pi public options, and Responses-owned render or
-continuity state. It maps messages, tools, reasoning, max output, temperature, cache
+The converter emits Pi `Context`, Pi public options, minimal Responses-owned Client
+state, and continuity state. Client state retains only stream selection and reversible
+tool identity. It maps messages, tools, reasoning, max output, temperature, cache
 retention, and basic tool choice only where Pi has a neutral contract.
 
-Unrepresentable optional controls warn and remain outside Pi. Required and named tool
-choice map to Pi's neutral `toolChoice`; hosted tool choice has no neutral contract and
-is omitted with a bounded Client notice. Invalid tool identity/history relationships
-reject before dispatch. Client metadata remains response echo/state only.
+Unrepresentable optional controls warn and remain outside Pi. `auto` and `none` map to
+Pi's neutral `toolChoice`; required, named, and hosted tool choices have no neutral
+contract and are omitted with a bounded Client notice. Invalid tool identity/history
+relationships reject before dispatch. Client metadata is unconsumed, unread, and
+warned; it is not retained for response echo.
+
+After execution, the Responses adapter constructs a one-use response projection from the
+effective Pi invocation. Required Responses configuration fields come from that
+invocation or explicit adapter defaults, never from a saved copy of raw request intent.
 
 ## Reasoning behavior
 

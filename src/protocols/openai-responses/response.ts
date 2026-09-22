@@ -1,6 +1,7 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ResponsesEchoToolChoice } from "./semantic/tool-choice.js";
-export type { ResponsesEchoToolChoice } from "./semantic/tool-choice.js";
+import type {
+  AssistantMessage,
+  ModelsSimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 
 import {
   extractResponsesReasoning,
@@ -136,10 +137,7 @@ export interface ResponsesResponseObject {
   output: ResponsesOutputItem[];
   parallel_tool_calls: boolean;
   temperature: number | null;
-  /** Only legal SDK tool_choice values are echoed; the target union is
-   *  'none' | 'auto' | 'required' (or an allowed/function object). A residual
-   *  render value that is not a legal echo normalizes to "auto". */
-  tool_choice: ResponsesEchoToolChoice;
+  tool_choice: ResponsesResponseToolChoice;
   tools: ResponsesEchoTool[];
   top_p: number | null;
   usage: ResponsesUsage;
@@ -179,28 +177,29 @@ export type ResponsesEchoTool =
   | ResponsesEchoFunctionTool
   | ResponsesEchoCustomTool;
 
+/** Tool-choice values expressible by the pinned Pi common options contract. */
+export type ResponsesResponseToolChoice = NonNullable<
+  ModelsSimpleStreamOptions["toolChoice"]
+>;
+
 /**
- * Immutable Responses-owned render facts, frozen at request conversion and
- * consumed once to render an honest Response. Only the effective normalized
- * state survives; raw caller intent that did not take effect never does.
+ * Immediate Responses projection derived after execution from the effective Pi
+ * invocation plus Responses-only tool identity. It is never persisted as
+ * request state.
  */
-export interface ResponsesRenderState {
-  readonly clientModel: string;
-  readonly stream: boolean;
-  readonly toolChoice?: ResponsesEchoToolChoice | string;
-  readonly parallelToolCalls?: boolean;
+export interface ResponsesResponseProjection {
+  readonly model: string;
+  readonly toolChoice: ResponsesResponseToolChoice;
+  readonly temperature: number | null;
+  readonly tools: readonly ResponsesEchoTool[];
   readonly freeformToolNames?: ReadonlySet<string>;
   readonly namespaceReverse?: Readonly<
     Record<string, { namespace: string; child: string }>
   >;
-  readonly metadataEcho?: Readonly<Record<string, string>>;
-  readonly temperature?: number;
-  readonly topP?: number;
-  readonly tools?: readonly ResponsesEchoTool[];
   /** Adapter-local policy for unknown Pi content (response side). */
-  readonly unknownPiContent?: "error" | "ignore";
-  /** Optional request-local response-notice sink (surfaced by the handler). */
-  readonly notices?: ConversionNoticeSink;
+  readonly unknownPiContent: "error" | "ignore";
+  /** Request-local response-notice sink (surfaced by the handler). */
+  readonly notices: ConversionNoticeSink;
 }
 
 export interface PreparedHttpResponse {
@@ -719,15 +718,8 @@ function assertMessageEnvelope(message: AssistantMessage): void {
   convertStopReason(message.stopReason, message);
 }
 
-/**
- * Map a request-local render tool_choice to the legal SDK echo. Only the
- * target union 'none' | 'auto' | 'required' is echoed; any residual value
- * (including the request-local "allowed" filter marker, which the SDK models
- * as an allowed_tools object rather than a bare string) normalizes to the
- * SDK default "auto". A non-target value is never echoed as effective.
- */
-/** Deep-clone and deep-freeze the echoed tools so no shared reference to the
- *  caller's render state can survive into the wire object. */
+/** Deep-clone and deep-freeze the projected tools so no shared reference to
+ *  the immediate projection can survive into the wire object. */
 function deepFreezeTools(tools: readonly ResponsesEchoTool[]): ResponsesEchoTool[] {
   return tools.map((tool) => {
     if (tool.type === "function") {
@@ -758,19 +750,9 @@ function deepFreeze(value: unknown): unknown {
   return value;
 }
 
-function normalizeEchoedToolChoice(
-  value: ResponsesEchoToolChoice | string | undefined,
-): ResponsesEchoToolChoice {
-  if (typeof value === "object" && value !== null) {
-    return deepFreeze(value) as ResponsesEchoToolChoice;
-  }
-  if (value === "none" || value === "required") return value;
-  return "auto";
-}
-
 export function convertAssistantMessageToResponses(
   message: AssistantMessage,
-  renderState: ResponsesRenderState,
+  projection: ResponsesResponseProjection,
   responseId: string,
   createdAt: number,
   previousResponseId: string | undefined,
@@ -778,16 +760,16 @@ export function convertAssistantMessageToResponses(
   assertMessageEnvelope(message);
   const noticeSink: ConversionNoticeSink = {
     push(notice): void {
-      if (renderState.notices !== undefined) renderState.notices.push(notice);
+      projection.notices.push(notice);
     },
   };
   const output = convertOutput(
     message,
     extractResponsesReasoning(message),
     responseId,
-    renderState.freeformToolNames ?? new Set(),
-    renderState.namespaceReverse ?? {},
-    renderState.unknownPiContent ?? "error",
+    projection.freeformToolNames ?? new Set(),
+    projection.namespaceReverse ?? {},
+    projection.unknownPiContent,
     noticeSink,
   );
   const { status, error, incomplete_details } = convertStopReason(
@@ -802,21 +784,17 @@ export function convertAssistantMessageToResponses(
     error,
     incomplete_details,
     instructions: null,
-    metadata: Object.freeze({ ...(renderState.metadataEcho ?? {}) }),
-    model: renderState.clientModel,
+    metadata: Object.freeze({}),
+    model: projection.model,
     output,
-    parallel_tool_calls: renderState.parallelToolCalls ?? true,
-    temperature: renderState.temperature ?? null,
-    // The SDK Response tool_choice has no bare "allowed" string; the
-    // allowed_tools filter is auto-mode filtering, so any residual "allowed"
-    // render-state value is normalized to the legal "auto" echo. Never echo a
-    // non-target value as effective.
-    tool_choice: normalizeEchoedToolChoice(renderState.toolChoice),
-    // Deep-snapshot the echoed tools: a hostile caller that later mutates the
+    parallel_tool_calls: true,
+    temperature: projection.temperature,
+    tool_choice: projection.toolChoice,
+    // Deep-snapshot the effective tools: a hostile caller that later mutates the
     // shared tool schema (e.g. the nested `parameters` object) in place must
     // never corrupt the already-rendered wire object.
-    tools: deepFreezeTools(renderState.tools ?? []),
-    top_p: renderState.topP ?? null,
+    tools: deepFreezeTools(projection.tools),
+    top_p: null,
     usage: convertUsage(message, noticeSink),
   };
   if (previousResponseId !== undefined) {

@@ -25,10 +25,8 @@ import type {
 } from "./semantic/reasoning/contract.js";
 import type {
   ResponsesAllowedTool,
-  ResponsesEchoToolChoice,
   ResponsesToolChoice,
 } from "./semantic/tool-choice.js";
-import { toResponsesEchoToolChoice } from "./semantic/tool-choice.js";
 import {
   decodeResponsesContinuity,
   RESPONSES_CONTINUITY_FIELD,
@@ -81,22 +79,15 @@ export const DEFAULT_REFERENCE_LIMITS = Object.freeze({
 });
 
 export interface ResponsesClientRenderState {
-    clientModel: string;
-    stream: boolean;
-    /** Client response echo for a tool choice represented exactly in Pi. */
-    toolChoice?: ResponsesEchoToolChoice;
-    parallelToolCalls?: boolean;
-    /** Client response echo for a sampling control represented directly in Pi. */
-    temperature?: number;
-    /** Tool names declared as freeform `custom` tools; their calls must
-     *  round-trip as `custom_tool_call` output items. */
-    freeformToolNames?: ReadonlySet<string>;
-    /** Reverse metadata for flattened namespace tools, retained only for
-     *  request-local response echo. Never placed into model context. */
-    namespaceReverse?: Readonly<Record<string, { namespace: string; child: string }>>;
-    /** Source metadata retained only for request-local response echo. Never
-     *  placed into model context. */
-    metadataEcho?: Readonly<Record<string, string>>;
+  readonly stream: boolean;
+  /** Tool names declared as freeform `custom` tools; their calls must
+   *  round-trip as `custom_tool_call` output items. */
+  readonly freeformToolNames?: ReadonlySet<string>;
+  /** Reverse identity for flattened namespace tools. Pi tool names cannot
+   *  carry this Responses-only relationship through execution. */
+  readonly namespaceReverse?: Readonly<
+    Record<string, { namespace: string; child: string }>
+  >;
 }
 
 export type ResponsesInvocation = ResponsesConversionResult<ResponsesClientRenderState>;
@@ -239,7 +230,6 @@ const MAIN_REQUEST_FIELDS = Object.freeze([
   "input",
   "instructions",
   "stream",
-  "metadata",
   "previous_response_id",
   "store",
   "reasoning",
@@ -2539,14 +2529,11 @@ function applyToolChoiceFilter(
 ): {
   tools: Tool[] | undefined;
   piToolChoice: ModelsSimpleStreamOptions["toolChoice"];
-  effective: ResponsesEchoToolChoice | undefined;
 } {
   let effectiveTools = mergedTools;
   let piToolChoice: ModelsSimpleStreamOptions["toolChoice"];
-  let effectiveToolChoice: ResponsesEchoToolChoice | undefined;
   if (toolChoice?.kind === "none") {
     piToolChoice = "none";
-    effectiveToolChoice = "none";
   } else if (toolChoice?.kind === "allowed") {
     const omittedHosted = toolChoice.tools.some(
       (entry) => entry.toolType !== "function" && entry.toolType !== "custom",
@@ -2584,7 +2571,6 @@ function applyToolChoiceFilter(
         );
       }
     }
-    effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "named") {
     if (effectiveTools?.some((tool) => tool.name === toolChoice.name) !== true) {
       throw new InvalidRequest(
@@ -2598,7 +2584,6 @@ function applyToolChoiceFilter(
         "$.tool_choice",
       ),
     );
-    effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "required") {
     notices.push(
       requestNotice(
@@ -2607,7 +2592,6 @@ function applyToolChoiceFilter(
         "$.tool_choice",
       ),
     );
-    effectiveToolChoice = "required";
   } else if (toolChoice?.kind === "hosted") {
     notices.push(
       requestNotice(
@@ -2616,20 +2600,16 @@ function applyToolChoiceFilter(
         "$.tool_choice",
       ),
     );
-    effectiveToolChoice = toResponsesEchoToolChoice(toolChoice);
   } else if (toolChoice?.kind === "auto") {
     piToolChoice = "auto";
-    effectiveToolChoice = "auto";
   }
   return {
     tools: effectiveTools,
     piToolChoice,
-    effective: effectiveToolChoice,
   };
 }
 
 function buildInvocation(
-  value: unknown,
   validated: ValidatedResponsesRequest,
   freeformNames: Set<string>,
   additionalTools: unknown[],
@@ -2640,16 +2620,13 @@ function buildInvocation(
     Object.create(null),
 ): ResponsesInvocation {
   const context: Context = { messages };
-  // Source metadata is retained only for request-local response echo; it is
-  // never placed into model context.
-  const metadataEcho = collectMetadataEcho(value);
   // Top-level instructions are the leading Pi system prompt. Input-level
   // system/developer messages stay in transcript order as Pi SystemMessage.
   if (validated.instructions !== undefined) {
     context.systemPrompt = validated.instructions;
   }
   // Namespace flattening already happened during validation; the reverse map
-  // is retained only for request-local response echo.
+  // is retained only to restore Responses tool identity after Pi execution.
   const mergedTools =
     validated.tools === undefined
       ? additionalTools.length === 0
@@ -2697,58 +2674,15 @@ function buildInvocation(
     }),
     client: Object.freeze({
       renderState: Object.freeze({
-        clientModel: validated.selector,
         stream: validated.stream,
-        ...(filtered.effective === undefined
-          ? {}
-          : { toolChoice: filtered.effective }),
-        ...(validated.parallelToolCalls === undefined
-          ? {}
-          : { parallelToolCalls: validated.parallelToolCalls }),
-        ...(validated.temperature === undefined
-          ? {}
-          : { temperature: validated.temperature }),
         ...(freeformNames.size > 0 ? { freeformToolNames: freeformNames } : {}),
         ...(Object.keys(namespaceReverse).length > 0
           ? { namespaceReverse: Object.freeze(namespaceReverse) }
           : {}),
-        ...(metadataEcho === undefined ? {} : { metadataEcho }),
       }),
       notices: Object.freeze(notices),
     }),
   });
-}
-
-/** Validate and retain Responses metadata for request-local response echo. */
-function collectMetadataEcho(value: unknown): Readonly<Record<string, string>> | undefined {
-  if (!isRecord(value)) return undefined;
-  const metadata = value.metadata;
-  if (metadata === undefined || metadata === null) return undefined;
-  if (!isRecord(metadata)) {
-    throw new InvalidRequest("metadata must be an object when present");
-  }
-  const entries = Object.entries(metadata);
-  if (entries.length > 16) {
-    throw new InvalidRequest("metadata must contain at most 16 entries");
-  }
-  // A null-prototype object: hostile keys such as "__proto__" or
-  // "constructor" from JSON.parse input can never pollute its prototype.
-  const echo: Record<string, string> = Object.create(null);
-  for (const [key, entry] of entries) {
-    if (key.length > 64) {
-      throw new InvalidRequest("metadata keys must be at most 64 characters");
-    }
-    if (typeof entry !== "string") {
-      throw new InvalidRequest("metadata values must be strings");
-    }
-    if (entry.length > 512) {
-      throw new InvalidRequest(
-        "metadata values must be at most 512 characters",
-      );
-    }
-    echo[key] = entry;
-  }
-  return Object.keys(echo).length === 0 ? undefined : Object.freeze(echo);
 }
 
 /**
@@ -2811,7 +2745,6 @@ export function convertResponsesRequest(
     ),
   });
   return buildInvocation(
-    mainRequest,
     validated,
     freeformNames,
     additionalTools,
@@ -2900,7 +2833,6 @@ export async function convertResponsesRequestAsync(
     ),
   });
   return buildInvocation(
-    mainRequest,
     validated,
     freeformNames,
     additionalTools,
