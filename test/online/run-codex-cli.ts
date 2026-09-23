@@ -105,6 +105,23 @@ const REPOSITORY_ROOT = resolve(
   "..",
   "..",
 );
+const SCHEMA_PROBE_MCP_PATH = join(
+  REPOSITORY_ROOT,
+  "test",
+  "online",
+  "codex-schema-probe-mcp.mjs",
+);
+
+function schemaProbeMcpToml(): readonly string[] {
+  const quoted = (value: string): string => JSON.stringify(value);
+  return Object.freeze([
+    "[mcp_servers.token_schema_probe]",
+    "command = " + quoted(process.execPath),
+    "args = [" + quoted(SCHEMA_PROBE_MCP_PATH) + "]",
+    "startup_timeout_sec = 10",
+    "",
+  ]);
+}
 
 interface OnlineArguments {
   readonly providerId: string;
@@ -303,8 +320,13 @@ function sanitizedArtifactHeaders(
 function createUpstreamLogger(
   artifactDir: string,
   upstream: FetchFunction,
-): { readonly fetch: FetchFunction; readonly flush: () => Promise<void> } {
+): {
+  readonly fetch: FetchFunction;
+  readonly urls: readonly string[];
+  readonly flush: () => Promise<void>;
+} {
   let sequence = 0;
+  const urls: string[] = [];
   const pending: Promise<void>[] = [];
   const upstreamDir = join(artifactDir, "upstream");
   const fetch: FetchFunction = async (input, init) => {
@@ -314,6 +336,7 @@ function createUpstreamLogger(
         : new Request(input as RequestInfo, init);
     const requestBody = await request.clone().text();
     const startedAt = performance.now();
+    urls.push(request.url);
     const response = await upstream(request);
     const responseBody = await response.clone().text();
     const seq = sequence;
@@ -350,6 +373,7 @@ function createUpstreamLogger(
   };
   return Object.freeze({
     fetch,
+    urls,
     flush: async () => {
       await Promise.allSettled(pending);
     },
@@ -415,7 +439,13 @@ async function prepareIsolatedCodexHome(
   const codexHome = join(directory, "codex-home");
   await mkdir(codexHome, { recursive: true });
   if (injected !== undefined) {
-    const originalConfig = 'model = "unrelated-fixture"\n[features]\nunified_exec = true\n';
+    const originalConfig = [
+      'model = "unrelated-fixture"',
+      "[features]",
+      "unified_exec = true",
+      "",
+      ...schemaProbeMcpToml(),
+    ].join("\n");
     await writeFile(join(codexHome, "config.toml"), originalConfig, "utf8");
     const authority = createCodexIntegrationAuthority({
       codexHome,
@@ -549,6 +579,7 @@ async function prepareIsolatedCodexHome(
       "requires_openai_auth = true",
       `env_key = ${quoted(CODEX_PROMPT_ENV_KEY)}`,
       "",
+      ...schemaProbeMcpToml(),
     ].join("\n"),
     "utf8",
   );
@@ -1080,6 +1111,10 @@ interface Scenario {
   readonly minimumRequiredItems?: number;
   readonly requireFailedCommand?: boolean;
   readonly requiredCustomTool?: string;
+  /** Require one advertised tool schema to contain properties.model as a
+   * schema object. This reproduces the Provider Native projection trigger
+   * while keeping the isolated Codex environment deterministic. */
+  readonly requireModelSchemaProperty?: boolean;
   /** After the turn, verify this file exists in the session directory. */
   readonly expectedFile?: Readonly<{ path: string; content: string }>;
   /** Extra Codex flags for this scenario (e.g. tool usage). */
@@ -1121,6 +1156,14 @@ function directedScenarios(): readonly Scenario[] {
       prompt:
         "Reply with exactly: NO_TOOLS_OK. Do not use any tools, do not explain.",
       expectedText: "NO_TOOLS_OK",
+    }),
+    Object.freeze({
+      id: "tool_schema_model_property",
+      prompt:
+        "Reply with exactly: TOOL_SCHEMA_MODEL_PROPERTY_OK. Do not call any tools, " +
+        "do not explain.",
+      expectedText: "TOOL_SCHEMA_MODEL_PROPERTY_OK",
+      requireModelSchemaProperty: true,
     }),
 
     // Exercise the longest stateful tool chain before the stress matrix can
@@ -1340,6 +1383,32 @@ async function runPool(
   );
 }
 
+function assertCommandCodeCodexRoute(
+  providerId: string,
+  upstreamUrls: readonly string[],
+): string | undefined {
+  const paths = upstreamUrls.map((url) => new URL(url).pathname);
+  if (providerId === "commandcode-private") {
+    if (!paths.includes("/alpha/generate")) {
+      throw new Error("codex_private_semantic_upstream_missing");
+    }
+    if (paths.includes("/provider/v1/responses")) {
+      throw new Error("codex_private_unexpected_provider_native_upstream");
+    }
+    return "/alpha/generate";
+  }
+  if (providerId === "commandcode-goat") {
+    if (!paths.includes("/provider/v1/responses")) {
+      throw new Error("codex_goat_provider_native_upstream_missing");
+    }
+    if (paths.includes("/alpha/generate")) {
+      throw new Error("codex_goat_unexpected_private_semantic_upstream");
+    }
+    return "/provider/v1/responses";
+  }
+  return undefined;
+}
+
 function latencySummary(values: readonly number[]): Record<string, number> {
   if (values.length === 0) return {};
   const sorted = [...values].sort((left, right) => left - right);
@@ -1402,6 +1471,47 @@ function createCapturingRuntime(
       return runtime.handle(request);
     },
   });
+}
+
+function containsModelSchemaProperty(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsModelSchemaProperty(entry));
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (
+      key === "model" &&
+      typeof entry === "object" &&
+      entry !== null &&
+      !Array.isArray(entry) &&
+      (entry as { type?: unknown }).type === "string"
+    ) {
+      return true;
+    }
+    if (containsModelSchemaProperty(entry)) return true;
+  }
+  return false;
+}
+
+async function assertCapturedModelSchemaProperty(
+  artifactDir: string,
+  marker: string,
+): Promise<void> {
+  const requestsDir = join(artifactDir, "requests");
+  const requestNames = (await readdir(requestsDir)).filter(
+    (name) => name.startsWith(`${marker}_`) && name.endsWith(".json"),
+  );
+  for (const requestName of requestNames) {
+    const captured: unknown = JSON.parse(
+      await readFile(join(requestsDir, requestName), "utf8"),
+    );
+    if (typeof captured !== "object" || captured === null) continue;
+    const body = (captured as { body?: unknown }).body;
+    if (typeof body !== "object" || body === null) continue;
+    const tools = (body as { tools?: unknown }).tools;
+    if (Array.isArray(tools) && containsModelSchemaProperty(tools)) return;
+  }
+  throw new Error("codex_model_schema_property_missing");
 }
 
 async function assertCapturedCustomToolRoundTrip(
@@ -1792,6 +1902,9 @@ export async function runCodexCliOnlineSuite(
             scenario.requiredCustomTool,
           );
         }
+        if (scenario.requireModelSchemaProperty === true) {
+          await assertCapturedModelSchemaProperty(artifactDir, marker);
+        }
         if (scenario.expectedFile !== undefined) {
           const actual = await readFile(
             join(sessionDir, scenario.expectedFile.path),
@@ -1829,15 +1942,24 @@ export async function runCodexCliOnlineSuite(
 
     // Server-side snapshot health after the batch.
     await assertSnapshotHealthy(stateFile);
+    const certifiedUpstreamPath = assertCommandCodeCodexRoute(
+      providerId,
+      upstreamLogger.urls,
+    );
 
     const stdout: string[] = [];
     stdout.push("=== Codex CLI online suite ===");
     stdout.push(`artifactDir: ${artifactDir}`);
     stdout.push(`origin: ${origin}`);
+    stdout.push(`provider: ${providerId}`);
+    stdout.push(`model: ${selector}`);
     stdout.push(`batches: ${batches}`);
     stdout.push(`attempted: ${summary.attempted}`);
     stdout.push(`successful: ${summary.successful}`);
     stdout.push(`failed: ${summary.failed}`);
+    if (certifiedUpstreamPath !== undefined) {
+      stdout.push(`certifiedUpstreamPath: ${certifiedUpstreamPath}`);
+    }
     stdout.push("--- coverage matrix ---");
     for (const entry of matrix) {
       stdout.push(

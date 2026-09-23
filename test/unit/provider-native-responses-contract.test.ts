@@ -7,6 +7,7 @@ import type {
   RequestJourneyObservationInput,
 } from "../../src/diagnostics/contract.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
+import type { PublicModelSource } from "../../src/public-model-seam.js";
 import {
   createProviderNativeResponses,
   supportsProviderNativeResponses,
@@ -53,6 +54,7 @@ function dependencies(
   source: Models,
   fetch: FetchFunction,
   diagnostics?: RequestJourneyObservationAuthority,
+  publicModels?: PublicModelSource,
 ): HttpBoundaryDependencies {
   const handler = createOpenAIResponsesHandler({
     models: source,
@@ -65,6 +67,7 @@ function dependencies(
     maxRequestBytes: 1_000_000,
     createResponseId: () => "resp_test",
     now: () => 1,
+    ...(publicModels === undefined ? {} : { publicModels }),
   });
   return {
     clientProtocols: [handler],
@@ -232,6 +235,132 @@ describe("Provider Native Responses contract", () => {
         terminalClass: "done",
       }),
     }));
+  });
+
+  it("projects wrapped SSE response identity without treating tool-schema model properties as aliases", async () => {
+    const model = responsesModel();
+    const alias = "public/gpt-native";
+    const publicModels: PublicModelSource = {
+      requestSnapshot: async () =>
+        ({
+          resolve: (selector: string) =>
+            selector === alias
+              ? { providerId: model.provider, modelId: model.id }
+              : undefined,
+        }) as never,
+    };
+    const responseObject = {
+      id: "resp_tools",
+      object: "response",
+      status: "completed",
+      model: model.id,
+      tools: [{
+        type: "function",
+        name: "choose",
+        parameters: {
+          type: "object",
+          properties: {
+            model: {
+              type: "string",
+              description: "Requested model",
+            },
+          },
+        },
+      }],
+    };
+    const sse = ["created", "in_progress", "completed"]
+      .map(
+        (status) =>
+          `event: response.${status}\ndata: ${JSON.stringify({
+            type: `response.${status}`,
+            response: responseObject,
+          })}\n\n`,
+      )
+      .join("");
+    const fetch: FetchFunction = async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, undefined, publicModels),
+      request(JSON.stringify({ model: alias, input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    const projected = await response.text();
+    const frames = projected.trim().split("\n\n");
+    expect(frames).toHaveLength(3);
+    for (const frame of frames) {
+      const payload = JSON.parse(frame.split("\n")[1]!.slice(6)) as {
+        response: typeof responseObject;
+      };
+      expect(payload.response.model).toBe(alias);
+      expect(
+        payload.response.tools[0]!.parameters.properties.model.description,
+      ).toBe("Requested model");
+    }
+  });
+
+  it("records an exact Provider Native alias-projection failure instead of a generic request failure", async () => {
+    const model = responsesModel();
+    const alias = "public/gpt-native";
+    const publicModels: PublicModelSource = {
+      requestSnapshot: async () =>
+        ({
+          resolve: (selector: string) =>
+            selector === alias
+              ? { providerId: model.provider, modelId: model.id }
+              : undefined,
+        }) as never,
+    };
+    const recorded = recordingJourney();
+    const responseObject = {
+      id: "resp_ambiguous",
+      object: "response",
+      status: "completed",
+      model: model.id,
+      output: [{
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        status: "completed",
+        content: [],
+        model: model.id,
+      }],
+    };
+    const sse =
+      `event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed",
+        response: responseObject,
+      })}\n\n`;
+    const fetch: FetchFunction = async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, recorded.authority, publicModels),
+      request(JSON.stringify({ model: alias, input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(502);
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "failure_detected",
+        classification: "provider_native_alias_projection_failed",
+        origin: "Token",
+        originPrecision: "exact",
+        location: expect.objectContaining({
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "preserve_provider_response",
+        }),
+      }),
+    );
   });
 
   it("returns upstream SSE bytes unchanged when no alias projection is required", async () => {

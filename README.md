@@ -483,7 +483,9 @@ these runners load CommandCode through the generic loader from `node_modules`:
 npx tsx test/online/pi-commandcode-ir-probe.ts
 npm run test:online
 npm run test:online-responses
-npm run test:online-codex -- 3
+npm run test:online-codex:private
+npm run test:online-codex:goat
+npm run test:online-codex
 npm run test:online-claude -- 3
 ```
 

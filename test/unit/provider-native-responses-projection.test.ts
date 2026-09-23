@@ -112,6 +112,41 @@ describe("Ticket 15 Responses passthrough response projection", () => {
     expect(projected).not.toContain(CANONICAL);
   });
 
+  it("rewrites a wrapped response model while retaining model properties in tool schemas", () => {
+    const response = {
+      id: "resp_tools",
+      object: "response",
+      model: CANONICAL,
+      tools: [{
+        type: "function",
+        name: "choose",
+        parameters: {
+          type: "object",
+          properties: { model: { type: "string", description: "Requested model" } },
+        },
+      }],
+    };
+    const stream = ["created", "in_progress", "completed"]
+      .map((status) => `event: response.${status}\ndata: ${JSON.stringify({ type: `response.${status}`, response })}\n\n`)
+      .join("");
+    const result = projectResponsesPassthroughBody(
+      encode(stream),
+      "text/event-stream",
+      ALIAS,
+    );
+    expect("error" in result).toBe(false);
+    if ("error" in result) return;
+    const frames = decode(result.body).trim().split("\n\n");
+    for (const frame of frames) {
+      const data = JSON.parse(frame.split("\n")[1]!.slice(6)) as {
+        response: typeof response;
+      };
+      expect(data.response.model).toBe(ALIAS);
+      expect(data.response.tools[0]!.parameters.properties.model.description)
+        .toBe("Requested model");
+    }
+  });
+
   it("fails closed when a non-streaming response carries a nested model that cannot be told apart from semantic content", () => {
     const body = JSON.parse(responseObject(CANONICAL)) as Record<string, unknown>;
     body.output = [

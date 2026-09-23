@@ -76,6 +76,8 @@ test("every repository test entrypoint uses the Codex test guard", async () => {
     "test:online",
     "test:online-responses",
     "test:online-codex",
+    "test:online-codex:private",
+    "test:online-codex:goat",
     "test:online-claude",
     "test:cache",
   ];
@@ -119,6 +121,61 @@ test("every repository test entrypoint uses the Codex test guard", async () => {
     windowsCertification,
     /Remove-Item Env:CODEX_HOME/u,
     "installed-product certification must restore the inherited Codex environment",
+  );
+});
+
+test("the online Codex matrix certifies both CommandCode Providers and the model-schema regression", async () => {
+  const rootManifest = JSON.parse(
+    await readFile(join(repositoryRoot, "package.json"), "utf8"),
+  );
+  const runner = await readFile(
+    join(repositoryRoot, "test", "online", "run-codex-cli.ts"),
+    "utf8",
+  );
+  const fixture = await readFile(
+    join(repositoryRoot, "test", "online", "codex-schema-probe-mcp.mjs"),
+    "utf8",
+  );
+
+  assert.match(
+    rootManifest.scripts["test:online-codex:inner"] ?? "",
+    /test:online-codex:run:private.*test:online-codex:run:goat/u,
+    "aggregate Codex online entrypoint must run Private then Goat",
+  );
+  assert.match(
+    rootManifest.scripts["test:online-codex:run:private"] ?? "",
+    /--provider commandcode-private .*--model commandcode-private\/deepseek\/deepseek-v4\.1-flash .*--alias commandcode-private\/deepseek-v4\.1-flash/u,
+    "Private Codex online entrypoint must bind the Private Provider/model through a public alias",
+  );
+  assert.match(
+    rootManifest.scripts["test:online-codex:run:goat"] ?? "",
+    /--provider commandcode-goat .*--model commandcode-goat\/deepseek\/deepseek-v4\.1-flash .*--alias commandcode-goat\/deepseek-v4\.1-flash/u,
+    "Goat Codex online entrypoint must bind the Goat Provider/model through a public alias",
+  );
+  assert.match(
+    runner,
+    /id:\s*"tool_schema_model_property"/u,
+    "Codex online coverage must retain the model-schema regression scenario",
+  );
+  assert.match(
+    runner,
+    /assertCapturedModelSchemaProperty/u,
+    "Codex online coverage must prove the real request advertised the schema",
+  );
+  assert.match(
+    runner,
+    /codex_private_semantic_upstream_missing/u,
+    "Private Codex certification must fail if Semantic upstream dispatch is absent",
+  );
+  assert.match(
+    runner,
+    /codex_goat_provider_native_upstream_missing/u,
+    "Goat Codex certification must fail if Provider Native dispatch is absent",
+  );
+  assert.match(
+    fixture,
+    /properties:[\s\S]*model:[\s\S]*type:\s*"string"/u,
+    "fixture MCP must advertise a tool schema with properties.model",
   );
 });
 

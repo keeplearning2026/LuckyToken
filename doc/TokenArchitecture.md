@@ -2437,12 +2437,15 @@ git diff --check
 npx tsx test/online/pi-commandcode-ir-probe.ts
 npm run test:online
 npm run test:online-responses
-npm run test:online-codex -- 1
+npm run test:online-codex:private
+npm run test:online-codex:goat
+npm run test:online-codex
 npm run test:online-claude -- 1
 ```
 
-（`-- 1` 为单批 runner 调用：Codex 20 个场景、Claude 17 个场景；当前 conformance
-证据由 3 次独立 invocation 汇总。）
+（当前 Codex runner 每个 Provider 为 22 个场景；Private 认证 Semantic Conversion，
+Goat 认证 Provider Native Preservation。Claude 的 `-- 1` 仍为单批 17 个场景。
+历史 conformance 记录继续作为历史证据，不替代当前双 Provider Codex gate。）
 
 涉及协议、Pi revision、Provider model/endpoint、request identity、credential authority、
 lane eligibility 或 serving boundary 的修改，还必须更新对应 conformance record/hash，

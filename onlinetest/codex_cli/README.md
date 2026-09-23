@@ -1,39 +1,66 @@
 # Codex CLI online test
 
-From this directory:
+The repository-level entrypoint certifies both bundled CommandCode Providers
+with the real Codex CLI:
 
 ```powershell
-npm test
+npm run test:online-codex
 ```
 
-Pass a batch count to repeat the 20-scenario real-client matrix:
+It builds the shared packages once, then runs the same 22-scenario matrix
+serially against:
+
+```text
+commandcode-private/deepseek/deepseek-v4.1-flash
+commandcode-goat/deepseek/deepseek-v4.1-flash
+```
+
+Run either Provider independently when isolating a failure:
 
 ```powershell
-npm test -- 3
+npm run test:online-codex:private
+npm run test:online-codex:goat
 ```
 
-To certify the exact three-field Codex injection instead of the legacy test
-profile overrides, supply a Codex-safe public alias and one scenario:
+The Private run exercises the Codex/OpenAI Responses client contract through
+Semantic Conversion. The Goat run exercises the same real client through
+Provider Native Preservation.
+
+The matrix includes `tool_schema_model_property`. The isolated Codex home
+starts a test-only stdio MCP server whose advertised tool schema contains:
+
+```json
+{
+  "properties": {
+    "model": {
+      "type": "string"
+    }
+  }
+}
+```
+
+The runner captures the actual `/v1/responses` request and fails unless that
+schema was really advertised by Codex. This protects the Provider Native SSE
+alias-projection regression where a tool-schema property named `model` was
+previously mistaken for response model identity.
+
+From this directory, `npm test` still runs the generic runner with its default
+Provider. Pass runner arguments after `--` for targeted development, for
+example:
+
+```powershell
+npm test -- --provider commandcode-goat --model commandcode-goat/deepseek/deepseek-v4.1-flash --scenario tool_schema_model_property
+```
+
+To certify the exact three-field Codex injection instead of the profile
+overrides, supply a Codex-safe public alias and one scenario:
 
 ```powershell
 npm test -- --injected-config --alias commandcode-private/deepseek-v4-flash --scenario chain_basic
 ```
 
-This mode builds `token-model-catalog.json` from the installed bundled
-catalog plus Pi model facts, runs the installed CLI preflight in a temporary
-`CODEX_HOME`, enables the real integration authority, and launches Codex
-without command-line overrides for `model_provider`, `openai_base_url`, or
-`model_catalog_json`. It restores the nullable preimage after the run.
-
 The runner starts a fresh Token server, reads the git-ignored
-`../../CommandcodeAPIKey.txt`, creates an isolated temporary `CODEX_HOME`, and
-runs the real Codex CLI against `/v1/responses`. Test child processes use
-`--dangerously-bypass-approvals-and-sandbox` only inside per-scenario temporary
-working directories.
-
-This online harness intentionally constructs the CommandCode package through the
-generic Provider Package test path so it can characterize that boundary directly.
-That is **test-only composition**: production Token treats
-`@token/provider-commandcode-private` as a bundled reserved product Provider
-and rejects it in user `providerPackages`. The certified run is 20 scenarios ×
-3 batches = 60/60 with Codex CLI `0.147.0`.
+`../../CommandcodeAPIKey.txt`, creates an isolated temporary `CODEX_HOME`,
+and runs the real Codex CLI against `/v1/responses`. User MCPs, credentials,
+sessions, skills, and default settings are not inherited; the schema-probe MCP
+is injected explicitly so the regression trigger stays deterministic.

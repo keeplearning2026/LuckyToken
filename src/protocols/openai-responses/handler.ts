@@ -1099,6 +1099,17 @@ async function providerNativeBranch(
         preserveLocation,
       );
       observeResponsesJourney(journey, {
+        kind: "failure_detected",
+        failureId:
+          `${journey?.requestId ?? "responses"}:provider_native_alias_projection_failed`,
+        role: "primary",
+        classification: "provider_native_alias_projection_failed",
+        origin: "Token",
+        originPrecision: "exact",
+        safeMessage: "Token could not safely prepare the provider response.",
+        location: preserveLocation,
+      });
+      observeResponsesJourney(journey, {
         kind: "artifact_observed",
         artifactId: "provider_native_preserved_response_wire",
         artifactKind: "provider_native_preserved_response_wire",

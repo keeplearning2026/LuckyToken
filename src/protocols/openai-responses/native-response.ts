@@ -90,7 +90,9 @@ function collectModelPaths(
   }
   for (const [key, entry] of Object.entries(value)) {
     const next = [...path, key];
-    if (key === "model") out.push(next.join("."));
+    if (key === "model" && typeof entry === "string") {
+      out.push(next.join("."));
+    }
     collectModelPaths(entry, next, out, depth + 1);
   }
   return out;
@@ -147,8 +149,9 @@ function endOfValue(text: string, start: number): number {
   return index;
 }
 
-function topLevelModelStringSpans(
+function topLevelPropertyValueSpans(
   text: string,
+  property: string,
 ): ReadonlyArray<readonly [number, number]> {
   let index = skipWhitespace(text, 0);
   if (text[index] !== "{") return [];
@@ -165,7 +168,7 @@ function topLevelModelStringSpans(
     index = skipWhitespace(text, index + 1);
     const valueStart = index;
     const valueEnd = endOfValue(text, valueStart);
-    if (key === "model" && text[valueStart] === '"') {
+    if (key === property) {
       spans.push([valueStart, valueEnd] as const);
     }
     index = skipWhitespace(text, valueEnd);
@@ -175,6 +178,31 @@ function topLevelModelStringSpans(
     }
     if (text[index] === "}") break;
     throw new Error("Expected JSON property delimiter");
+  }
+  return spans;
+}
+
+function topLevelModelStringSpans(
+  text: string,
+): ReadonlyArray<readonly [number, number]> {
+  return topLevelPropertyValueSpans(text, "model").filter(
+    ([start]) => text[start] === '"',
+  );
+}
+
+function wrappedResponseModelStringSpans(
+  text: string,
+): ReadonlyArray<readonly [number, number]> {
+  const responseSpans = topLevelPropertyValueSpans(text, "response");
+  const spans: Array<readonly [number, number]> = [];
+  for (const [responseStart, responseEnd] of responseSpans) {
+    const responseText = text.slice(responseStart, responseEnd);
+    for (const [start, end] of topLevelModelStringSpans(responseText)) {
+      spans.push([
+        responseStart + start,
+        responseStart + end,
+      ] as const);
+    }
   }
   return spans;
 }
@@ -303,19 +331,42 @@ function frameModelRawSpan(
     return { error: "Responses native SSE event is not valid JSON" };
   }
   if (typeof parsed !== "object" || parsed === null) return {};
+  const record = parsed as Record<string, unknown>;
+  if (
+    Object.prototype.hasOwnProperty.call(record, "model") &&
+    typeof record.model !== "string"
+  ) {
+    return { error: "Responses SSE event carries a non-string model" };
+  }
+  const wrappedResponse = record.response;
+  if (
+    typeof wrappedResponse === "object" &&
+    wrappedResponse !== null &&
+    !Array.isArray(wrappedResponse)
+  ) {
+    const responseRecord = wrappedResponse as Record<string, unknown>;
+    if (
+      Object.prototype.hasOwnProperty.call(responseRecord, "model") &&
+      typeof responseRecord.model !== "string"
+    ) {
+      return { error: "Responses SSE event carries a non-string model" };
+    }
+  }
   const paths = collectModelPaths(parsed);
   if (paths.length === 0) return {};
-  if (paths.length !== 1 || paths[0] !== "model") {
+  if (
+    paths.length !== 1 ||
+    (paths[0] !== "model" && paths[0] !== "response.model")
+  ) {
     return { error: "Responses SSE event carries an ambiguous model position" };
-  }
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.model !== "string") {
-    return { error: "Responses SSE event carries a non-string model" };
   }
 
   let spans: ReadonlyArray<readonly [number, number]>;
   try {
-    spans = topLevelModelStringSpans(payload);
+    spans =
+      paths[0] === "model"
+        ? topLevelModelStringSpans(payload)
+        : wrappedResponseModelStringSpans(payload);
   } catch {
     return { error: "Responses SSE event carries an ambiguous model position" };
   }
