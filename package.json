@@ -29,6 +29,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "compare:protocols": "node tools/protocol-compare/cli.mjs",
     "start": "npm run build:packages && tsx src/cli.ts",
     "test:cache": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:cache:inner",
     "test:cache:inner": "tsx test/online/cache-probe.ts",
