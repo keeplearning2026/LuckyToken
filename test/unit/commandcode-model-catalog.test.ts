@@ -47,6 +47,7 @@ describe("CommandCode model catalog", () => {
       "MiniMaxAI/MiniMax-M3",
       "MiniMaxAI/MiniMax-M2.7",
       "MiniMaxAI/MiniMax-M2.5",
+      "xiaomi/mimo-v2.6-flash",
       "xiaomi/mimo-v2.5-pro",
       "xiaomi/mimo-v2.5",
       "Qwen/Qwen3.8-Max",
@@ -98,7 +99,7 @@ describe("CommandCode model catalog", () => {
       .digest("hex");
 
     expect(fingerprint).toBe(
-      "42f3ca01541ce0cbb753d6119160558cf600e83c3aa060f79b9f0fa27bc97b01",
+      "995043d6b8f1cae4dd4ecad32d09f9470a4aa220c55481b4e2810065a7e2b34e",
     );
   });
 
@@ -115,6 +116,9 @@ describe("CommandCode model catalog", () => {
     );
     expect(
       selectCommandCodeModelApi(byId.get("deepseek/deepseek-v4.1-flash")!),
+    ).toBe("openai-responses");
+    expect(
+      selectCommandCodeModelApi(byId.get("xiaomi/mimo-v2.6-flash")!),
     ).toBe("openai-responses");
     expect(
       selectCommandCodeModelApi(byId.get("stepfun/Step-3.5-Flash")!),
@@ -142,6 +146,19 @@ describe("CommandCode model catalog", () => {
       high: null,
       xhigh: null,
       max: null,
+    });
+    expect(
+      COMMANDCODE_MODEL_FACTS.find(
+        (model) => model.id === "xiaomi/mimo-v2.6-flash",
+      ),
+    ).toMatchObject({
+      supportedEndpoints: ["/chat/completions", "/responses"],
+      name: "MiMo V2.6 Flash",
+      description: "efficient long-context agentic coding",
+      input: ["text", "image"],
+      reasoning: false,
+      contextWindow: 1_000_000,
+      minimumPlan: "go",
     });
     expect(
       COMMANDCODE_MODEL_FACTS.find((model) => model.id === "claude-sonnet-4-6"),
@@ -190,8 +207,8 @@ describe("CommandCode model catalog", () => {
         expect(Object.isFrozen(facts.thinkingLevelMap)).toBe(true);
       }
     }
-    expect(ids.size).toBe(57);
-    expect(plans).toEqual({ go: 35, goat: 4, pro: 13, max: 5 });
+    expect(ids.size).toBe(58);
+    expect(plans).toEqual({ go: 36, goat: 4, pro: 13, max: 5 });
     expect(Object.isFrozen(COMMANDCODE_MODEL_FACTS)).toBe(true);
   });
 
@@ -375,6 +392,7 @@ describe("CommandCode model catalog", () => {
       "MiniMaxAI/MiniMax-M3",
       "MiniMaxAI/MiniMax-M2.7",
       "MiniMaxAI/MiniMax-M2.5",
+      "xiaomi/mimo-v2.6-flash",
       "xiaomi/mimo-v2.5-pro",
       "xiaomi/mimo-v2.5",
       "Qwen/Qwen3.8-Max",

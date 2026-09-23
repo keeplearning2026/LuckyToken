@@ -4,7 +4,7 @@ This private workspace package owns the schema, validation, bootstrap snapshot,
 and projection helpers for the stable CommandCode model capability facts shared
 by Token's CommandCode Pi Providers. The runtime authority is the
 Backend-startup `commandcode-models.json` file; the bundled snapshot is only
-the seed/fallback source. The current bootstrap contains 57 reviewed callable
+the seed/fallback source. The current bootstrap contains 58 reviewed callable
 models from the `command-code@1.32.1` source table after removing retired
 entries.
 

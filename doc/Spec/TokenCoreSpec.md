@@ -5892,7 +5892,7 @@ validation, factory, Pi ↔ CommandCode Private conversion, and its upstream
 lifecycle. Stable CommandCode model capability schema/bootstrap/projection
 helpers are owned separately by `@token/commandcode-model-catalog`; runtime
 product composition loads one frozen `commandcode-models.json` snapshot and
-injects it into both CommandCode packages. The current bundled bootstrap has 57
+injects it into both CommandCode packages. The current bundled bootstrap has 58
 reviewed facts, and the Private package projects its own provider/api/baseUrl
 identity across the full loaded snapshot. Generic Provider Runtime imports only
 the Provider Package contract and opaque bundled configurations; it must not
@@ -7355,8 +7355,8 @@ slot. Its per-model `Model.api` is selected from the Backend-startup
 `commandcode-models.json` `supportedEndpoints`; the same frozen catalog
 snapshot is injected into Private and Goat. Goat must not import Private request
 builders, credentials, transport, assembler, or response conversion. The bundled
-bootstrap snapshot currently contains 57 reviewed facts and is used only to seed
-or fall back when the user catalog is unavailable; Goat selects the 39 Go/GOAT
+bootstrap snapshot currently contains 58 reviewed facts and is used only to seed
+or fall back when the user catalog is unavailable; Goat selects the 40 Go/GOAT
 facts. The Goat Pi API map pre-registers Anthropic Messages, Responses, and Chat
 Completions so that future catalog-only model additions across any supported
 endpoint do not require rebuilding the Provider package.

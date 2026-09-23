@@ -578,10 +578,10 @@ The package implementations are:
 Both consume the same frozen startup catalog loaded from Token-owned
 `commandcode-models.json` by `@token/commandcode-model-catalog`. They do not
 share Provider credentials, transport, wire conversion, or response lifecycle.
-The bundled bootstrap snapshot currently has 57 reviewed facts and exists only
+The bundled bootstrap snapshot currently has 58 reviewed facts and exists only
 for first-run seed/fallback. Private projects the full loaded catalog through
 its private API; Goat selects loaded facts whose minimum plan is Go or GOAT
-(current bootstrap: 39) and derives each Pi API from `supportedEndpoints`.
+(current bootstrap: 40) and derives each Pi API from `supportedEndpoints`.
 
 The npm/package identity is an implementation detail and is never required in normal UI or first-run configuration.
 
@@ -1765,8 +1765,8 @@ Without any user `providerPackages` configuration:
 models.getProvider("commandcode-private") exists
 models.getProvider("commandcode-goat") exists
 source = token_bundled
-commandcode-private model count = 57
-commandcode-goat model count = 39
+commandcode-private model count = 58
+commandcode-goat model count = 40
 ```
 
 ### P3 — source classification

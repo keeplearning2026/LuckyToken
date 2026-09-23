@@ -542,6 +542,16 @@ export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
       minimumPlan: "go",
     },
     {
+      id: "xiaomi/mimo-v2.6-flash",
+      supportedEndpoints: ["/chat/completions", "/responses"],
+      name: "MiMo V2.6 Flash",
+      description: "efficient long-context agentic coding",
+      input: ["text", "image"],
+      reasoning: false,
+      contextWindow: 1_000_000,
+      minimumPlan: "go",
+    },
+    {
       id: "xiaomi/mimo-v2.5-pro",
       supportedEndpoints: ["/chat/completions", "/responses"],
       name: "MiMo V2.5 Pro",

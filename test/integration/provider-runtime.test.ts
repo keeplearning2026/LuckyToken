@@ -258,7 +258,7 @@ describe("Provider Runtime composition", () => {
     expect(runtime.providerSource("commandcode-goat")).toBe(
       "token_bundled",
     );
-    expect(runtime.models.getModels("commandcode-goat")).toHaveLength(39);
+    expect(runtime.models.getModels("commandcode-goat")).toHaveLength(40);
   });
 
   it("P3: classifies Pi builtin, bundled, custom models.json, external package and builtin overlay sources", async () => {

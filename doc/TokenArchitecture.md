@@ -1276,7 +1276,7 @@ Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contr
 保留原文件、回退到 bundled default 并发布 warning。一次 Backend 启动只加载一次并 freeze，
 同一 snapshot 同时注入 Private 与 Goat，所以两条路径不会在一次启动中看到不同 catalog。
 
-当前 bundled bootstrap 有 **57 个已核对模型事实**；它不是运行期第二权威，只负责首次 seed/
+当前 bundled bootstrap 有 **58 个已核对模型事实**；它不是运行期第二权威，只负责首次 seed/
 fallback。`supportedEndpoints` 保存 upstream capability，唯一 Pi API 由确定性规则选择：
 `/messages → anthropic-messages`，含 `/responses → openai-responses`，否则
 `/chat/completions → openai-completions`。Private 仍把所有 facts 投影成自己的
@@ -2012,7 +2012,7 @@ Pi AI IR
 的 `supportedEndpoints` 确定性选择。OpenAI-style 模型的
 `baseUrl=https://api.commandcode.ai/provider/v1`；Anthropic-style base URL 若未来有
 Go/GOAT 可见模型则使用 provider root，由 Pi Anthropic adapter 拼 `/v1/messages`。
-当前 57 个 bootstrap facts 中，Go/GOAT 过滤后是 39 个模型。Goat Provider map
+当前 58 个 bootstrap facts 中，Go/GOAT 过滤后是 40 个模型。Goat Provider map
 预注册 Pi 的 `anthropic-messages`、`openai-responses` 与 `openai-completions`
 三个 transport adapter；因此未来只要更新 `commandcode-models.json`，新增任一已支持
 endpoint 的 Go/GOAT 模型都不需要重新构建软件。它拥有独立 Pi credential slot，并且
@@ -2483,7 +2483,7 @@ flowchart LR
 | Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Direct Mode caller envelope、Provider JSONL state 分模块拥有 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
 | Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
-| 模型单一权威来源 | Backend 启动只加载一次 `commandcode-models.json` 并将同一 frozen snapshot 注入 Private/Goat；bundled 57-model snapshot 只做首次 seed/fallback；当前 Goat 按 Go/GOAT 选择 39 个 | 符合 |
+| 模型单一权威来源 | Backend 启动只加载一次 `commandcode-models.json` 并将同一 frozen snapshot 注入 Private/Goat；bundled 58-model snapshot 只做首次 seed/fallback；当前 Goat 按 Go/GOAT 选择 40 个 | 符合 |
 | `pi-agent/` 不可变 | 当前 `0.86.1` reference tree（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
 | HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |

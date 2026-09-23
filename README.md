@@ -273,8 +273,8 @@ is required. The runtime CommandCode catalog authority is
 the bundled bootstrap snapshot, while an invalid file is preserved and the
 Backend falls back with a warning. The Providers share the same frozen startup
 snapshot but own independent authentication, transport, and response lifecycles.
-The current bundled bootstrap contains 57 reviewed facts; Private projects all
-57, while Goat exposes the 39 entries whose minimum plan is Go or GOAT.
+The current bundled bootstrap contains 58 reviewed facts; Private projects all
+58, while Goat exposes the 40 entries whose minimum plan is Go or GOAT.
 
 Only npm root package names (including scoped root names) are accepted for
 user `providerPackages`. Package import, contract/export validation, factory
