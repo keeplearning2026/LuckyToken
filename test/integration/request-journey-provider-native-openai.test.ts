@@ -1024,7 +1024,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
     }
   });
 
-  it("persists Provider Native lifecycle normalization notices and wire evidence", async () => {
+  it.each([false, true])("persists lifecycle evidence with skipped=%s and a successful outcome", async (skipped) => {
     const root = await mkdtemp(
       join(tmpdir(), "Token-openai-provider-native-normalized-journey-"),
     );
@@ -1055,7 +1055,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         }),
       } as unknown as Models;
 
-      const upstreamSse =
+      let upstreamSse =
         'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
         'event: response.metadata\ndata: {"type":"response.metadata","sequence_number":1,"marker":"between"}\n\n' +
         'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
@@ -1067,6 +1067,11 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
         'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
         'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+
+      if (skipped) {
+        upstreamSse += 'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":2,"item":{"type":"message","id":"msg_unclosed","role":"assistant","content":[]}}\n\n';
+      }
+      const expectedWire = skipped ? upstreamSse : expectedNormalized;
 
       const providerNativeLane = createProviderNativeResponses({
         models,
@@ -1104,7 +1109,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         }),
       });
       expect(response.status).toBe(200);
-      await expect(response.text()).resolves.toBe(expectedNormalized);
+      await expect(response.text()).resolves.toBe(expectedWire);
 
       const detail = await authority.getRequestJourney({
         requestId: REQUEST_ID,
@@ -1120,45 +1125,33 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
           step: "normalize_provider_native_lifecycle",
         },
       });
-      expect(observations).toContainEqual(
-        expect.objectContaining({
-          kind: "conversion_notice_observed",
-          code: "provider_native_lifecycle_normalized",
+      const notices = observations.filter((observation) => observation.kind === "conversion_notice_observed");
+      expect(notices.filter((notice) => notice.code === (skipped
+        ? "provider_native_lifecycle_normalization_skipped"
+        : "provider_native_lifecycle_normalized"))).toHaveLength(1);
+      expect(notices.filter((notice) => notice.code === "item_commit_order_differs_from_output_index"))
+        .toHaveLength(skipped ? 0 : 1);
+      if (skipped) {
+        expect(notices).toContainEqual(expect.objectContaining({
+          code: "provider_native_lifecycle_normalization_skipped",
+          message: "incomplete_item_chain",
           severity: "info",
-        }),
-      );
-      expect(observations).toContainEqual(
-        expect.objectContaining({
-          kind: "conversion_notice_observed",
-          code: "item_commit_order_differs_from_output_index",
-          severity: "warning",
-        }),
-      );
-      expect(detail.artifacts).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            artifactId: "provider_native_upstream_response_wire.1",
-            artifactKind: "provider_native_upstream_response_wire",
-            state: "captured",
-          }),
-          expect.objectContaining({
-            artifactId: "provider_native_lifecycle_normalized_wire",
-            artifactKind: "provider_native_lifecycle_normalized_wire",
-            state: "captured",
-          }),
-          expect.objectContaining({
-            artifactId: "provider_native_preserved_response_wire",
-            artifactKind: "provider_native_preserved_response_wire",
-            state: "captured",
-          }),
-        ]),
-      );
-
-      for (const [artifactId, expected] of [
+        }));
+        expect(notices.some((notice) => notice.code === "provider_native_lifecycle_normalized")).toBe(false);
+      }
+      expect(observations).toContainEqual(expect.objectContaining({
+        kind: "work_outcome_committed", outcome: "success",
+      }));
+      expect(detail.artifacts.filter((artifact) =>
+        artifact.artifactId === "provider_native_lifecycle_normalized_wire"))
+        .toHaveLength(skipped ? 0 : 1);
+      const expectedArtifacts = [
         ["provider_native_upstream_response_wire.1", upstreamSse],
-        ["provider_native_lifecycle_normalized_wire", expectedNormalized],
-        ["provider_native_preserved_response_wire", expectedNormalized],
-      ] as const) {
+        ...(!skipped ? [["provider_native_lifecycle_normalized_wire", expectedNormalized]] : []),
+        ["provider_native_preserved_response_wire", expectedWire],
+      ] as const;
+      for (const [artifactId, expected] of expectedArtifacts) {
+        expect(detail.artifacts).toContainEqual(expect.objectContaining({ artifactId, state: "captured" }));
         const artifact = await authority.getRequestArtifact({
           requestId: REQUEST_ID,
           artifactId,

@@ -1,6 +1,6 @@
 # Provider Native Responses 生命周期规范化修改计划
 
-状态：**COMPLETED / REVIEWED — 生产实现、Private/Goat 在线认证、真实 Codex replay、完整仓库回归与 code-review 均已完成**
+状态：**COMPLETED / REVIEWED — 核心算法保留；follow-up 字节保留修复、真实 Codex consumer 认证、双 Provider 在线认证与完整仓库/发行门禁均已通过，见 §10**
 日期：2026-09-23
 
 ## 1. 目标与证据
@@ -98,6 +98,7 @@ A.done                          A.done
 ### 3.2 SSE 字节保留
 
 - 内部保留原始帧及其字节/文本区间，支持 LF、CRLF、合法多行 data、注释、空行和原始非 data 字段。
+- 裸 CR 也是合法 SSE 行结束符，但当前 normalizer 无法证明此类输入可安全重排；在任何 frame/span 分析前检测裸 CR，返回 `skipped/invalid_sse_structure` 并保留原始字节，包括原本串行的流。此原因表示当前分析能力不足，不将裸 CR 定义成非法 SSE；本任务不扩展 parser 能力。
 - JSON 解码只服务于结构分析；输出不得全量 JSON.stringify。
 - `event:` 与 data 内的类型等判定信息矛盾、JSON/UTF-8 无法可靠解析、关键属性重复且歧义、帧边界不完整等，不重构，返回原始 body。
 - 不产生新 SSE 事件，不丢弃未知字段；注释/非数据记录不凭空附着到另一 item，按原始记录边界保留。
@@ -177,6 +178,8 @@ normalizer 的可恢复错误不逃逸成 502；真正的上游读取失败、�
 - `provider_native_lifecycle_normalized`：每响应至多一次。
 - `provider_native_lifecycle_normalization_skipped`：每响应至多一次，附有界固定原因文本。
 - `item_commit_order_differs_from_output_index`：规范化结果的 index 顺序差异，至多一次 warning，不阻断。
+
+该 index 差异 notice 仅由 `normalized` 分支产生；已经串行的逆 index 流返回 `unchanged`，不额外产生该 notice。
 
 skip 原因至少包括：`item_identity_conflict`、`incomplete_item_chain`、`unsupported_event_attribution`、`invalid_sse_structure`、`invalid_sequence_number`、`upstream_cursor_semantics`。不再使用 `midstream_global_barrier`。
 
@@ -330,3 +333,62 @@ done 位置展开；`output_index` 只用于身份和一致性校验，不参与
   descriptor 超时；两者随后隔离重跑分别 13/13、9/9 通过；
 - 最终完整 `npm test` 再次重跑返回 exit code 0：仓库 Vitest 269 files / 2337 tests
   全通过，Desktop 20 files / 112 tests 全通过。
+
+## 10. Follow-up review 修复与再认证
+
+独立复核见
+[`ProviderNativeResponsesLifecycleNormalizationReview.md`](../Research/ProviderNativeResponsesLifecycleNormalizationReview.md)。
+该复核没有推翻「在原始 done 位置展开完整 chain」算法，但发现一个 preservation 字节损坏缺陷
+和若干认证/记录缺口。follow-up 仅修这些局部问题，不改变三线路架构、排序权威或 Pi/Codex。
+
+已实施：
+
+1. 裸 CR 在任何 frame/span 分析前 fail closed：
+   `skipped/invalid_sse_structure` + 原始 body byte-identical；裸 CR 本身仍是合法 SSE，
+   这里只表示当前 normalizer 不支持安全变换。
+2. `Frame.type` / `Chain.id` 死状态删除；background 从已解析请求体提取，
+   `rawBody` 继续作为 Provider Native 原样转发权威，不再二次 `JSON.parse`。
+3. 隔离 CLI replay 结构化核对下一轮 function call / call output / reasoning history；
+   额外使用 Codex app-server 实测 `custom_tool_call_input.delta` 的真实 patch diff consumer。
+   raw 交错控制会丢失一个 call 的 diff attribution，production normalization 后两个 call_id
+   均正确归属，直接覆盖单 `active_tool_argument_diff_consumer` 冲突。
+4. diagnostics normalization exchange 补齐 disabled baseline、throwing、slow、saturated、
+   unavailable 等价性；skipped 分支补齐持久化 notice、artifact 关系和成功 outcome。
+5. Provider Native serving conformance profile 增加 lifecycle normalizer 与 diagnostics
+   non-interference 证据，并重新绑定 record hash；历史 ordering audit 与 follow-up review
+   均显式指向本计划。
+
+已知边界：
+
+- `response.audio.delta` / `response.audio.transcript.delta` 在当前 OpenAI Responses 事件形状中
+  没有 item identity。当前实现仍按 global 处理，可能改变其相对 output-item lifecycle 位置。
+  Codex 当前不消费这两个事件；因此本计划的 Codex certification 不外推到 audio-capable
+  downstream。本 follow-up 不借机改变该未冻结的事件归属契约。
+
+follow-up 已重新验证：
+
+- 受影响定向测试：43/43 PASS；
+- serving conformance sync：5/5 PASS；
+- 三线路 / compact 负回归：28/28 PASS；
+- 隔离 production CLI replay：Codex CLI 0.156.1，reverse-done、global+done、
+  reasoning/message、tool/history 与真实 custom-tool patch diff consumer 全部 PASS；
+  raw custom-tool 交错按预期只保留后一个 consumer attribution，normalized 后两个 call_id
+  均完整归属，四类 forbidden lifecycle diagnostics 为 0；
+- typecheck 已按根脚本组成项拆分执行：packages、root、Desktop 全部 PASS；
+- ESLint（root + Desktop）与 `git diff --check`：PASS；
+- Private 在线 Codex：22/22 PASS，0 failure，认证上游路径 `/alpha/generate`；
+- Goat 在线 Codex：22/22 PASS，0 failure，认证上游路径 `/provider/v1/responses`。
+
+最终关闭门禁：
+
+- Desktop package build：独立重跑 PASS；先前一次 EBUSY 已确认来自与在线测试并发时的目录占用，
+  不是产品构建失败；
+- `npm test`：PASS。Certification 70/70；主仓库 Vitest 269/269 files、2346/2346 tests；
+  Desktop Vitest 20/20 files、112/112 tests；
+- `npm run test:distribution`：PASS。完整 build、distribution tarball 安装 1/1、
+  Desktop 112/112 tests，以及 packaged product E2E 7/7 全部通过；
+- 最终 `git diff --check`、serving conformance sync 与相关 ESLint 均 PASS。
+
+因此 follow-up review 中的 P1、P3、P4 已关闭；P2 audio 仍按上文“已知边界”明确限定，
+不属于本次 Codex certification 的覆盖面，也未被误标为已认证。当前计划恢复为
+`COMPLETED / REVIEWED`。

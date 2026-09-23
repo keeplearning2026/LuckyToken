@@ -1,5 +1,10 @@
 # Provider Native Responses item-chain ordering: Codex consumer audit
 
+Status: **historical consumer audit** — the production contract is frozen by
+[TokenProviderNativeResponsesLifecycleNormalizationPlan.md](../Spec/TokenProviderNativeResponsesLifecycleNormalizationPlan.md).
+The follow-up review and certification findings are tracked in
+[ProviderNativeResponsesLifecycleNormalizationReview.md](./ProviderNativeResponsesLifecycleNormalizationReview.md).
+
 Date: 2026-09-23. Source: local Codex checkout `D:\project\codex`, commit `30fc6864cc1318121eca1843c217fe00ce1212f1`. Sections 1–5 are source deductions. Sections 6–8 add parser/state findings and an isolated synthetic replay with installed `codex-cli 0.149.0`. No production source or user-owned Codex state was changed.
 
 ## Finding

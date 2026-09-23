@@ -46,9 +46,12 @@ node scripts/run-with-codex-test-sandbox.mjs -- npx tsx test/online/run-provider
 
 That replay preserves the original `response.output_item.done` commit order,
 keeps independent global events in the global+done skeleton, and verifies
-reverse-index done order, reasoning/message overlap, and an interleaved
-multi-tool argument round-trip whose second request must contain the expected
-tool outputs/history. All certified cases require zero lifecycle warnings.
+reverse-index done order, reasoning/message overlap, structured multi-tool
+history, and the real single-slot custom-tool argument diff consumer through
+Codex app-server `item/fileChange/patchUpdated` notifications. The raw
+interleaved custom-tool control must lose one consumer attribution, while the
+production-normalized treatment must preserve both call-id-attributed patch
+diffs. All certified cases require zero lifecycle warnings.
 
 The matrix includes `tool_schema_model_property`. The isolated Codex home
 starts a test-only stdio MCP server whose advertised tool schema contains:

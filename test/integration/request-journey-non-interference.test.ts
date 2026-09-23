@@ -1,8 +1,12 @@
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { RequestJourneyObservationAuthority } from "../../src/diagnostics/index.js";
+import { createDiagnosticsAuthority, parseDiagnosticsConfiguration } from "../../src/diagnostics/index.js";
 import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createTokenRuntime } from "../../src/runtime.js";
@@ -12,6 +16,7 @@ import {
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
+import { StalledDiagnosticsSession } from "../support/stalled-diagnostics-session.js";
 
 const REQUEST_ID = "30000000-0000-4000-8000-000000000001";
 const SESSION_ID = "30000000-0000-4000-8000-000000000002";
@@ -271,6 +276,66 @@ describe("Request Journey diagnostics non-interference", () => {
     expect(faulted).toEqual(baseline);
     expect(JSON.stringify(faulted)).not.toContain(DIAGNOSTICS_CANARY);
   });
+
+  it.each(["slow", "saturated", "unavailable"] as const)(
+    "keeps the same Provider Native normalized exchange when diagnostics are %s",
+    async (fault) => {
+      const baseline = await runProviderNativeResponsesExchange();
+      const root = await mkdtemp(join(tmpdir(), "Token-native-diagnostics-fault-"));
+      const stalled = new StalledDiagnosticsSession();
+      const authority = await createDiagnosticsAuthority({
+        configuration: parseDiagnosticsConfiguration({ directory: join(root, "diagnostics") }, root),
+        journeyCapturePolicy: {
+          snapshot: () => ({ allRequestsEnabled: true, failedRequestsEnabled: true }),
+        },
+        workerFactory: () => {
+          if (fault === "unavailable") throw new Error("fixture diagnostics process unavailable");
+          return stalled;
+        },
+      });
+      try {
+        if (fault === "saturated") {
+          const probe = authority.begin({
+            requestId: "queue-saturation-probe",
+            operationCandidate: "pending",
+            transport: "in_process",
+            method: "POST",
+            path: "/v1/responses",
+            acceptedAt: 1,
+            cancellation: { caller: "active", shutdown: "not_bound" },
+          });
+          const bytes = Buffer.from(JSON.stringify({ payload: "x".repeat(60 * 1_024) }));
+          for (let index = 0; index < 400; index += 1) {
+            probe.observe({
+              kind: "artifact_observed",
+              artifactId: `saturation-${index}`,
+              artifactKind: "saturation_probe",
+              state: "captured",
+              mediaType: "application/json",
+              bytes,
+              originalBytes: bytes.length,
+              capturedBytes: bytes.length,
+              truncated: false,
+              location: { phase: "upstream_execution", step: "saturate_diagnostics_queue" },
+            });
+          }
+          probe.close({ outcome: "success" });
+          expect(JSON.stringify(stalled.posted)).toContain("queue_capacity_exhausted");
+        }
+        // No diagnostics acknowledgements have been released. Completion here
+        // proves serving does not await the slow/saturated worker.
+        expect(await runProviderNativeResponsesExchange(authority)).toEqual(baseline);
+        if (fault === "unavailable") expect(authority.diagnosticsAvailable()).toBe(false);
+        else expect(stalled.posted.length).toBeGreaterThan(0);
+      } finally {
+        stalled.release();
+        const closing = authority.close();
+        stalled.release();
+        await closing;
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps the real HTTP exchange identical when the authority or observer throws", async () => {
     const baseline = await runExchange();

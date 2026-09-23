@@ -91,10 +91,12 @@
       "tests": [
         "test/unit/provider-native-responses-contract.test.ts",
         "test/unit/provider-native-responses-header-matrix.test.ts",
+        "test/unit/provider-native-responses-lifecycle-normalizer.test.ts",
         "test/unit/provider-native-responses-projection.test.ts",
         "test/unit/responses-native-provider-sender.test.ts",
         "test/unit/responses-native-provider-retry.test.ts",
-        "test/integration/request-journey-provider-native-openai.test.ts"
+        "test/integration/request-journey-provider-native-openai.test.ts",
+        "test/integration/request-journey-non-interference.test.ts"
       ]
     },
     {

@@ -58,6 +58,30 @@ function expectSkipped(
 }
 
 describe("Provider Native Responses SSE lifecycle normalizer", () => {
+  it("preserves the complete wire when a bare CR precedes a sequence token in an interleaved stream", () => {
+    const body = encoder.encode(
+      ': bare-cr comment\r' +
+        text(sse([
+          { type: "response.output_item.added", output_index: 0, item: message("a") },
+          { type: "response.output_item.added", output_index: 1, item: message("b") },
+          { type: "response.output_item.done", output_index: 1, item: message("b") },
+          { type: "response.output_item.done", output_index: 0, item: message("a") },
+        ])),
+    );
+
+    expectSkipped(normalizeNativeResponsesSse(body), body, "invalid_sse_structure");
+  });
+
+  it.each([
+    ': comment\revent: response.completed\ndata: {"type":"response.completed"}\n\n',
+    'event: response.completed\ndata: {"type":\rdata: "response.completed"}\n\n',
+    'id: cursor\revent: response.completed\ndata: {"type":"response.completed"}\n\n',
+    'event: response.completed\rdata: {"type":"response.completed"}\r\r',
+  ])("skips unsupported bare CR records without rebuilding even a serial stream (%#)", (wire) => {
+    const body = encoder.encode(wire);
+    expectSkipped(normalizeNativeResponsesSse(body), body, "invalid_sse_structure");
+  });
+
   it("serializes complete item chains at their original done positions rather than by output_index", () => {
     const aAdded = {
       type: "response.output_item.added",

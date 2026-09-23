@@ -34,7 +34,6 @@ interface DataSegment {
 interface Frame {
   readonly index: number;
   readonly raw: string;
-  readonly type?: string;
   readonly itemId?: string;
   readonly outputIndex?: number;
   readonly isAdded: boolean;
@@ -47,7 +46,6 @@ interface Frame {
 }
 
 interface Chain {
-  readonly id: string;
   readonly frames: Frame[];
   outputIndex?: number;
   added: boolean;
@@ -227,7 +225,6 @@ function parseFrame(
     return {
       index,
       raw,
-      ...(eventType === undefined ? {} : { type: eventType }),
       isAdded: eventType === "response.output_item.added",
       isDone: eventType === "response.output_item.done",
       isTerminal:
@@ -372,7 +369,6 @@ function parseFrame(
   return {
     index,
     raw,
-    ...(type === undefined ? {} : { type }),
     ...(itemId === undefined ? {} : { itemId }),
     ...(outputIndex === undefined ? {} : { outputIndex }),
     isAdded: type === "response.output_item.added",
@@ -411,6 +407,10 @@ export function normalizeNativeResponsesSse(
     return skip(body, "invalid_sse_structure");
   }
   if (text.length === 0) return { kind: "unchanged", body };
+  // Bare CR is legal SSE, but this parser supports only LF and CRLF.
+  // Reject the whole wire before scanning so skipped lines cannot corrupt
+  // attribution, cursor detection, or sequence token offsets.
+  if (/\r(?!\n)/u.test(text)) return skip(body, "invalid_sse_structure");
 
   const frameRaws: string[] = [];
   const delimiter = /\r\n\r\n|\n\n/gu;
@@ -487,7 +487,6 @@ export function normalizeNativeResponsesSse(
     let chain = chains.get(itemId);
     if (chain === undefined) {
       chain = {
-        id: itemId,
         frames: [],
         ...(frame.outputIndex === undefined
           ? {}

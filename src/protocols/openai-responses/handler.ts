@@ -679,6 +679,7 @@ async function handleOpenAIResponses(
           request,
           model,
           rawBody,
+          hasProviderNativeUpstreamCursorSemantics(request, body),
           streamRequested,
           requestIdentity.effectiveSessionId,
           projectAlias,
@@ -923,34 +924,30 @@ async function handleOpenAIResponses(
   }
 }
 
-/** Provider Native execution stays behind its lane seam. The protocol owns
- * lifecycle observation and alias projection, never Provider credentials or
- * request construction. */
 function hasProviderNativeUpstreamCursorSemantics(
   request: Request,
-  rawBody: string,
+  body: unknown,
 ): boolean {
   if ((request.headers.get("last-event-id") ?? "").trim().length > 0) return true;
   const startingAfter = new URL(request.url).searchParams.get("starting_after");
   if (startingAfter !== null && startingAfter.trim().length > 0) return true;
-  try {
-    const parsed = JSON.parse(rawBody) as unknown;
-    return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed) &&
-      (parsed as Record<string, unknown>).background === true
-    );
-  } catch {
-    return false;
-  }
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    (body as Record<string, unknown>).background === true
+  );
 }
 
+/** Provider Native execution stays behind its lane seam. The protocol owns
+ * lifecycle observation and alias projection, never Provider credentials or
+ * request construction. */
 async function providerNativeBranch(
   dependencies: OpenAIResponsesDependencies,
   request: Request,
   model: Model<string>,
   rawBody: string,
+  upstreamCursorSemantics: boolean,
   streamRequested: boolean,
   sessionId: string,
   alias: string | undefined,
@@ -1111,10 +1108,7 @@ async function providerNativeBranch(
       normalizeLocation,
     );
     const normalized = normalizeNativeResponsesSse(body, {
-      upstreamCursorSemantics: hasProviderNativeUpstreamCursorSemantics(
-        request,
-        rawBody,
-      ),
+      upstreamCursorSemantics,
     });
     if (normalized.kind === "normalized") {
       body = normalized.body;
