@@ -776,6 +776,34 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       1,
     )).toThrow("allOf schemas are unsupported");
   });
+
+  it("rejects structured anyOf unions expressed with a type array", () => {
+    expect(() => convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{
+          type: "function",
+          name: "lookup",
+          strict: true,
+          parameters: {
+            type: "object",
+            properties: {
+              value: {
+                anyOf: [
+                  { type: ["object", "null"] },
+                  { type: "string" },
+                ],
+              },
+            },
+            required: ["value"],
+            additionalProperties: false,
+          },
+        }],
+      },
+      1,
+    )).toThrow("anyOf object and array unions are unsupported");
+  });
 });
 
 describe("13: Responses privileged prompts, options, and handles", () => {

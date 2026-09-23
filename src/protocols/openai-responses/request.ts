@@ -11,7 +11,6 @@ import type {
   ToolResultMessage,
   Usage,
 } from "@earendil-works/pi-ai";
-import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 
 import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 import type { ResponsesConversionResult } from "./semantic/invocation.js";
@@ -514,9 +513,22 @@ function validateExplicitStrictParameters(
   parameters: unknown,
   name: string,
 ): void {
+  const unsupportedKeywords = [
+    "$ref", "$defs", "definitions", "allOf", "oneOf", "patternProperties",
+    "dependentSchemas", "dependencies", "unevaluatedProperties", "propertyNames",
+    "contains", "prefixItems", "not", "if", "then", "else",
+  ];
   const visit = (schema: unknown, path: string): void => {
     if (!isRecord(schema)) {
       throw new InvalidRequest(`function ${name} ${path} must be a schema object`);
+    }
+    for (const key of unsupportedKeywords) {
+      if (schema[key] !== undefined) {
+        throw new InvalidRequest(`function ${name} ${path}: ${key} schemas are unsupported`);
+      }
+    }
+    if (schema.properties !== undefined && schema.type !== "object") {
+      throw new InvalidRequest(`function ${name} ${path}.properties requires type object`);
     }
     if (schema.type === "object") {
       if (schema.additionalProperties !== false) {
@@ -533,9 +545,9 @@ function validateExplicitStrictParameters(
       if (
         (required !== undefined &&
           (!Array.isArray(required) || required.some((key) => typeof key !== "string"))) ||
-        (entries.length > 0 &&
-          (!Array.isArray(required) ||
-            required.length !== entries.length ||
+        (entries.length > 0 && !Array.isArray(required)) ||
+        (Array.isArray(required) &&
+          (required.length !== entries.length ||
             entries.some(([key]) => !required.includes(key))))
       ) {
         throw new InvalidRequest(
@@ -546,9 +558,32 @@ function validateExplicitStrictParameters(
         visit(property, `${path}.properties.${key}`);
       }
     }
-    if (schema.items !== undefined) visit(schema.items, `${path}.items`);
-    if (Array.isArray(schema.anyOf)) {
-      schema.anyOf.forEach((variant, index) => visit(variant, `${path}.anyOf[${index}]`));
+    if (schema.items !== undefined) {
+      if (Array.isArray(schema.items)) {
+        throw new InvalidRequest(`function ${name} ${path}.items tuple schemas are unsupported`);
+      }
+      visit(schema.items, `${path}.items`);
+    }
+    if (schema.anyOf !== undefined) {
+      if (!Array.isArray(schema.anyOf) || schema.anyOf.length === 0) {
+        throw new InvalidRequest(`function ${name} ${path}.anyOf must contain schemas`);
+      }
+      schema.anyOf.forEach((variant, index) => {
+        const types = isRecord(variant)
+          ? typeof variant.type === "string"
+            ? [variant.type]
+            : Array.isArray(variant.type)
+              ? variant.type
+              : []
+          : [];
+        if (isRecord(variant) && (
+          types.includes("object") || types.includes("array") ||
+          variant.properties !== undefined || variant.items !== undefined
+        )) {
+          throw new InvalidRequest(`function ${name} ${path}.anyOf object and array unions are unsupported`);
+        }
+        visit(variant, `${path}.anyOf[${index}]`);
+      });
     }
   };
   if (!isRecord(parameters) || parameters.type !== "object") {
@@ -557,15 +592,6 @@ function validateExplicitStrictParameters(
     );
   }
   visit(parameters, "parameters");
-  // Pi owns the supported strict subset. Validate it here so an impossible
-  // explicit guarantee fails as a Client request, before Provider dispatch.
-  try {
-    makeStrictJsonSchema(parameters);
-  } catch (error) {
-    throw new InvalidRequest(
-      `function ${name} strict parameters are unsupported: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
 }
 
 function parseFunctionStrict(value: unknown, name: string): boolean | "prefer" {
