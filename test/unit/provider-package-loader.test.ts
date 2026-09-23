@@ -1,8 +1,14 @@
 import { createModels } from "@earendil-works/pi-ai";
 import { providerPackage as commandCodeProviderPackage } from "@token/provider-commandcode-private";
+import { DEFAULT_COMMANDCODE_MODEL_CATALOG } from "@token/commandcode-model-catalog";
 import { describe, expect, it, vi } from "vitest";
 
 import { loadProviderPackages } from "../../src/providers/package-loader.js";
+
+const commandCodeConfiguration = Object.freeze({
+  catalog: DEFAULT_COMMANDCODE_MODEL_CATALOG,
+  provider: Object.freeze({}),
+});
 
 describe("Provider Package loader", () => {
   it("loads and registers a configured package through one seam", async () => {
@@ -10,7 +16,9 @@ describe("Provider Package loader", () => {
 
     const result = await loadProviderPackages({
       models,
-      providerPackages: Object.freeze({ "@fixture/commandcode": {} }),
+      providerPackages: Object.freeze({
+        "@fixture/commandcode": commandCodeConfiguration,
+      }),
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,
@@ -34,7 +42,9 @@ describe("Provider Package loader", () => {
     await expect(
       loadProviderPackages({
         models,
-        providerPackages: Object.freeze({ "@fixture/long-provider-id": {} }),
+        providerPackages: Object.freeze({
+          "@fixture/long-provider-id": commandCodeConfiguration,
+        }),
         host: {
           fetch: async () => new Response(null, { status: 500 }),
           now: () => 1,
@@ -63,8 +73,8 @@ describe("Provider Package loader", () => {
       loadProviderPackages({
         models,
         providerPackages: Object.freeze({
-          "@fixture/first": {},
-          "@fixture/second": {},
+          "@fixture/first": commandCodeConfiguration,
+          "@fixture/second": commandCodeConfiguration,
         }),
         host: {
           fetch: async () => new Response(null, { status: 500 }),
@@ -163,7 +173,7 @@ describe("Provider Package loader", () => {
         loadProviderPackages({
           models,
           providerPackages: {
-            "@fixture/valid": {},
+            "@fixture/valid": commandCodeConfiguration,
             "@fixture/failing": {},
           },
           host: {

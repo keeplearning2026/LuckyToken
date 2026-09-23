@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   COMMANDCODE_MODEL_FACTS,
+  freezeCommandCodeModelFacts,
   projectCommandCodeModel,
+  selectCommandCodeModelApi,
 } from "@token/commandcode-model-catalog";
 import {
   COMMANDCODE_MODELS,
@@ -66,7 +68,6 @@ describe("CommandCode model catalog", () => {
       "nvidia/nemotron-3-ultra-550b-a55b",
       "thinkingmachines/inkling",
       "thinkingmachines/inkling-small",
-      "stealth/ox-alpha",
       "poolside/laguna-s-2.1-free",
       "meta/muse-spark-1.1",
       "meta/muse-spark-1.2",
@@ -79,6 +80,7 @@ describe("CommandCode model catalog", () => {
   it("matches the current CommandCode source-fact fingerprint", () => {
     const sourceShape = COMMANDCODE_MODEL_FACTS.map((facts) => ({
       id: facts.id,
+      supportedEndpoints: [...facts.supportedEndpoints],
       name: facts.name,
       description: facts.description,
       input: [...facts.input],
@@ -96,8 +98,30 @@ describe("CommandCode model catalog", () => {
       .digest("hex");
 
     expect(fingerprint).toBe(
-      "e5759d5a7d6a7e2ce18edff872e61d3757b06199d0f9d36b18f2bd4ecb4d27c4",
+      "42f3ca01541ce0cbb753d6119160558cf600e83c3aa060f79b9f0fa27bc97b01",
     );
+  });
+
+  it("stores one reviewed Pi API selection per CommandCode model", () => {
+    const byId = new Map(
+      COMMANDCODE_MODEL_FACTS.map((model) => [model.id, model] as const),
+    );
+
+    expect(selectCommandCodeModelApi(byId.get("claude-sonnet-5")!)).toBe(
+      "anthropic-messages",
+    );
+    expect(selectCommandCodeModelApi(byId.get("gpt-5.6-sol")!)).toBe(
+      "openai-responses",
+    );
+    expect(
+      selectCommandCodeModelApi(byId.get("deepseek/deepseek-v4.1-flash")!),
+    ).toBe("openai-responses");
+    expect(
+      selectCommandCodeModelApi(byId.get("stepfun/Step-3.5-Flash")!),
+    ).toBe("openai-completions");
+    expect(
+      selectCommandCodeModelApi(byId.get("google/gemini-3.7-flash")!),
+    ).toBe("openai-completions");
   });
 
   it("keeps source facts distinct from Pi projection policy", () => {
@@ -138,6 +162,9 @@ describe("CommandCode model catalog", () => {
       COMMANDCODE_MODEL_FACTS.some((model) => model.id === "tencent/Hy3"),
     ).toBe(false);
     expect(
+      COMMANDCODE_MODEL_FACTS.some((model) => model.id === "stealth/ox-alpha"),
+    ).toBe(false);
+    expect(
       COMMANDCODE_MODEL_FACTS.some(
         (model) => model.id === "inclusionai/ling-3.0-flash-free",
       ),
@@ -154,6 +181,8 @@ describe("CommandCode model catalog", () => {
       expect(new Set(facts.input).size).toBe(facts.input.length);
       expect(Number.isSafeInteger(facts.contextWindow)).toBe(true);
       expect(facts.contextWindow).toBeGreaterThan(0);
+      expect(facts.supportedEndpoints.length).toBeGreaterThan(0);
+      expect(() => selectCommandCodeModelApi(facts)).not.toThrow();
       if (!facts.reasoning) expect(facts).not.toHaveProperty("thinkingLevelMap");
       expect(Object.isFrozen(facts)).toBe(true);
       expect(Object.isFrozen(facts.input)).toBe(true);
@@ -161,8 +190,8 @@ describe("CommandCode model catalog", () => {
         expect(Object.isFrozen(facts.thinkingLevelMap)).toBe(true);
       }
     }
-    expect(ids.size).toBe(58);
-    expect(plans).toEqual({ go: 36, goat: 4, pro: 13, max: 5 });
+    expect(ids.size).toBe(57);
+    expect(plans).toEqual({ go: 35, goat: 4, pro: 13, max: 5 });
     expect(Object.isFrozen(COMMANDCODE_MODEL_FACTS)).toBe(true);
   });
 
@@ -177,10 +206,38 @@ describe("CommandCode model catalog", () => {
       expect(thinkingLevelMap).toBeDefined();
       if (thinkingLevelMap === undefined) throw new Error("missing level map");
       expect(Object.keys(thinkingLevelMap)).toEqual(keys);
+      const allowed = new Set(["low", "medium", "high", "xhigh", "max"]);
+      expect(thinkingLevelMap.off).toBeNull();
       expect(Object.values(thinkingLevelMap).every(
-        (value) => value === null || typeof value === "string",
+        (value) => value === null || allowed.has(value),
       )).toBe(true);
     }
+  });
+
+  it("rejects invalid in-memory reasoning mappings before projection", () => {
+    expect(() =>
+      freezeCommandCodeModelFacts([
+        {
+          id: "invalid-reasoning-map",
+          supportedEndpoints: ["/responses"],
+          name: "Invalid",
+          description: "invalid reasoning map fixture",
+          input: ["text"],
+          reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: null,
+            low: "bogus" as never,
+            medium: "medium",
+            high: "high",
+            xhigh: "xhigh",
+            max: "max",
+          },
+          contextWindow: 100_000,
+          minimumPlan: "go",
+        },
+      ]),
+    ).toThrow(/invalid level map/u);
   });
 
   it("keeps verified context and output limits without projection guesses", () => {
@@ -192,9 +249,6 @@ describe("CommandCode model catalog", () => {
     expect(
       COMMANDCODE_MODEL_FACTS.find((model) => model.id === "Qwen/Qwen3.8-27B"),
     ).toMatchObject({ contextWindow: 262_144, maxOutputTokens: 32_768 });
-    expect(
-      COMMANDCODE_MODEL_FACTS.find((model) => model.id === "stealth/ox-alpha"),
-    ).toMatchObject({ contextWindow: 1_000_000, maxOutputTokens: 131_072 });
   });
 
   it("projects every current fact into the CommandCode Private catalog", () => {
@@ -337,30 +391,57 @@ describe("CommandCode model catalog", () => {
       "nvidia/nemotron-3-ultra-550b-a55b",
       "thinkingmachines/inkling",
       "thinkingmachines/inkling-small",
-      "stealth/ox-alpha",
       "poolside/laguna-s-2.1-free",
       "meta/muse-spark-1.2",
       "meta/muse-spark-1.2-contributor",
       "xai/grok-4.5",
       "xai/grok-4.6",
     ]);
-    expect(COMMANDCODE_GOAT_MODELS[0]).toMatchObject({
-      provider: "commandcode-goat",
-      api: "openai-completions",
-      baseUrl: "https://api.commandcode.ai/provider/v1",
-    });
+    const sourceById = new Map(
+      COMMANDCODE_MODEL_FACTS.map((model) => [model.id, model] as const),
+    );
     for (const model of COMMANDCODE_GOAT_MODELS) {
-      expect(model.api).toBe("openai-completions");
+      expect(model.provider).toBe("commandcode-goat");
+      expect(model.api).toBe(
+        selectCommandCodeModelApi(sourceById.get(model.id)!),
+      );
+      expect(model.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
     }
   });
 
-  it("keeps Goat endpoint compatibility with the Goat provider projection", () => {
-    for (const projected of COMMANDCODE_GOAT_MODELS) {
-      expect(projected.compat).toEqual({
+  it("keeps Goat compat specific to the selected Pi API", () => {
+    const responses = COMMANDCODE_GOAT_MODELS.find(
+      (model) => model.id === "deepseek/deepseek-v4.1-flash",
+    );
+    const completions = COMMANDCODE_GOAT_MODELS.find(
+      (model) => model.id === "google/gemini-3.7-flash",
+    );
+
+    expect(responses).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+    });
+    expect(responses).not.toHaveProperty("compat");
+    expect(completions).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+      compat: {
         thinkingFormat: "openai",
         supportsReasoningEffort: true,
-      });
-    }
+      },
+    });
+  });
+
+  it("keeps CommandCode Private on its own API despite shared selected APIs", () => {
+    const privateClaude = COMMANDCODE_MODELS.find(
+      (model) => model.id === "claude-sonnet-5",
+    );
+    const privateResponses = COMMANDCODE_MODELS.find(
+      (model) => model.id === "gpt-5.6-sol",
+    );
+
+    expect(privateClaude?.api).toBe("commandcode-private");
+    expect(privateResponses?.api).toBe("commandcode-private");
   });
 
   it("freezes every model and its nested state", () => {

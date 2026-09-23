@@ -1,10 +1,12 @@
 # `@token/commandcode-model-catalog`
 
-This private workspace package owns the stable CommandCode model capability
-facts shared by Token's CommandCode Pi Providers: model identity, display
-name, context window, input modalities, reasoning support/efforts, and output
-limits. The current catalog contains 58 callable models from the
-`command-code@1.32.1` source table after removing retired free entries.
+This private workspace package owns the schema, validation, bootstrap snapshot,
+and projection helpers for the stable CommandCode model capability facts shared
+by Token's CommandCode Pi Providers. The runtime authority is the
+Backend-startup `commandcode-models.json` file; the bundled snapshot is only
+the seed/fallback source. The current bootstrap contains 57 reviewed callable
+models from the `command-code@1.32.1` source table after removing retired
+entries.
 
 It deliberately does not contain pricing. Pi requires every `Model` to carry a
 `cost` object, so the catalog projection supplies zero rates to mean that

@@ -5,6 +5,7 @@ import type {
   FetchFunction,
   ModelsStore,
 } from "@earendil-works/pi-ai";
+import { dirname, join } from "node:path";
 
 import type { TokenCliConfig } from "../../src/cli-config.js";
 import {
@@ -30,6 +31,7 @@ import type {
 import type { PublicModelSource } from "../../src/public-model-seam.js";
 import type { PublicModelAuthority } from "../../src/public-models/authority.js";
 import { resolveModel } from "../../src/model-resolution.js";
+import { loadBundledProviderConfigurations } from "../../src/providers/bundled-configuration.js";
 import type { ConfigValueAdapters } from "../../src/providers/config-value.js";
 import { loadModelsJson } from "../../src/providers/models-json.js";
 import type { ImportProviderModule } from "../../src/providers/package-loader.js";
@@ -77,6 +79,7 @@ export interface TestConfiguredPiModelsOptions {
   readonly credentialSeedStore?: CredentialStore;
   readonly fetch: FetchFunction;
   readonly modelsJsonPath?: string;
+  readonly commandCodeModelsPath?: string;
   readonly modelsStore?: ModelsStore;
   readonly providerPackages?: Readonly<Record<string, unknown>>;
   readonly importModule?: ImportProviderModule;
@@ -106,9 +109,16 @@ export async function createConfiguredPiModels(
       : await createSeededCredentialRecordStoreFromStore(
           options.credentialSeedStore,
         ));
+  const bundledProviderConfigurationLoad =
+    await loadBundledProviderConfigurations(
+      options.commandCodeModelsPath ??
+        join(dirname(modelsJsonPath), "commandcode-models.json"),
+    );
   const runtime = await createProviderRuntime({
     piDirectory: options.piDirectory,
     modelsJsonPath,
+    bundledProviderConfigurations:
+      bundledProviderConfigurationLoad.configurations,
     userProviderPackages: options.providerPackages ?? {},
     fetch: options.fetch,
     ...(credentialRecordStore === undefined
@@ -278,11 +288,19 @@ export async function createConfiguredTokenDataPlane(
       : await createSeededCredentialRecordStoreFromStore(
           options.credentialSeedStore,
         ));
+  const bundledProviderConfigurationLoad =
+    options.providerRuntime === undefined
+      ? await loadBundledProviderConfigurations(
+          join(dirname(options.config.configPath), "commandcode-models.json"),
+        )
+      : undefined;
   const runtime =
     options.providerRuntime ??
     (await createProviderRuntime({
       piDirectory: options.config.pi.directory,
       modelsJsonPath: options.config.pi.modelsJson,
+      bundledProviderConfigurations:
+        bundledProviderConfigurationLoad!.configurations,
       userProviderPackages: options.config.providerPackages,
       fetch: options.fetch,
       ...(credentialRecordStore === undefined

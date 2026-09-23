@@ -105,7 +105,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
           'const Token = await import("Token");',
           "assert.equal(contract.PROVIDER_PACKAGE_CONTRACT_VERSION, 1);",
           "const input = {",
-          "configuration: {},",
+          "configuration: { catalog: catalog.DEFAULT_COMMANDCODE_MODEL_CATALOG, provider: {} },",
           'configurationPath: "providerPackages.fixture",',
           "host: { fetch: globalThis.fetch, now: () => 1, createUuid: () => \"00000000-0000-4000-8000-000000000006\" },",
           "};",

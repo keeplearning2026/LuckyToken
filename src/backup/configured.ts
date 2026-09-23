@@ -2,6 +2,10 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { TokenCliConfig } from "../cli-config.js";
+import {
+  COMMANDCODE_MODEL_CATALOG_SCHEMA,
+  parseCommandCodeModelCatalogText,
+} from "@token/commandcode-model-catalog";
 import { stripJsonComments } from "../providers/models-json-schema.js";
 import { PI_COMPATIBILITY_BASELINE } from "../providers/pi-baseline.js";
 import {
@@ -41,6 +45,16 @@ export function configuredBackupFiles(
       category: "configuration",
       optional: true,
       parseJson: (text: string) => JSON.parse(stripJsonComments(text)),
+    },
+    {
+      id: "commandcode-models",
+      path: join(dirname(configPath), "commandcode-models.json"),
+      contract: "luckytoken-commandcode-models",
+      version: COMMANDCODE_MODEL_CATALOG_SCHEMA,
+      category: "configuration",
+      optional: true,
+      parseJson: (text: string) =>
+        parseCommandCodeModelCatalogText(text, "commandcode-models.json"),
     },
     {
       id: "public-models",

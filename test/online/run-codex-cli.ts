@@ -1534,6 +1534,10 @@ export async function runCodexCliOnlineSuite(
     ...(config.pi.modelsJson === undefined
       ? {}
       : { modelsJsonPath: config.pi.modelsJson }),
+    commandCodeModelsPath: join(
+      dirname(config.configPath),
+      "commandcode-models.json",
+    ),
     providerPackages: config.providerPackages,
     fetch: globalThis.fetch,
     credentialRecordStore,

@@ -21,7 +21,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
@@ -648,6 +648,10 @@ export async function runOpenAIResponsesOnlineSuite(
       ...(config.pi.modelsJson === undefined
         ? {}
         : { modelsJsonPath: config.pi.modelsJson }),
+      commandCodeModelsPath: join(
+        dirname(config.configPath),
+        "commandcode-models.json",
+      ),
       providerPackages: config.providerPackages,
       fetch: globalThis.fetch,
       credentialRecordStore,

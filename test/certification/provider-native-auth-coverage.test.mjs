@@ -34,6 +34,7 @@ test("Provider Native Responses claims only its certified provider/api tuples", 
     "opencode-go",
     "cloudflare-ai-gateway",
     "github-copilot",
+    "commandcode-goat",
   ]);
   for (const providerId of providers) {
     assert.match(

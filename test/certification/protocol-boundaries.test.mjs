@@ -210,7 +210,9 @@ test("CommandCode Providers never import concrete Client Protocols or one anothe
     commandCodeGoatRoot,
     new Set([
       "@earendil-works/pi-ai",
+      "@earendil-works/pi-ai/api/anthropic-messages.lazy",
       "@earendil-works/pi-ai/api/openai-completions.lazy",
+      "@earendil-works/pi-ai/api/openai-responses.lazy",
       "@token/commandcode-model-catalog",
       "@token/provider-contract/package",
       "@token/provider-contract/diagnostics",

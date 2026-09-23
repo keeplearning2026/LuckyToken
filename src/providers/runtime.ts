@@ -87,6 +87,9 @@ export interface ProviderRuntime {
 export interface CreateProviderRuntimeOptions {
   readonly piDirectory: string;
   readonly modelsJsonPath: string;
+  /** Product-owned configurations for the Token bundled Provider Packages.
+   * Provider Runtime treats these as opaque package inputs. */
+  readonly bundledProviderConfigurations: Readonly<Record<string, unknown>>;
   /** Explicitly configured external/user Provider Packages. Bundled
    *  packages are never configured here; claiming one is rejected. */
   readonly userProviderPackages: Readonly<Record<string, unknown>>;
@@ -221,9 +224,20 @@ export async function createProviderRuntime(
   // same Token Provider Package contract as user packages (Spec
   // §8.3); a missing/broken bundled Provider is a product integrity
   // failure (Spec §18.1).
-  const bundled: Record<string, unknown> = {};
+  const bundled = options.bundledProviderConfigurations;
   for (const entry of bundledProviderPackages) {
-    bundled[entry.specifier] = entry.configuration;
+    if (!Object.hasOwn(bundled, entry.specifier)) {
+      throw new Error(
+        `Missing bundled Provider Package configuration: ${entry.specifier}`,
+      );
+    }
+  }
+  for (const specifier of Object.keys(bundled)) {
+    if (!bundledProviderSpecifiers.has(specifier)) {
+      throw new Error(
+        `Unknown bundled Provider Package configuration: ${specifier}`,
+      );
+    }
   }
   await loadProviderPackages({
     models: mutableModels,

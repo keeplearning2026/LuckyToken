@@ -2,9 +2,11 @@
 
 This private workspace package owns the complete CommandCode Private Pi Provider capability: its projection of the shared CommandCode model capability catalog, Pi IR ↔ CommandCode conversion, request preparation, HTTP attempt/retry lifecycle, JSONL assembly, diagnostics, and Provider authentication contract.
 
-It projects all 58 current shared model facts. Reasoning effort is emitted only
-after Pi capability clamping produces a supported string; the Provider does not
-invent an effort or fall back to the model's highest advertised level.
+It projects every model from the one frozen startup CommandCode catalog
+snapshot; the current bundled bootstrap contains 57 reviewed facts. Reasoning
+effort is emitted only after Pi capability clamping produces a supported string;
+the Provider does not invent an effort or fall back to the model's highest
+advertised level.
 
 ## Product composition
 
@@ -18,7 +20,14 @@ Users must **not** add this package to `config.providerPackages`:
 
 That specifier is reserved by the product and explicit user configuration is rejected. `providerPackages` is only for external/user Provider Packages.
 
-The model catalog is package-owned; no `models.json` entry is required. A missing API key does not prevent the Backend from reaching Management Ready. Login/credential operations use the Backend/Pi credential authority, and a real invocation without usable auth fails through the standard Provider authentication path.
+The runtime model catalog is loaded once from
+`dirname(config.json)/commandcode-models.json` by product startup composition
+and injected into the package alongside the package-owned Private
+conversion/transport configuration. No `models.json` entry is required. A
+missing API key does not prevent the Backend from reaching Management Ready.
+Login/credential operations use the Backend/Pi credential authority, and a real
+invocation without usable auth fails through the standard Provider
+authentication path.
 
 ## Package contract
 

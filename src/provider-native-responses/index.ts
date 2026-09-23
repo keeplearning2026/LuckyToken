@@ -18,6 +18,7 @@ import type {
   CreateProviderResponsesSenderOptions,
   ProviderResponsesLane,
   ProviderResponsesObservationContext,
+  ProviderResponsesOperation,
   ProviderResponsesPhysicalAttemptObservation,
   ProviderResponsesSender,
 } from "./contract.js";
@@ -273,6 +274,16 @@ const CERTIFIED_OPENAI_RESPONSES_PROVIDERS = new Set([
   "opencode-go",
   "cloudflare-ai-gateway",
   "github-copilot",
+  "commandcode-goat",
+]);
+
+const CERTIFIED_OPENAI_COMPACT_PROVIDERS = new Set([
+  "openai",
+  "xai",
+  "opencode",
+  "opencode-go",
+  "cloudflare-ai-gateway",
+  "github-copilot",
 ]);
 
 function providerResponsesTransportKind(
@@ -299,8 +310,20 @@ function providerResponsesTransportKind(
   return undefined;
 }
 
-export function supportsProviderNativeResponses(model: Model<string>): boolean {
-  return providerResponsesTransportKind(model) !== undefined;
+export function supportsProviderNativeResponses(
+  model: Model<string>,
+  operation: ProviderResponsesOperation,
+): boolean {
+  const transport = providerResponsesTransportKind(model);
+  if (transport === undefined) return false;
+  if (operation === "responses") return true;
+  switch (transport) {
+    case "openai":
+      return CERTIFIED_OPENAI_COMPACT_PROVIDERS.has(model.provider);
+    case "codex":
+    case "azure":
+      return true;
+  }
 }
 
 function createProviderResponsesSenderForTransport(
@@ -338,8 +361,11 @@ export function createProviderNativeResponses(
     sleep: options.retryDependencies?.sleep ?? defaultSleep,
   };
   return Object.freeze({
-    claims(model: Model<string>): boolean {
-      return supportsProviderNativeResponses(model);
+    claims(
+      model: Model<string>,
+      operation: ProviderResponsesOperation,
+    ): boolean {
+      return supportsProviderNativeResponses(model, operation);
     },
     async execute(
       input: Parameters<ProviderResponsesLane["execute"]>[0],

@@ -1,4 +1,5 @@
 import {
+  hasApi,
   normalizeContext,
   type AssistantMessageEventStream,
   type AuthResult,
@@ -12,6 +13,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import { createProviderResponsesSender } from "../../src/provider-native-responses/index.js";
+import { COMMANDCODE_GOAT_MODELS } from "../../packages/provider-commandcode-goat/src/models.js";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000123";
 const CONTEXT = normalizeContext({ messages: [] });
@@ -110,6 +112,58 @@ async function requestJson(request: Request): Promise<Record<string, unknown>> {
 }
 
 describe("Provider Native Responses Pi HTTP parity", () => {
+  it("matches pinned Pi for the real CommandCode Goat Responses projection", async () => {
+    const selectedModel = COMMANDCODE_GOAT_MODELS.find(
+      (entry) => entry.id === "deepseek/deepseek-v4.1-flash",
+    );
+    expect(selectedModel).toMatchObject({
+      provider: "commandcode-goat",
+      api: "openai-responses",
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+    });
+    if (selectedModel === undefined || !hasApi(selectedModel, "openai-responses")) {
+      throw new Error("CommandCode Goat Responses parity model is unavailable");
+    }
+    const projectedBody = {
+      model: selectedModel.id,
+      input: "hello",
+      stream: true,
+      future_provider_field: { preserved: true },
+    };
+    const rawBody = JSON.stringify({
+      ...projectedBody,
+      model: "commandcode-goat/public-alias",
+    });
+    const pi = await capturePiRequest((fetch) =>
+      streamOpenAIResponses(selectedModel, CONTEXT, {
+        apiKey: "goat-key",
+        fetch,
+        sessionId: SESSION_ID,
+        maxRetries: 0,
+        onPayload: () => projectedBody,
+      }),
+    );
+    const lucky = await captureTokenRequest(
+      selectedModel,
+      auth("goat-key"),
+      rawBody,
+    );
+    const stableHeaders = [
+      "accept",
+      "authorization",
+      "content-type",
+      "session_id",
+      "x-client-request-id",
+    ] as const;
+
+    expect(lucky.url).toBe(pi.url);
+    expect(lucky.method).toBe(pi.method);
+    expect(selectedHeaders(lucky, stableHeaders)).toEqual(
+      selectedHeaders(pi, stableHeaders),
+    );
+    await expect(requestJson(lucky)).resolves.toEqual(await requestJson(pi));
+  });
+
   it("matches Pi's OpenAI SDK URL, stable headers, session affinity, and body shape", async () => {
     const selectedModel = model("openai", "openai-responses", "https://api.openai.com/v1");
     const projectedBody = {

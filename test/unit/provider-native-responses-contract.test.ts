@@ -92,23 +92,35 @@ function recordingJourney(): {
 
 describe("Provider Native Responses contract", () => {
   it("claims only explicit provider/protocol native contracts", () => {
-    expect(supportsProviderNativeResponses(responsesModel("openai-responses"))).toBe(true);
-    expect(supportsProviderNativeResponses(responsesModel("anthropic-messages"))).toBe(false);
+    expect(
+      supportsProviderNativeResponses(
+        responsesModel("openai-responses"),
+        "responses",
+      ),
+    ).toBe(true);
+    expect(
+      supportsProviderNativeResponses(
+        responsesModel("anthropic-messages"),
+        "responses",
+      ),
+    ).toBe(false);
 
     const codex = responsesModel(
       "openai-codex-responses",
       "https://chatgpt.com/backend-api",
     );
     codex.provider = "openai-codex";
-    expect(supportsProviderNativeResponses(codex)).toBe(true);
+    expect(supportsProviderNativeResponses(codex, "responses")).toBe(true);
 
     const unrelated = responsesModel("openai-codex-responses");
     unrelated.provider = "another-provider";
-    expect(supportsProviderNativeResponses(unrelated)).toBe(false);
+    expect(
+      supportsProviderNativeResponses(unrelated, "responses"),
+    ).toBe(false);
 
     const custom = responsesModel("openai-responses");
     custom.provider = "custom-provider";
-    expect(supportsProviderNativeResponses(custom)).toBe(false);
+    expect(supportsProviderNativeResponses(custom, "responses")).toBe(false);
   });
 
   it("preserves opaque request fields while rewriting only the upstream model selector", async () => {

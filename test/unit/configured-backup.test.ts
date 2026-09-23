@@ -53,6 +53,12 @@ describe("configured backup contract versions", () => {
       contract: "pi-models-json",
       version: "0.84.2",
     });
+    expect(files.find((file) => file.id === "commandcode-models")).toMatchObject({
+      path: "C:\\Token\\commandcode-models.json",
+      contract: "luckytoken-commandcode-models",
+      version: "luckytoken-commandcode-models-v1",
+      optional: true,
+    });
     expect(files.find((file) => file.id === "provider-credentials")).toBeUndefined();
     expect(configuredCredentialProfileBackupSnapshot(config)).toMatchObject({
       id: "provider-credential-profiles",

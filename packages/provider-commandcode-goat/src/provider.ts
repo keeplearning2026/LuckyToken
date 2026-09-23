@@ -1,15 +1,18 @@
 import {
   createProvider,
   type FetchFunction,
+  type Model,
   type Provider,
   type ProviderStreams,
 } from "@earendil-works/pi-ai";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import type { CommandCodeModelApi } from "@token/commandcode-model-catalog";
 
 import {
-  COMMANDCODE_GOAT_API_ID,
-  COMMANDCODE_GOAT_BASE_URL,
   COMMANDCODE_GOAT_PROVIDER_ID,
+  COMMANDCODE_GOAT_PROVIDER_ROOT,
 } from "./constants.js";
 import { COMMANDCODE_GOAT_MODELS } from "./models.js";
 import { bindUpstreamFailureDiagnostics } from "./stream-diagnostics.js";
@@ -18,6 +21,7 @@ export interface CommandCodeGoatProviderOptions {
   /** Optional deployment fallback. A Pi-stored login credential takes precedence. */
   readonly apiKey?: string;
   readonly fetch?: FetchFunction;
+  readonly models?: readonly Model<CommandCodeModelApi>[];
 }
 
 function bindFetch(
@@ -37,19 +41,26 @@ function bindFetch(
   return Object.freeze(bound);
 }
 
+function bindGoatStreams(
+  streams: ProviderStreams,
+  fetch: FetchFunction | undefined,
+): ProviderStreams {
+  return bindUpstreamFailureDiagnostics(bindFetch(streams, fetch));
+}
+
 export function createCommandCodeGoatProvider(
   options: CommandCodeGoatProviderOptions = {},
-): Provider<typeof COMMANDCODE_GOAT_API_ID> {
+): Provider<CommandCodeModelApi> {
   const configuredApiKey = options.apiKey?.trim();
   if (options.apiKey !== undefined && configuredApiKey?.length === 0) {
     throw new Error("CommandCode Goat API key must be non-empty");
   }
 
-  return createProvider({
+  return createProvider<CommandCodeModelApi>({
     id: COMMANDCODE_GOAT_PROVIDER_ID,
     name: "CommandCode Goat",
-    baseUrl: COMMANDCODE_GOAT_BASE_URL,
-    models: COMMANDCODE_GOAT_MODELS,
+    baseUrl: COMMANDCODE_GOAT_PROVIDER_ROOT,
+    models: options.models ?? COMMANDCODE_GOAT_MODELS,
     auth: {
       apiKey: {
         name: "CommandCode Goat API key",
@@ -88,11 +99,21 @@ export function createCommandCodeGoatProvider(
         },
       },
     },
-    api: bindUpstreamFailureDiagnostics(
-      bindFetch(openAICompletionsApi(), options.fetch),
-    ),
+    api: {
+      "anthropic-messages": bindGoatStreams(
+        anthropicMessagesApi(),
+        options.fetch,
+      ),
+      "openai-completions": bindGoatStreams(
+        openAICompletionsApi(),
+        options.fetch,
+      ),
+      "openai-responses": bindGoatStreams(
+        openAIResponsesApi(),
+        options.fetch,
+      ),
+    },
   });
 }
 
 export const commandCodeGoatProviderId = COMMANDCODE_GOAT_PROVIDER_ID;
-export const commandCodeGoatApiId = COMMANDCODE_GOAT_API_ID;

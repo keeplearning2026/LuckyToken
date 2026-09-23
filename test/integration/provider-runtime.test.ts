@@ -1,18 +1,25 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import {
+  COMMANDCODE_MODEL_CATALOG_SCHEMA,
+  DEFAULT_COMMANDCODE_MODEL_CATALOG,
+  loadCommandCodeModelCatalog,
+} from "@token/commandcode-model-catalog";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createBundledProviderConfigurations } from "../../src/providers/bundled-configuration.js";
 import {
   bundledProviderIds,
   bundledProviderPackages,
 } from "../../src/providers/bundled.js";
 import {
   assertUserProviderPackages,
-  createProviderRuntime,
+  createProviderRuntime as createRawProviderRuntime,
+  type CreateProviderRuntimeOptions,
 } from "../../src/providers/runtime.js";
 import {
   COMMANDCODE_GOAT_PROVIDER_PACKAGE,
@@ -21,6 +28,19 @@ import {
 } from "../support/commandcode-provider-package.js";
 
 const roots: string[] = [];
+
+function createProviderRuntime(
+  options: Omit<CreateProviderRuntimeOptions, "bundledProviderConfigurations"> & {
+    readonly bundledProviderConfigurations?: Readonly<Record<string, unknown>>;
+  },
+): ReturnType<typeof createRawProviderRuntime> {
+  return createRawProviderRuntime({
+    ...options,
+    bundledProviderConfigurations:
+      options.bundledProviderConfigurations ??
+      createBundledProviderConfigurations(DEFAULT_COMMANDCODE_MODEL_CATALOG),
+  });
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -126,6 +146,94 @@ describe("Provider Runtime composition", () => {
     }
   });
 
+  it("loads one startup CommandCode catalog snapshot into both bundled Providers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-commandcode-runtime-"));
+    roots.push(root);
+    const modelsJsonPath = join(root, "models.json");
+    const commandCodeModelsPath = join(root, "commandcode-models.json");
+    await writeFile(
+      commandCodeModelsPath,
+      JSON.stringify({
+        schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
+        models: [
+          {
+            id: "runtime-responses",
+            name: "Runtime Responses",
+            description: "runtime catalog responses fixture",
+            supportedEndpoints: ["/chat/completions", "/responses"],
+            input: ["text"],
+            reasoning: false,
+            contextWindow: 100000,
+            minimumPlan: "go",
+          },
+          {
+            id: "runtime-messages",
+            name: "Runtime Messages",
+            description: "runtime catalog messages fixture",
+            supportedEndpoints: ["/messages"],
+            input: ["text"],
+            reasoning: false,
+            contextWindow: 100000,
+            minimumPlan: "pro",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const commandCodeCatalog = await loadCommandCodeModelCatalog(
+      commandCodeModelsPath,
+    );
+    const runtime = await createProviderRuntime({
+      piDirectory: join(root, "pi"),
+      modelsJsonPath,
+      bundledProviderConfigurations: createBundledProviderConfigurations(
+        commandCodeCatalog.catalog,
+      ),
+      userProviderPackages: {},
+      fetch: vi.fn(async () => new Response()),
+      importModule: commandCodeProviderImportModule(),
+      now: () => 1,
+      createUuid: () => "00000000-0000-4000-8000-000000000099",
+    });
+
+    expect(
+      runtime.models
+        .getModels("commandcode-private")
+        .map(({ id, api }) => ({ id, api })),
+    ).toEqual([
+      { id: "runtime-responses", api: "commandcode-private" },
+      { id: "runtime-messages", api: "commandcode-private" },
+    ]);
+    expect(
+      runtime.models
+        .getModels("commandcode-goat")
+        .map(({ id, api }) => ({ id, api })),
+    ).toEqual([
+      { id: "runtime-responses", api: "openai-responses" },
+    ]);
+  });
+
+  it("uses the bundled CommandCode snapshot without filesystem I/O when no catalog path is supplied", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-commandcode-default-"));
+    roots.push(root);
+    const modelsJsonPath = join(root, "models.json");
+
+    const runtime = await createProviderRuntime({
+      piDirectory: join(root, "pi"),
+      modelsJsonPath,
+      userProviderPackages: {},
+      fetch: vi.fn(async () => new Response()),
+      importModule: commandCodeProviderImportModule(),
+      now: () => 1,
+      createUuid: () => "00000000-0000-4000-8000-000000000098",
+    });
+
+    expect(runtime.models.getModels("commandcode-private").length).toBeGreaterThan(0);
+    await expect(readFile(join(root, "commandcode-models.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("P2: discovers both bundled CommandCode Providers without user configuration", async () => {
     const { modelsJsonPath } = await fixture();
     const runtime = await createProviderRuntime({
@@ -150,7 +258,7 @@ describe("Provider Runtime composition", () => {
     expect(runtime.providerSource("commandcode-goat")).toBe(
       "token_bundled",
     );
-    expect(runtime.models.getModels("commandcode-goat")).toHaveLength(40);
+    expect(runtime.models.getModels("commandcode-goat")).toHaveLength(39);
   });
 
   it("P3: classifies Pi builtin, bundled, custom models.json, external package and builtin overlay sources", async () => {

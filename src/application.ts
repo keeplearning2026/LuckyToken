@@ -73,6 +73,7 @@ import {
   recoveryProjection,
 } from "./owned-storage/index.js";
 import { createCatalogCacheStore } from "./providers/catalog-cache.js";
+import { loadBundledProviderConfigurations } from "./providers/bundled-configuration.js";
 import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 import { createProviderRuntime } from "./providers/runtime.js";
@@ -674,9 +675,28 @@ async function startNormalApplication(options: {
     // before the Control Plane starts. Provider discovery, Profile state,
     // login, and the authoritative Catalog live for the whole Backend
     // lifetime; Data Plane stop/start/restart never recreates them.
+    const bundledProviderConfigurationLoad =
+      await loadBundledProviderConfigurations(
+        join(dirname(config.configPath), "commandcode-models.json"),
+      );
+    if (
+      bundledProviderConfigurationLoad.commandCodeCatalog.source ===
+        "fallback_default" &&
+      bundledProviderConfigurationLoad.commandCodeCatalog.error !== undefined
+    ) {
+      ownedDiagnosticsAuthority.observeRuntime({
+        level: "warning",
+        classification: "provider_commandcode_models_invalid",
+        safeMessage:
+          "commandcode-models.json is not loadable; CommandCode Providers are using the bundled default catalog until the file is fixed.",
+      });
+    }
+
     const providerRuntime = await createProviderRuntime({
       piDirectory: config.pi.directory,
       modelsJsonPath: config.pi.modelsJson,
+      bundledProviderConfigurations:
+        bundledProviderConfigurationLoad.configurations,
       userProviderPackages: config.providerPackages,
       fetch: globalThis.fetch,
       modelsStore: catalogCacheStore,

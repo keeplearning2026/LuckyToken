@@ -5889,11 +5889,14 @@ POST /alpha/generate
 
 Package `@token/provider-commandcode-private` owns configuration
 validation, factory, Pi ↔ CommandCode Private conversion, and its upstream
-lifecycle. Stable CommandCode model capability facts are owned separately by
-`@token/commandcode-model-catalog`; the Private package projects its own
-provider/api/baseUrl identity across all 58 current facts. Core imports only
-`@token/provider-contract`; it must not import, instantiate, or
-special-case the CommandCode implementation.
+lifecycle. Stable CommandCode model capability schema/bootstrap/projection
+helpers are owned separately by `@token/commandcode-model-catalog`; runtime
+product composition loads one frozen `commandcode-models.json` snapshot and
+injects it into both CommandCode packages. The current bundled bootstrap has 57
+reviewed facts, and the Private package projects its own provider/api/baseUrl
+identity across the full loaded snapshot. Generic Provider Runtime imports only
+the Provider Package contract and opaque bundled configurations; it must not
+load, instantiate, or special-case the CommandCode implementation.
 
 本章只讨论这个 integration。
 
@@ -7339,22 +7342,24 @@ Request:
   Pi Model + Context + Options
           │
           ▼
-  Pi openai-completions adapter
+  Pi createProvider() dispatch by Model.api
+          ├─ openai-responses   → /provider/v1/responses
+          └─ openai-completions → /provider/v1/chat/completions
           │ independent Goat auth/transport
-          ▼
-  https://api.commandcode.ai/provider/v1/chat/completions
-          │
           ▼
   Pi AssistantMessageEventStream
 ```
 
-Goat has `Provider.id=commandcode-goat`, `Model.api=openai-completions`, and an
-independent Pi credential slot. It shares only the price-free model capability
-catalog with CommandCode Private and must not import Private request builders,
-credentials, transport, assembler, or response conversion. Goat selects only
-the 40 shared facts whose minimum plan is Go or GOAT. All currently eligible
-models use Chat Completions; Anthropic Messages and OpenAI Responses are not
-registered without an eligible model and confirmed upstream support.
+Goat has fixed `Provider.id=commandcode-goat` and an independent Pi credential
+slot. Its per-model `Model.api` is selected from the Backend-startup
+`commandcode-models.json` `supportedEndpoints`; the same frozen catalog
+snapshot is injected into Private and Goat. Goat must not import Private request
+builders, credentials, transport, assembler, or response conversion. The bundled
+bootstrap snapshot currently contains 57 reviewed facts and is used only to seed
+or fall back when the user catalog is unavailable; Goat selects the 39 Go/GOAT
+facts. The Goat Pi API map pre-registers Anthropic Messages, Responses, and Chat
+Completions so that future catalog-only model additions across any supported
+endpoint do not require rebuilding the Provider package.
 
 CommandCode Private 与 Goat vocabulary 不进入 Generic Core。
 

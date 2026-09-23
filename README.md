@@ -261,15 +261,20 @@ Two CommandCode Providers are shipped as bundled product packages and registered
 automatically through the standard Pi Provider contract:
 
 - `commandcode-private` uses CommandCode's private `/alpha/generate` protocol;
-- `commandcode-goat` uses Pi's `openai-completions` adapter at
-  `https://api.commandcode.ai/provider/v1`.
+- `commandcode-goat` dispatches through Pi by each model's selected API:
+  Responses models use `/provider/v1/responses`, Chat models use
+  `/provider/v1/chat/completions`, and the Anthropic adapter is pre-registered
+  for future catalog-only Messages models.
 
 Users must **not** add either bundled package to `providerPackages`; that key is
 reserved for explicit external/user Provider Packages. No `models.json` entry
-is required. The Providers share one price-free model capability catalog but
-own independent authentication, transport, and response lifecycles. Private
-projects all 58 current facts; Goat exposes the 40 entries whose minimum plan
-is Go or GOAT and keeps every model on Chat Completions.
+is required. The runtime CommandCode catalog authority is
+`dirname(config.json)/commandcode-models.json`; a missing file is seeded from
+the bundled bootstrap snapshot, while an invalid file is preserved and the
+Backend falls back with a warning. The Providers share the same frozen startup
+snapshot but own independent authentication, transport, and response lifecycles.
+The current bundled bootstrap contains 57 reviewed facts; Private projects all
+57, while Goat exposes the 39 entries whose minimum plan is Go or GOAT.
 
 Only npm root package names (including scoped root names) are accepted for
 user `providerPackages`. Package import, contract/export validation, factory

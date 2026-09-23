@@ -64,7 +64,7 @@ export interface CommandCodePrivateProviderOptions {
    * precedence; exactly one of `model` or `models` must be provided.
    */
   model?: Model<string>;
-  /** Full model catalog (e.g. the built-in 58-model directory). */
+  /** Full model catalog from the frozen Backend-startup snapshot. */
   models?: readonly Model<string>[];
   now: () => number;
   compatibility?: CommandCodeCompatibilityPolicy;

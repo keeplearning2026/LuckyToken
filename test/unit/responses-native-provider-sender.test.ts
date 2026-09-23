@@ -548,8 +548,8 @@ describe("Responses native provider sender", () => {
     });
   });
 
-  it("exposes native compact for every supported Responses provider/protocol pair", () => {
-    const models = [
+  it("certifies Responses and Compact independently", () => {
+    const compactCertified = [
       model("openai", "openai-responses", "https://api.openai.com/v1"),
       model("xai", "openai-responses", "https://api.x.ai/v1"),
       model("opencode", "openai-responses", "https://opencode.ai/zen/v1"),
@@ -564,8 +564,17 @@ describe("Responses native provider sender", () => {
       model("azure-openai-responses", "azure-openai-responses", ""),
     ];
 
-    for (const candidate of models) {
-      expect(supportsProviderNativeResponses(candidate)).toBe(true);
+    for (const candidate of compactCertified) {
+      expect(supportsProviderNativeResponses(candidate, "responses")).toBe(true);
+      expect(supportsProviderNativeResponses(candidate, "compact")).toBe(true);
     }
+
+    const goat = model(
+      "commandcode-goat",
+      "openai-responses",
+      "https://api.commandcode.ai/provider/v1",
+    );
+    expect(supportsProviderNativeResponses(goat, "responses")).toBe(true);
+    expect(supportsProviderNativeResponses(goat, "compact")).toBe(false);
   });
 });
