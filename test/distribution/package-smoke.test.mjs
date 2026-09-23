@@ -22,6 +22,7 @@ function runNpm(arguments_, options) {
 async function pack(
   packageDirectory,
   destination,
+  expectedExtraFiles = [],
 ) {
   const { stdout } = await runNpm(
     ["pack", packageDirectory, "--json", "--pack-destination", destination],
@@ -34,8 +35,15 @@ async function pack(
     assert.ok(
       entry.path === "package.json" ||
         entry.path === "README.md" ||
-        entry.path.startsWith("dist/"),
+        entry.path.startsWith("dist/") ||
+        expectedExtraFiles.includes(entry.path),
       `${report.name} packed an unexpected file: ${entry.path}`,
+    );
+  }
+  for (const expected of expectedExtraFiles) {
+    assert.ok(
+      report.files.some((entry) => entry.path === expected),
+      `${report.name} must pack ${expected}`,
     );
   }
   return join(destination, report.filename);
@@ -51,6 +59,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
     const catalogTarball = await pack(
       join(repositoryRoot, "packages", "commandcode-model-catalog"),
       directory,
+      ["commandcode-models.json"],
     );
     const privateProviderTarball = await pack(
       join(repositoryRoot, "packages", "provider-commandcode-private"),
@@ -91,6 +100,38 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
       ["install", "--ignore-scripts", "--no-audit", "--no-fund"],
       { cwd: directory, maxBuffer: 8 * 1024 * 1024 },
     );
+
+    const installedCatalogPath = join(
+      directory,
+      "node_modules",
+      "@token",
+      "commandcode-model-catalog",
+      "commandcode-models.json",
+    );
+    await writeFile(
+      installedCatalogPath,
+      `${JSON.stringify(
+        {
+          schema: "luckytoken-commandcode-models-v1",
+          models: [
+            {
+              id: "authority-probe",
+              name: "Authority Probe",
+              description: "proves the packaged JSON is the model-data authority",
+              supportedEndpoints: ["/chat/completions", "/responses"],
+              input: ["text"],
+              reasoning: false,
+              contextWindow: 123456,
+              minimumPlan: "go",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
     await execFileAsync(
       process.execPath,
       [
@@ -109,12 +150,14 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
           'configurationPath: "providerPackages.fixture",',
           "host: { fetch: globalThis.fetch, now: () => 1, createUuid: () => \"00000000-0000-4000-8000-000000000006\" },",
           "};",
+          "assert.deepEqual(catalog.DEFAULT_COMMANDCODE_MODEL_CATALOG.models.map(({ id }) => id), [\"authority-probe\"]);",
+          "assert.deepEqual(catalog.COMMANDCODE_MODEL_FACTS.map(({ id }) => id), [\"authority-probe\"]);",
           "const privateProvider = privateProviderModule.providerPackage.createProvider(input);",
           "const goatProvider = goatProviderModule.providerPackage.createProvider(input);",
           'assert.equal(privateProvider.id, "commandcode-private");',
           'assert.equal(goatProvider.id, "commandcode-goat");',
-          "assert.deepEqual(privateProvider.getModels().map(({ id }) => id), catalog.COMMANDCODE_MODEL_FACTS.map(({ id }) => id));",
-          "assert.deepEqual(goatProvider.getModels().map(({ id }) => id), catalog.COMMANDCODE_MODEL_FACTS.filter(({ minimumPlan }) => minimumPlan === \"go\" || minimumPlan === \"goat\").map(({ id }) => id));",
+          "assert.deepEqual(privateProvider.getModels().map(({ id }) => id), [\"authority-probe\"]);",
+          "assert.deepEqual(goatProvider.getModels().map(({ id }) => id), [\"authority-probe\"]);",
           'assert.equal(typeof Token.createTokenRuntime, "function");',
         ].join("\n"),
       ],

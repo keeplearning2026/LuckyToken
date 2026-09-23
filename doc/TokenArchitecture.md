@@ -1270,14 +1270,16 @@ Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contr
 > `commandcode-models.json`。Backend 每次启动只读取一次；你更新这个文件后重启
 > Backend 就生效，不需要重新构建软件。
 
-运行时的唯一 CommandCode catalog authority 是
-`dirname(config.json)/commandcode-models.json`。文件不存在时，
-`@token/commandcode-model-catalog` 用 bundled bootstrap snapshot 首次 seed；文件损坏时
-保留原文件、回退到 bundled default 并发布 warning。一次 Backend 启动只加载一次并 freeze，
-同一 snapshot 同时注入 Private 与 Goat，所以两条路径不会在一次启动中看到不同 catalog。
+产品默认的唯一 CommandCode 模型数据权威是仓库跟踪的
+`packages/commandcode-model-catalog/commandcode-models.json`。安装后运行时权威是
+`dirname(config.json)/commandcode-models.json`：文件不存在时，
+`@token/commandcode-model-catalog` 从打包携带的同一 JSON 字节首次 seed；文件损坏时
+保留原文件、回退到同一 packaged JSON 的验证视图并发布 warning。代码中不再维护第二套
+TypeScript 模型表。一次 Backend 启动只加载一次并 freeze，同一 snapshot 同时注入 Private
+与 Goat，所以两条路径不会在一次启动中看到不同 catalog。
 
-当前 bundled bootstrap 有 **58 个已核对模型事实**；它不是运行期第二权威，只负责首次 seed/
-fallback。`supportedEndpoints` 保存 upstream capability，唯一 Pi API 由确定性规则选择：
+当前 tracked JSON 有 **57 个已核对模型事实**；packaged default 只是该 JSON 的解析视图，
+负责首次 seed/fallback。`supportedEndpoints` 保存 upstream capability，唯一 Pi API 由确定性规则选择：
 `/messages → anthropic-messages`，含 `/responses → openai-responses`，否则
 `/chat/completions → openai-completions`。Private 仍把所有 facts 投影成自己的
 `commandcode-private` API；Goat 按 plan 再投影。两个 Provider 不共享认证、transport、
@@ -2012,7 +2014,7 @@ Pi AI IR
 的 `supportedEndpoints` 确定性选择。OpenAI-style 模型的
 `baseUrl=https://api.commandcode.ai/provider/v1`；Anthropic-style base URL 若未来有
 Go/GOAT 可见模型则使用 provider root，由 Pi Anthropic adapter 拼 `/v1/messages`。
-当前 58 个 bootstrap facts 中，Go/GOAT 过滤后是 40 个模型。Goat Provider map
+当前 57 个 tracked JSON facts 中，Go/GOAT 过滤后是 39 个模型。Goat Provider map
 预注册 Pi 的 `anthropic-messages`、`openai-responses` 与 `openai-completions`
 三个 transport adapter；因此未来只要更新 `commandcode-models.json`，新增任一已支持
 endpoint 的 Go/GOAT 模型都不需要重新构建软件。它拥有独立 Pi credential slot，并且
@@ -2276,7 +2278,7 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | `src/providers/catalog.ts` | `registerTokenProviders()`；只注册 Pi builtins 与 `models.json` | composition | Pi Providers、Pi Models | configured-composition、provider-boundary tests |
 | `src/providers/package-loader.ts` | 校验 npm 根名/契约/Provider，冲突检查后原子注册 | composition | Contract、Pi Models、dynamic import | package-loader/runtime/distribution tests |
-| `packages/commandcode-model-catalog/src/catalog-file.ts`、`models.ts`、`projection.ts` | runtime `commandcode-models.json` loader/schema/API selection；bundled bootstrap snapshot；严格 Pi Model 投影 | Provider Runtime、Private、Goat | Node fs、Pi Model type | catalog-file + model-catalog tests |
+| `packages/commandcode-model-catalog/src/catalog-file.ts`、`models.ts`、`projection.ts` | runtime `commandcode-models.json` loader/schema/API selection；tracked packaged JSON authority；严格 Pi Model 投影 | Provider Runtime、Private、Goat | Node fs、Pi Model type | catalog-file + model-catalog tests |
 | `packages/provider-commandcode-private/src/models.ts` | Private identity projection | Private provider factory | shared capability catalog、`constants.ts` | model catalog/default-model tests |
 | `packages/provider-commandcode-private/src/constants.ts` | provider identity 常量（id/api/baseUrl） | models、provider | none | 被 model tests 覆盖 |
 | `packages/provider-commandcode-private/src/model.ts` | 默认模型工厂（从目录取 `deepseek/deepseek-v4.1-flash`） | provider factory | `models.ts` | `test/unit/commandcode-model.test.ts` |
@@ -2488,7 +2490,7 @@ flowchart LR
 | Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Direct Mode caller envelope、Provider JSONL state 分模块拥有 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
 | Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
-| 模型单一权威来源 | Backend 启动只加载一次 `commandcode-models.json` 并将同一 frozen snapshot 注入 Private/Goat；bundled 58-model snapshot 只做首次 seed/fallback；当前 Goat 按 Go/GOAT 选择 40 个 | 符合 |
+| 模型单一权威来源 | tracked `packages/commandcode-model-catalog/commandcode-models.json` 是唯一 bundled 数据权威；Backend 启动只加载一次用户侧实例并将同一 frozen snapshot 注入 Private/Goat；首次 seed/fallback 均来自同一 packaged JSON；当前 Goat 按 Go/GOAT 选择 39 个 | 符合 |
 | `pi-agent/` 不可变 | 当前 `0.86.1` reference tree（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
 | HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
@@ -2668,7 +2670,7 @@ method、request/response conversion、retry/cancel/online conformance 仍由新
 运行时 CommandCode models 的唯一权威来源是 Token 用户数据目录中的
 `commandcode-models.json`。增删模型或调整 `supportedEndpoints` 只需要更新该文件并
 重启 Backend；不需要重新构建软件，也不需要在通用 `models.json` 复制条目。仓库内
-bundled bootstrap snapshot 只用于首次 seed/fallback。CommandCode wire conversion 应继续
+tracked packaged `commandcode-models.json` 只用于首次 seed/fallback。CommandCode wire conversion 应继续
 只消费 invocation 中已 resolved 的 Pi `Model`。
 
 ## 12.4 更新 Pi

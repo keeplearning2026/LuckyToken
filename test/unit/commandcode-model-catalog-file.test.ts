@@ -136,6 +136,15 @@ describe("CommandCode model catalog file authority", () => {
     const seeded = await loadCommandCodeModelCatalog(path);
     expect(seeded.source).toBe("seeded_default");
     expect(seeded.catalog.models.length).toBeGreaterThan(0);
+    expect(await readFile(path, "utf8")).toBe(
+      await readFile(
+        new URL(
+          "../../packages/commandcode-model-catalog/commandcode-models.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
 
     const seededDocument = JSON.parse(await readFile(path, "utf8")) as {
       schema?: unknown;

@@ -1,5 +1,4 @@
 export {
-  COMMANDCODE_MODEL_FACTS,
   freezeCommandCodeModelFacts,
   selectCommandCodeModelApi,
   type CommandCodeModelApi,
@@ -14,6 +13,7 @@ export {
 } from "./projection.js";
 export {
   COMMANDCODE_MODEL_CATALOG_SCHEMA,
+  COMMANDCODE_MODEL_FACTS,
   DEFAULT_COMMANDCODE_MODEL_CATALOG,
   loadCommandCodeModelCatalog,
   parseCommandCodeModelCatalog,

@@ -3,7 +3,8 @@
 This private workspace package owns the complete CommandCode Private Pi Provider capability: its projection of the shared CommandCode model capability catalog, Pi IR ↔ CommandCode conversion, request preparation, HTTP attempt/retry lifecycle, JSONL assembly, diagnostics, and Provider authentication contract.
 
 It projects every model from the one frozen startup CommandCode catalog
-snapshot; the current bundled bootstrap contains 58 reviewed facts. Reasoning
+snapshot; the tracked packaged `commandcode-models.json` is the only bundled
+model-data authority and currently contains 57 reviewed facts. Reasoning
 effort is emitted only after Pi capability clamping produces a supported string;
 the Provider does not invent an effort or fall back to the model's highest
 advertised level.

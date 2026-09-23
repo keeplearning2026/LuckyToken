@@ -26,7 +26,7 @@ describe("CommandCode model catalog", () => {
       "claude-haiku-4-5-20251001",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
-      "gpt-5.6-luna",
+      "gpt-6-luna",
       "gpt-5.5",
       "gpt-5.4",
       "gpt-5.3-codex",
@@ -48,8 +48,7 @@ describe("CommandCode model catalog", () => {
       "MiniMaxAI/MiniMax-M2.7",
       "MiniMaxAI/MiniMax-M2.5",
       "xiaomi/mimo-v2.6-flash",
-      "xiaomi/mimo-v2.5-pro",
-      "xiaomi/mimo-v2.5",
+      "xiaomi/mimo-v2.6-pro",
       "Qwen/Qwen3.8-Max",
       "Qwen/Qwen3.8-27B",
       "Qwen/Qwen3.7-Max",
@@ -99,7 +98,7 @@ describe("CommandCode model catalog", () => {
       .digest("hex");
 
     expect(fingerprint).toBe(
-      "995043d6b8f1cae4dd4ecad32d09f9470a4aa220c55481b4e2810065a7e2b34e",
+      "5a0ad83bc7af7b76a84e08ff68aaab1bfc3f0dfa72804b0dd2c292c82fd801ae",
     );
   });
 
@@ -207,8 +206,8 @@ describe("CommandCode model catalog", () => {
         expect(Object.isFrozen(facts.thinkingLevelMap)).toBe(true);
       }
     }
-    expect(ids.size).toBe(58);
-    expect(plans).toEqual({ go: 36, goat: 4, pro: 13, max: 5 });
+    expect(ids.size).toBe(57);
+    expect(plans).toEqual({ go: 35, goat: 4, pro: 13, max: 5 });
     expect(Object.isFrozen(COMMANDCODE_MODEL_FACTS)).toBe(true);
   });
 
@@ -375,7 +374,7 @@ describe("CommandCode model catalog", () => {
   it("projects only Go and GOAT plan models for CommandCode Goat", () => {
     expect(COMMANDCODE_GOAT_MODELS.map((model) => model.id)).toEqual([
       "gpt-5.6-sol",
-      "gpt-5.6-luna",
+      "gpt-6-luna",
       "deepseek/deepseek-v4-pro",
       "deepseek/deepseek-v4.1-flash",
       "deepseek/deepseek-v4-flash-vision-exp",
@@ -393,8 +392,7 @@ describe("CommandCode model catalog", () => {
       "MiniMaxAI/MiniMax-M2.7",
       "MiniMaxAI/MiniMax-M2.5",
       "xiaomi/mimo-v2.6-flash",
-      "xiaomi/mimo-v2.5-pro",
-      "xiaomi/mimo-v2.5",
+      "xiaomi/mimo-v2.6-pro",
       "Qwen/Qwen3.8-Max",
       "Qwen/Qwen3.8-27B",
       "Qwen/Qwen3.7-Max",

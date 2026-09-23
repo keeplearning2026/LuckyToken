@@ -25,7 +25,7 @@ export function createCommandCodeModels(
   );
 }
 
-/** Bootstrap-only projection used by tests/tools that do not own Backend startup. */
+/** JSON-derived bootstrap projection used only by tests/tools that do not own Backend startup. */
 export const COMMANDCODE_MODELS: readonly Model<typeof COMMANDCODE_API_ID>[] =
   createCommandCodeModels(COMMANDCODE_MODEL_FACTS);
 

@@ -85,7 +85,7 @@ describe("CommandCode Goat Provider Package", () => {
 
     expect(provider.id).toBe("commandcode-goat");
     expect(provider.name).toBe("CommandCode Goat");
-    expect(provider.getModels()).toHaveLength(40);
+    expect(provider.getModels()).toHaveLength(39);
     expect(provider.getModels()[0]).toMatchObject({
       provider: "commandcode-goat",
       api: "openai-responses",

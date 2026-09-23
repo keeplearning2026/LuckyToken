@@ -1,8 +1,9 @@
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
-  COMMANDCODE_MODEL_FACTS,
   freezeCommandCodeModelFacts,
   isCommandCodeReasoningEffort,
   type CommandCodeModelFacts,
@@ -30,12 +31,6 @@ export interface CommandCodeModelCatalogLoadResult {
   readonly source: CommandCodeModelCatalogLoadSource;
   readonly error?: Error;
 }
-
-export const DEFAULT_COMMANDCODE_MODEL_CATALOG: CommandCodeModelCatalog =
-  Object.freeze({
-    schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
-    models: COMMANDCODE_MODEL_FACTS,
-  });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -295,6 +290,28 @@ export function parseCommandCodeModelCatalogText(
   return parseCommandCodeModelCatalog(parsed, path);
 }
 
+const BUNDLED_COMMANDCODE_MODEL_CATALOG_PATH = fileURLToPath(
+  new URL("../commandcode-models.json", import.meta.url),
+);
+const BUNDLED_COMMANDCODE_MODEL_CATALOG_TEXT = readFileSync(
+  BUNDLED_COMMANDCODE_MODEL_CATALOG_PATH,
+  "utf8",
+);
+
+/**
+ * Product-default CommandCode catalog. The tracked JSON file is the only
+ * bundled model-data authority; this object is only its validated frozen view.
+ */
+export const DEFAULT_COMMANDCODE_MODEL_CATALOG: CommandCodeModelCatalog =
+  parseCommandCodeModelCatalogText(
+    BUNDLED_COMMANDCODE_MODEL_CATALOG_TEXT,
+    BUNDLED_COMMANDCODE_MODEL_CATALOG_PATH,
+  );
+
+/** Compatibility projection for existing tools/tests; data still comes from the JSON authority. */
+export const COMMANDCODE_MODEL_FACTS: readonly CommandCodeModelFacts[] =
+  DEFAULT_COMMANDCODE_MODEL_CATALOG.models;
+
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -308,7 +325,7 @@ function isMissingFile(error: unknown): boolean {
 }
 
 function defaultCatalogText(): string {
-  return `${JSON.stringify(DEFAULT_COMMANDCODE_MODEL_CATALOG, null, 2)}\n`;
+  return BUNDLED_COMMANDCODE_MODEL_CATALOG_TEXT;
 }
 
 export async function loadCommandCodeModelCatalog(

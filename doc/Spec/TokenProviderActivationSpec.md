@@ -578,10 +578,11 @@ The package implementations are:
 Both consume the same frozen startup catalog loaded from Token-owned
 `commandcode-models.json` by `@token/commandcode-model-catalog`. They do not
 share Provider credentials, transport, wire conversion, or response lifecycle.
-The bundled bootstrap snapshot currently has 58 reviewed facts and exists only
-for first-run seed/fallback. Private projects the full loaded catalog through
-its private API; Goat selects loaded facts whose minimum plan is Go or GOAT
-(current bootstrap: 40) and derives each Pi API from `supportedEndpoints`.
+The tracked package `commandcode-models.json` is the only bundled model-data
+authority; it currently has 57 reviewed facts and is used for first-run
+seed/fallback. Private projects the full loaded catalog through its private API;
+Goat selects loaded facts whose minimum plan is Go or GOAT (currently 39) and
+derives each Pi API from `supportedEndpoints`.
 
 The npm/package identity is an implementation detail and is never required in normal UI or first-run configuration.
 

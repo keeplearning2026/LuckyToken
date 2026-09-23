@@ -5889,12 +5889,14 @@ POST /alpha/generate
 
 Package `@token/provider-commandcode-private` owns configuration
 validation, factory, Pi ↔ CommandCode Private conversion, and its upstream
-lifecycle. Stable CommandCode model capability schema/bootstrap/projection
-helpers are owned separately by `@token/commandcode-model-catalog`; runtime
-product composition loads one frozen `commandcode-models.json` snapshot and
-injects it into both CommandCode packages. The current bundled bootstrap has 58
-reviewed facts, and the Private package projects its own provider/api/baseUrl
-identity across the full loaded snapshot. Generic Provider Runtime imports only
+lifecycle. Stable CommandCode model capability schema/validation/projection
+helpers and the tracked product-default `commandcode-models.json` are owned
+separately by `@token/commandcode-model-catalog`. The tracked JSON is the only
+bundled model-data authority; runtime product composition loads one frozen
+user-side `commandcode-models.json` snapshot and injects it into both
+CommandCode packages. The current JSON authority has 57 reviewed facts, and the
+Private package projects its own provider/api/baseUrl identity across the full
+loaded snapshot. Generic Provider Runtime imports only
 the Provider Package contract and opaque bundled configurations; it must not
 load, instantiate, or special-case the CommandCode implementation.
 
@@ -7354,9 +7356,10 @@ Goat has fixed `Provider.id=commandcode-goat` and an independent Pi credential
 slot. Its per-model `Model.api` is selected from the Backend-startup
 `commandcode-models.json` `supportedEndpoints`; the same frozen catalog
 snapshot is injected into Private and Goat. Goat must not import Private request
-builders, credentials, transport, assembler, or response conversion. The bundled
-bootstrap snapshot currently contains 58 reviewed facts and is used only to seed
-or fall back when the user catalog is unavailable; Goat selects the 40 Go/GOAT
+builders, credentials, transport, assembler, or response conversion. The tracked
+package JSON currently contains 57 reviewed facts and is the only bundled
+model-data authority used to seed or fall back when the user catalog is
+unavailable; Goat selects the 39 Go/GOAT
 facts. The Goat Pi API map pre-registers Anthropic Messages, Responses, and Chat
 Completions so that future catalog-only model additions across any supported
 endpoint do not require rebuilding the Provider package.

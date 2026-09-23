@@ -290,7 +290,7 @@ describe("configured serving composition", () => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "commandcode-private/gpt-5.6-luna",
+          model: "commandcode-private/gpt-6-luna",
           max_tokens: 32,
           messages: [{ role: "user", content: "hello" }],
         }),

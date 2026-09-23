@@ -268,13 +268,16 @@ automatically through the standard Pi Provider contract:
 
 Users must **not** add either bundled package to `providerPackages`; that key is
 reserved for explicit external/user Provider Packages. No `models.json` entry
-is required. The runtime CommandCode catalog authority is
-`dirname(config.json)/commandcode-models.json`; a missing file is seeded from
-the bundled bootstrap snapshot, while an invalid file is preserved and the
-Backend falls back with a warning. The Providers share the same frozen startup
-snapshot but own independent authentication, transport, and response lifecycles.
-The current bundled bootstrap contains 58 reviewed facts; Private projects all
-58, while Goat exposes the 40 entries whose minimum plan is Go or GOAT.
+is required. The product-default CommandCode model-data authority is the tracked
+`packages/commandcode-model-catalog/commandcode-models.json`. The installed
+runtime authority is `dirname(config.json)/commandcode-models.json`; a missing
+file is seeded byte-for-byte from the tracked packaged JSON, while an invalid
+file is preserved and the Backend falls back to that same packaged JSON with a
+warning. There is no second TypeScript model table. The Providers share the
+same frozen startup snapshot but own independent authentication, transport, and
+response lifecycles. The current JSON authority contains 57 reviewed facts;
+Private projects all 57, while Goat exposes the 39 entries whose minimum plan
+is Go or GOAT.
 
 Only npm root package names (including scoped root names) are accepted for
 user `providerPackages`. Package import, contract/export validation, factory

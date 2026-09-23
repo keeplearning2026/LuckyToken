@@ -55,6 +55,6 @@ export function createCommandCodeGoatModels(
   );
 }
 
-/** Bootstrap-only projection used by tests/tools that do not own Backend startup. */
+/** JSON-derived bootstrap projection used only by tests/tools that do not own Backend startup. */
 export const COMMANDCODE_GOAT_MODELS: readonly Model<CommandCodeModelApi>[] =
   createCommandCodeGoatModels(COMMANDCODE_MODEL_FACTS);
