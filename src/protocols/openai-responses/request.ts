@@ -11,6 +11,7 @@ import type {
   ToolResultMessage,
   Usage,
 } from "@earendil-works/pi-ai";
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 
 import type { ConversionNotice } from "@token/provider-contract/diagnostics";
 import type { ResponsesConversionResult } from "./semantic/invocation.js";
@@ -506,6 +507,73 @@ function convertCustomGrammar(
   );
 }
 
+/** An explicit Responses strict guarantee must already be satisfied by the
+ * caller's schema. Pi may normalize an omitted-strict schema, but must not
+ * silently repair one that the Client explicitly marked strict. */
+function validateExplicitStrictParameters(
+  parameters: unknown,
+  name: string,
+): void {
+  const visit = (schema: unknown, path: string): void => {
+    if (!isRecord(schema)) {
+      throw new InvalidRequest(`function ${name} ${path} must be a schema object`);
+    }
+    if (schema.type === "object") {
+      if (schema.additionalProperties !== false) {
+        throw new InvalidRequest(
+          `function ${name} ${path}.additionalProperties must be false when strict is true`,
+        );
+      }
+      const properties = schema.properties;
+      if (properties !== undefined && !isRecord(properties)) {
+        throw new InvalidRequest(`function ${name} ${path}.properties must be an object`);
+      }
+      const entries = Object.entries(properties ?? {});
+      const required = schema.required;
+      if (
+        (required !== undefined &&
+          (!Array.isArray(required) || required.some((key) => typeof key !== "string"))) ||
+        (entries.length > 0 &&
+          (!Array.isArray(required) ||
+            required.length !== entries.length ||
+            entries.some(([key]) => !required.includes(key))))
+      ) {
+        throw new InvalidRequest(
+          `function ${name} ${path}.required must contain every property when strict is true`,
+        );
+      }
+      for (const [key, property] of entries) {
+        visit(property, `${path}.properties.${key}`);
+      }
+    }
+    if (schema.items !== undefined) visit(schema.items, `${path}.items`);
+    if (Array.isArray(schema.anyOf)) {
+      schema.anyOf.forEach((variant, index) => visit(variant, `${path}.anyOf[${index}]`));
+    }
+  };
+  if (!isRecord(parameters) || parameters.type !== "object") {
+    throw new InvalidRequest(
+      `function ${name} strict parameters must have type object`,
+    );
+  }
+  visit(parameters, "parameters");
+  // Pi owns the supported strict subset. Validate it here so an impossible
+  // explicit guarantee fails as a Client request, before Provider dispatch.
+  try {
+    makeStrictJsonSchema(parameters);
+  } catch (error) {
+    throw new InvalidRequest(
+      `function ${name} strict parameters are unsupported: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function parseFunctionStrict(value: unknown, name: string): boolean | "prefer" {
+  if (value == null) return "prefer";
+  if (typeof value === "boolean") return value;
+  throw new InvalidRequest(`function ${name} strict must be a boolean or null`);
+}
+
 function convertTools(
   value: unknown,
   freeformNames?: Set<string>,
@@ -534,6 +602,7 @@ function convertTools(
       );
     }
     names.add(name);
+    if (strict === true) validateExplicitStrictParameters(rawParameters, name);
     // Codex clients may send tool definitions whose `parameters` is absent,
     // non-object, or missing the `type` marker (e.g. built-in shell/apply
     // tools). Normalize the same way opencodex does: wrap non-objects in a
@@ -548,8 +617,11 @@ function convertTools(
       description,
       parameters: normalizedParameters,
     };
-    if (strict === true) {
-      tool.constrainedSampling = { type: "json_schema", strict: "require" };
+    if (strict === true || strict === "prefer") {
+      tool.constrainedSampling = {
+        type: "json_schema",
+        strict: strict === true ? "require" : "prefer",
+      };
     } else if (constrainedSampling !== undefined) {
       tool.constrainedSampling = constrainedSampling;
     }
@@ -581,8 +653,8 @@ function convertTools(
         flatName,
         description,
         inner.parameters,
-        // The installed SDK defaults function `strict` to true.
-        inner.strict ?? true,
+        // Responses tries strict mode for an omitted value, then falls back.
+        parseFunctionStrict(inner.strict, flatName),
         convertCustomGrammar(inner.format ?? inner.grammar, flatName),
       );
     } else if (inner.type === "custom") {
@@ -628,9 +700,8 @@ function convertTools(
         name,
         description,
         candidate.parameters,
-        // The installed SDK defaults function `strict` to true; absent strict
-        // maps to Pi constrainedSampling require.
-        candidate.strict ?? true,
+        // Responses tries strict mode for an omitted value, then falls back.
+        parseFunctionStrict(candidate.strict, name),
         convertCustomGrammar(candidate.format ?? candidate.grammar, name),
       );
       continue;

@@ -156,7 +156,10 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     try {
       const hello = await client.hello(5);
       assert.equal(hello.type, "compatible");
-      assert.equal(hello.application.version, "1.0.4");
+      const expectedVersion = JSON.parse(
+        await readFile(join(repositoryRoot, "package.json"), "utf8"),
+      ).version;
+      assert.equal(hello.application.version, expectedVersion);
       assert.equal(hello.contractVersion, 5);
 
       let status;

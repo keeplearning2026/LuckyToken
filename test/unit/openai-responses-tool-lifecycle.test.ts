@@ -73,6 +73,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
                 type: "object",
                 properties: { city: { type: "string" } },
                 required: ["city"],
+                additionalProperties: false,
               },
               strict: true,
             },
@@ -89,6 +90,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
             type: "object",
             properties: { city: { type: "string" } },
             required: ["city"],
+            additionalProperties: false,
           },
           constrainedSampling: { type: "json_schema", strict: "require" },
         },
@@ -115,10 +117,9 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       expect(loose.invocation.pi.context.tools?.[0]?.constrainedSampling).toBeUndefined();
     });
 
-    it("treats absent strict as the SDK default of strict:true", () => {
-      // The installed SDK documents `strict` defaulting to true; an absent
-      // strict maps to Pi constrainedSampling require rather than silently
-      // degrading caller intent.
+    it("prefers strict when the function does not specify strict", () => {
+      // Responses attempts strict normalization for an omitted value, but
+      // falls back to non-strict if the schema cannot be made compatible.
       const absent = convertResponsesRequest(
         {
           model: "m",
@@ -130,7 +131,7 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       );
       expect(absent.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
         type: "json_schema",
-        strict: "require",
+        strict: "prefer",
       });
     });
 
@@ -595,6 +596,30 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
       const tool = invocation.invocation.pi.context.tools?.[0];
       expect(tool?.description).toBe("read a resource");
       expect(tool?.parameters).toEqual({ type: "object", properties: {} });
+      expect(tool?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+    });
+
+    it("keeps an explicit namespace-child strict:false separate from omission", () => {
+      const invocation = convertResponsesRequest(
+        {
+          model: "m",
+          input: "x",
+          tools: [{
+            type: "namespace",
+            name: "mcp",
+            tools: [{
+              type: "function",
+              name: "read",
+              strict: false,
+              parameters: { type: "object", properties: {} },
+            }],
+          }],
+        },
+        1,
+        policy(),
+      );
+
+      expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toBeUndefined();
     });
 
     it("canonicalizes a namespaced historical call to the flattened declared Pi tool identity", () => {

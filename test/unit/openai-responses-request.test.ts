@@ -532,7 +532,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
             type: "function",
             name: "base",
             description: "base tool",
-            parameters: { type: "object", properties: {} },
+            parameters: { type: "object", properties: {}, additionalProperties: false },
             strict: true,
           },
         ],
@@ -648,7 +648,7 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
           {
             type: "function",
             name: "strict_tool",
-            parameters: { type: "object", properties: {} },
+            parameters: { type: "object", properties: {}, additionalProperties: false },
             strict: true,
           },
         ],
@@ -659,6 +659,122 @@ describe("OpenAI Responses request → Pi IR conversion", () => {
       type: "json_schema",
       strict: "require",
     });
+  });
+
+  it("prefers strict sampling when a function omits strict", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{
+          type: "function",
+          name: "lookup",
+          parameters: { type: "object", additionalProperties: true },
+        }],
+      },
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
+      type: "json_schema",
+      strict: "prefer",
+    });
+  });
+
+  it("treats function strict:null like omission", () => {
+    const invocation = convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "function", name: "lookup", strict: null }],
+      },
+      1,
+    );
+
+    expect(invocation.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({
+      type: "json_schema",
+      strict: "prefer",
+    });
+  });
+
+  it("rejects a non-boolean function strict value", () => {
+    expect(() => convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{ type: "function", name: "lookup", strict: "prefer" }],
+      },
+      1,
+    )).toThrow("function lookup strict must be a boolean or null");
+  });
+
+  it("rejects an explicit strict function whose schema permits unspecified properties", () => {
+    expect(() => convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{
+          type: "function",
+          name: "lookup",
+          strict: true,
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        }],
+      },
+      1,
+    )).toThrow("additionalProperties must be false");
+  });
+
+  it("rejects an explicit strict function with an optional nested property", () => {
+    expect(() => convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{
+          type: "function",
+          name: "lookup",
+          strict: true,
+          parameters: {
+            type: "object",
+            properties: {
+              filter: {
+                type: "object",
+                properties: { query: { type: "string" } },
+                required: [],
+                additionalProperties: false,
+              },
+            },
+            required: ["filter"],
+            additionalProperties: false,
+          },
+        }],
+      },
+      1,
+    )).toThrow("parameters.properties.filter.required must contain every property");
+  });
+
+  it("rejects an explicit strict function outside Pi's strict schema subset before dispatch", () => {
+    expect(() => convertResponsesRequest(
+      {
+        model: "m",
+        input: "x",
+        tools: [{
+          type: "function",
+          name: "lookup",
+          strict: true,
+          parameters: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+            allOf: [{ type: "object" }],
+          },
+        }],
+      },
+      1,
+    )).toThrow("allOf schemas are unsupported");
   });
 });
 

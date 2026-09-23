@@ -57,6 +57,7 @@ the projection is consumed once and is never persisted as request state.
 | --- | --- | --- |
 | input messages, instructions, images | `pi-context` | preserve model-visible content; unresolved opaque references fail or warn only under the declared resolver policy |
 | tools, call IDs, results | `pi-context` | identity/relationship loss fails |
+| function `strict` | `pi-context` constrained sampling | omitted/`null` → Pi `prefer` (normalize if possible, otherwise non-strict); explicit `true` → validate strict schema before dispatch and map to Pi `require`; explicit `false` → no strict constraint. The selected Pi Provider owns the final wire, including capability-dependent omission of `strict`. |
 | reasoning effort `none` | `client-warning-omit` | omit explicit disable, warn, request no Pi reasoning level, and let the selected Pi adapter determine resulting thinking behavior |
 | enabled reasoning effort | `pi-common-option` | resolved model map + public Pi selection helpers |
 | reasoning summary preference | `provider-private-omit-warning` | Pi common contract has no summary selector |
