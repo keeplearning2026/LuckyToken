@@ -32,8 +32,12 @@ function responsesModel(
   };
 }
 
-function request(body: string, headers: Record<string, string> = {}): Request {
-  return new Request("http://Token.test/v1/responses", {
+function request(
+  body: string,
+  headers: Record<string, string> = {},
+  url = "http://Token.test/v1/responses",
+): Request {
+  return new Request(url, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body,
@@ -304,6 +308,125 @@ describe("Provider Native Responses contract", () => {
     }
   });
 
+  it("applies alias projection after lifecycle normalization", async () => {
+    const model = responsesModel();
+    const alias = "public/gpt-native";
+    const publicModels: PublicModelSource = {
+      requestSnapshot: async () =>
+        ({
+          resolve: (selector: string) =>
+            selector === alias
+              ? { providerId: model.provider, modelId: model.id }
+              : undefined,
+        }) as never,
+    };
+    const responseObject = {
+      id: "resp_alias_normalized",
+      object: "response",
+      status: "in_progress",
+      model: model.id,
+      output: [],
+    };
+    const item = (id: string, status: string) => ({
+      type: "message",
+      id,
+      role: "assistant",
+      status,
+      content: [],
+    });
+    const events = [
+      { type: "response.created", response: responseObject },
+      { type: "response.output_item.added", output_index: 0, item: item("msg_a", "in_progress") },
+      { type: "response.output_item.added", output_index: 1, item: item("msg_b", "in_progress") },
+      { type: "response.output_item.done", output_index: 1, item: item("msg_b", "completed") },
+      { type: "response.output_item.done", output_index: 0, item: item("msg_a", "completed") },
+      { type: "response.completed", response: { ...responseObject, status: "completed" } },
+    ];
+    const upstreamSse = events
+      .map(
+        (event, sequence_number) =>
+          `event: ${event.type}\ndata: ${JSON.stringify({
+            ...event,
+            sequence_number,
+          })}\n\n`,
+      )
+      .join("");
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, undefined, publicModels),
+      request(JSON.stringify({ model: alias, input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    const result = await response.text();
+    expect(result).toContain(`"model":"${alias}"`);
+    expect(result).not.toContain(`"model":"${model.id}"`);
+    expect(result.indexOf('"id":"msg_b"')).toBeLessThan(
+      result.indexOf('"id":"msg_a"'),
+    );
+  });
+
+  it("still applies alias projection when lifecycle normalization is skipped", async () => {
+    const model = responsesModel();
+    const alias = "public/gpt-native";
+    const publicModels: PublicModelSource = {
+      requestSnapshot: async () =>
+        ({
+          resolve: (selector: string) =>
+            selector === alias
+              ? { providerId: model.provider, modelId: model.id }
+              : undefined,
+        }) as never,
+    };
+    const upstreamSse =
+      `event: response.created\ndata: ${JSON.stringify({
+        type: "response.created",
+        sequence_number: 0,
+        response: {
+          id: "resp_alias_skipped",
+          object: "response",
+          status: "in_progress",
+          model: model.id,
+          output: [],
+        },
+      })}\n\n` +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":2,"output_index":1,"item_id":"msg_a","content_index":0,"delta":"A"}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n' +
+      `event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed",
+        sequence_number: 4,
+        response: {
+          id: "resp_alias_skipped",
+          object: "response",
+          status: "completed",
+          model: model.id,
+          output: [],
+        },
+      })}\n\n`;
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, undefined, publicModels),
+      request(JSON.stringify({ model: alias, input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    const result = await response.text();
+    expect(result).toContain(`"model":"${alias}"`);
+    expect(result).not.toContain(`"model":"${model.id}"`);
+    expect(result).toContain('"output_index":1,"item_id":"msg_a"');
+  });
+
   it("records an exact Provider Native alias-projection failure instead of a generic request failure", async () => {
     const model = responsesModel();
     const alias = "public/gpt-native";
@@ -363,6 +486,65 @@ describe("Provider Native Responses contract", () => {
     );
   });
 
+  it("normalizes interleaved Provider Native SSE and records bounded lifecycle observations", async () => {
+    const model = responsesModel();
+    const recorded = recordingJourney();
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":2,"output_index":1,"item_id":"msg_b","content_index":0,"delta":"B"}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[{"type":"output_text","text":"B","annotations":[]}]}}\n\n' +
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":4,"output_index":0,"item_id":"msg_a","content_index":0,"delta":"A"}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[{"type":"output_text","text":"A","annotations":[]}]}}\n\n';
+    const expectedSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":1,"output_index":1,"item_id":"msg_b","content_index":0,"delta":"B"}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[{"type":"output_text","text":"B","annotations":[]}]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":4,"output_index":0,"item_id":"msg_a","content_index":0,"delta":"A"}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[{"type":"output_text","text":"A","annotations":[]}]}}\n\n';
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, recorded.authority),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(expectedSse);
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "conversion_notice_observed",
+        code: "provider_native_lifecycle_normalized",
+        severity: "info",
+        location: {
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "normalize_provider_native_lifecycle",
+        },
+      }),
+    );
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "conversion_notice_observed",
+        code: "item_commit_order_differs_from_output_index",
+        severity: "warning",
+      }),
+    );
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "artifact_observed",
+        artifactId: "provider_native_lifecycle_normalized_wire",
+        artifactKind: "provider_native_lifecycle_normalized_wire",
+        state: "captured",
+      }),
+    );
+  });
+
   it("returns upstream SSE bytes unchanged when no alias projection is required", async () => {
     const model = responsesModel();
     const sse =
@@ -384,6 +566,340 @@ describe("Provider Native Responses contract", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     await expect(response.text()).resolves.toBe(sse);
+  });
+
+  it("normalizes interleaved Provider Native SSE before returning it", async () => {
+    const model = responsesModel();
+    const item = (id: string, status: string) => ({
+      type: "message",
+      id,
+      role: "assistant",
+      status,
+      content: [],
+    });
+    const events = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: item("msg_a", "in_progress"),
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
+        item: item("msg_b", "in_progress"),
+      },
+      {
+        type: "response.output_text.delta",
+        output_index: 1,
+        item_id: "msg_b",
+        content_index: 0,
+        delta: "B",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 1,
+        item: item("msg_b", "completed"),
+      },
+      {
+        type: "response.output_text.delta",
+        output_index: 0,
+        item_id: "msg_a",
+        content_index: 0,
+        delta: "A",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: item("msg_a", "completed"),
+      },
+    ] as const;
+    const upstreamSse = events
+      .map(
+        (event, sequence_number) =>
+          `event: ${event.type}\ndata: ${JSON.stringify({
+            ...event,
+            sequence_number,
+          })}\n\n`,
+      )
+      .join("");
+    const expectedEvents = [
+      events[1]!,
+      events[2]!,
+      events[3]!,
+      events[0]!,
+      events[4]!,
+      events[5]!,
+    ];
+    const expectedSse = expectedEvents
+      .map(
+        (event, sequence_number) =>
+          `event: ${event.type}\ndata: ${JSON.stringify({
+            ...event,
+            sequence_number,
+          })}\n\n`,
+      )
+      .join("");
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(expectedSse);
+  });
+
+  it("keeps the original Provider Native SSE when lifecycle normalization is skipped", async () => {
+    const model = responsesModel();
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":1,"output_index":1,"item_id":"msg_a","content_index":0,"delta":"A"}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(upstreamSse);
+  });
+
+  it.each([
+    {
+      name: "background request",
+      body: { model: "openai/gpt-5", input: "hi", stream: true, background: true },
+      headers: {},
+      url: "http://Token.test/v1/responses",
+    },
+    {
+      name: "Last-Event-ID",
+      body: { model: "openai/gpt-5", input: "hi", stream: true },
+      headers: { "last-event-id": "cursor-1" },
+      url: "http://Token.test/v1/responses",
+    },
+    {
+      name: "starting_after query",
+      body: { model: "openai/gpt-5", input: "hi", stream: true },
+      headers: {},
+      url: "http://Token.test/v1/responses?starting_after=7",
+    },
+  ])("does not normalize Provider Native SSE with upstream cursor semantics: $name", async ({ body, headers, url }) => {
+    const model = responsesModel();
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify(body), headers, url),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(upstreamSse);
+  });
+
+  it("does not confuse previous_response_id with upstream SSE cursor semantics", async () => {
+    const model = responsesModel();
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const expectedSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({
+        model: "openai/gpt-5",
+        input: "hi",
+        stream: true,
+        previous_response_id: "resp_previous",
+      })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(expectedSse);
+  });
+
+  it("observes lifecycle normalization without changing Provider Native success semantics", async () => {
+    const model = responsesModel();
+    const recorded = recordingJourney();
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, recorded.authority),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(recorded.observations).toContainEqual(expect.objectContaining({
+      kind: "step_completed",
+      stepInstanceId: "p5.normalize_provider_native_lifecycle",
+      completion: "success",
+      location: {
+        phase: "lane_response_processing",
+        lane: "provider_native",
+        step: "normalize_provider_native_lifecycle",
+      },
+    }));
+    expect(recorded.observations).toContainEqual(expect.objectContaining({
+      kind: "conversion_notice_observed",
+      code: "provider_native_lifecycle_normalized",
+      severity: "info",
+    }));
+    expect(recorded.observations).toContainEqual(expect.objectContaining({
+      kind: "conversion_notice_observed",
+      code: "item_commit_order_differs_from_output_index",
+      severity: "warning",
+    }));
+    expect(recorded.observations).toContainEqual(expect.objectContaining({
+      kind: "artifact_observed",
+      artifactId: "provider_native_lifecycle_normalized_wire",
+      artifactKind: "provider_native_lifecycle_normalized_wire",
+      state: "captured",
+    }));
+    expect(
+      recorded.observations.filter(
+        (observation) => observation.kind === "failure_detected",
+      ),
+    ).toEqual([]);
+  });
+
+  it("records a bounded skipped notice without turning normalization into a request failure", async () => {
+    const model = responsesModel();
+    const recorded = recordingJourney();
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":1,"output_index":1,"item_id":"msg_a","content_index":0,"delta":"A"}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, recorded.authority),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi", stream: true })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(upstreamSse);
+    expect(recorded.observations).toContainEqual(expect.objectContaining({
+      kind: "conversion_notice_observed",
+      code: "provider_native_lifecycle_normalization_skipped",
+      severity: "info",
+      message: "item_identity_conflict",
+    }));
+    expect(
+      recorded.observations.some(
+        (observation) =>
+          observation.kind === "artifact_observed" &&
+          observation.artifactKind === "provider_native_lifecycle_normalized_wire",
+      ),
+    ).toBe(false);
+    expect(
+      recorded.observations.filter(
+        (observation) => observation.kind === "failure_detected",
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps normalized Provider Native responses identical when diagnostics observation throws", async () => {
+    const model = responsesModel();
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream",
+          "x-provider-response": "kept",
+        },
+      });
+    const requestBody = JSON.stringify({
+      model: "openai/gpt-5",
+      input: "hi",
+      stream: true,
+    });
+    const run = async (
+      diagnostics?: RequestJourneyObservationAuthority,
+    ): Promise<{
+      readonly status: number;
+      readonly headers: readonly (readonly [string, string])[];
+      readonly body: string;
+    }> => {
+      const response = await handleHttpRequest(
+        dependencies(models(model), fetch, diagnostics),
+        request(requestBody),
+      );
+      return {
+        status: response.status,
+        headers: Array.from(response.headers.entries())
+          .filter(([name]) => name.toLowerCase() !== "x-token-request-id")
+          .sort(([a], [b]) => a.localeCompare(b)),
+        body: await response.text(),
+      };
+    };
+
+    const baseline = await run();
+    let observeReached = false;
+    const throwing: RequestJourneyObservationAuthority = {
+      begin: (input) => ({
+        requestId: input.requestId,
+        observe: () => {
+          observeReached = true;
+          throw new Error("diagnostics-observe-must-not-interfere");
+        },
+        close: () => {
+          throw new Error("diagnostics-close-must-not-interfere");
+        },
+      }),
+      observeRuntime: () => undefined,
+    };
+    const faulted = await run(throwing);
+
+    expect(observeReached).toBe(true);
+    expect(faulted).toEqual(baseline);
   });
 
   it("returns a fixed 502 when Provider credential resolution fails, without transport fallback", async () => {

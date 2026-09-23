@@ -53,6 +53,7 @@ import {
   type NativeResponsesResult,
 } from "./native-response.js";
 import { extractResponsesPassthroughUsage } from "./passthrough-usage.js";
+import { normalizeNativeResponsesSse } from "./native-sse-lifecycle-normalizer.js";
 import { executeSemanticResponses } from "./semantic.js";
 import type {
   ProviderResponsesLane,
@@ -925,6 +926,26 @@ async function handleOpenAIResponses(
 /** Provider Native execution stays behind its lane seam. The protocol owns
  * lifecycle observation and alias projection, never Provider credentials or
  * request construction. */
+function hasProviderNativeUpstreamCursorSemantics(
+  request: Request,
+  rawBody: string,
+): boolean {
+  if ((request.headers.get("last-event-id") ?? "").trim().length > 0) return true;
+  const startingAfter = new URL(request.url).searchParams.get("starting_after");
+  if (startingAfter !== null && startingAfter.trim().length > 0) return true;
+  try {
+    const parsed = JSON.parse(rawBody) as unknown;
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>).background === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function providerNativeBranch(
   dependencies: OpenAIResponsesDependencies,
   request: Request,
@@ -1069,11 +1090,78 @@ async function providerNativeBranch(
     observeProviderNativeTerminalResponse(journey, failureResponse, "failed");
     return failureResponse;
   }
+  // Provider Native Responses are fully buffered before any downstream
+  // byte is committed. Successful SSE responses may therefore be normalized
+  // into complete item chains while preserving the upstream commit order.
+  let body = upstream.body;
+  const contentType = upstream.headers["content-type"] ?? "";
+  if (
+    upstream.status >= 200 &&
+    upstream.status < 300 &&
+    contentType.toLowerCase().includes("text/event-stream")
+  ) {
+    const normalizeLocation = {
+      phase: "lane_response_processing",
+      lane: "provider_native",
+      step: "normalize_provider_native_lifecycle",
+    } as const;
+    enterResponsesJourneyStep(
+      journey,
+      "p5.normalize_provider_native_lifecycle",
+      normalizeLocation,
+    );
+    const normalized = normalizeNativeResponsesSse(body, {
+      upstreamCursorSemantics: hasProviderNativeUpstreamCursorSemantics(
+        request,
+        rawBody,
+      ),
+    });
+    if (normalized.kind === "normalized") {
+      body = normalized.body;
+      observeResponsesJourney(journey, {
+        kind: "conversion_notice_observed",
+        code: "provider_native_lifecycle_normalized",
+        severity: "info",
+        message: "Provider Native Responses lifecycle was normalized.",
+        location: normalizeLocation,
+      });
+      if (normalized.commitOrderDiffersFromOutputIndex) {
+        observeResponsesJourney(journey, {
+          kind: "conversion_notice_observed",
+          code: "item_commit_order_differs_from_output_index",
+          severity: "warning",
+          message:
+            "Provider Native item commit order differs from output index order; original commit order was preserved.",
+          location: normalizeLocation,
+        });
+      }
+      observeResponsesWireArtifact(journey, {
+        artifactId: "provider_native_lifecycle_normalized_wire",
+        artifactKind: "provider_native_lifecycle_normalized_wire",
+        bytes: body,
+        mediaType: contentType,
+        location: normalizeLocation,
+      });
+    } else if (normalized.kind === "skipped") {
+      observeResponsesJourney(journey, {
+        kind: "conversion_notice_observed",
+        code: "provider_native_lifecycle_normalization_skipped",
+        severity: "info",
+        message: normalized.reason,
+        location: normalizeLocation,
+      });
+    }
+    completeResponsesJourneyStep(
+      journey,
+      "p5.normalize_provider_native_lifecycle",
+      normalizeLocation,
+    );
+  }
+
   // Ticket 15 symmetry: a successful upstream response must expose the
   // requested alias, never the canonical model id. The buffered body is
   // projected before any byte is committed; an unprojectable shape fails
   // safely (no upstream bytes, no canonical identity).
-  let body = upstream.body;
   const preserveLocation = {
     phase: "lane_response_processing",
     lane: "provider_native",

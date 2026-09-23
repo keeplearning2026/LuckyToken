@@ -1,6 +1,6 @@
 # Provider Native Responses → Codex SSE Compatibility Investigation and Implementation Report
 
-Status: **research complete; implementation pending**
+Status: **historical research complete; implementation follows `../Spec/TokenProviderNativeResponsesLifecycleNormalizationPlan.md`**
 
 Scope: LuckyToken `/v1/responses` **Provider Native Preservation** path, with Codex CLI as the downstream client.
 

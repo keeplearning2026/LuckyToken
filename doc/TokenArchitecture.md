@@ -216,7 +216,7 @@ Semantic Conversion: Client Wire ↔ Client Protocol ↔ Pi ↔ Provider ↔ Ups
 - Anthropic/OpenAI conversion 模块可以依赖 Pi types，但不能 import、命名或判断 concrete Provider；
 - CommandCode Provider 可以依赖 Pi types，但不能 import、命名或判断 Client Protocol；
 - Direct Mode 与 Provider Native 不进入 Pi AI IR，也不共享 credential/transport/executor authority；
-- native lane 以 compatible raw Client Wire 为 authority，只做 endpoint、auth、header filtering、identity projection 等 preservation 必要变化；
+- native lane 以 compatible raw Client Wire 为 authority，只做 endpoint、auth、header filtering、identity projection 等 preservation 必要变化；Provider Native `/v1/responses` 的成功 SSE 在完整缓冲后还允许一项窄 lifecycle normalization：按原始 `output_item.done`/global 骨架，在各自 done 位置展开完整 item chain；`output_index` 只做归属/一致性校验，不参与排序；unchanged/skipped 保留原始 body，游标续传语义跳过规范化；
 - `sessionId`、`AbortSignal` 等可以作为窄 infrastructure/request facts，但不会形成第二套通用 request DTO；
 - composition root 可以看见各 lane seam 并进行选择/注入，但不做跨侧语义转换；
 - lane 一旦开始执行，failure 不得 fallback 到另一个 lane。
@@ -258,7 +258,7 @@ flowchart LR
 | Transport/Runtime | `server.ts`, `runtime.ts`, `http.ts`, `settings/runtime.ts` | TCP、Node/Web 类型适配、route、协议启停 gate、取消、timeout、response delivery | Anthropic 字段、Pi message、Provider 配置 |
 | Credential/security authorities | `credentials/`, Application Control Plane capability | Provider credential mutation/status、management capability authentication | Codex caller credential（由 Direct Mode wire 自己保存）、Client/Provider semantic conversion |
 | Anthropic adapter | `src/protocols/anthropic/` | Anthropic Wire ↔ Pi，Anthropic error/JSON/SSE | CommandCode 协议与 Provider 决策 |
-| OpenAI Responses adapter | `src/protocols/openai-responses/` | Responses Wire ↔ Pi（独立语义转换/执行协调/推理/continuity），Responses error/JSON/Atomic SSE | CommandCode 协议与 Provider 决策 |
+| OpenAI Responses adapter | `src/protocols/openai-responses/` | Responses Wire ↔ Pi（独立语义转换/执行协调/推理/continuity），Responses error/JSON/Atomic SSE；Provider Native 成功 SSE 的 identity projection 与 preservation-first item-chain lifecycle normalization | CommandCode 协议与 Provider 决策 |
 | Pi integration/composition | `src/providers/`, `src/composition.ts`, `src/cli-config.ts`, `src/cli.ts` | 配置加载、Pi Models、Provider 注册、credential persistence、进程装配 | 两侧协议转换语义 |
 | CommandCode model capability catalog | `packages/commandcode-model-catalog/` + startup `commandcode-models.json` | 启动时加载/校验两个 CommandCode Provider 共用的模型事实；按 `supportedEndpoints` 选择唯一 Pi API；price-free Pi Model projection | Provider identity、credential、transport、wire lifecycle |
 | CommandCode Private Provider Package | `packages/provider-commandcode-private/` | Pi ↔ CommandCode Private、fixed runtime compatibility config、HTTP attempts、JSONL lifecycle | Goat/OpenAI Completions transport、Client Protocol 格式与 Core 注册策略 |
@@ -2444,7 +2444,9 @@ npm run test:online-claude -- 1
 ```
 
 （当前 Codex runner 每个 Provider 为 22 个场景；Private 认证 Semantic Conversion，
-Goat 认证 Provider Native Preservation。Claude 的 `-- 1` 仍为单批 17 个场景。
+Goat 认证 Provider Native Preservation。Goat/Private 的 Codex gate 还禁止四类 `without active item`
+lifecycle diagnostic；Provider Native item-chain 的本地隔离回放额外认证 reverse-done、global+done
+骨架、reasoning→message overlap，以及多工具 argument consumer + 下一轮 history replay。Claude 的 `-- 1` 仍为单批 17 个场景。
 历史 conformance 记录继续作为历史证据，不替代当前双 Provider Codex gate。）
 
 涉及协议、Pi revision、Provider model/endpoint、request identity、credential authority、

@@ -1,6 +1,6 @@
 # Provider Native Responses 生命周期规范化修改计划
 
-状态：**PLANNED — 设计已确定，生产实现尚未开始**
+状态：**COMPLETED / REVIEWED — 生产实现、Private/Goat 在线认证、真实 Codex replay、完整仓库回归与 code-review 均已完成**
 日期：2026-09-23
 
 ## 1. 目标与证据
@@ -299,3 +299,34 @@ ReasoningRawContentDelta without active item
 - 真实 CLI 回放验证已认证场景的最终消息、reasoning、工具、后续历史以及零 lifecycle diagnostics。
 - Private/Goat 在线认证与仓库门禁完成；任何未完成部分明确列出。
 - 诊断非干扰得到验证；未改 Pi/Codex，也未触碰用户 Codex 状态。
+
+## 9. 实施与最终审查记录
+
+2026-09-23 已完成生产实现与最终 code-review。实现保持本规范冻结的单一算法：
+global 与 `response.output_item.done` 共同形成原序骨架，每条完整 item chain 在其原始
+done 位置展开；`output_index` 只用于身份和一致性校验，不参与排序。
+
+最终 review 额外发现并修复了三个真实边界问题：
+
+1. `[DONE]` 必须按 terminal record 处理，不能让尚未闭合的 item chain 被展开到其后；
+2. background / upstream cursor 语义即使遇到本来已经串行的 SSE，也必须返回
+   `skipped/upstream_cursor_semantics`，不能先归类为 `unchanged`；
+3. 嵌套 `item.id` 的重复关键属性属于身份歧义，必须在结构分析阶段返回
+   `skipped/invalid_sse_structure`，不能依赖 JSON parser 的最后值覆盖。
+
+审查后的验证结果：
+
+- normalizer pure seam：23/23；
+- Provider Native contract/projection + Journey/non-interference 定向集合：68/68；
+- `npm run typecheck`：PASS；
+- `npm run lint`：PASS；
+- `git diff --check`：PASS（只有工作区行尾转换提示）；
+- 真实 Codex CLI 0.149.0 production replay：reverse-done、global+done、
+  reasoning/message overlap、tool/history overlap 均完成，最终消息保持原 done 行为，
+  四类 forbidden lifecycle diagnostics 为 0；
+- Private/Goat 在线 Codex 认证已按 lifecycle hard gate 完成；
+- 两次较早的完整 `npm test` 重跑分别只在与本任务无关的 lifecycle timing 测试上超时：
+  `backend-application.test.ts` 一次 5 秒超时，`cli-ownership.test.ts` 一次 30 秒
+  descriptor 超时；两者随后隔离重跑分别 13/13、9/9 通过；
+- 最终完整 `npm test` 再次重跑返回 exit code 0：仓库 Vitest 269 files / 2337 tests
+  全通过，Desktop 20 files / 112 tests 全通过。

@@ -6,6 +6,10 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, isAbsolute } from "node:path";
 
+import { normalizeNativeResponsesSse } from "../../src/protocols/openai-responses/native-sse-lifecycle-normalizer.ts";
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 const root = await mkdtemp(join(tmpdir(), "Token-item-chain-replay-"));
 const cli = join(process.env.APPDATA, "npm", "node_modules", "@openai", "codex", "bin", "codex.js");
 const message = (id, text, status = "completed") => ({
@@ -54,13 +58,36 @@ try {
   await mkdir(versionHome);
   const version = await run(["--version"], root, versionHome);
   console.log(version.stdout.trim());
+  const wireFor = events =>
+    [{ type: "response.created", response: { id: "resp_replay", status: "in_progress" } }, ...events, terminal]
+      .map((event, sequence_number) => `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number })}\n\n`)
+      .join("");
+  const normalize = source => {
+    const result = normalizeNativeResponsesSse(encoder.encode(source));
+    assert.equal(result.kind, "normalized");
+    return decoder.decode(result.body);
+  };
+  const orderedOverlap = wireFor([
+    chainA[0],
+    chainA[1],
+    chainB[0],
+    chainA[2],
+    chainB[1],
+    chainB[2],
+  ]);
+  const reverseOverlap = wireFor([
+    chainA[0],
+    ...chainB,
+    chainA[1],
+    chainA[2],
+  ]);
   const cases = [
-    ["overlap_index_ordered_done", [chainA[0], chainA[1], chainB[0], chainA[2], chainB[1], chainB[2]], "ANSWER_B", 1],
-    ["overlap_reverse_done", [chainA[0], ...chainB, chainA[1], chainA[2]], "ANSWER_A", 1],
-    ["serialized_by_index", [...chainA, ...chainB], "ANSWER_B", 0],
-    ["serialized_by_done", [...chainB, ...chainA], "ANSWER_A", 0],
+    ["overlap_index_ordered_done", orderedOverlap, "ANSWER_B", 1],
+    ["normalized_by_production_index_ordered_done", normalize(orderedOverlap), "ANSWER_B", 0],
+    ["overlap_reverse_done", reverseOverlap, "ANSWER_A", 1],
+    ["normalized_by_production_reverse_done", normalize(reverseOverlap), "ANSWER_A", 0],
   ];
-  for (const [name, events, expectedFinal, expectedWarnings] of cases) {
+  for (const [name, caseWire, expectedFinal, expectedWarnings] of cases) {
     const directory = join(root, name);
     const codexHome = join(directory, "codex-home");
     await mkdir(codexHome, { recursive: true });
@@ -70,8 +97,7 @@ try {
       `base_url = "${baseUrl}"`, 'wire_api = "responses"', 'requires_openai_auth = false',
     ].join("\n"));
     const output = join(directory, "final.txt");
-    wire = [{ type: "response.created", response: { id: "resp_replay", status: "in_progress" } }, ...events, terminal]
-      .map((event, sequence_number) => `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number })}\n\n`).join("");
+    wire = caseWire;
     const result = await run(["exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-o", output, "Reply with a short answer. Do not use tools."], directory, codexHome);
     const final = await readFile(output, "utf8").catch(() => "");
     const warnings = (result.stderr.match(/OutputTextDelta without active item/g) ?? []).length;

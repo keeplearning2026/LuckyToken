@@ -29,6 +29,7 @@ import {
   startTokenHttpServer,
   type RunningTokenHttpServer,
 } from "../../src/server.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 
 const REQUEST_ID = "64000000-0000-4000-8000-000000000001";
 const SESSION_ID = "64000000-0000-4000-8000-000000000002";
@@ -859,6 +860,314 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         UPSTREAM_COOKIE,
       ]) {
         expect(persistedBytes.includes(Buffer.from(secret))).toBe(false);
+      }
+    } finally {
+      await Promise.allSettled([
+        server?.close() ?? Promise.resolve(),
+        authority?.close() ?? Promise.resolve(),
+      ]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("captures normalized Provider Native lifecycle evidence without changing the successful outcome", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "Token-openai-provider-native-normalization-"),
+    );
+    const diagnosticsDirectory = join(root, "diagnostics");
+    let authority: DiagnosticsManagementAuthority | undefined;
+    let server: RunningTokenHttpServer | undefined;
+    const requestId = "64000000-0000-4000-8000-000000000011";
+
+    try {
+      authority = await createDiagnosticsAuthority({
+        configuration: parseDiagnosticsConfiguration(
+          { directory: diagnosticsDirectory },
+          root,
+        ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
+      });
+      let resolveClosed!: () => void;
+      const closed = new Promise<void>((resolve) => {
+        resolveClosed = resolve;
+      });
+      const latchedAuthority: RequestJourneyObservationAuthority = {
+        begin: (input) => {
+          const observer = authority!.begin(input);
+          return {
+            requestId: observer.requestId,
+            observe: (observation) => observer.observe(observation),
+            close: (closeInput) => {
+              observer.close(closeInput);
+              resolveClosed();
+            },
+          };
+        },
+        observeRuntime: (input) => authority!.observeRuntime(input),
+      };
+
+      const model = openAIModel();
+      const models = {
+        getModels: () => [model],
+        getAuth: async () => ({ auth: { apiKey: "provider-normalization-key" } }),
+      } as unknown as Models;
+      const upstreamSse =
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":2,"output_index":1,"item_id":"msg_b","content_index":0,"delta":"B"}\n\n' +
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[{"type":"output_text","text":"B","annotations":[]}]}}\n\n' +
+        'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","sequence_number":4,"output_index":0,"item_id":"msg_a","content_index":0,"delta":"A"}\n\n' +
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[{"type":"output_text","text":"A","annotations":[]}]}}\n\n' +
+        'event: response.completed\ndata: {"type":"response.completed","sequence_number":6,"response":{"id":"resp_normalized","status":"completed","model":"gpt-native","output":[]}}\n\n';
+      const providerNativeLane = createProviderNativeResponses({
+        models,
+        bindings: ambientProfileBindings,
+        fetch: async () =>
+          new Response(upstreamSse, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+      });
+      const handler = createOpenAIResponsesHandler({
+        models,
+        providerNativeLane,
+        stateFile: join(root, "responses-state.json"),
+        maxRequestBytes: 8_192,
+        createSessionId: () => SESSION_ID,
+        now: () => 1_788_000_000_000,
+      });
+      const runtime = createTokenRuntime({ clientProtocols: [handler] });
+      server = await startTokenHttpServer({
+        runtime,
+        diagnostics: latchedAuthority,
+        createRequestId: () => requestId,
+        port: 0,
+      });
+
+      const response = await fetch(`${server.origin}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai/gpt-native",
+          input: "hi",
+          stream: true,
+        }),
+      });
+      const responseBody = await response.text();
+      await closed;
+
+      expect(response.status).toBe(200);
+      expect(responseBody.indexOf('"msg_b"')).toBeLessThan(
+        responseBody.indexOf('"msg_a"'),
+      );
+
+      const detail = await authority.getRequestJourney({ requestId });
+      const observations = detail.timeline.map((event) => event.observation);
+      expect(
+        completedStep(
+          observations,
+          "p5.normalize_provider_native_lifecycle",
+        ),
+      ).toMatchObject({
+        completion: "success",
+        location: {
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "normalize_provider_native_lifecycle",
+        },
+      });
+      expect(observations).toContainEqual(
+        expect.objectContaining({
+          kind: "conversion_notice_observed",
+          code: "provider_native_lifecycle_normalized",
+          severity: "info",
+        }),
+      );
+      expect(observations).toContainEqual(
+        expect.objectContaining({
+          kind: "conversion_notice_observed",
+          code: "item_commit_order_differs_from_output_index",
+          severity: "warning",
+        }),
+      );
+      expect(detail.artifacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            artifactId: "provider_native_upstream_response_wire.1",
+            artifactKind: "provider_native_upstream_response_wire",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_lifecycle_normalized_wire",
+            artifactKind: "provider_native_lifecycle_normalized_wire",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_preserved_response_wire",
+            artifactKind: "provider_native_preserved_response_wire",
+            state: "captured",
+          }),
+        ]),
+      );
+      expect(detail.incident).toBeUndefined();
+    } finally {
+      await Promise.allSettled([
+        server?.close() ?? Promise.resolve(),
+        authority?.close() ?? Promise.resolve(),
+      ]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists Provider Native lifecycle normalization notices and wire evidence", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "Token-openai-provider-native-normalized-journey-"),
+    );
+    const diagnosticsDirectory = join(root, "diagnostics");
+    let authority: DiagnosticsManagementAuthority | undefined;
+    let server: RunningTokenHttpServer | undefined;
+
+    try {
+      authority = await createDiagnosticsAuthority({
+        configuration: parseDiagnosticsConfiguration(
+          { directory: diagnosticsDirectory },
+          root,
+        ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
+      });
+
+      const model = openAIModel();
+      const models = {
+        getModels: () => [model],
+        getAuth: async () => ({
+          auth: { apiKey: PROVIDER_TOKEN_A },
+          source: "fixture",
+        }),
+      } as unknown as Models;
+
+      const upstreamSse =
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+        'event: response.metadata\ndata: {"type":"response.metadata","sequence_number":1,"marker":"between"}\n\n' +
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+      const expectedNormalized =
+        'event: response.metadata\ndata: {"type":"response.metadata","sequence_number":0,"marker":"between"}\n\n' +
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+        'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+
+      const providerNativeLane = createProviderNativeResponses({
+        models,
+        bindings: ambientProfileBindings,
+        fetch: async () =>
+          new Response(upstreamSse, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+      });
+      const handler = createOpenAIResponsesHandler({
+        models,
+        providerNativeLane,
+        stateFile: join(root, "responses-state.json"),
+        maxRequestBytes: 8_192,
+        createSessionId: () => SESSION_ID,
+        createResponseId: () => "resp_unused",
+        now: () => 1_788_000_000_000,
+      });
+      const runtime = createTokenRuntime({ clientProtocols: [handler] });
+      server = await startTokenHttpServer({
+        runtime,
+        diagnostics: authority,
+        createRequestId: () => REQUEST_ID,
+        port: 0,
+      });
+
+      const response = await fetch(`${server.origin}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai/gpt-native",
+          input: "normalize",
+          stream: true,
+        }),
+      });
+      expect(response.status).toBe(200);
+      await expect(response.text()).resolves.toBe(expectedNormalized);
+
+      const detail = await authority.getRequestJourney({
+        requestId: REQUEST_ID,
+      });
+      const observations = detail.timeline.map((event) => event.observation);
+      expect(
+        completedStep(observations, "p5.normalize_provider_native_lifecycle"),
+      ).toMatchObject({
+        completion: "success",
+        location: {
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "normalize_provider_native_lifecycle",
+        },
+      });
+      expect(observations).toContainEqual(
+        expect.objectContaining({
+          kind: "conversion_notice_observed",
+          code: "provider_native_lifecycle_normalized",
+          severity: "info",
+        }),
+      );
+      expect(observations).toContainEqual(
+        expect.objectContaining({
+          kind: "conversion_notice_observed",
+          code: "item_commit_order_differs_from_output_index",
+          severity: "warning",
+        }),
+      );
+      expect(detail.artifacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            artifactId: "provider_native_upstream_response_wire.1",
+            artifactKind: "provider_native_upstream_response_wire",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_lifecycle_normalized_wire",
+            artifactKind: "provider_native_lifecycle_normalized_wire",
+            state: "captured",
+          }),
+          expect.objectContaining({
+            artifactId: "provider_native_preserved_response_wire",
+            artifactKind: "provider_native_preserved_response_wire",
+            state: "captured",
+          }),
+        ]),
+      );
+
+      for (const [artifactId, expected] of [
+        ["provider_native_upstream_response_wire.1", upstreamSse],
+        ["provider_native_lifecycle_normalized_wire", expectedNormalized],
+        ["provider_native_preserved_response_wire", expectedNormalized],
+      ] as const) {
+        const artifact = await authority.getRequestArtifact({
+          requestId: REQUEST_ID,
+          artifactId,
+          offset: 0,
+          limit: 256 * 1_024,
+        });
+        expect(
+          Buffer.from(artifact.dataBase64, "base64").toString("utf8"),
+        ).toBe(expected);
       }
     } finally {
       await Promise.allSettled([

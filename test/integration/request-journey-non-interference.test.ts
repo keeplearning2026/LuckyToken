@@ -1,13 +1,17 @@
-import type { FetchFunction } from "@earendil-works/pi-ai";
+import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { RequestJourneyObservationAuthority } from "../../src/diagnostics/index.js";
+import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
+import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
+import { createTokenRuntime } from "../../src/runtime.js";
 import {
   startTokenHttpServer,
   type RunningTokenHttpServer,
 } from "../../src/server.js";
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
+import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
 
 const REQUEST_ID = "30000000-0000-4000-8000-000000000001";
 const SESSION_ID = "30000000-0000-4000-8000-000000000002";
@@ -141,6 +145,132 @@ describe("Request Journey diagnostics non-interference", () => {
       },
     };
   }
+
+  async function runProviderNativeResponsesExchange(
+    diagnostics?: RequestJourneyObservationAuthority,
+  ): Promise<ExchangeSnapshot> {
+    const route: Array<{ method: string; pathname: string }> = [];
+    const outbound: OutboundSnapshot[] = [];
+    const model: Model<string> = {
+      id: "gpt-native",
+      name: "GPT Native",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://provider.example.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    };
+    const models = {
+      getModels: () => [model],
+      getAuth: async () => ({ auth: { apiKey: "provider-key" } }),
+    } as unknown as Models;
+    const upstreamSse =
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":0,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.added\ndata: {"type":"response.output_item.added","sequence_number":1,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"in_progress","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"type":"message","id":"msg_b","role":"assistant","status":"completed","content":[]}}\n\n' +
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"type":"message","id":"msg_a","role":"assistant","status":"completed","content":[]}}\n\n';
+    const providerFetch: FetchFunction = async (input, init) => {
+      const request = new Request(input, init);
+      outbound.push({
+        url: request.url,
+        method: request.method,
+        headers: sortedHeaders(request.headers),
+        bodyBase64: Buffer.from(await request.arrayBuffer()).toString("base64"),
+      });
+      return new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    };
+    const handler = createOpenAIResponsesHandler({
+      models,
+      providerNativeLane: createProviderNativeResponses({
+        models,
+        bindings: ambientProfileBindings,
+        fetch: providerFetch,
+      }),
+      stateFile: "provider-native-non-interference-state.json",
+      maxRequestBytes: 1_000_000,
+      createSessionId: () => SESSION_ID,
+      createResponseId: () => "resp_unused",
+      now: () => 1_787_472_000_000,
+    });
+    const servingRuntime = createTokenRuntime({
+      clientProtocols: [handler],
+    });
+    const runtime = {
+      routes: servingRuntime.routes,
+      handle: (...args: Parameters<typeof servingRuntime.handle>) => {
+        const [request] = args;
+        route.push({
+          method: request.method,
+          pathname: new URL(request.url).pathname,
+        });
+        return servingRuntime.handle(...args);
+      },
+    };
+    const server = await startTokenHttpServer({
+      runtime,
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+      createRequestId: () => REQUEST_ID,
+      port: 0,
+    });
+    servers.push(server);
+
+    const response = await fetch(`${server.origin}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "openai/gpt-native",
+        input: "normalize without interference",
+        stream: true,
+      }),
+    });
+    const responseBody = Buffer.from(await response.arrayBuffer());
+
+    return {
+      route,
+      outbound,
+      response: {
+        status: response.status,
+        headers: sortedHeaders(response.headers, new Set(["date"])),
+        bodyBase64: responseBody.toString("base64"),
+      },
+    };
+  }
+
+  it("keeps the Provider Native normalized HTTP exchange identical when observation throws", async () => {
+    const baseline = await runProviderNativeResponsesExchange();
+    expect(baseline.response.status).toBe(200);
+    expect(baseline.route).toEqual([
+      { method: "POST", pathname: "/v1/responses" },
+    ]);
+
+    let observeReached = false;
+    const throwingObserverAuthority: RequestJourneyObservationAuthority = {
+      begin: (input) => ({
+        requestId: input.requestId,
+        observe: () => {
+          observeReached = true;
+          throw new Error(`${DIAGNOSTICS_CANARY}-responses-observe`);
+        },
+        close: () => {
+          throw new Error(`${DIAGNOSTICS_CANARY}-responses-close`);
+        },
+      }),
+      observeRuntime: () => undefined,
+    };
+
+    const faulted = await runProviderNativeResponsesExchange(
+      throwingObserverAuthority,
+    );
+    expect(observeReached).toBe(true);
+    expect(faulted).toEqual(baseline);
+    expect(JSON.stringify(faulted)).not.toContain(DIAGNOSTICS_CANARY);
+  });
 
   it("keeps the real HTTP exchange identical when the authority or observer throws", async () => {
     const baseline = await runExchange();

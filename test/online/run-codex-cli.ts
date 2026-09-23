@@ -84,6 +84,12 @@ const DEFAULT_CONCURRENCY = 1;
 const REQUEST_TIMEOUT_MS = 120_000;
 const SUITE_TIMEOUT_MS = 45 * 60_000;
 const CODEX_EXEC_TIMEOUT_MS = 90_000;
+const FORBIDDEN_CODEX_LIFECYCLE_DIAGNOSTICS = Object.freeze([
+  "OutputTextDelta without active item",
+  "ReasoningSummaryDelta without active item",
+  "ReasoningSummaryPartAdded without active item",
+  "ReasoningRawContentDelta without active item",
+] as const);
 
 const CODEX_PROFILE = "Token";
 const CODEX_PROMPT_ENV_KEY = "TOKEN_API_KEY";
@@ -891,6 +897,13 @@ function assertCodexResult(
   minimumRequiredItems = 1,
   requireFailedCommand = false,
 ): void {
+  if (
+    FORBIDDEN_CODEX_LIFECYCLE_DIAGNOSTICS.some((diagnostic) =>
+      result.stderr.includes(diagnostic),
+    )
+  ) {
+    throw new Error("codex_lifecycle_diagnostic");
+  }
   if (result.timedOut) {
     throw new Error("codex_exec_timeout");
   }

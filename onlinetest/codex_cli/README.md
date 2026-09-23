@@ -26,6 +26,30 @@ The Private run exercises the Codex/OpenAI Responses client contract through
 Semantic Conversion. The Goat run exercises the same real client through
 Provider Native Preservation.
 
+For both Providers, a scenario fails if Codex stderr contains any of the known
+active-item lifecycle diagnostics:
+
+```text
+OutputTextDelta without active item
+ReasoningSummaryDelta without active item
+ReasoningSummaryPartAdded without active item
+ReasoningRawContentDelta without active item
+```
+
+Provider Native lifecycle normalization is also certified locally with the real
+Codex CLI while routing the synthetic upstream SSE through the production
+Provider Native handler/normalizer:
+
+```powershell
+node scripts/run-with-codex-test-sandbox.mjs -- npx tsx test/online/run-provider-native-item-chain-replay.ts
+```
+
+That replay preserves the original `response.output_item.done` commit order,
+keeps independent global events in the global+done skeleton, and verifies
+reverse-index done order, reasoning/message overlap, and an interleaved
+multi-tool argument round-trip whose second request must contain the expected
+tool outputs/history. All certified cases require zero lifecycle warnings.
+
 The matrix includes `tool_schema_model_property`. The isolated Codex home
 starts a test-only stdio MCP server whose advertised tool schema contains:
 
