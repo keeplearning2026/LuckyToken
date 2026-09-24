@@ -90,3 +90,108 @@ export function redactMessage(message: string): string {
   if (redacted.length <= MAX_ERROR_MESSAGE_LENGTH) return redacted;
   return `${redacted.slice(0, MAX_ERROR_MESSAGE_LENGTH)}…`;
 }
+
+const MAX_UPSTREAM_ERROR_BODY_BYTES = 65_536;
+const MAX_ERROR_ENVELOPE_DEPTH = 4;
+const textEncoder = new TextEncoder();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractMessageProperty(value: string): string | undefined {
+  const match = /"message"\s*:\s*"((?:\\.|[^"\\])*)"/u.exec(value);
+  const encoded = match?.[1];
+  if (encoded === undefined) return undefined;
+  try {
+    const decoded = JSON.parse(`"${encoded}"`) as unknown;
+    return typeof decoded === "string" ? decoded : undefined;
+  } catch {
+    return encoded;
+  }
+}
+
+function extractErrorMessage(value: unknown, depth: number): string | undefined {
+  if (depth > MAX_ERROR_ENVELOPE_DEPTH) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return undefined;
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return extractErrorMessage(JSON.parse(trimmed), depth + 1);
+      } catch {
+        return extractMessageProperty(trimmed);
+      }
+    }
+    return trimmed;
+  }
+  if (!isRecord(value)) return undefined;
+  const error = value.error;
+  if (typeof error === "string") {
+    const nested = extractErrorMessage(error, depth + 1);
+    if (nested !== undefined) return nested;
+  }
+  if (isRecord(error)) {
+    const nested = extractErrorMessage(error.message, depth + 1);
+    if (nested !== undefined) return nested;
+    const code = extractErrorMessage(error.code, depth + 1);
+    if (code !== undefined) return code;
+  }
+  const message = extractErrorMessage(value.message, depth + 1);
+  if (message !== undefined) return message;
+  return extractErrorMessage(value.code, depth + 1);
+}
+
+function sanitizeUpstreamErrorMessage(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function boundUtf8(value: string, maximumBytes: number): string {
+  if (textEncoder.encode(value).byteLength <= maximumBytes) return value;
+  const suffix = "…";
+  const suffixBytes = textEncoder.encode(suffix).byteLength;
+  let end = value.length;
+  while (
+    end > 0 &&
+    textEncoder.encode(value.slice(0, end)).byteLength + suffixBytes >
+      maximumBytes
+  ) {
+    end -= 1;
+  }
+  return `${value.slice(0, end)}${suffix}`;
+}
+
+/**
+ * Extract a bounded, credential-redacted upstream error summary from an
+ * already-buffered Provider response. The returned value is safe for local
+ * Request Journey diagnosis; it never returns upstream bytes or metadata.
+ */
+export function extractSafeUpstreamErrorMessage(
+  body: Uint8Array,
+  status: number,
+): string {
+  const fallback = `Upstream provider returned HTTP ${status}.`;
+  if (body.byteLength === 0 || body.byteLength > MAX_UPSTREAM_ERROR_BODY_BYTES) {
+    return fallback;
+  }
+  const text = new TextDecoder().decode(body).trim();
+  if (text.length === 0) return fallback;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = text;
+  }
+  const extracted = extractErrorMessage(parsed, 0);
+  if (extracted === undefined) return fallback;
+  const cleaned = redactMessage(sanitizeUpstreamErrorMessage(extracted));
+  if (cleaned.length === 0) return fallback;
+  const suffix = /[.!?]$/u.test(cleaned) ? "" : ".";
+  return boundUtf8(
+    `Upstream provider returned HTTP ${status}: ${cleaned}${suffix}`,
+    MAX_ERROR_MESSAGE_LENGTH,
+  );
+}

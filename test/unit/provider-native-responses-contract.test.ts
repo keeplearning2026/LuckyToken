@@ -486,6 +486,115 @@ describe("Provider Native Responses contract", () => {
     );
   });
 
+  it("records a safe upstream HTTP failure for alias errors without leaking bytes", async () => {
+    const model = responsesModel();
+    const alias = "public/gpt-native";
+    const publicModels: PublicModelSource = {
+      requestSnapshot: async () =>
+        ({
+          resolve: (selector: string) =>
+            selector === alias
+              ? { providerId: model.provider, modelId: model.id }
+              : undefined,
+        }) as never,
+    };
+    const recorded = recordingJourney();
+    const upstreamBody = JSON.stringify({
+      error: {
+        message: JSON.stringify({
+          error: {
+            message: "Request Entity Too Large",
+            type: "AI_APICallError",
+          },
+          providerMetadata: {
+            gateway: {
+              routing: {
+                originalModelId: "deepseek/deepseek-v4.1-flash",
+                resolvedProvider: "deepseek",
+                canonicalSlug: "deepseek/deepseek-v4.1-flash",
+              },
+            },
+          },
+        }),
+        type: "server_error",
+      },
+    });
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamBody, {
+        status: 413,
+        headers: { "content-type": "application/json" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, recorded.authority, publicModels),
+      request(JSON.stringify({ model: alias, input: "hi" })),
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(body).toContain("Upstream provider failed");
+    expect(body).not.toContain("Request Entity Too Large");
+    expect(body).not.toContain("deepseek");
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "failure_detected",
+        role: "primary",
+        classification: "provider_http_413",
+        origin: "provider",
+        originPrecision: "external_boundary",
+        safeMessage:
+          "Upstream provider returned HTTP 413: Request Entity Too Large.",
+        location: expect.objectContaining({
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "preserve_provider_response",
+          attempt: 1,
+        }),
+      }),
+    );
+  });
+
+  it("records a safe upstream HTTP failure for non-alias errors", async () => {
+    const model = responsesModel();
+    const recorded = recordingJourney();
+    const upstreamBody = JSON.stringify({
+      error: {
+        message: "Invalid input",
+        type: "invalid_request_error",
+        param: "input",
+      },
+    });
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamBody, {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, recorded.authority),
+      request(JSON.stringify({ model: "openai/gpt-5", input: "hi" })),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toBe(upstreamBody);
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "failure_detected",
+        role: "primary",
+        classification: "provider_http_400",
+        origin: "provider",
+        originPrecision: "external_boundary",
+        safeMessage: "Upstream provider returned HTTP 400: Invalid input.",
+        location: expect.objectContaining({
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "preserve_provider_response",
+          attempt: 1,
+        }),
+      }),
+    );
+  });
+
   it("normalizes interleaved Provider Native SSE and records bounded lifecycle observations", async () => {
     const model = responsesModel();
     const recorded = recordingJourney();

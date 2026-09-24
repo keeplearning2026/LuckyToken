@@ -25,6 +25,7 @@ import {
 import { parseProviderNativeResponsesConfiguration } from "../../src/provider-native-responses/configuration.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createTokenRuntime } from "../../src/runtime.js";
+import { handleHttpRequest } from "../../src/http.js";
 import {
   startTokenHttpServer,
   type RunningTokenHttpServer,
@@ -143,6 +144,145 @@ function completedStep(
 }
 
 describe("OpenAI Responses Provider Native Request Journey", () => {
+  it("persists a safe upstream HTTP diagnosis for Overview without exposing alias error bytes", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "Token-openai-provider-native-upstream-error-"),
+    );
+    const diagnosticsDirectory = join(root, "diagnostics");
+    let authority: DiagnosticsManagementAuthority | undefined;
+    const requestId = "64000000-0000-4000-8000-000000000021";
+
+    try {
+      authority = await createDiagnosticsAuthority({
+        configuration: parseDiagnosticsConfiguration(
+          { directory: diagnosticsDirectory },
+          root,
+        ),
+        journeyCapturePolicy: {
+          snapshot: () => Object.freeze({
+            allRequestsEnabled: true,
+            failedRequestsEnabled: true,
+          }),
+        },
+      });
+      let resolveClosed!: () => void;
+      const closed = new Promise<void>((resolve) => {
+        resolveClosed = resolve;
+      });
+      const latchedAuthority: RequestJourneyObservationAuthority = {
+        begin: (input) => {
+          const observer = authority!.begin(input);
+          return {
+            requestId: observer.requestId,
+            observe: (observation) => observer.observe(observation),
+            close: (closeInput) => {
+              observer.close(closeInput);
+              resolveClosed();
+            },
+          };
+        },
+        observeRuntime: (input) => authority!.observeRuntime(input),
+      };
+
+      const model = openAIModel();
+      const alias = "public/gpt-native";
+      const models = {
+        getModels: () => [model],
+        getAuth: async () => ({ auth: { apiKey: PROVIDER_TOKEN_A } }),
+      } as unknown as Models;
+      const publicModels = {
+        requestSnapshot: async () =>
+          ({
+            resolve: (selector: string) =>
+              selector === alias
+                ? { providerId: model.provider, modelId: model.id }
+                : undefined,
+          }) as never,
+      };
+      const upstreamBody = JSON.stringify({
+        error: {
+          message: JSON.stringify({
+            error: {
+              message: "Request Entity Too Large",
+              type: "AI_APICallError",
+            },
+            providerMetadata: {
+              gateway: {
+                routing: {
+                  originalModelId: "deepseek/deepseek-v4.1-flash",
+                  resolvedProvider: "deepseek",
+                  canonicalSlug: "deepseek/deepseek-v4.1-flash",
+                },
+              },
+            },
+          }),
+          type: "server_error",
+        },
+      });
+      const handler = createOpenAIResponsesHandler({
+        models,
+        providerNativeLane: createProviderNativeResponses({
+          models,
+          bindings: ambientProfileBindings,
+          fetch: async () =>
+            new Response(upstreamBody, {
+              status: 413,
+              headers: { "content-type": "application/json" },
+            }),
+        }),
+        publicModels,
+        stateFile: join(root, "responses-state.json"),
+        maxRequestBytes: 8_192,
+        createSessionId: () => SESSION_ID,
+        now: () => 1_788_000_000_000,
+      });
+
+      const response = await handleHttpRequest(
+        {
+          clientProtocols: [handler],
+          requestTimeoutMs: undefined,
+          shutdownSignal: undefined,
+          diagnostics: latchedAuthority,
+          createRequestId: () => requestId,
+        },
+        new Request("http://Token.test/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: alias, input: "hi" }),
+        }),
+      );
+      const body = await response.text();
+      await closed;
+
+      expect(response.status).toBe(502);
+      expect(body).toContain("Upstream provider failed");
+      expect(body).not.toContain("Request Entity Too Large");
+      expect(body).not.toContain("deepseek");
+
+      const detail = await authority.getRequestJourney({ requestId });
+      expect(detail.diagnosis).toEqual({
+        evidence: "observed",
+        classification: "provider_http_413",
+        safeMessage:
+          "Upstream provider returned HTTP 413: Request Entity Too Large.",
+        origin: "provider",
+        originPrecision: "external_boundary",
+        location: {
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "preserve_provider_response",
+          attempt: 1,
+        },
+      });
+      expect(detail.incident?.primaryFailureId).toBe(
+        `${requestId}:provider_http_413:1`,
+      );
+    } finally {
+      await authority?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the Responses native lane observable through final Profile exhaustion", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "Token-openai-provider-native-journey-"),

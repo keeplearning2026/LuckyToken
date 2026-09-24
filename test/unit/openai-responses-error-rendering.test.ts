@@ -5,6 +5,7 @@ import {
   renderResponsesErrorResponse,
 } from "../../src/protocols/openai-responses/response.js";
 import {
+  extractSafeUpstreamErrorMessage,
   mapUpstreamFailureFact,
   SAFE_RESPONSE_HEADERS,
 } from "../../src/protocols/openai-responses/error-rendering.js";
@@ -208,5 +209,83 @@ describe("OpenAI Responses neutral failure fact → error mapping", () => {
     expect(SAFE_RESPONSE_HEADERS).not.toContain("cookie");
     expect(SAFE_RESPONSE_HEADERS).not.toContain("connection");
     expect(SAFE_RESPONSE_HEADERS).not.toContain("set-cookie");
+  });
+});
+
+describe("OpenAI Responses safe upstream error summary", () => {
+  it("extracts a nested gateway error message without exposing routing metadata", () => {
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        error: {
+          message: JSON.stringify({
+            error: {
+              message: "Request Entity Too Large",
+              type: "AI_APICallError",
+            },
+            providerMetadata: {
+              gateway: {
+                routing: {
+                  originalModelId: "deepseek/deepseek-v4.1-flash",
+                  resolvedProvider: "deepseek",
+                  canonicalSlug: "deepseek/deepseek-v4.1-flash",
+                },
+              },
+            },
+          }),
+          type: "server_error",
+        },
+      }),
+    );
+
+    expect(extractSafeUpstreamErrorMessage(body, 413)).toBe(
+      "Upstream provider returned HTTP 413: Request Entity Too Large.",
+    );
+  });
+
+  it("extracts plain provider error text and removes control characters", () => {
+    const body = new TextEncoder().encode("  Invalid\ninput\u0000  ");
+    expect(extractSafeUpstreamErrorMessage(body, 400)).toBe(
+      "Upstream provider returned HTTP 400: Invalid input.",
+    );
+  });
+
+  it("recovers the error message from a truncated nested gateway envelope", () => {
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        error: {
+          message:
+            '{"error":{"message":"Request Entity Too Large","type":"AI_APICallError"},"providerMetadata":{"gateway":{"routing":{"canonicalSlug":"deepseek',
+          type: "server_error",
+        },
+      }),
+    );
+    expect(extractSafeUpstreamErrorMessage(body, 413)).toBe(
+      "Upstream provider returned HTTP 413: Request Entity Too Large.",
+    );
+  });
+
+  it("redacts credential-looking fragments from the upstream summary", () => {
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        error: {
+          message: "Bearer sk-secret-token-12345678 failed",
+        },
+      }),
+    );
+    const summary = extractSafeUpstreamErrorMessage(body, 401);
+    expect(summary).toContain("[REDACTED]");
+    expect(summary).not.toContain("sk-secret-token-12345678");
+  });
+
+  it("falls back to a bounded status summary for invalid or oversized bodies", () => {
+    expect(
+      extractSafeUpstreamErrorMessage(
+        new TextEncoder().encode("{"),
+        400,
+      ),
+    ).toBe("Upstream provider returned HTTP 400.");
+    expect(
+      extractSafeUpstreamErrorMessage(new Uint8Array(65_537), 413),
+    ).toBe("Upstream provider returned HTTP 413.");
   });
 });

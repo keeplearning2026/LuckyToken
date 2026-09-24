@@ -39,7 +39,10 @@ import {
   renderResponsesErrorResponse,
   type PreparedHttpResponse,
 } from "./response.js";
-import { mapUpstreamFailureFact } from "./error-rendering.js";
+import {
+  extractSafeUpstreamErrorMessage,
+  mapUpstreamFailureFact,
+} from "./error-rendering.js";
 import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { extractResponsesModelSelector } from "./request.js";
 import {
@@ -282,6 +285,26 @@ function observeResponsesWireArtifact(
     capturedBytes,
     truncated: capturedBytes < input.bytes.byteLength,
     location: input.location,
+  });
+}
+
+function observeProviderNativeHttpFailure(
+  journey: RequestJourneyObserver | undefined,
+  status: number,
+  body: Uint8Array,
+  attempt: number,
+  location: RequestJourneyLocation,
+): void {
+  const classification = `provider_http_${status}`;
+  observeResponsesJourney(journey, {
+    kind: "failure_detected",
+    failureId: `${journey?.requestId ?? "responses"}:${classification}:${attempt}`,
+    role: "primary",
+    classification,
+    origin: "provider",
+    originPrecision: "external_boundary",
+    safeMessage: extractSafeUpstreamErrorMessage(body, status),
+    location,
   });
 }
 
@@ -956,6 +979,7 @@ async function providerNativeBranch(
   const lane = dependencies.providerNativeLane;
   if (lane === undefined) throw new Error("Provider Native lane is unavailable");
   let finalAttempt = 1;
+  let physicalResponseObserved = false;
   const observation: ProviderResponsesObservationContext | undefined =
     journey === undefined
       ? undefined
@@ -965,6 +989,7 @@ async function providerNativeBranch(
           finalResponseAttempt: (attempt: number) => {
             if (Number.isSafeInteger(attempt) && attempt > 0) {
               finalAttempt = attempt;
+              physicalResponseObserved = true;
             }
           },
         };
@@ -1054,10 +1079,14 @@ async function providerNativeBranch(
     "p5.observe_provider_native_usage",
     usageLocation,
   );
+  const shouldObserveUpstreamHttpFailure =
+    physicalResponseObserved && upstream.status >= 400 && upstream.status !== 429;
   if (upstream.status >= 400 && alias !== undefined) {
     // Alias mode never forwards upstream error bytes: arbitrary upstream
     // error text or headers could name the canonical target. The client
-    // receives a legal fixed value-free error instead.
+    // receives a legal fixed value-free error instead. The local Request
+    // Journey still records a bounded safe upstream error summary for
+    // Overview and incident investigation.
     const failureResponse = toResponse(
       renderResponsesError(502, "api_error", "Upstream provider failed"),
     );
@@ -1071,6 +1100,15 @@ async function providerNativeBranch(
       "p5.preserve_provider_response",
       preserveLocation,
     );
+    if (shouldObserveUpstreamHttpFailure) {
+      observeProviderNativeHttpFailure(
+        journey,
+        upstream.status,
+        upstream.body,
+        finalAttempt,
+        { ...preserveLocation, attempt: finalAttempt },
+      );
+    }
     observeResponsesJourney(journey, {
       kind: "artifact_observed",
       artifactId: "provider_native_preserved_response_wire",
@@ -1166,6 +1204,15 @@ async function providerNativeBranch(
     "p5.preserve_provider_response",
     preserveLocation,
   );
+  if (shouldObserveUpstreamHttpFailure) {
+    observeProviderNativeHttpFailure(
+      journey,
+      upstream.status,
+      upstream.body,
+      finalAttempt,
+      { ...preserveLocation, attempt: finalAttempt },
+    );
+  }
   if (alias !== undefined) {
     const projected = projectNativeResponsesBody(
       body,

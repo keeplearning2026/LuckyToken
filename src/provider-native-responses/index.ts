@@ -66,11 +66,24 @@ function safeProfileId(
     : undefined;
 }
 
+const syntheticProviderResponses = new WeakSet<Response>();
+
+function syntheticErrorResponse(
+  status: number,
+  type: string,
+  message: string,
+): Response {
+  const response = errorResponse(status, type, message);
+  syntheticProviderResponses.add(response);
+  return response;
+}
+
 function finishObservedResponse(
   observation: ProviderResponsesObservationContext | undefined,
   response: Response,
   attempt: number,
 ): Response {
+  if (syntheticProviderResponses.has(response)) return response;
   try {
     observation?.finalResponseAttempt(attempt);
   } catch {
@@ -437,11 +450,15 @@ export function createProviderNativeResponses(
               throw error;
             }
             if (auth === undefined) {
-              return errorResponse(502, "api_error", "Provider is not configured");
+              return syntheticErrorResponse(
+                502,
+                "api_error",
+                "Provider is not configured",
+              );
             }
             const transport = providerResponsesTransportKind(input.model);
             if (transport === undefined) {
-              return errorResponse(
+              return syntheticErrorResponse(
                 502,
                 "api_error",
                 "Provider native transport is unavailable",
@@ -557,7 +574,11 @@ export function createProviderNativeResponses(
                   input.operation !== "responses" ||
                   retryAttempt >= configuration.transport.maxRetries
                 ) {
-                  return physicalResponse;
+                  return finishObservedResponse(
+                    input.observation,
+                    physicalResponse,
+                    responseAttempt,
+                  );
                 }
                 let retryable: boolean;
                 try {
@@ -573,7 +594,13 @@ export function createProviderNativeResponses(
                   );
                   continue;
                 }
-                if (!retryable) return physicalResponse;
+                if (!retryable) {
+                  return finishObservedResponse(
+                    input.observation,
+                    physicalResponse,
+                    responseAttempt,
+                  );
+                }
                 await releaseRetryResponse(physicalResponse);
                 const delayMs = isCodex
                   ? codexRetryDelayMs(
@@ -596,7 +623,7 @@ export function createProviderNativeResponses(
               }
             } catch (error) {
               if (input.signal.aborted) throw error;
-              return errorResponse(
+              return syntheticErrorResponse(
                 502,
                 "api_error",
                 "Upstream provider request failed",
