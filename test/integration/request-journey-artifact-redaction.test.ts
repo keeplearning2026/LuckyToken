@@ -252,6 +252,9 @@ describe("Request Journey failure artifact redaction", () => {
           JSON.stringify(JSON.parse(responseBytes.toString("utf8")), null, 2),
         ),
       });
+      expect.soft(responseDescriptor.capturedBytes).toBeGreaterThan(
+        responseDescriptor.originalBytes!,
+      );
 
       // No more HTTP work may enter the diagnostics queue. The completed
       // Journey query above is the Worker commit barrier for every artifact.
@@ -289,9 +292,11 @@ describe("Request Journey failure artifact redaction", () => {
       expect(requestRow?.bodyPath).not.toBeNull();
       expect(responseRow?.bodyPath).not.toBeNull();
 
-      const storedRequest = JSON.parse(
-        await readFile(join(diagnosticsDirectory, requestRow!.bodyPath!), "utf8"),
-      ) as Record<string, unknown>;
+      const storedRequestText = await readFile(
+        join(diagnosticsDirectory, requestRow!.bodyPath!),
+        "utf8",
+      );
+      const storedRequest = JSON.parse(storedRequestText) as Record<string, unknown>;
       expect.soft(storedRequest).toMatchObject({
         model: SAFE_MODEL,
         max_tokens: 32,
@@ -304,6 +309,12 @@ describe("Request Journey failure artifact redaction", () => {
         requestRow!.descriptorJson,
       ) as RequestArtifactDescriptor;
       expect.soft(storedRequestDescriptor.redaction).toBe("applied");
+      expect.soft(storedRequestDescriptor.originalBytes).toBe(
+        Buffer.byteLength(requestBody),
+      );
+      expect.soft(storedRequestDescriptor.capturedBytes).toBe(
+        Buffer.byteLength(storedRequestText),
+      );
 
       const storedResponse = JSON.parse(
         await readFile(join(diagnosticsDirectory, responseRow!.bodyPath!), "utf8"),

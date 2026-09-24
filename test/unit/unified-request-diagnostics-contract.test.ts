@@ -549,6 +549,23 @@ describe("unified request diagnostics Control Plane contract", () => {
     ).toBeUndefined();
   });
 
+  it("accepts a sanitized artifact larger than its original wire", () => {
+    const record = {
+      ...JOURNEY_RECORD,
+      artifacts: [
+        {
+          ...JOURNEY_RECORD.artifacts[0],
+          originalBytes: 4,
+          capturedBytes: 19,
+          redaction: "applied",
+          truncated: false,
+        },
+      ],
+    } as const;
+
+    expect(decodeRequestJourneyRecord(record)).toEqual(record);
+  });
+
   it("strictly decodes Journey and bounded artifact read DTOs", () => {
     expect(
       decodeRequestJourneyGetInput({ requestId: JOURNEY_SUMMARY.requestId }),

@@ -425,9 +425,6 @@ function decodeArtifactFields(
       !isNonNegativeSafeInteger(value.originalBytes)) ||
     (value.capturedBytes !== undefined &&
       !isNonNegativeSafeInteger(value.capturedBytes)) ||
-    (value.originalBytes !== undefined &&
-      value.capturedBytes !== undefined &&
-      (value.capturedBytes as number) > (value.originalBytes as number)) ||
     (value.redaction !== undefined &&
       value.redaction !== "not_required" &&
       value.redaction !== "applied" &&

@@ -220,7 +220,10 @@ export interface ArtifactPersistedObservation
   readonly artifactKind: string;
   readonly state: RequestArtifactState;
   readonly mediaType?: string;
+  /** Original Client/Provider wire byte count when known. */
   readonly originalBytes?: number;
+  /** Byte count of the persisted sanitized representation. Redaction and
+   * formatting may make this larger than originalBytes. */
   readonly capturedBytes?: number;
   readonly redaction?: "not_required" | "applied" | "failed";
   readonly truncated?: boolean;
@@ -310,7 +313,10 @@ export interface RequestArtifactDescriptor {
   readonly artifactKind: string;
   readonly state: RequestArtifactState;
   readonly mediaType?: string;
+  /** Original Client/Provider wire byte count when known. */
   readonly originalBytes?: number;
+  /** Byte count of the persisted sanitized representation. Redaction and
+   * formatting may make this larger than originalBytes. */
   readonly capturedBytes?: number;
   readonly redaction: "not_required" | "applied" | "failed";
   readonly truncated: boolean;

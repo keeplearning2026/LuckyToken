@@ -132,9 +132,10 @@ const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
       artifactKind: "client_response_wire",
       state: "captured",
       mediaType: "application/json",
-      capturedBytes: 4,
+      // Redaction and pretty-printing may expand the persisted body.
+      capturedBytes: 19,
       originalBytes: 4,
-      redaction: "not_required",
+      redaction: "applied",
       truncated: false,
     }),
   ]),
