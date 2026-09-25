@@ -50,7 +50,11 @@ async function freePort() {
 }
 
 test("the assembled release backend serves as a desktop-owned instance from the installed layout", async () => {
-  const nodeExe = join(backendRoot, "node", "node.exe");
+  const nodeExe = join(
+    backendRoot,
+    "node",
+    process.platform === "win32" ? "node.exe" : "node",
+  );
   const cliScript = join(backendRoot, "dist", "cli.js");
   for (const path of [nodeExe, cliScript]) {
     assert.ok(

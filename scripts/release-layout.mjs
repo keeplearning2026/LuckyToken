@@ -2,9 +2,15 @@
 // Node backend under resources/backend; launcher.json remains the stable
 // backend launch contract shared by assembly and certification.
 
-export function launcherConfig() {
+/** The bundled portable Node runtime keeps its platform executable name, so
+ *  assembly and packaged-layout checks agree on exactly one path per platform. */
+export function backendNodeExecutable(platform = process.platform) {
+  return platform === "win32" ? "backend/node/node.exe" : "backend/node/node";
+}
+
+export function launcherConfig(platform = process.platform) {
   return {
-    backendNodeExecutable: "backend/node/node.exe",
+    backendNodeExecutable: backendNodeExecutable(platform),
     backendCliScript: "backend/dist/cli.js",
   };
 }

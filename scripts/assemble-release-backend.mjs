@@ -1,11 +1,11 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { launcherConfig } from "./release-layout.mjs";
+import { backendNodeExecutable, launcherConfig } from "./release-layout.mjs";
 
 const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
@@ -26,13 +26,14 @@ async function runNpm(arguments_, options) {
  * desktop shell launches. The output directory is
  * packages/desktop-shell/backend (next to the Tauri resources that the
  * installer ships), containing:
- *   node/node.exe        the pinned portable Node executable
+ *   node/node           the pinned portable Node executable for this platform
  *   dist/                the compiled Token core (cli.js entry)
  *   node_modules/        the production dependency tree
  *   launcher.json        the stable launch contract next to the exe
  */
 export async function assembleReleaseBackend({
   nodeExecutable = process.execPath,
+  platform = process.platform,
   destination = join(
     repositoryRoot,
     "packages",
@@ -44,8 +45,16 @@ export async function assembleReleaseBackend({
   await mkdir(join(destination, "node"), { recursive: true });
   await mkdir(join(destination, "dist"), { recursive: true });
 
-  // 1. Copy the fixed Node executable (portable runtime pin).
-  await cp(nodeExecutable, join(destination, "node", "node.exe"));
+  // 1. Copy the fixed Node executable (portable runtime pin) under the name the
+  //    packaged desktop resolves for this platform.
+  const bundledNode = join(
+    destination,
+    backendNodeExecutable(platform).slice("backend/".length),
+  );
+  await cp(nodeExecutable, bundledNode);
+  if (platform !== "win32") {
+    await chmod(bundledNode, 0o755);
+  }
 
   // 2. Compile the core and copy the built dist tree (cli.js + support).
   await runNpm(["run", "build:root"], { cwd: repositoryRoot, stdio: "inherit" });
@@ -151,7 +160,7 @@ export async function assembleReleaseBackend({
   //    the desktop executable.
   await writeFile(
     join(destination, "launcher.json"),
-    `${JSON.stringify(launcherConfig(), null, 2)}\n`,
+    `${JSON.stringify(launcherConfig(platform), null, 2)}\n`,
     "utf8",
   );
   return destination;

@@ -66,8 +66,51 @@ installer and installed EXE have valid signatures and the complete real
 install/automatic-first-run/uninstall certification succeeds.
 See `doc/release/WindowsReleaseProcess.md` for the release contract.
 
+Installing a produced release is per-user: run `Token-Setup.exe` from
+`artifacts/releases/<version>-<commit>/`. Squirrel installs Token for the
+current user without an elevation step, and the desktop starts its bundled
+Backend on first run.
+
 The integration suite uses an injected fixture `fetch` implementation. It does
 not call the real CommandCode service or read `CommandcodeAPIKey.txt`.
+
+## macOS package
+
+macOS installers are built on a GitHub-hosted macOS runner. A Windows machine
+can start that build, but it cannot package or sign a DMG locally.
+
+Run the **macOS package** workflow from the repository's **Actions** tab and
+pick the runner label, which also selects the packaged architecture:
+
+| Runner label | Packaged architecture |
+|---|---|
+| `macos-latest`, `macos-26`, `macos-15` | Apple silicon (`arm64`) |
+| `macos-15-intel` | Intel (`x64`) |
+
+One run packages one architecture and attaches it to that run as the
+`token-macos-<runner>` artifact: `Token-<version>-<arch>.dmg` plus a portable
+darwin ZIP built by the ZIP maker. The workflow packages the application and
+the installer only; it is not a release or certification entry point.
+
+Install a built package on a Mac:
+
+1. Download the artifact archive from the workflow run and extract it.
+2. Open `Token-<version>-<arch>.dmg` and drag **Token** into **Applications**.
+3. Launch **Token** once from **Applications**. The artifact is unsigned and
+   un-notarized, so Gatekeeper blocks a normal double-click:
+   - macOS 15 and newer: allow the app in **System Settings → Privacy &
+     Security → Open Anyway**, then confirm.
+   - macOS 14 and older: right-click **Token** and choose **Open**.
+   - The explicit override is to clear the download quarantine once:
+
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/Token.app
+     ```
+
+Distributing to other users requires a Developer ID Application certificate and
+DMG notarization; this workflow does neither yet. The packaged app keeps the
+same bundled-Backend layout as Windows, resolving the Backend at
+`Token.app/Contents/Resources/backend/node` and user state at `~/.Token/`.
 
 ## Local service configuration, Backend lifecycle, and Provider login
 

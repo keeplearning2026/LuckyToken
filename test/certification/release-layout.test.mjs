@@ -8,10 +8,18 @@ import {
 } from "../../scripts/release-layout.mjs";
 
 test("launcher.json contract is stable and resolvable by the Electron BackendLauncher", () => {
-  assert.deepEqual(launcherConfig(), {
+  assert.deepEqual(launcherConfig("win32"), {
     backendNodeExecutable: "backend/node/node.exe",
     backendCliScript: "backend/dist/cli.js",
   });
+  assert.deepEqual(launcherConfig("darwin"), {
+    backendNodeExecutable: "backend/node/node",
+    backendCliScript: "backend/dist/cli.js",
+  });
+  assert.equal(
+    launcherConfig().backendNodeExecutable,
+    process.platform === "win32" ? "backend/node/node.exe" : "backend/node/node",
+  );
 
   const parsed = parseLauncherJson(
     JSON.stringify({

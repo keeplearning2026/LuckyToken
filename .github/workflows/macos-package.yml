@@ -1,0 +1,79 @@
+name: macOS package
+
+# Builds the macOS application and installer on a GitHub-hosted macOS runner.
+# The runner's CPU architecture selects the packaged architecture, so an
+# Apple-silicon artifact and an Intel artifact come from two runs.
+# This workflow produces an unsigned, un-notarized artifact: it packages the
+# app and installer only, and makes no release or certification claim.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: GitHub-hosted macOS runner label that decides the packaged architecture
+        required: true
+        default: macos-latest
+        type: choice
+        options:
+          - macos-latest
+          - macos-26
+          - macos-15
+          - macos-15-intel
+
+permissions:
+  contents: read
+
+concurrency:
+  group: token-macos-package-${{ inputs.runner }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Use pinned Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.14.1
+          cache: npm
+
+      - name: Install locked dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild electron
+
+      - name: Assemble the portable Backend
+        run: |
+          npm run build:packages
+          npm run release:assemble-backend
+
+      - name: Package the application and the installer
+        run: npm run make:prepared --workspace @token/desktop-shell
+
+      - name: Verify the packaged Backend layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          backend="$(find packages/desktop-shell/.electron-out -type d -path '*/Token.app/Contents/Resources/backend' -print -quit)"
+          test -n "$backend"
+          test -x "$backend/node/node"
+          test -f "$backend/dist/cli.js"
+          test -f "$backend/build-id.txt"
+          echo "packaged Backend layout verified at $backend"
+
+      - name: Upload the macOS installer set
+        uses: actions/upload-artifact@v7
+        with:
+          name: token-macos-${{ inputs.runner }}
+          path: |
+            packages/desktop-shell/.electron-out/*/make/**/*.dmg
+            packages/desktop-shell/.electron-out/*/make/**/*.zip
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 0
