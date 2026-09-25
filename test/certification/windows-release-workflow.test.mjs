@@ -18,4 +18,15 @@ test("GitHub Windows release delegates to the one official release entry", async
   assert.match(workflow, /TOKEN_WINDOWS_CERTIFICATE_PASSWORD/u);
   assert.match(workflow, /artifacts\/releases/u);
   assert.equal(workflow.includes("electron-forge make"), false);
+
+  // A job-level env value cannot read the `runner` context; using it there
+  // invalidates the whole workflow file, so GitHub never schedules a job and
+  // instead fails every push with a workflow file issue.
+  for (const line of workflow.split("\n")) {
+    if (!line.includes("${{ runner.")) continue;
+    assert.ok(
+      line.startsWith("          "),
+      `the runner context is only available inside a step: ${line.trim()}`,
+    );
+  }
 });

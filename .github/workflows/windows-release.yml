@@ -14,9 +14,6 @@ jobs:
   release:
     runs-on: windows-2022
     timeout-minutes: 90
-    env:
-      TOKEN_WINDOWS_CERTIFICATE_FILE: ${{ runner.temp }}\Token.pfx
-      TOKEN_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - name: Check out exact source
         uses: actions/checkout@v7
@@ -37,6 +34,7 @@ jobs:
       - name: Materialize signing certificate
         shell: pwsh
         env:
+          TOKEN_WINDOWS_CERTIFICATE_FILE: ${{ runner.temp }}\Token.pfx
           WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PFX_BASE64)) {
@@ -48,6 +46,9 @@ jobs:
           )
 
       - name: Build, install, and certify the official release
+        env:
+          TOKEN_WINDOWS_CERTIFICATE_FILE: ${{ runner.temp }}\Token.pfx
+          TOKEN_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: npm run release:windows
 
       - name: Upload the certified Squirrel release set
@@ -61,4 +62,6 @@ jobs:
       - name: Remove signing certificate
         if: always()
         shell: pwsh
+        env:
+          TOKEN_WINDOWS_CERTIFICATE_FILE: ${{ runner.temp }}\Token.pfx
         run: Remove-Item -LiteralPath $env:TOKEN_WINDOWS_CERTIFICATE_FILE -Force -ErrorAction SilentlyContinue
