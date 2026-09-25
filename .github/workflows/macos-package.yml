@@ -46,7 +46,10 @@ jobs:
       - name: Install locked dependencies
         run: |
           npm ci --ignore-scripts
-          npm rebuild electron
+          # --ignore-scripts skips the implicit node-gyp build of the native
+          # modules the DMG maker loads (appdmg -> ds-store/macos-alias,
+          # fs-xattr), so they are rebuilt explicitly for the runner's Node.
+          npm rebuild electron macos-alias fs-xattr
 
       - name: Assemble the portable Backend
         run: |
