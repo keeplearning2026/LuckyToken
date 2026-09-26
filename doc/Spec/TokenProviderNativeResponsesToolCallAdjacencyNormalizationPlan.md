@@ -14,7 +14,7 @@ Scope: Provider Native Preservation，且仅 `operation === "responses"`（不�
 | 5.9 仓库门禁 | 单测 1790/1790、typecheck、eslint 通过。集成 588 例中 586 通过：`test/integration/backend-application.test.ts` 的 quit/projection 用例在并行全量运行中偶发失败（单独运行 13/13 通过，且不引用 provider-native 任何模块），与本改动无因果关系 |
 | 5.4 生产接缝 stub-upstream e2e | 已完成：`test/integration/provider-native-adjacency-stub-upstream.test.ts`（本地 HTTP stub 用独立 oracle；① 改前同体被 oracle 判 400，② 同一 body 经 Token 后 stub 200 且逐字节等于预期排列、客户端 200、记 info notice，③ 非合格形状 stub 400、客户端 502、记 warning notice） |
 | 5.5 隔离 CLI 多轮消费 | **已完成（离线）**。`tool_history_overlap` 用例按 §1.3 形状改造后**自然复现**交错：CLI 首轮响应给出 `view_image`（仓库大图 2744x3600）与慢速兄弟工具 `exec_command`（`Start-Sleep -Milliseconds 1500; Write-Output TOOL_B`），图片结果先返回，真实 CLI 在客户端线写出 `output(view_image) → message(role=developer, <image_resize_notice>) → output(exec_command)`；Token 把该 notice 推迟到组闭合之后，Provider 组窗内无穿插、notice 仍在历史中、图片内容与 `TOOL_B` 结果完整，独立 oracle 判定全部出站 body 邻接合法，客户端两轮完成并拿到最终答案。观测输出 `naturalInterleaveObserved=true / injected=false`（未注入历史）。方法学更正：此前 `developerBetweenOutputs` 观测的是**规范化后的 Provider 出站 body**，规范化生效时该字段必然为 false，交错证据改由客户端线捕获。两处运行前提：①`features.image_resize_notice=true`（0.156.1 仍 under development、默认关闭，不启用时 CLI 缩放图片但不写提示）；②该用例 CLI 调用使用 `--dangerously-bypass-approvals-and-sandbox`（隔离 `CODEX_HOME` 下 approval=never 会拒绝全部命令，兄弟工具瞬时失败则图片不再先返回），命令为临时用例目录内的固定 sleep/echo。 |
-| 5.8 在线门禁 | **未完成**（按计划只能声明离线认证） |
+| 5.8 在线门禁 | **已完成（合成最小 body，真实上游）**。`npm run test:online-provider-native-adjacency`：同一合成 `input` 直连 CommandCode Goat Responses 返回 400，错误匹配 tool-call 邻接条件；经本地 Token 后返回 200，捕获的 Provider 出站 body 只把组内 developer message 移到两个结果之后。两次请求的顶层 `model` 分别为上游 ID 与客户端选择器，符合 Native model 投影契约；不含真实会话内容。 |
 | 4.4 的 28 条契约断言修订 | 已落盘（27 处文档 + 2 个测试文件新增用例） |
 
 ## 0. 本轮修订摘要（对第三轮复审的回应）
@@ -468,10 +468,16 @@ Direct、Semantic、Anthropic Native、`operation === "compact"`、codex/azure c
 
 disabled / throwing / saturated / slow / unavailable：outbound 文本、notice 缺失、请求结局与基准一致。
 
-### 5.8 在线门禁（当前未完成）
+### 5.8 在线门禁（合成最小 body 已通过）
 
-真实上游 400→200 不属于 v1 完成判据；另设显式门禁。完成前只能声明"离线认证通过"，
-不得声明"真实连续 502 已修复"。
+`test/online/run-provider-native-adjacency-online-gate.ts` 使用合成的 `view_image` 与慢速
+`exec_command` 历史调用，两个结果之间放一条 developer message。直连
+`https://api.commandcode.ai/provider/v1/responses` 返回 400，错误匹配
+`insufficient tool messages following tool_calls message`；同一 `input` 经本地 Token 返回
+200。捕获的 Native 出站 body 中两个结果相邻、developer message 在组尾，其他 `input`
+元素及顺序不变。顶层 `model` 是直连上游 ID／Token 客户端选择器的唯一请求差异，Token
+按契约投影为上游 ID。在线运行只证明这一合成形状的真实上游 400→200；不等同于真实
+Codex 会话所有变体均已消除连续 502。
 
 ### 5.9 仓库门禁
 
@@ -506,7 +512,8 @@ guarded npm test；文档修订与代码同批提交。
 - 3.7 的三条 code、优先级与"每请求至多一条"一致；
 - 4.4 的 28 条修订完成，且两处测试基线**未被削弱**；
 - 未引入配置开关；
-- 5.8 未完成前，任何文档/release 不得写"已修复"。
+- 5.8 已验证合成最小形状的真实上游 400→200；文档/release 不得据此声称真实
+  Codex 会话所有变体的连续 502 均已修复。
 
 ## 8. 已知边界
 

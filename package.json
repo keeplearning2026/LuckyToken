@@ -56,6 +56,8 @@
     "test:online-responses:private:inner": "npm run build:packages && tsx test/online/run-commandcode-private-responses.ts",
     "test:online-responses:goat": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-responses:goat:inner",
     "test:online-responses:goat:inner": "npm run build:packages && tsx test/online/run-commandcode-goat-responses.ts",
+    "test:online-provider-native-adjacency": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-provider-native-adjacency:inner",
+    "test:online-provider-native-adjacency:inner": "npm run build:packages && tsx test/online/run-provider-native-adjacency-online-gate.ts",
     "test:online-responses:opencode-go": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-responses:opencode-go:inner",
     "test:online-responses:opencode-go:inner": "npm run build:packages && tsx test/online/run-opencode-go-responses.ts",
     "test:online-anthropic": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-anthropic:inner",
