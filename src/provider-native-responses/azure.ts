@@ -4,13 +4,23 @@ import {
   appendEndpoint,
   applyHeaders,
   executeProviderFetch,
-  rewriteModelJson,
 } from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
+  ProviderResponsesPhysicalAttemptObservation,
   ProviderResponsesOperation,
   ProviderResponsesSender,
 } from "./contract.js";
+import {
+  completeProviderResponsesStep,
+  enterProviderResponsesStep,
+  observeProviderResponsesBodyProjection,
+} from "./observation.js";
+import {
+  projectProviderNativeBody,
+  type ProviderNativeBodyProjection,
+} from "./tool-call-adjacency.js";
+
 
 function providerEnv(name: string, auth: AuthResult): string | undefined {
   return auth.env?.[name] || process.env[name] || undefined;
@@ -89,8 +99,43 @@ export function createAzureResponsesSender(
       operation: ProviderResponsesOperation,
       rawBody: string,
       signal: AbortSignal,
+      observation?: ProviderResponsesPhysicalAttemptObservation,
     ): Promise<Response> {
-      const rewritten = rewriteModelJson(rawBody, deploymentName);
+      const projectionLocation = {
+        phase: "lane_request_preparation",
+        lane: "provider_native",
+        step: "project_native_body",
+        attempt: observation?.attempt ?? 1,
+      } as const;
+      const projectionStep = `p3.project_native_body.${projectionLocation.attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        projectionStep,
+        projectionLocation,
+      );
+      let rewritten: ProviderNativeBodyProjection;
+      try {
+        rewritten = projectProviderNativeBody(rawBody, deploymentName, operation);
+        observeProviderResponsesBodyProjection(
+          observation?.journey,
+          rewritten,
+          projectionLocation,
+        );
+        completeProviderResponsesStep(
+          observation?.journey,
+          projectionStep,
+          projectionLocation,
+          "success",
+        );
+      } catch (error) {
+        completeProviderResponsesStep(
+          observation?.journey,
+          projectionStep,
+          projectionLocation,
+          "failed",
+        );
+        throw error;
+      }
       const headers = new Headers({
         accept: "application/json",
         "api-key": apiKey,

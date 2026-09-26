@@ -116,6 +116,47 @@ describe("Responses native provider sender", () => {
 
     await expect(captured.requests[0]!.text()).resolves.toBe(expected);
   });
+
+  it("defers a developer message slice out of a closed tool-call group", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model("openai", "openai-responses", "https://api.openai.com/v1"),
+      auth: auth({ apiKey: "sk-openai" }),
+      fetch: captured.fetch,
+    });
+    const items = [
+      { type: "function_call", call_id: "a", name: "exec_command", arguments: "{}" },
+      { type: "function_call", call_id: "b", name: "exec_command", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output: "ok" },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "resize notice" }] },
+      { type: "function_call_output", call_id: "b", output: "ok" },
+    ];
+    const reordered = [items[0], items[1], items[2], items[4], items[3]];
+    const raw = JSON.stringify({ model: "alias", input: items });
+
+    await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(
+      JSON.stringify({ model: "real-model", input: reordered }),
+    );
+  });
+
+  it("keeps the baseline byte contract when the group is not interrupted", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model("openai", "openai-responses", "https://api.openai.com/v1"),
+      auth: auth({ apiKey: "sk-openai" }),
+      fetch: captured.fetch,
+    });
+    const raw =
+      '{\n "model" : "alias", "input": [{"type":"function_call","call_id":"a","name":"exec_command","arguments":"{}"},{"type":"function_call_output","call_id":"a","output":"ok"}]\n}';
+    const expected = raw.replace('"alias"', '"real-model"');
+
+    await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(expected);
+  });
+
   it("returns raw non-2xx upstream Responses instead of converting them into transport errors", async () => {
     const requests: Request[] = [];
     const fetch: FetchFunction = (async (input: RequestInfo | URL, init?: RequestInit) => {

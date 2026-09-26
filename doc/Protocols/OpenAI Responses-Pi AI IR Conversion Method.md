@@ -605,7 +605,7 @@ raw Responses body
 → provider-native Responses sender
 ```
 
-This lane preserves the raw Responses body as the model-visible authority while applying only boundary-required model identity projection, Provider auth/header rules, endpoint construction, response alias projection, and safe response handling. It does not execute Pi Client↔Provider semantic conversion.
+This lane preserves the raw Responses body as the model-visible authority while applying only boundary-required model identity projection, the closed tool-call adjacency deferral for `operation === "responses"`, Provider auth/header rules, endpoint construction, response alias projection, and safe response handling. It does not execute Pi Client↔Provider semantic conversion.
 
 ### 15.3 Shared preservation requirements
 

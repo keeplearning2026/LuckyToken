@@ -139,7 +139,7 @@ fail-open diagnostics path rather than the Client Wire.
 |---:|---|---|---|---|---|
 | 1 | P3 | `capture_provider_profile` | resolved provider and request binding | exact request-bound Profile facts | no usable Profile/binding failure |
 | 2 | P3 | `resolve_provider_auth` | resolved Pi model and Profile binding | Pi `AuthResult`, safe auth type attribution | missing auth, refresh/setup failure |
-| 3 | P3 | `project_native_body` | authoritative Client Wire body | model-only projection or explicit Anthropic OAuth projection | malformed JSON, unsafe OAuth projection |
+| 3 | P3 | `project_native_body` | authoritative Client Wire body | model-only projection, the bounded Responses tool-call adjacency deferral (`provider_native_tool_call_adjacency_deferred` / `provider_native_tool_call_group_abandoned` / `provider_native_tool_call_group_unsupported_item`), or explicit Anthropic OAuth projection | malformed JSON, unsafe OAuth projection, failed adjacency qualification (fail-open to model-only) |
 | 4 | P3 | `reconstruct_provider_envelope` | model, auth, operation, projected body | method, endpoint, headers, encoding/compression | missing endpoint/session/header facts |
 | 5 | P4 | `dispatch_provider_native` | reconstructed envelope | upstream response handle | connect/write/timeout/cancellation |
 | 6 | P4 | `classify_native_retry` | response/error and Provider contract | retry decision and delay | invalid retry delay, retry policy failure |

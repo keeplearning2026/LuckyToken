@@ -6,7 +6,6 @@ import {
   applyHeaders,
   executeProviderFetch,
   hasHeader,
-  rewriteModelJson,
 } from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
@@ -15,10 +14,15 @@ import type {
   ProviderResponsesSender,
 } from "./contract.js";
 import {
+  projectProviderNativeBody,
+  type ProviderNativeBodyProjection,
+} from "./tool-call-adjacency.js";
+import {
   completeProviderResponsesStep,
   enterProviderResponsesStep,
   observeProviderResponses,
   observeProviderResponsesArtifact,
+  observeProviderResponsesBodyProjection,
 } from "./observation.js";
 import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
 
@@ -117,9 +121,14 @@ export function createOpenAIResponsesSender(
         projectionStep,
         projectionLocation,
       );
-      let rewritten: ReturnType<typeof rewriteModelJson>;
+      let rewritten: ProviderNativeBodyProjection;
       try {
-        rewritten = rewriteModelJson(rawBody, model.id);
+        rewritten = projectProviderNativeBody(rawBody, model.id, operation);
+        observeProviderResponsesBodyProjection(
+          observation?.journey,
+          rewritten,
+          projectionLocation,
+        );
         completeProviderResponsesStep(
           observation?.journey,
           projectionStep,

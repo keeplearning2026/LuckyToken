@@ -216,7 +216,7 @@ Semantic Conversion: Client Wire ↔ Client Protocol ↔ Pi ↔ Provider ↔ Ups
 - Anthropic/OpenAI conversion 模块可以依赖 Pi types，但不能 import、命名或判断 concrete Provider；
 - CommandCode Provider 可以依赖 Pi types，但不能 import、命名或判断 Client Protocol；
 - Direct Mode 与 Provider Native 不进入 Pi AI IR，也不共享 credential/transport/executor authority；
-- native lane 以 compatible raw Client Wire 为 authority，只做 endpoint、auth、header filtering、identity projection 等 preservation 必要变化；Provider Native `/v1/responses` 的成功 SSE 在完整缓冲后还允许一项窄 lifecycle normalization：按原始 `output_item.done`/global 骨架，在各自 done 位置展开完整 item chain；`output_index` 只做归属/一致性校验，不参与排序；unchanged/skipped 保留原始 body，游标续传语义跳过规范化；
+- native lane 以 compatible raw Client Wire 为 authority，只做 endpoint、auth、header filtering、identity projection 等 preservation 必要变化；Provider Native `/v1/responses` 在请求方向还允许一项窄邻接归一化（仅 `operation === "responses"`，compact 除外）：把已闭合且通过资格校验的 tool-call 组内 `role=developer` message 的原始元素切片延后到该组最后一个结果之后；任一资格、span 或重建检查失败即整份仅做 model 投影。其成功 SSE 在完整缓冲后还允许一项窄 lifecycle normalization：按原始 `output_item.done`/global 骨架，在各自 done 位置展开完整 item chain；`output_index` 只做归属/一致性校验，不参与排序；unchanged/skipped 保留原始 body，游标续传语义跳过规范化；
 - `sessionId`、`AbortSignal` 等可以作为窄 infrastructure/request facts，但不会形成第二套通用 request DTO；
 - composition root 可以看见各 lane seam 并进行选择/注入，但不做跨侧语义转换；
 - lane 一旦开始执行，failure 不得 fallback 到另一个 lane。

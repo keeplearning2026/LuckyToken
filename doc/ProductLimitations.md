@@ -62,7 +62,10 @@ part of the complete history.
 
 Provider Native Preservation forwards the compatible Client Wire as the
 authoritative request body. It changes only boundary-required facts such as the
-top-level model selector; it does not reinterpret Client-private items through Pi
+top-level model selector. For Provider Native Responses (`operation === "responses"`, never compact)
+it may additionally defer original `role=developer` message element slices out of a fully
+validated, closed tool-call group; any failed qualification, span, or reconstruction check
+reduces the send to the model projection. It does not reinterpret Client-private items through Pi
 AI IR.
 
 The CommandCode Goat Responses upstream accepts ordinary Responses messages and

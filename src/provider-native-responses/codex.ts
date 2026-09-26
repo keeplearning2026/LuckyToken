@@ -6,13 +6,23 @@ import { resolveRequestModel } from "../providers/request-composition.js";
 import {
   applyHeaders,
   executeProviderFetch,
-  rewriteModelJson,
 } from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
+  ProviderResponsesPhysicalAttemptObservation,
   ProviderResponsesOperation,
   ProviderResponsesSender,
 } from "./contract.js";
+import {
+  completeProviderResponsesStep,
+  enterProviderResponsesStep,
+  observeProviderResponsesBodyProjection,
+} from "./observation.js";
+import {
+  projectProviderNativeBody,
+  type ProviderNativeBodyProjection,
+} from "./tool-call-adjacency.js";
+
 
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 
@@ -79,8 +89,43 @@ export function createCodexResponsesSender(
       operation: ProviderResponsesOperation,
       rawBody: string,
       signal: AbortSignal,
+      observation?: ProviderResponsesPhysicalAttemptObservation,
     ): Promise<Response> {
-      const rewritten = rewriteModelJson(rawBody, model.id);
+      const projectionLocation = {
+        phase: "lane_request_preparation",
+        lane: "provider_native",
+        step: "project_native_body",
+        attempt: observation?.attempt ?? 1,
+      } as const;
+      const projectionStep = `p3.project_native_body.${projectionLocation.attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        projectionStep,
+        projectionLocation,
+      );
+      let rewritten: ProviderNativeBodyProjection;
+      try {
+        rewritten = projectProviderNativeBody(rawBody, model.id, operation);
+        observeProviderResponsesBodyProjection(
+          observation?.journey,
+          rewritten,
+          projectionLocation,
+        );
+        completeProviderResponsesStep(
+          observation?.journey,
+          projectionStep,
+          projectionLocation,
+          "success",
+        );
+      } catch (error) {
+        completeProviderResponsesStep(
+          observation?.journey,
+          projectionStep,
+          projectionLocation,
+          "failed",
+        );
+        throw error;
+      }
       const headers = new Headers();
       applyHeaders(headers, model.headers);
       applyHeaders(headers, options.auth.auth.headers);

@@ -156,6 +156,46 @@ describe("Provider Native Responses contract", () => {
     );
   });
 
+
+  it("defers a developer message slice and records the adjacency notice", async () => {
+    const nativeModel = responsesModel();
+    const recorded = recordingJourney();
+    const upstream: Request[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      upstream.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({ id: "resp_adjacency", object: "response", status: "completed", model: "gpt-5", output: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const items = [
+      { type: "function_call", call_id: "a", name: "exec_command", arguments: "{}" },
+      { type: "function_call", call_id: "b", name: "exec_command", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output: "ok" },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "resize notice" }] },
+      { type: "function_call_output", call_id: "b", output: "ok" },
+    ];
+    const reordered = [items[0], items[1], items[2], items[4], items[3]];
+
+    const response = await handleHttpRequest(
+      dependencies(models(nativeModel), fetch, recorded.authority),
+      request(JSON.stringify({ model: "openai/gpt-5", input: items })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveLength(1);
+    await expect(upstream[0]?.text()).resolves.toBe(
+      JSON.stringify({ model: "gpt-5", input: reordered }),
+    );
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "conversion_notice_observed",
+        code: "provider_native_tool_call_adjacency_deferred",
+        severity: "info",
+      }),
+    );
+  });
+
   it("observes native upstream usage through the Request Journey", async () => {
     const model = responsesModel();
     const recorded = recordingJourney();

@@ -30,15 +30,15 @@ Responses request
 → provider-native Responses transport
 ```
 
-This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, Provider auth/header construction, endpoint construction, content encoding, and response alias projection. For ordinary `POST /v1/responses`, Token constructs the raw request body itself and otherwise mirrors the pinned Pi AI HTTP transport contract:
+This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, the bounded tool-call adjacency deferral defined by the Provider Native adjacency contract (`operation === "responses"` only), Provider auth/header construction, endpoint construction, content encoding, and response alias projection. For ordinary `POST /v1/responses`, Token constructs the raw request body itself and otherwise mirrors the pinned Pi AI HTTP transport contract:
 
 - OpenAI-compatible Responses uses Pi model/auth facts and Pi session-affinity formats (`openai`, `openai-nosession`, or `openrouter`).
 - Azure Responses uses Pi's normalized endpoint, deployment identity, API version, and `api-key` authentication without session headers.
 - Codex Responses uses the Pi SSE contract: OAuth account identity, `originator: pi`, Pi user agent, experimental Responses header, effective session headers, and zstd when available. WebSocket parity is outside this contract.
 - Client credential, cookie, proxy, and `x-stainless-*` transport identity headers are not forwarded. Pi model/auth headers are authoritative.
-- The body is not semantically reconstructed: only the top-level `model` string is projected. Unknown and future fields, JSON numeric spellings, whitespace, and nested values otherwise remain client-authored.
+- The body is not semantically reconstructed: only the top-level `model` string is projected, plus the closed adjacency deferral that relocates original developer message element slices inside `input`. Unknown and future fields, JSON numeric spellings, whitespace, and nested values otherwise remain client-authored.
 
-Compact remains a separately tested native operation and does not inherit ordinary Responses retry/session parity.
+Compact remains a separately tested native operation, never receives the adjacency deferral, and does not inherit ordinary Responses retry/session parity.
 
 ### 1.3 Semantic Conversion
 
