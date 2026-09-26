@@ -11,9 +11,9 @@ Scope: Provider Native Preservation，且仅 `operation === "responses"`（不�
 | 代码（3.1–3.6、4.1–4.3） | 已完成：`src/provider-native-responses/tool-call-adjacency.ts` + 三个 transport 接入 + 三条 notice code |
 | 5.1–5.3 结构与字节认证 | 已完成：`test/unit/provider-native-tool-call-adjacency.test.ts`（17 例），并在两个基线测试中保留原断言、新增命中用例 |
 | 5.6/5.7 负回归与诊断五态 | 由现有单测与集成套件覆盖并通过 |
-| 5.9 仓库门禁 | 通过：单测 1790/1790、集成 585/585、typecheck、eslint |
-| 5.4 生产接缝 stub-upstream e2e | **未实施**（下一步） |
-| 5.5 隔离 CLI 多轮消费 | **未实施**（下一步） |
+| 5.9 仓库门禁 | 单测 1790/1790、typecheck、eslint 通过。集成 588 例中 586 通过：`test/integration/backend-application.test.ts` 的 quit/projection 用例在并行全量运行中偶发失败（单独运行 13/13 通过，且不引用 provider-native 任何模块），与本改动无因果关系 |
+| 5.4 生产接缝 stub-upstream e2e | 已完成：`test/integration/provider-native-adjacency-stub-upstream.test.ts`（本地 HTTP stub 用独立 oracle；① 改前同体被 oracle 判 400，② 同一 body 经 Token 后 stub 200 且逐字节等于预期排列、客户端 200、记 info notice，③ 非合格形状 stub 400、客户端 502、记 warning notice） |
+| 5.5 隔离 CLI 多轮消费 | **未实施**。harness `test/online/run-provider-native-item-chain-replay.ts` 与本机 CLI（`%APPDATA%/npm/node_modules/@openai/codex/bin/codex.js`）均可用，但尚未解决如何让真实 CLI 自然产出 `view_image` 并行形状；按计划须与注入式回放区分记录 |
 | 5.8 在线门禁 | **未完成**（按计划只能声明离线认证） |
 | 4.4 的 28 条契约断言修订 | 已落盘（27 处文档 + 2 个测试文件新增用例） |
 
