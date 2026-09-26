@@ -85,6 +85,43 @@ let wire = "";
 let providerRequests = 0;
 let providerResponder: ((request: Request) => Promise<Response>) | undefined;
 
+const outboundProviderBodies: string[] = [];
+
+/** Independent adjacency oracle: mirrors the upstream Chat contraction rule
+ * without calling any Token projection code. */
+function violatesToolCallAdjacency(body: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null) return false;
+  const input = (parsed as Record<string, unknown>).input;
+  if (!Array.isArray(input)) return false;
+  const pending = new Set<string>();
+  let sawOutput = false;
+  for (const entry of input) {
+    const item = entry as Record<string, unknown>;
+    const type = item?.type;
+    const callId = item?.call_id;
+    if (type === "function_call" || type === "custom_tool_call") {
+      if (pending.size > 0 && sawOutput) return true;
+      if (typeof callId === "string") pending.add(callId);
+      continue;
+    }
+    if (type === "function_call_output" || type === "custom_tool_call_output") {
+      if (pending.size === 0) continue;
+      sawOutput = true;
+      if (typeof callId === "string") pending.delete(callId);
+      if (pending.size === 0) sawOutput = false;
+      continue;
+    }
+    if (pending.size > 0) return true;
+  }
+  return pending.size > 0;
+}
+
 function runCodex(
   args: readonly string[],
   cwd: string,
@@ -142,7 +179,10 @@ try {
   const providerFetch: FetchFunction = async (input, init) => {
     providerRequests += 1;
     const request = new Request(input, init);
-    if (providerResponder !== undefined) return providerResponder(request);
+    if (providerResponder !== undefined) {
+      outboundProviderBodies.push(await request.clone().text());
+      return providerResponder(request);
+    }
     return new Response(wire, {
       status: 200,
       headers: { "content-type": "text/event-stream" },
@@ -513,6 +553,7 @@ try {
 
     let toolStage = 0;
     let capturedSecondInput: Record<string, unknown>[] | undefined;
+    const outboundBefore = outboundProviderBodies.length;
     providerResponder = async (request) => {
       const body = await request.text();
       if (toolStage === 0) {
@@ -606,6 +647,38 @@ try {
           capturedSecondInput.indexOf(calls[index]!),
       );
     }
+    const caseOutbound = outboundProviderBodies.slice(outboundBefore);
+    assert.ok(
+      caseOutbound.length >= 2,
+      "the tool history case must send at least two Provider requests",
+    );
+    assert.deepEqual(
+      caseOutbound.map((body) => violatesToolCallAdjacency(body)),
+      caseOutbound.map(() => false),
+      "every outbound Provider body must keep tool-call groups adjacent",
+    );
+    const observedDeveloperBetweenOutputs = capturedSecondInput.some(
+      (item, index) => {
+        if (item.type !== "message" || item.role !== "developer") return false;
+        const before = capturedSecondInput!.slice(0, index);
+        const after = capturedSecondInput!.slice(index + 1);
+        return (
+          before.some((entry) => entry.type === "function_call_output") &&
+          after.some((entry) => entry.type === "function_call_output")
+        );
+      },
+    );
+    process.stdout.write(
+      JSON.stringify({
+        name: "tool_history_adjacency_observation",
+        providerRequests: caseOutbound.length,
+        outboundAdjacent: true,
+        developerBetweenOutputs: observedDeveloperBetweenOutputs,
+        note: observedDeveloperBetweenOutputs
+          ? "natural interleave observed and normalized"
+          : "natural interleave not observed in this run",
+      }) + "\n",
+    );
     const reasoningItems = capturedSecondInput.filter(
       (item) => item.type === "reasoning",
     );
