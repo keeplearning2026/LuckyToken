@@ -13,7 +13,7 @@ Scope: Provider Native Preservation，且仅 `operation === "responses"`（不�
 | 5.6/5.7 负回归与诊断五态 | 由现有单测与集成套件覆盖并通过 |
 | 5.9 仓库门禁 | 单测 1790/1790、typecheck、eslint 通过。集成 588 例中 586 通过：`test/integration/backend-application.test.ts` 的 quit/projection 用例在并行全量运行中偶发失败（单独运行 13/13 通过，且不引用 provider-native 任何模块），与本改动无因果关系 |
 | 5.4 生产接缝 stub-upstream e2e | 已完成：`test/integration/provider-native-adjacency-stub-upstream.test.ts`（本地 HTTP stub 用独立 oracle；① 改前同体被 oracle 判 400，② 同一 body 经 Token 后 stub 200 且逐字节等于预期排列、客户端 200、记 info notice，③ 非合格形状 stub 400、客户端 502、记 warning notice） |
-| 5.5 隔离 CLI 多轮消费 | **部分完成**。既有隔离回放脚本（临时 `CODEX_HOME` + 真实 `codex-cli 0.156.1` + stub upstream，两轮含 `exec_command` 工具调用）已加装**独立邻接 oracle**与自然触发观测：本次运行 Token 发出 2 个 Provider 请求、全部邻接合法，客户端两轮完成、第二轮历史含全部 tool 结果且 call/result 关联完整。观测结果 `developerBetweenOutputs=false`——**自然交错未复现**，因此"下一轮仍含该 developer message"这一条断言尚未被真实场景覆盖；仍需让真实 CLI 产出 `view_image` 并行形状，或按计划改注入式并在记录中标注 |
+| 5.5 隔离 CLI 多轮消费 | **部分完成**。既有隔离回放脚本（临时 `CODEX_HOME` + 真实 `codex-cli 0.156.1` + stub upstream，两轮含 `exec_command` 工具调用）已加装**独立邻接 oracle**与自然触发观测：本次运行 Token 发出 2 个 Provider 请求、全部邻接合法，客户端两轮完成、第二轮历史含全部 tool 结果且 call/result 关联完整。观测结果 `developerBetweenOutputs=false`——**自然交错未复现**，因此"下一轮仍含该 developer message"这一条断言尚未被真实场景覆盖；仍需让真实 CLI 产出 `view_image` 并行形状，或按计划改注入式并在记录中标注。自然触发的三个前提已探明：① 本机 `codex.exe`（0.156.1）内含 `view_image`、`image_resize_notice`、`was resized from` 三个字符串，说明提示行为在 CLI 侧存在；② 仓库已有可用的大图（`reference/opencodex/.../040-after-cap-slot-ko-1280.png`，2744x3600，超过观察到的触发尺寸）；③ 交错需要图片结果**先于**同组兄弟工具返回，可用 `Start-Sleep` 让兄弟工具变慢来确定性构造。下一步即按此改造 `tool_history_overlap` 用例并断言 `developerBetweenOutputs=true` |
 | 5.8 在线门禁 | **未完成**（按计划只能声明离线认证） |
 | 4.4 的 28 条契约断言修订 | 已落盘（27 处文档 + 2 个测试文件新增用例） |
 
