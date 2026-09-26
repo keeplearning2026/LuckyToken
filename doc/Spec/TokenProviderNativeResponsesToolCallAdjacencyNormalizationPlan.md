@@ -13,7 +13,7 @@ Scope: Provider Native Preservation，且仅 `operation === "responses"`（不�
 | 5.6/5.7 负回归与诊断五态 | 由现有单测与集成套件覆盖并通过 |
 | 5.9 仓库门禁 | 单测 1790/1790、typecheck、eslint 通过。集成 588 例中 586 通过：`test/integration/backend-application.test.ts` 的 quit/projection 用例在并行全量运行中偶发失败（单独运行 13/13 通过，且不引用 provider-native 任何模块），与本改动无因果关系 |
 | 5.4 生产接缝 stub-upstream e2e | 已完成：`test/integration/provider-native-adjacency-stub-upstream.test.ts`（本地 HTTP stub 用独立 oracle；① 改前同体被 oracle 判 400，② 同一 body 经 Token 后 stub 200 且逐字节等于预期排列、客户端 200、记 info notice，③ 非合格形状 stub 400、客户端 502、记 warning notice） |
-| 5.5 隔离 CLI 多轮消费 | **部分完成**。既有隔离回放脚本（临时 `CODEX_HOME` + 真实 `codex-cli 0.156.1` + stub upstream，两轮含 `exec_command` 工具调用）已加装**独立邻接 oracle**与自然触发观测：本次运行 Token 发出 2 个 Provider 请求、全部邻接合法，客户端两轮完成、第二轮历史含全部 tool 结果且 call/result 关联完整。观测结果 `developerBetweenOutputs=false`——**自然交错未复现**，因此"下一轮仍含该 developer message"这一条断言尚未被真实场景覆盖；仍需让真实 CLI 产出 `view_image` 并行形状，或按计划改注入式并在记录中标注。自然触发的三个前提已探明：① 本机 `codex.exe`（0.156.1）内含 `view_image`、`image_resize_notice`、`was resized from` 三个字符串，说明提示行为在 CLI 侧存在；② 仓库已有可用的大图（`reference/opencodex/.../040-after-cap-slot-ko-1280.png`，2744x3600，超过观察到的触发尺寸）；③ 交错需要图片结果**先于**同组兄弟工具返回，可用 `Start-Sleep` 让兄弟工具变慢来确定性构造。下一步即按此改造 `tool_history_overlap` 用例并断言 `developerBetweenOutputs=true` |
+| 5.5 隔离 CLI 多轮消费 | **已完成（离线）**。`tool_history_overlap` 用例按 §1.3 形状改造后**自然复现**交错：CLI 首轮响应给出 `view_image`（仓库大图 2744x3600）与慢速兄弟工具 `exec_command`（`Start-Sleep -Milliseconds 1500; Write-Output TOOL_B`），图片结果先返回，真实 CLI 在客户端线写出 `output(view_image) → message(role=developer, <image_resize_notice>) → output(exec_command)`；Token 把该 notice 推迟到组闭合之后，Provider 组窗内无穿插、notice 仍在历史中、图片内容与 `TOOL_B` 结果完整，独立 oracle 判定全部出站 body 邻接合法，客户端两轮完成并拿到最终答案。观测输出 `naturalInterleaveObserved=true / injected=false`（未注入历史）。方法学更正：此前 `developerBetweenOutputs` 观测的是**规范化后的 Provider 出站 body**，规范化生效时该字段必然为 false，交错证据改由客户端线捕获。两处运行前提：①`features.image_resize_notice=true`（0.156.1 仍 under development、默认关闭，不启用时 CLI 缩放图片但不写提示）；②该用例 CLI 调用使用 `--dangerously-bypass-approvals-and-sandbox`（隔离 `CODEX_HOME` 下 approval=never 会拒绝全部命令，兄弟工具瞬时失败则图片不再先返回），命令为临时用例目录内的固定 sleep/echo。 |
 | 5.8 在线门禁 | **未完成**（按计划只能声明离线认证） |
 | 4.4 的 28 条契约断言修订 | 已落盘（27 处文档 + 2 个测试文件新增用例） |
 
@@ -421,6 +421,43 @@ Token 指向本地 stub upstream；stub 用**独立实现**的邻接 oracle 判�
 真实 Codex CLI 指向本地 Token + stub upstream，至少两轮含一次工具调用：下一轮历史仍含该
 developer message 与全部 tool 结果、call/result 关联完整、不再进入连续 502 循环。
 形状无法自然触发时用注入历史并明确标注。
+
+`test/online/run-provider-native-item-chain-replay.ts` 的 `tool_history_overlap`
+（`TOKEN_REPLAY_CASE=tool_history_overlap`）已按 §1.3 形状改造，并**自然复现**该交错，
+本次未使用注入历史：
+
+```text
+客户端线（Token 入站，真实 CLI 写出）
+  function_call_output  call_tool_a   ← view_image：仓库大图 2744x3600，CLI 缩放后写入 input_image
+  message  role=developer             ← <image_resize_notice>：Image 1 of 1 in the preceding tool output was resized from 2744x3600 to 1376x1805 pixels.
+  function_call_output  call_tool_b   ← exec_command：Start-Sleep -Milliseconds 1500; Write-Output TOOL_B
+
+Provider 线（Token 出站，同一请求）
+  function_call_output  call_tool_a
+  function_call_output  call_tool_b
+  message  role=developer             ← 同一则 notice，被推迟到组闭合之后
+```
+
+脚本硬断言：客户端线组窗恰为 `call_tool_a, developer, call_tool_b`；Provider 线组窗恰为
+`call_tool_a, call_tool_b` 且 notice 仍在该组之后；每个 tool 结果落在自己的 call 之后；
+`view_image` 结果是 `input_image` 内容数组、`exec_command` 结果含 `TOOL_B`；独立 oracle
+`violatesToolCallAdjacency` 判定本次全部出站 body 邻接合法；CLI 退出码 0、`turn.completed`、
+最终文本 `TOOLS_HISTORY_OK`、无已知渲染诊断。观测行输出
+`naturalInterleaveObserved=true / injected=false`。
+
+两处运行前提由脚本显式配置（并写入用例目录内的 `config.toml`）：
+
+- `features.image_resize_notice = true`。0.156.1 的 `image_resize_notice` 仍是 under
+  development 且默认关闭（`codex features list`）；不启用时 CLI 照常缩放图片但不写提示，
+  交错不会出现。用例启用该客户端特性，而不是自行拼装提示文本。
+- 该用例的 CLI 调用使用 `--dangerously-bypass-approvals-and-sandbox`。隔离 `CODEX_HOME`
+  下命令策略在 approval=never 时拒绝全部命令（含 `Write-Output`；`workspace-write`
+  同样被拒），兄弟工具会在图片结果之前瞬时失败，图片结果不再"先返回"。用例执行的固定
+  fixture 命令只是临时用例目录内的 sleep/echo，不接触用户状态。
+
+方法学更正：5.5 早期版本的 `developerBetweenOutputs` 观测的是**规范化后的 Provider 出站
+body**，而规范化生效时该字段必然为 false；交错与否只能在客户端线判定。用例现同时捕获
+两条线，分别断言"客户端线有交错、Provider 线无交错"。
 
 ### 5.6 负回归
 

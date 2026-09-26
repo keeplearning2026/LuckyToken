@@ -3,9 +3,11 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 
+import type { ClientProtocolHandler } from "../../src/http.js";
 import { createProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 import { createOpenAIResponsesHandler } from "../../src/protocols/openai-responses/handler.js";
 import { createTokenRuntime } from "../../src/runtime.js";
@@ -120,6 +122,40 @@ function violatesToolCallAdjacency(body: string): boolean {
     if (pending.size > 0) return true;
   }
   return pending.size > 0;
+}
+
+const TOOL_HISTORY_IMAGE_CALL_ID = "call_tool_a";
+const TOOL_HISTORY_SIBLING_CALL_ID = "call_tool_b";
+
+function toolHistoryInput(body: string): readonly Record<string, unknown>[] {
+  return (JSON.parse(body) as { input: readonly Record<string, unknown>[] }).input;
+}
+
+/** The inclusive slice from the image tool output to its sibling tool output. */
+function toolHistoryGroupWindow(
+  items: readonly Record<string, unknown>[],
+): readonly string[] {
+  const label = (item: Record<string, unknown>): string => {
+    if (item.type === "function_call_output" && typeof item.call_id === "string") {
+      return `output:${item.call_id}`;
+    }
+    if (item.type === "message" && item.role === "developer") return "developer";
+    return String(item.type);
+  };
+  const image = items.findIndex(
+    (item) =>
+      item.type === "function_call_output" &&
+      item.call_id === TOOL_HISTORY_IMAGE_CALL_ID,
+  );
+  const sibling = items.findIndex(
+    (item) =>
+      item.type === "function_call_output" &&
+      item.call_id === TOOL_HISTORY_SIBLING_CALL_ID,
+  );
+  assert.ok(image >= 0 && sibling >= 0, "both tool outputs must be in history");
+  return items
+    .slice(Math.min(image, sibling), Math.max(image, sibling) + 1)
+    .map(label);
 }
 
 function runCodex(
@@ -385,30 +421,62 @@ try {
     const directory = join(root, "tool_history_overlap");
     const codexHome = join(directory, "codex-home");
     await mkdir(codexHome, { recursive: true });
+
+    // §5.5 client-wire observation seam. Token preserves the client body, so the
+    // recorded §1.3 shape has to be captured on the wire before Token defers the
+    // notice out of the tool-call group.
+    const clientRequests: string[] = [];
+    const observingProtocol: ClientProtocolHandler = {
+      method: handler.method,
+      pathname: handler.pathname,
+      handle: async (request, context) => {
+        clientRequests.push(await request.clone().text());
+        return handler.handle(request, context);
+      },
+    };
+    const clientServer = await startTokenHttpServer({
+      runtime: createTokenRuntime({ clientProtocols: [observingProtocol] }),
+      port: 0,
+    });
     await writeFile(
       join(codexHome, "config.toml"),
       [
         'model = "openai/gpt-native"',
         'model_provider = "token_replay"',
+        // codex-cli 0.156.1 ships the resize notice behind an under-development
+        // feature flag. The recorded incident carries the notice, so the replay
+        // enables that client feature instead of inventing the notice text.
+        "features.image_resize_notice = true",
         "[model_providers.token_replay]",
         'name = "LuckyToken production lifecycle replay"',
-        `base_url = "${tokenServer.origin}/v1"`,
+        `base_url = "${clientServer.origin}/v1"`,
         'wire_api = "responses"',
         "requires_openai_auth = false",
       ].join("\n"),
     );
 
-    const firstCallId = "call_tool_a";
-    const secondCallId = "call_tool_b";
+    const firstCallId = TOOL_HISTORY_IMAGE_CALL_ID;
+    const secondCallId = TOOL_HISTORY_SIBLING_CALL_ID;
     const firstItemId = "fc_tool_a";
     const secondItemId = "fc_tool_b";
-    const firstArguments = JSON.stringify({ cmd: "Write-Output TOOL_A" });
-    const secondArguments = JSON.stringify({ cmd: "Write-Output TOOL_B" });
+    // §1.3 records an oversized `view_image` followed by a slower sibling tool, so
+    // the resized image result is already in the history when the sibling result is
+    // appended and the CLI writes its resize notice between the two outputs.
+    const imagePath = fileURLToPath(
+      new URL(
+        "../../reference/opencodex/devlog/_plan/260830_models_provider_header/evidence/040-after-cap-slot-ko-1280.png",
+        import.meta.url,
+      ),
+    );
+    const firstArguments = JSON.stringify({ path: imagePath });
+    const secondArguments = JSON.stringify({
+      cmd: `Start-Sleep -Milliseconds 1500; Write-Output TOOL_B`,
+    });
     const firstCall = {
       type: "function_call",
       id: firstItemId,
       call_id: firstCallId,
-      name: "exec_command",
+      name: "view_image",
       arguments: firstArguments,
       status: "completed",
     };
@@ -460,23 +528,6 @@ try {
       },
       {
         type: "response.function_call_arguments.delta",
-        output_index: 1,
-        item_id: secondItemId,
-        delta: secondArguments,
-      },
-      {
-        type: "response.function_call_arguments.done",
-        output_index: 1,
-        item_id: secondItemId,
-        arguments: secondArguments,
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        item: secondCall,
-      },
-      {
-        type: "response.function_call_arguments.delta",
         output_index: 0,
         item_id: firstItemId,
         delta: firstArguments,
@@ -491,6 +542,23 @@ try {
         type: "response.output_item.done",
         output_index: 0,
         item: firstCall,
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        output_index: 1,
+        item_id: secondItemId,
+        delta: secondArguments,
+      },
+      {
+        type: "response.function_call_arguments.done",
+        output_index: 1,
+        item_id: secondItemId,
+        arguments: secondArguments,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 1,
+        item: secondCall,
       },
       {
         type: "response.completed",
@@ -573,125 +641,177 @@ try {
       });
     };
 
-    const output = join(directory, "final.txt");
-    const result = await runCodex(
-      [
-        "exec",
-        "--json",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        "-o",
-        output,
-        "Use both exec_command calls exactly as supplied by the model, then finish.",
-      ],
-      directory,
-      codexHome,
-    );
-    const final = await readFile(output, "utf8").catch(() => "");
-    const events = result.stdout
-      .split(/\r?\n/u)
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line) as {
-            type?: string;
-            item?: { type?: string; text?: string };
-          };
-        } catch {
-          return {};
-        }
-      });
-    const forbidden = FORBIDDEN.filter((diagnostic) =>
-      result.stderr.includes(diagnostic),
-    );
-    const summary = {
-      name: "tool_history_overlap",
-      exitCode: result.code,
-      final: final.trim(),
-      forbidden,
-      completed: events.some((event) => event.type === "turn.completed"),
-      toolStage,
-    };
-    process.stdout.write(JSON.stringify(summary) + "\n");
-
-    assert.equal(result.code, 0);
-    assert.equal(summary.completed, true);
-    assert.equal(summary.final, "TOOLS_HISTORY_OK");
-    assert.equal(toolStage, 2);
-    assert.deepEqual(forbidden, []);
-
-    assert.ok(capturedSecondInput, "Codex must issue a second Responses request");
-    const calls = capturedSecondInput.filter((item) => item.type === "function_call");
-    assert.deepEqual(
-      calls.map(({ call_id, name, arguments: args }) => ({ call_id, name, args })),
-      [
-        { call_id: secondCallId, name: "exec_command", args: secondArguments },
-        { call_id: firstCallId, name: "exec_command", args: firstArguments },
-      ],
-    );
-    const outputs = capturedSecondInput.filter(
-      (item) => item.type === "function_call_output",
-    );
-    assert.deepEqual(
-      outputs.map((item) => item.call_id),
-      [secondCallId, firstCallId],
-    );
-    for (const [index, marker] of ["TOOL_B", "TOOL_A"].entries()) {
-      const outputText = String(outputs[index]!.output);
-      assert.match(outputText, new RegExp(marker));
-      assert.ok(outputText.length > 0);
-      assert.ok(
-        capturedSecondInput.indexOf(outputs[index]!) >
-          capturedSecondInput.indexOf(calls[index]!),
+    try {
+      const output = join(directory, "final.txt");
+      const result = await runCodex(
+        [
+          "exec",
+          "--json",
+          "--ephemeral",
+          "--skip-git-repo-check",
+          // The sibling tool has to really run (and stay slow) so the image result
+          // lands first and the history carries a genuine tool result. The isolated
+          // CLI command policy rejects every command under approval=never, so this
+          // case executes the fixed fixture command without a sandbox: a sleep/echo
+          // inside the temporary case directory.
+          "--dangerously-bypass-approvals-and-sandbox",
+          "-o",
+          output,
+          "Use both tool calls exactly as supplied by the model, then finish.",
+        ],
+        directory,
+        codexHome,
       );
-    }
-    const caseOutbound = outboundProviderBodies.slice(outboundBefore);
-    assert.ok(
-      caseOutbound.length >= 2,
-      "the tool history case must send at least two Provider requests",
-    );
-    assert.deepEqual(
-      caseOutbound.map((body) => violatesToolCallAdjacency(body)),
-      caseOutbound.map(() => false),
-      "every outbound Provider body must keep tool-call groups adjacent",
-    );
-    const observedDeveloperBetweenOutputs = capturedSecondInput.some(
-      (item, index) => {
-        if (item.type !== "message" || item.role !== "developer") return false;
-        const before = capturedSecondInput!.slice(0, index);
-        const after = capturedSecondInput!.slice(index + 1);
-        return (
-          before.some((entry) => entry.type === "function_call_output") &&
-          after.some((entry) => entry.type === "function_call_output")
+      const final = await readFile(output, "utf8").catch(() => "");
+      const events = result.stdout
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line) as {
+              type?: string;
+              item?: { type?: string; text?: string };
+            };
+          } catch {
+            return {};
+          }
+        });
+      const forbidden = FORBIDDEN.filter((diagnostic) =>
+        result.stderr.includes(diagnostic),
+      );
+      const summary = {
+        name: "tool_history_overlap",
+        exitCode: result.code,
+        final: final.trim(),
+        forbidden,
+        completed: events.some((event) => event.type === "turn.completed"),
+        toolStage,
+      };
+      process.stdout.write(JSON.stringify(summary) + "\n");
+
+      assert.equal(result.code, 0);
+      assert.equal(summary.completed, true);
+      assert.equal(summary.final, "TOOLS_HISTORY_OK");
+      assert.equal(toolStage, 2);
+      assert.deepEqual(forbidden, []);
+
+      // §5.5 evidence. The real CLI must produce the recorded §1.3 interleave on
+      // the wire, and Token must hand the Provider a group-adjacent body that
+      // still carries the developer message.
+      const clientBody = clientRequests.find((body) =>
+        body.includes(TOOL_HISTORY_SIBLING_CALL_ID),
+      );
+      assert.ok(clientBody, "the tool-history client request must reach Token");
+      assert.deepEqual(
+        toolHistoryGroupWindow(toolHistoryInput(clientBody)),
+        [`output:${firstCallId}`, "developer", `output:${secondCallId}`],
+        "codex-cli 0.156.1 must place the resize notice between the two tool outputs",
+      );
+
+      assert.ok(capturedSecondInput, "Codex must issue a second Responses request");
+      const calls = capturedSecondInput.filter((item) => item.type === "function_call");
+      assert.deepEqual(
+        calls.map(({ call_id, name, arguments: args }) => ({ call_id, name, args })),
+        [
+          { call_id: firstCallId, name: "view_image", args: firstArguments },
+          { call_id: secondCallId, name: "exec_command", args: secondArguments },
+        ],
+      );
+      const outputs = capturedSecondInput.filter(
+        (item) => item.type === "function_call_output",
+      );
+      process.stdout.write(
+        JSON.stringify({
+          name: "tool_history_captured_outputs",
+          outputs: outputs.map((item) => ({
+            call_id: item.call_id,
+            kind: Array.isArray(item.output) ? "content-array" : typeof item.output,
+          })),
+        }) + "\n",
+      );
+      assert.deepEqual(
+        outputs.map((item) => item.call_id),
+        [firstCallId, secondCallId],
+      );
+      const imageOutput = outputs[0]!;
+      const siblingOutput = outputs[1]!;
+      assert.ok(
+        Array.isArray(imageOutput.output) &&
+          imageOutput.output.some(
+            (part) => (part as Record<string, unknown>).type === "input_image",
+          ),
+        "the view_image result must carry the resized image into the next round",
+      );
+      const siblingText =
+        typeof siblingOutput.output === "string"
+          ? siblingOutput.output
+          : JSON.stringify(siblingOutput.output);
+      assert.match(siblingText, /TOOL_B/u);
+      assert.doesNotMatch(
+        siblingText,
+        /blocked by policy/u,
+        "the sibling tool must really execute instead of being rejected by the command policy",
+      );
+      for (const [index, outputItem] of outputs.entries()) {
+        assert.ok(
+          capturedSecondInput.indexOf(outputItem) >
+            capturedSecondInput.indexOf(calls[index]!),
+          "every tool result must follow its own tool call",
         );
-      },
-    );
-    process.stdout.write(
-      JSON.stringify({
-        name: "tool_history_adjacency_observation",
-        providerRequests: caseOutbound.length,
-        outboundAdjacent: true,
-        developerBetweenOutputs: observedDeveloperBetweenOutputs,
-        note: observedDeveloperBetweenOutputs
-          ? "natural interleave observed and normalized"
-          : "natural interleave not observed in this run",
-      }) + "\n",
-    );
-    const reasoningItems = capturedSecondInput.filter(
-      (item) => item.type === "reasoning",
-    );
-    assert.equal(reasoningItems.length, 1);
-    assert.equal(reasoningItems[0]!.id, "rs_tools");
-    assert.deepEqual(reasoningItems[0]!.summary, [
-      { type: "summary_text", text: "TOOLS_REASONING" },
-    ]);
-    assert.ok(
-      capturedSecondInput.indexOf(reasoningItems[0]!) <
-        capturedSecondInput.indexOf(calls[0]!),
-    );
-    providerResponder = undefined;
+      }
+      assert.deepEqual(
+        toolHistoryGroupWindow(capturedSecondInput),
+        [`output:${firstCallId}`, `output:${secondCallId}`],
+        "the Provider request must present the tool-call group without interleaved items",
+      );
+      const outboundNoticeIndex = capturedSecondInput.findIndex(
+        (item) =>
+          item.type === "message" &&
+          item.role === "developer" &&
+          JSON.stringify(item.content).includes("<image_resize_notice>"),
+      );
+      assert.ok(
+        outboundNoticeIndex > capturedSecondInput.indexOf(siblingOutput),
+        "the deferred resize notice must stay in history after the closed group",
+      );
+
+      const caseOutbound = outboundProviderBodies.slice(outboundBefore);
+      assert.ok(
+        caseOutbound.length >= 2,
+        "the tool history case must send at least two Provider requests",
+      );
+      assert.deepEqual(
+        caseOutbound.map((body) => violatesToolCallAdjacency(body)),
+        caseOutbound.map(() => false),
+        "every outbound Provider body must keep tool-call groups adjacent",
+      );
+
+      const reasoningItems = capturedSecondInput.filter(
+        (item) => item.type === "reasoning",
+      );
+      assert.equal(reasoningItems.length, 1);
+      assert.equal(reasoningItems[0]!.id, "rs_tools");
+      assert.deepEqual(reasoningItems[0]!.summary, [
+        { type: "summary_text", text: "TOOLS_REASONING" },
+      ]);
+      assert.ok(
+        capturedSecondInput.indexOf(reasoningItems[0]!) <
+          capturedSecondInput.indexOf(calls[0]!),
+      );
+      process.stdout.write(
+        JSON.stringify({
+          name: "tool_history_adjacency_observation",
+          providerRequests: caseOutbound.length,
+          outboundAdjacent: true,
+          naturalInterleaveObserved: true,
+          injected: false,
+          note: "the real codex-cli 0.156.1 produced the recorded §1.3 interleave and Token deferred the resize notice back out of the group",
+        }) + "\n",
+      );
+    } finally {
+      providerResponder = undefined;
+      await clientServer.close();
+    }
   }
 
   if (runPatchConsumerCase) {
