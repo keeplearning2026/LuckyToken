@@ -1,11 +1,11 @@
 /**
- * Shared direct-Provider OpenAI Responses semantic-certification harness.
+ * Shared direct-Provider OpenAI Responses online certification harness.
  *
  * It constructs protocol requests itself and drives a real Provider through
  * Token's local `/v1/responses` endpoint. Provider-specific entrypoints
- * select the fixed Provider/model/key tuple. This harness certifies only
- * complete-history semantic conversion and never claims Codex client state or
- * lifecycle behavior.
+ * select the fixed Provider/model/key tuple. This harness certifies
+ * complete-history behavior in the selected lane and never claims Codex
+ * client state or lifecycle behavior.
  *
  * Real Agent/client behavior belongs in separate runners such as
  * `run-codex-cli.ts`; only those runners may certify `previous_response_id`,
@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../../src/data-plane-limits.js";
+import { supportsProviderNativeResponses } from "../../src/provider-native-responses/index.js";
 import {
   createOnlinePublicModelAuthority,
   reconcileOnlinePublicModels,
@@ -254,7 +255,9 @@ function responsesReasoningReplay(input: {
     .map((part) => part.text ?? "")
     .join("\n");
   if (summary.length === 0) return undefined;
-  if (input.api === "commandcode-private") return { summary };
+  if (input.api === "commandcode-private" || input.api === "openai-responses") {
+    return { summary };
+  }
   if (input.api !== "openai-completions") {
     throw new Error(`online_${input.api}_reasoning_shape`);
   }
@@ -521,12 +524,15 @@ function latencySummary(values: readonly number[]): Record<string, number> {
 function publishOnlineReport(input: {
   readonly model: string;
   readonly concurrency: number;
+  readonly providerNative: boolean;
   readonly summary: OnlineSummary;
 }): void {
   const report = {
     model: input.model,
     concurrency: input.concurrency,
-    scope: "semantic-complete-history",
+    scope: input.providerNative
+      ? "provider-native-complete-history"
+      : "semantic-complete-history",
     attemptedRequests: input.summary.attemptedRequests,
     successfulJson: input.summary.successfulJson,
     successfulSse: input.summary.successfulSse,
@@ -708,6 +714,10 @@ export async function runOpenAIResponsesOnlineSuite(
       throw new Error("online_resolved_provider_model_missing");
     }
     const providerApi = resolvedProviderModel.api;
+    const providerNative = supportsProviderNativeResponses(
+      resolvedProviderModel,
+      "responses",
+    );
     server = await startTokenHttpServer({
       runtime: composition.runtime,
       host: "127.0.0.1",
@@ -810,12 +820,16 @@ export async function runOpenAIResponsesOnlineSuite(
     if (streamOptionsExchange === undefined) {
       throw new Error("online_stream_options_upstream_missing");
     }
-    if (
-      containsObjectKey(
-        JSON.parse(streamOptionsExchange.body) as unknown,
-        "reasoning_summary_delivery",
-      )
-    ) {
+    const streamOptionsBody = JSON.parse(streamOptionsExchange.body) as unknown;
+    if (providerNative) {
+      if (
+        !isRecord(streamOptionsBody) ||
+        JSON.stringify(streamOptionsBody.stream_options) !==
+          JSON.stringify({ reasoning_summary_delivery: "sequential_cutoff" })
+      ) {
+        throw new Error("online_native_stream_options_not_preserved");
+      }
+    } else if (containsObjectKey(streamOptionsBody, "reasoning_summary_delivery")) {
       throw new Error(
         "online_stream_options_reasoning_summary_delivery_reached_provider_wire",
       );
@@ -869,19 +883,20 @@ export async function runOpenAIResponsesOnlineSuite(
         throw new Error("online_private_reasoning_effort_wire_mismatch");
       }
     }
+    const fullHistoryInput = [
+      ...fullHistoryTurn1.output,
+      {
+        type: "message",
+        role: "user",
+        content: promptFor(fullHistoryMarker2),
+      },
+    ];
     const fullHistoryTurn2 = await postResponses(
       conformanceOrigin,
       responsesToken,
       {
         model: selector,
-        input: [
-          ...fullHistoryTurn1.output,
-          {
-            type: "message",
-            role: "user",
-            content: promptFor(fullHistoryMarker2),
-          },
-        ],
+        input: fullHistoryInput,
         max_output_tokens: SUCCESS_MAX_TOKENS,
         reasoning: { effort: "high", summary: "auto" },
       },
@@ -902,16 +917,25 @@ export async function runOpenAIResponsesOnlineSuite(
     const fullHistoryBody = JSON.parse(
       fullHistoryUpstream.at(-1)?.body ?? "{}",
     ) as unknown;
-    const fullHistoryMessages = readOnlineProviderMessages(
-      providerApi,
-      fullHistoryBody,
-    );
-    requireOnlineReasoningReplay(
-      providerApi,
-      fullHistoryMessages,
-      replay.summary,
-      replay.fieldSelector,
-    );
+    if (providerNative) {
+      if (
+        !isRecord(fullHistoryBody) ||
+        JSON.stringify(fullHistoryBody.input) !== JSON.stringify(fullHistoryInput)
+      ) {
+        throw new Error("online_native_full_history_input_not_preserved");
+      }
+    } else {
+      const fullHistoryMessages = readOnlineProviderMessages(
+        providerApi,
+        fullHistoryBody,
+      );
+      requireOnlineReasoningReplay(
+        providerApi,
+        fullHistoryMessages,
+        replay.summary,
+        replay.fieldSelector,
+      );
+    }
     summary.successfulFullHistory += 1;
 
     if (providerApi === "openai-completions") {
@@ -1044,6 +1068,7 @@ export async function runOpenAIResponsesOnlineSuite(
     publishOnlineReport({
       model: selector,
       concurrency,
+      providerNative,
       summary,
     });
   } finally {
