@@ -18,16 +18,60 @@ test("release version is single-sourced and every shipped surface agrees", async
   );
   assert.notEqual(root.version, "0.0.0", "no placeholder version may be released");
 
-  for (const path of [
+  const manifestPaths = [
+    "package.json",
     "packages/application-control-plane/package.json",
     "packages/commandcode-model-catalog/package.json",
     "packages/provider-contract/package.json",
     "packages/provider-commandcode-goat/package.json",
     "packages/provider-commandcode-private/package.json",
     "packages/desktop-shell/package.json",
-  ]) {
-    const manifest = await readJson(path);
+  ];
+  const dependencySections = [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+  ];
+
+  const manifests = new Map();
+  for (const path of manifestPaths) {
+    manifests.set(path, path === "package.json" ? root : await readJson(path));
+  }
+  const internalPackageNames = new Set(
+    [...manifests.values()]
+      .map((manifest) => manifest.name)
+      .filter((name) => typeof name === "string" && name.startsWith("@token/")),
+  );
+
+  const lock = await readJson("package-lock.json");
+  assert.equal(lock.version, root.version, "package-lock.json must match the root version");
+
+  for (const path of manifestPaths) {
+    const manifest = manifests.get(path);
+    const packageKey = path === "package.json" ? "" : path.replace(/\/package\.json$/u, "");
+    const lockedManifest = lock.packages?.[packageKey];
     assert.equal(manifest.version, root.version, `${path} must match the root version`);
+    assert.equal(
+      lockedManifest?.version,
+      root.version,
+      `package-lock.json packages[${JSON.stringify(packageKey)}] must match the root version`,
+    );
+    for (const section of dependencySections) {
+      for (const [name, version] of Object.entries(manifest[section] ?? {})) {
+        if (!internalPackageNames.has(name)) continue;
+        assert.equal(
+          version,
+          root.version,
+          `${path} ${section}.${name} must match the root version`,
+        );
+        assert.equal(
+          lockedManifest?.[section]?.[name],
+          root.version,
+          `package-lock.json packages[${JSON.stringify(packageKey)}].${section}.${name} must match the root version`,
+        );
+      }
+    }
   }
 
   // The Control Plane hello payload must read the same source of truth at

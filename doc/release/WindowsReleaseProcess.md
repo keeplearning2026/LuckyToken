@@ -16,6 +16,11 @@ directory without rebuilding or recompressing it.
 
 ## Commands
 
+- Change only the root `package.json` `version`, then run
+  `npm run release:sync-version`. The root version is the release authority;
+  this command synchronizes every shipped workspace version, exact internal
+  `@token/*` dependency, and `package-lock.json`, then runs the version
+  certification gate.
 - `npm run release:candidate` builds and certifies a local candidate. Dirty or
   unsigned candidates are allowed for development, machine installation is
   skipped to avoid touching the developer's user state, and the manifest is

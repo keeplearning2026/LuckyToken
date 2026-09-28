@@ -41,6 +41,27 @@ Each install or reinstall replaces the user's `commandcode-models.json` with
 the current bundled catalog. Normal Backend startup never overwrites that file.
 The portable ZIP is not a Windows release artifact.
 
+Before building a new release version, change only the root `package.json`
+`version` field, then synchronize every shipped workspace and lockfile:
+
+```powershell
+npm run release:sync-version
+```
+
+For example, to prepare version `1.3.0`, set:
+
+```json
+{
+  "version": "1.3.0"
+}
+```
+
+in the root `package.json`, then run `npm run release:sync-version`. The
+command updates all shipped workspace `version` fields, exact internal
+`@token/*` dependency versions, and `package-lock.json`, then runs the
+release version consistency certification. Do not manually update those
+derived versions.
+
 Build and fully certify an unsigned local candidate:
 
 ```powershell
