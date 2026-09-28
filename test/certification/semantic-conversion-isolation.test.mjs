@@ -76,9 +76,25 @@ test("Direct Mode, Provider Native, and Semantic Conversion are pairwise indepen
       path.join(repositoryRoot, "src/provider-native-anthropic"),
       path.join(repositoryRoot, "src/provider-native-responses"),
     ],
+    // Protocol coordinators select lanes; lane contracts and the shared
+    // Responses error envelope are boundary leaves, not conversion owners.
     "Semantic Conversion": [
       path.join(repositoryRoot, "src/protocols/openai-responses/semantic"),
+      path.join(repositoryRoot, "src/protocols/openai-responses/semantic.ts"),
+      path.join(repositoryRoot, "src/protocols/openai-responses/compact-semantic.ts"),
+      path.join(repositoryRoot, "src/protocols/openai-responses/request.ts"),
+      path.join(repositoryRoot, "src/protocols/openai-responses/response.ts"),
+      path.join(repositoryRoot, "src/protocols/openai-responses/session-state.ts"),
+      path.join(repositoryRoot, "src/protocols/openai-responses/sse.ts"),
+      path.join(repositoryRoot, "src/protocols/openai-responses/codex-routed-compaction.ts"),
       path.join(repositoryRoot, "src/protocols/anthropic/semantic"),
+      path.join(repositoryRoot, "src/protocols/anthropic/request.ts"),
+      path.join(repositoryRoot, "src/protocols/anthropic/response.ts"),
+      path.join(repositoryRoot, "src/protocols/anthropic/tools.ts"),
+      path.join(repositoryRoot, "src/protocols/anthropic/profile.ts"),
+      path.join(repositoryRoot, "src/protocols/anthropic/representability.ts"),
+      path.join(repositoryRoot, "src/protocols/anthropic/sse.ts"),
+      path.join(repositoryRoot, "src/protocols/anthropic/wire.ts"),
     ],
   };
   const names = Object.keys(lanes);

@@ -16,7 +16,7 @@
     {
       "id": "responses-pi-conversion",
       "path": "doc/Protocols/OpenAI Responses-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:963625a511c658afb463d610b02ed6035a9cadb926f50cb817d998454cf97253"
+      "sha256": "sha256:b213f228fb05f302865fb9da40cb3f294f282bbfb02dd1108a01e9cb5aaae6cc"
     },
     {
       "id": "pi-commandcode-conversion",
