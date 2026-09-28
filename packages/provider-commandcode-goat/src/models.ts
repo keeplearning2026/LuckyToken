@@ -36,6 +36,8 @@ function projectCommandCodeGoatModel(
     ? Object.freeze({
         ...projected,
         compat: Object.freeze({
+          supportsDeveloperRole: false,
+          maxTokensField: "max_tokens" as const,
           thinkingFormat: "openai" as const,
           supportsReasoningEffort: true,
         }),

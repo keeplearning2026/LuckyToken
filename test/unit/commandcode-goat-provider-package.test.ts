@@ -131,6 +131,8 @@ describe("CommandCode Goat Provider Package", () => {
       id: "explicit-chat",
       api: "openai-completions",
       compat: {
+        supportsDeveloperRole: false,
+        maxTokensField: "max_tokens",
         thinkingFormat: "openai",
         supportsReasoningEffort: true,
       },
@@ -270,6 +272,7 @@ describe("CommandCode Goat Provider Package", () => {
       .streamSimple(
         model!,
         normalizeContext({
+          systemPrompt: "root instruction",
           messages: [
             {
               role: "user",
@@ -297,10 +300,26 @@ describe("CommandCode Goat Provider Package", () => {
     expect(requests[0]?.headers.get("authorization")).toBe(
       "Bearer goat-secret",
     );
-    await expect(requests[0]?.json()).resolves.toMatchObject({
+    const body = (await requests[0]?.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
       model: "google/gemini-3.7-flash",
       stream: true,
+      max_tokens: 32,
     });
+    expect(body).not.toHaveProperty("max_completion_tokens");
+    expect(body.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: "root instruction",
+        }),
+      ]),
+    );
+    expect(body.messages).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "developer" }),
+      ]),
+    );
   });
 
   it("sends only reasoning efforts declared by the projected model", async () => {
