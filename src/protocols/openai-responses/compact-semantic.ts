@@ -14,7 +14,7 @@ import type { OpenAIResponsesConfiguration } from "./configuration.js";
 import {
   renderResponsesError,
   type PreparedHttpResponse,
-} from "./response.js";
+} from "./error-rendering.js";
 import type { ResponseSessionState } from "./session-state.js";
 import { executeSemanticResponses } from "./semantic.js";
 

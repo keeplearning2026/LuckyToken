@@ -110,36 +110,71 @@ function endOfValue(text: string, start: number): number {
   return index;
 }
 
+interface TopLevelEntry {
+  readonly key: string;
+  readonly keyStart: number;
+  readonly valueStart: number;
+  readonly valueEnd: number;
+}
+
+interface TopLevelScan {
+  readonly entries: readonly TopLevelEntry[];
+  readonly duplicate: boolean;
+}
+
+/** Span-only scan of the caller's top-level JSON object. Returns null when the
+ *  text is not a plain object or cannot be walked unambiguously. */
+function scanTopLevelObject(rawBody: string): TopLevelScan | null {
+  let index = skipWhitespace(rawBody, 0);
+  if (rawBody[index] !== "{") return null;
+  index = skipWhitespace(rawBody, index + 1);
+  const entries: TopLevelEntry[] = [];
+  const seen = new Set<string>();
+  let duplicate = false;
+  if (rawBody[index] === "}") return { entries, duplicate };
+  for (;;) {
+    const keyStart = index;
+    let keyEnd: number;
+    let key: unknown;
+    try {
+      keyEnd = endOfString(rawBody, keyStart);
+      key = JSON.parse(rawBody.slice(keyStart, keyEnd)) as unknown;
+    } catch {
+      return null;
+    }
+    if (typeof key !== "string") return null;
+    if (seen.has(key)) duplicate = true;
+    seen.add(key);
+    index = skipWhitespace(rawBody, keyEnd);
+    if (rawBody[index] !== ":") return null;
+    index = skipWhitespace(rawBody, index + 1);
+    let valueEnd: number;
+    try {
+      valueEnd = endOfValue(rawBody, index);
+    } catch {
+      return null;
+    }
+    entries.push({ key, keyStart, valueStart: index, valueEnd });
+    index = skipWhitespace(rawBody, valueEnd);
+    if (rawBody[index] === ",") {
+      index = skipWhitespace(rawBody, index + 1);
+      continue;
+    }
+    if (rawBody[index] === "}") return { entries, duplicate };
+    return null;
+  }
+}
+
 function topLevelModelStringSpans(
   rawBody: string,
 ): ReadonlyArray<readonly [number, number]> {
-  let index = skipWhitespace(rawBody, 0);
-  if (rawBody[index] !== "{") return [];
-  index += 1;
-  const spans: Array<readonly [number, number]> = [];
-  while (index < rawBody.length) {
-    index = skipWhitespace(rawBody, index);
-    if (rawBody[index] === "}") break;
-    const keyStart = index;
-    const keyEnd = endOfString(rawBody, keyStart);
-    const key = JSON.parse(rawBody.slice(keyStart, keyEnd)) as unknown;
-    index = skipWhitespace(rawBody, keyEnd);
-    if (rawBody[index] !== ":") throw new Error("Expected JSON property separator");
-    index = skipWhitespace(rawBody, index + 1);
-    const valueStart = index;
-    const valueEnd = endOfValue(rawBody, valueStart);
-    if (key === "model" && rawBody[valueStart] === '"') {
-      spans.push([valueStart, valueEnd] as const);
-    }
-    index = skipWhitespace(rawBody, valueEnd);
-    if (rawBody[index] === ",") {
-      index += 1;
-      continue;
-    }
-    if (rawBody[index] === "}") break;
-    throw new Error("Expected JSON property delimiter");
+  const scanned = scanTopLevelObject(rawBody);
+  if (scanned === null) {
+    throw new Error("Responses passthrough body must be a JSON object");
   }
-  return spans;
+  return scanned.entries
+    .filter((entry) => entry.key === "model" && rawBody[entry.valueStart] === '"')
+    .map((entry) => [entry.valueStart, entry.valueEnd] as const);
 }
 
 export function rewriteModelJson(
@@ -159,4 +194,62 @@ export function rewriteModelJson(
     text = `${text.slice(0, start)}${replacement}${text.slice(end)}`;
   }
   return { parsed: { ...parsed, model: modelId }, text };
+}
+
+export interface TopLevelPropertyRemoval {
+  /** The caller's document without the removed property. */
+  readonly parsed: Record<string, unknown>;
+  /** Byte-identical to the input whenever `removed` is false. */
+  readonly text: string;
+  readonly removed: boolean;
+}
+
+/**
+ * Remove exactly one top-level JSON property while keeping every other byte of
+ * the caller's request text: nested properties with the same name, string
+ * escapes, number literals, and whitespace all survive unchanged. Any
+ * ambiguity — an absent property, a duplicate top-level key, text that cannot
+ * be walked, or a splice that no longer parses back to the same remaining
+ * document — returns the original bytes instead of rewriting the whole body.
+ */
+export function removeTopLevelJsonProperty(
+  rawBody: string,
+  name: string,
+): TopLevelPropertyRemoval {
+  const parsed = parseJsonObject(rawBody);
+  const unchanged = (): TopLevelPropertyRemoval => ({
+    parsed,
+    text: rawBody,
+    removed: false,
+  });
+  if (!Object.hasOwn(parsed, name)) return unchanged();
+  const scanned = scanTopLevelObject(rawBody);
+  if (scanned === null || scanned.duplicate) return unchanged();
+  const index = scanned.entries.findIndex((entry) => entry.key === name);
+  const entry = scanned.entries[index];
+  if (entry === undefined) return unchanged();
+  const next = scanned.entries[index + 1];
+  const start =
+    next === undefined
+      ? (scanned.entries[index - 1]?.valueEnd ?? entry.keyStart)
+      : entry.keyStart;
+  const end = next === undefined ? entry.valueEnd : next.keyStart;
+  const text = `${rawBody.slice(0, start)}${rawBody.slice(end)}`;
+  const expected: Record<string, unknown> = { ...parsed };
+  delete expected[name];
+  let projected: unknown;
+  try {
+    projected = JSON.parse(text) as unknown;
+  } catch {
+    return unchanged();
+  }
+  if (
+    typeof projected !== "object" ||
+    projected === null ||
+    Array.isArray(projected) ||
+    JSON.stringify(projected) !== JSON.stringify(expected)
+  ) {
+    return unchanged();
+  }
+  return { parsed: projected as Record<string, unknown>, text, removed: true };
 }

@@ -1293,6 +1293,14 @@ wire conversion 或 response lifecycle。
 - `reasoningEfforts`：官方推理档位（如 DeepSeek 仅 `high/max`、Qwen3.8-Max 仅
   `low/medium/xhigh`）；官方未标注档位时不推断任何可选档位；
 - `supportedEndpoints`：CommandCode upstream 支持的协议端点，运行时据此确定唯一 Pi `Model.api`；
+- `responsesStreamOptions`：只有暴露 `/responses` 的模型声明 `preserve` 或 `omit`，
+  决定 Provider Native 发送边界是否移除 caller 的顶层 `stream_options`。`omit` 只删除该
+  顶层字段并保留其余原始字节（嵌套同名字段、数字字面量都不改写），同时发布 bounded
+  诊断 notice；未声明等同于 `preserve`，Semantic Conversion 始终不消费该字段。该事实
+  由 `createCommandCodeModelCapabilities()` 投影成按 model id 查询的只读视图，再由
+  composition 按 Provider id 收敛成 Provider Native 的显式 capability seam：它不挂在
+  Pi `Model` 上，不进入 `compat`/`samplingParams`/`metadata`，因此任何 Model 复制、克隆
+  或字段白名单重建都不会悄悄丢失该策略；
 - `minimumPlan`：Go、GOAT、Pro 或 Max，供 Goat 选择当前订阅可用模型。
 
 目录故意不保存价格，因为价格变化快且 Token 没有 live pricing authority。Pi

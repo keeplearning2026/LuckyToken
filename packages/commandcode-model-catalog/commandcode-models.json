@@ -166,6 +166,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GPT-5.6 Sol",
       "description": "frontier model for complex professional work",
       "input": [
@@ -191,6 +192,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GPT-5.6 Terra",
       "description": "balances intelligence and cost",
       "input": [
@@ -216,6 +218,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GPT-6 Luna",
       "description": "optimized for cost-sensitive workloads",
       "input": [
@@ -241,6 +244,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GPT-5.5",
       "description": "latest frontier model for general complex work",
       "input": [
@@ -266,6 +270,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GPT-5.4",
       "description": "frontier model for general complex work",
       "input": [
@@ -291,6 +296,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GPT-5.3 Codex",
       "description": "frontier coding model",
       "input": [
@@ -316,6 +322,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GPT-5.4 Mini",
       "description": "fast, cost-effective model for everyday tasks",
       "input": [
@@ -341,6 +348,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "omit",
       "name": "DeepSeek V4 Pro (latest)",
       "description": "hybrid-attention long-context reasoning",
       "input": [
@@ -365,6 +373,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "omit",
       "name": "DeepSeek V4.1 Flash",
       "description": "fast hybrid-attention reasoning with vision",
       "input": [
@@ -390,6 +399,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "omit",
       "name": "DeepSeek V4 Flash Vision (exp)",
       "description": "fast hybrid-attention reasoning with vision",
       "input": [
@@ -415,6 +425,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Kimi K3",
       "description": "long-horizon coding & knowledge work with 1M context",
       "input": [
@@ -440,6 +451,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Kimi K2.7 Code",
       "description": "improved long-horizon coding with vision",
       "input": [
@@ -465,6 +477,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Kimi K2.7 Code HighSpeed",
       "description": "high-speed long-horizon coding with vision",
       "input": [
@@ -490,6 +503,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Kimi K2.6",
       "description": "long-horizon coding with vision",
       "input": [
@@ -506,6 +520,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Kimi K2.5",
       "description": "multimodal frontend coding",
       "input": [
@@ -522,6 +537,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GLM-5.3",
       "description": "frontier coding with emergent cyber capabilities",
       "input": [
@@ -546,6 +562,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GLM-5.2",
       "description": "powerful coding with 1M context and long-horizon tasks",
       "input": [
@@ -570,6 +587,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GLM-5.2 Fast",
       "description": "high-throughput GLM-5.2 with 1M context",
       "input": [
@@ -585,6 +603,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GLM-5.1",
       "description": "long-horizon autonomous coding agent",
       "input": [
@@ -600,6 +619,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "GLM-5",
       "description": "multi-mode thinking & long-range planning",
       "input": [
@@ -615,6 +635,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "MiniMax M3",
       "description": "frontier coding, agents & native multimodality",
       "input": [
@@ -640,6 +661,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "MiniMax M2.7",
       "description": "end-to-end software engineering agent",
       "input": [
@@ -655,6 +677,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "MiniMax M2.5",
       "description": "cross-platform full-stack agentic dev",
       "input": [
@@ -670,6 +693,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "MiMo V2.6 Flash",
       "description": "efficient long-context agentic coding",
       "input": [
@@ -686,6 +710,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "MiMo V2.6 Pro",
       "description": "high-capability long-context agentic coding",
       "input": [
@@ -701,6 +726,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Qwen 3.8 Max",
       "description": "autonomous long-horizon coding & professional work",
       "input": [
@@ -726,6 +752,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Qwen 3.8 27B",
       "description": "compact vision-language coding & agentic work",
       "input": [
@@ -752,6 +779,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Qwen 3.7 Max",
       "description": "frontier coding & long-horizon agent execution",
       "input": [
@@ -776,6 +804,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Qwen 3.7 Plus",
       "description": "agentic coding & reasoning at lower cost",
       "input": [
@@ -801,6 +830,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Qwen 3.7 Flash",
       "description": "fast low-cost agentic coding & reasoning",
       "input": [
@@ -826,6 +856,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Qwen 3.6 Max Preview",
       "description": "vibe coding & efficient agent execution",
       "input": [
@@ -850,6 +881,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Qwen 3.6 Plus",
       "description": "agentic coding & reasoning",
       "input": [
@@ -875,6 +907,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Step 3.7 Flash",
       "description": "multimodal sparse-MoE reasoning",
       "input": [
@@ -923,6 +956,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Tencent Hy3",
       "description": "sparse-MoE reasoning & agentic tool use",
       "input": [
@@ -971,6 +1005,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Gemini 3.6 Flash",
       "description": "previous Gemini Flash, still fast & capable",
       "input": [
@@ -996,6 +1031,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Gemini 3.5 Flash",
       "description": "Pro-level coding proficiency, parallel agentic execution",
       "input": [
@@ -1021,6 +1057,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Gemini 3.5 Flash Lite",
       "description": "upgraded agentic capabilities, ideal for subagents",
       "input": [
@@ -1046,6 +1083,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Gemini 3.1 Flash Lite",
       "description": "high-volume workhorse model with implicit caching",
       "input": [
@@ -1071,6 +1109,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Fugu Ultra",
       "description": "multi-agent orchestration across frontier models",
       "input": [
@@ -1096,6 +1135,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Nemotron 3 Ultra",
       "description": "open reasoning model for long-horizon autonomous agents",
       "input": [
@@ -1120,6 +1160,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Inkling",
       "description": "multimodal MoE reasoning",
       "input": [
@@ -1145,6 +1186,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Inkling Small",
       "description": "lightweight MoE reasoning at lower cost and latency",
       "input": [
@@ -1170,6 +1212,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Laguna S 2.1",
       "description": "open-weight agentic coding and long-horizon work",
       "input": [
@@ -1195,6 +1238,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Muse Spark 1.1",
       "description": "agentic performance, tool use, and computer use",
       "input": [
@@ -1220,6 +1264,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Muse Spark 1.2",
       "description": "coding-optimized for agentic workflows and large codebases",
       "input": [
@@ -1245,6 +1290,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Muse Spark 1.2 Contributor",
       "description": "Muse Spark 1.2 at ~95% off",
       "input": [
@@ -1270,6 +1316,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Grok 4.5",
       "description": "smartest model for coding, agentic tasks, knowledge work",
       "input": [
@@ -1295,6 +1342,7 @@
         "/chat/completions",
         "/responses"
       ],
+      "responsesStreamOptions": "preserve",
       "name": "Grok 4.6",
       "description": "frontier performance on coding, knowledge work, and STEM",
       "input": [

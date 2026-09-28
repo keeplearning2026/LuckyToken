@@ -31,14 +31,14 @@ import {
   UnsupportedResponsesContentEncodingError,
 } from "./request-body.js";
 import {
-  renderResponsesError,
-  type PreparedHttpResponse,
-} from "./response.js";
-import {
   bufferNativeResponsesResponse,
   projectNativeResponsesBody,
   ResponsesNativeBodyReadError,
 } from "./native-response.js";
+import {
+  renderResponsesError,
+  type PreparedHttpResponse,
+} from "./error-rendering.js";
 import {
   createResponseSessionState,
   type ResponseSessionState,

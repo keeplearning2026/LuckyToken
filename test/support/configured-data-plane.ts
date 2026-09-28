@@ -355,6 +355,12 @@ export async function createConfiguredTokenDataPlane(
     providerAuthBindings: runtime.providerAuthBindings,
     publicModels,
     diagnostics,
+    ...(bundledProviderConfigurationLoad === undefined
+      ? {}
+      : {
+          providerNativeModelCapabilities:
+            bundledProviderConfigurationLoad.modelCapabilities,
+        }),
     isProtocolEnabled: (protocolId) => {
       const setting = options.settingsRegistry?.query([
         `protocols.${protocolId}.enabled`,

@@ -23,3 +23,12 @@ their own `provider`, `api`, and `baseUrl` facts through
 required `maxTokens` value of `64_000`. Reasoning without published effort
 levels projects every selectable Pi thinking level to `null` so callers cannot
 invent upstream support.
+
+Provider Native wire capabilities that Pi's `Model` contract cannot express
+project through `createCommandCodeModelCapabilities()` as one read-only view
+keyed by model id; they never ride on the Pi `Model`, `compat`,
+`samplingParams`, or any provider payload. `responsesStreamOptions` is such a
+fact: `omit` lets Provider Native drop the caller's top-level Responses
+`stream_options` at its own send boundary, while `preserve` (and an undeclared
+value) keeps the caller's bytes. Provider scoping stays with the caller that
+knows which Provider serves this catalog.

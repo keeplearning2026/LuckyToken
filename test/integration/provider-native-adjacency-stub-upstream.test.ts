@@ -235,7 +235,10 @@ describe("Provider Native adjacency stub-upstream seam", () => {
       request(raw),
     );
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain(
+      "insufficient tool messages following tool_calls message",
+    );
     const last = received[received.length - 1]!;
     expect(last.status).toBe(400);
     expect(last.body).toBe(

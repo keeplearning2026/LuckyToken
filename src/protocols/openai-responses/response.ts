@@ -6,7 +6,7 @@ import {
   type ResponsesReasoningResponseExtraction,
   type ResponsesContinuityBlock,
 } from "./semantic/reasoning/response.js";
-import { redactMessage } from "./error-rendering.js";
+import type { ResponsesError } from "./error-rendering.js";
 import {
   encodeResponsesContinuity,
   type TokenContinuityEnvelopeV1,
@@ -85,40 +85,6 @@ export type ResponsesOutputItem =
   | ResponsesReasoningOutputItem
   | ResponsesCompactionOutputItem;
 
-/**
- * The SDK `ResponseError` shape carried inside a failed Response object. The
- * installed SDK models it as exactly `code` + `message`: `code` is a required
- * enum (never null, never an arbitrary string) and there is no `type`/`param`
- * field (those belong to the non-streaming ErrorObject envelope, which this
- * adapter renders separately). A failed terminal therefore always carries a
- * legal enum code — an upstream failure collapses to the SDK-mandated
- * `server_error` mapping, matching how the Responses API maps internal errors.
- */
-export type ResponsesErrorCode =
-  | "server_error"
-  | "rate_limit_exceeded"
-  | "invalid_prompt"
-  | "vector_store_timeout"
-  | "invalid_image"
-  | "invalid_image_format"
-  | "invalid_base64_image"
-  | "invalid_image_url"
-  | "image_too_large"
-  | "image_too_small"
-  | "image_parse_error"
-  | "image_content_policy_violation"
-  | "invalid_image_mode"
-  | "image_file_too_large"
-  | "unsupported_image_media_type"
-  | "empty_image_file"
-  | "failed_to_download_image"
-  | "image_file_not_found";
-
-export interface ResponsesError {
-  readonly code: ResponsesErrorCode;
-  readonly message: string;
-}
-
 export type ResponsesStatus = "completed" | "incomplete" | "failed";
 
 export interface ResponsesResponseObject {
@@ -195,12 +161,6 @@ export interface ResponsesResponseProjection {
   readonly unknownPiContent: "error" | "ignore";
   /** Request-local response-notice sink (surfaced by the handler). */
   readonly notices: ConversionNoticeSink;
-}
-
-export interface PreparedHttpResponse {
-  readonly status: number;
-  readonly contentType: "application/json" | "text/event-stream";
-  readonly body: Uint8Array<ArrayBuffer>;
 }
 
 /** A syntactically valid Responses response ID for public protocol helpers. */
@@ -796,56 +756,4 @@ export function convertAssistantMessageToResponses(
     response.previous_response_id = previousResponseId;
   }
   return response;
-}
-
-export function renderResponsesError(
-  status: number,
-  type: string,
-  message: string,
-  code: string | null = null,
-  param: string | null = null,
-): PreparedHttpResponse {
-  return {
-    status,
-    contentType: "application/json",
-    body: new TextEncoder().encode(
-      JSON.stringify({ error: { message: redactMessage(message), type, code, param } }),
-    ),
-  };
-}
-
-/** A prepared Responses error envelope carrying its status and safe headers. */
-export interface PreparedResponsesError {
-  readonly status: number;
-  readonly type: string;
-  readonly message: string;
-  readonly code: string | null;
-  readonly param: string | null;
-  readonly safeHeaders: Readonly<Record<string, string>>;
-}
-
-/** Render a prepared Responses error as an HTTP Response with only the safe
- *  allowlisted headers attached. */
-export function renderResponsesErrorResponse(
-  error: PreparedResponsesError,
-): Response {
-  return new Response(
-    new TextEncoder().encode(
-      JSON.stringify({
-        error: {
-          message: error.message,
-          type: error.type,
-          code: error.code,
-          param: error.param,
-        },
-      }),
-    ),
-    {
-      status: error.status,
-      headers: {
-        "content-type": "application/json",
-        ...error.safeHeaders,
-      },
-    },
-  );
 }

@@ -1,4 +1,4 @@
-import type { DirectResponsesLane } from "../../protocols/openai-responses/handler.js";
+import type { DirectResponsesLane } from "../../protocols/openai-responses/direct-lane-contract.js";
 import type {
   CodexDirectFetch,
   CodexDirectModelSource,
@@ -12,7 +12,7 @@ import { extractResponsesPassthroughUsage } from "../../protocols/openai-respons
 import {
   renderResponsesError,
   type PreparedHttpResponse,
-} from "../../protocols/openai-responses/response.js";
+} from "../../protocols/openai-responses/error-rendering.js";
 import type {
   RequestJourneyLocation,
   RequestJourneyObservationInput,

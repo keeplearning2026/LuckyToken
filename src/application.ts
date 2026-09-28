@@ -953,6 +953,8 @@ async function startNormalApplication(options: {
             providerAuthBindings: providerRuntime.providerAuthBindings,
             publicModels,
             diagnostics: ownedDiagnosticsAuthority,
+            providerNativeModelCapabilities:
+              bundledProviderConfigurationLoad.modelCapabilities,
             isProtocolEnabled,
             fetch: globalThis.fetch,
             codexDirectFetch: createCodexDirectHttpFetch(),

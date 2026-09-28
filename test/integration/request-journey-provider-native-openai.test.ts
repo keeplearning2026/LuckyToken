@@ -254,9 +254,8 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
       const body = await response.text();
       await closed;
 
-      expect(response.status).toBe(502);
-      expect(body).toContain("Upstream provider failed");
-      expect(body).not.toContain("Request Entity Too Large");
+      expect(response.status).toBe(413);
+      expect(body).toContain("Upstream provider returned HTTP 413: Request Entity Too Large.");
       expect(body).not.toContain("deepseek");
 
       const detail = await authority.getRequestJourney({ requestId });

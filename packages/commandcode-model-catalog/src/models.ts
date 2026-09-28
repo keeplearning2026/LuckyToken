@@ -10,6 +10,28 @@ export type CommandCodeSupportedEndpoint =
   | "/chat/completions"
   | "/responses";
 
+/**
+ * Disposition for the client's top-level Responses `stream_options` property
+ * at the Provider Native send boundary. `preserve` keeps the caller's own
+ * bytes; `omit` removes only that top-level property because the model rejects
+ * it. This is a Provider Native wire capability, never a Pi semantic control.
+ */
+export type CommandCodeResponsesStreamOptions = "preserve" | "omit";
+
+const COMMANDCODE_RESPONSES_STREAM_OPTIONS =
+  new Set<CommandCodeResponsesStreamOptions>(["preserve", "omit"]);
+
+export function isCommandCodeResponsesStreamOptions(
+  value: unknown,
+): value is CommandCodeResponsesStreamOptions {
+  return (
+    typeof value === "string" &&
+    COMMANDCODE_RESPONSES_STREAM_OPTIONS.has(
+      value as CommandCodeResponsesStreamOptions,
+    )
+  );
+}
+
 export type CommandCodeReasoningEffort =
   | "low"
   | "medium"
@@ -46,6 +68,11 @@ export type CommandCodeThinkingLevelMap = Readonly<
 export interface CommandCodeModelFacts {
   readonly id: string;
   readonly supportedEndpoints: readonly CommandCodeSupportedEndpoint[];
+  /**
+   * Declared only for models that expose `/responses`. An undeclared value
+   * preserves the caller's own `stream_options` bytes.
+   */
+  readonly responsesStreamOptions?: CommandCodeResponsesStreamOptions;
   readonly name: string;
   readonly description: string;
   readonly input: readonly ("text" | "image")[];
@@ -93,6 +120,18 @@ export function freezeCommandCodeModelFacts(
         throw new Error(
           `CommandCode model ${value.id} has unsupported supportedEndpoints`,
         );
+      }
+      if (value.responsesStreamOptions !== undefined) {
+        if (!isCommandCodeResponsesStreamOptions(value.responsesStreamOptions)) {
+          throw new Error(
+            `CommandCode model ${value.id} has an invalid responsesStreamOptions`,
+          );
+        }
+        if (!endpoints.has("/responses")) {
+          throw new Error(
+            `CommandCode model ${value.id} declares responsesStreamOptions without /responses`,
+          );
+        }
       }
       if (value.input.length === 0 || new Set(value.input).size !== value.input.length) {
         throw new Error(`CommandCode model ${value.id} must have unique input modalities`);

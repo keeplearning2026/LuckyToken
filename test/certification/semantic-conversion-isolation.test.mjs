@@ -64,6 +64,39 @@ test("Direct Mode and Provider Native have no Anthropic semantic-conversion depe
   });
 });
 
+test("Direct Mode, Provider Native, and Semantic Conversion are pairwise independent", async () => {
+  const lanes = {
+    "Direct Mode": [
+      path.join(repositoryRoot, "src/integrations/codex"),
+      path.join(repositoryRoot, "src/codex-direct-seam.ts"),
+      path.join(repositoryRoot, "src/codex-direct-responses-transport.ts"),
+      path.join(repositoryRoot, "src/direct-http-response.ts"),
+    ],
+    "Provider Native": [
+      path.join(repositoryRoot, "src/provider-native-anthropic"),
+      path.join(repositoryRoot, "src/provider-native-responses"),
+    ],
+    "Semantic Conversion": [
+      path.join(repositoryRoot, "src/protocols/openai-responses/semantic"),
+      path.join(repositoryRoot, "src/protocols/anthropic/semantic"),
+    ],
+  };
+  const names = Object.keys(lanes);
+  for (const from of names) {
+    const others = names.filter((name) => name !== from);
+    await assertNoDependency({
+      entries: lanes[from],
+      forbidden: (dependency) =>
+        others.some((name) =>
+          lanes[name].some((entry) => {
+            const root = display(entry);
+            return dependency === root || dependency.startsWith(`${root}/`);
+          }),
+        ),
+    });
+  }
+});
+
 test("Anthropic online certification has independent Provider-owned policies and Claude-only Agent entry points", async () => {
   const harness = await readFile(
     path.join(repositoryRoot, "test/online/run-anthropic-messages.ts"),

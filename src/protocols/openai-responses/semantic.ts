@@ -43,14 +43,16 @@ import {
 } from "./request.js";
 import {
   convertAssistantMessageToResponses,
-  renderResponsesError,
-  renderResponsesErrorResponse,
-  type PreparedHttpResponse,
   type ResponsesEchoTool,
   type ResponsesResponseProjection,
   type ResponsesResponseToolChoice,
   type ResponsesResponseObject,
 } from "./response.js";
+import {
+  renderResponsesError,
+  renderResponsesErrorResponse,
+  type PreparedHttpResponse,
+} from "./error-rendering.js";
 import {
   ResponseStateConversionFailure,
   type ResponseSessionState,

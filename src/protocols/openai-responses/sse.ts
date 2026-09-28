@@ -1,7 +1,5 @@
-import type {
-  PreparedHttpResponse,
-  ResponsesResponseObject,
-} from "./response.js";
+import type { PreparedHttpResponse } from "./error-rendering.js";
+import type { ResponsesResponseObject } from "./response.js";
 
 /**
  * Render a complete Responses response object as the canonical atomic SSE

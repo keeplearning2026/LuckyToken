@@ -35,13 +35,11 @@ import {
   UnsupportedResponsesContentEncodingError,
 } from "./request-body.js";
 import {
+  extractSafeUpstreamErrorMessage,
+  mapUpstreamFailureFact,
   renderResponsesError,
   renderResponsesErrorResponse,
   type PreparedHttpResponse,
-} from "./response.js";
-import {
-  extractSafeUpstreamErrorMessage,
-  mapUpstreamFailureFact,
 } from "./error-rendering.js";
 import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { extractResponsesModelSelector } from "./request.js";
@@ -62,19 +60,9 @@ import type {
   ProviderResponsesLane,
   ProviderResponsesObservationContext,
 } from "../../provider-native-responses/contract.js";
+import type { DirectResponsesLane } from "./direct-lane-contract.js";
 
 export const openaiResponsesProtocolId = "openai-responses";
-
-export interface DirectResponsesLane {
-  claims(selector: string): boolean;
-  execute(input: {
-    readonly request: Request;
-    readonly rawBody: Uint8Array<ArrayBuffer>;
-    readonly selector: string;
-    readonly streamRequested: boolean;
-    readonly journey?: RequestJourneyObserver;
-  }): Promise<Response>;
-}
 
 export interface OpenAIResponsesHandlerOptions {
   readonly models: Models;
@@ -1082,13 +1070,20 @@ async function providerNativeBranch(
   const shouldObserveUpstreamHttpFailure =
     physicalResponseObserved && upstream.status >= 400 && upstream.status !== 429;
   if (upstream.status >= 400 && alias !== undefined) {
-    // Alias mode never forwards upstream error bytes: arbitrary upstream
-    // error text or headers could name the canonical target. The client
-    // receives a legal fixed value-free error instead. The local Request
-    // Journey still records a bounded safe upstream error summary for
-    // Overview and incident investigation.
-    const failureResponse = toResponse(
-      renderResponsesError(502, "api_error", "Upstream provider failed"),
+    // Keep the upstream status and a bounded, redacted error message while
+    // avoiding raw error bytes and headers that may reveal alias routing.
+    const safeMessage = extractSafeUpstreamErrorMessage(
+      upstream.body,
+      upstream.status,
+    ).replaceAll(model.id, alias);
+    const failureResponse = renderResponsesErrorResponse(
+      mapUpstreamFailureFact({
+        kind: "http",
+        status: upstream.status,
+        message: safeMessage,
+        headers: {},
+        truncated: false,
+      }),
     );
     const preserveLocation = {
       phase: "lane_response_processing",
@@ -1114,7 +1109,7 @@ async function providerNativeBranch(
       artifactId: "provider_native_preserved_response_wire",
       artifactKind: "provider_native_preserved_response_wire",
       state: "unavailable",
-      reason: "upstream_error_replaced_for_alias_safety",
+      reason: "upstream_error_summarized_for_alias_safety",
       location: preserveLocation,
     });
     completeResponsesJourneyStep(

@@ -1,9 +1,13 @@
 import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 
 /**
- * Responses-owned error rendering: one complete Response object or one
- * neutral failure fact feeds JSON/SSE rendering. No Provider code is moved
- * here and no string is ever reparsed to recover a status.
+ * Responses-owned error envelope: one neutral failure fact or one bounded
+ * message feeds the JSON error body, the safe-header allowlist, and the
+ * status/content-type facts every lane renders from. This module has no
+ * conversion, reasoning, continuity, Pi, or transport dependency, so the
+ * preservation lanes can render a legal error without reaching Semantic
+ * Conversion code. No Provider code is moved here and no string is ever
+ * reparsed to recover a status.
  */
 
 /** The fixed safe response-header allowlist. Credentials, cookies, proxy
@@ -193,5 +197,98 @@ export function extractSafeUpstreamErrorMessage(
   return boundUtf8(
     `Upstream provider returned HTTP ${status}: ${cleaned}${suffix}`,
     MAX_ERROR_MESSAGE_LENGTH,
+  );
+}
+
+export interface PreparedHttpResponse {
+  readonly status: number;
+  readonly contentType: "application/json" | "text/event-stream";
+  readonly body: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * The SDK `ResponseError` shape carried inside a failed Response object. The
+ * installed SDK models it as exactly `code` + `message`: `code` is a required
+ * enum (never null, never an arbitrary string) and there is no `type`/`param`
+ * field (those belong to the non-streaming ErrorObject envelope rendered
+ * here). A failed terminal therefore always carries a legal enum code — an
+ * upstream failure collapses to the SDK-mandated `server_error` mapping,
+ * matching how the Responses API maps internal errors.
+ */
+export type ResponsesErrorCode =
+  | "server_error"
+  | "rate_limit_exceeded"
+  | "invalid_prompt"
+  | "vector_store_timeout"
+  | "invalid_image"
+  | "invalid_image_format"
+  | "invalid_base64_image"
+  | "invalid_image_url"
+  | "image_too_large"
+  | "image_too_small"
+  | "image_parse_error"
+  | "image_content_policy_violation"
+  | "invalid_image_mode"
+  | "image_file_too_large"
+  | "unsupported_image_media_type"
+  | "empty_image_file"
+  | "failed_to_download_image"
+  | "image_file_not_found";
+
+export interface ResponsesError {
+  readonly code: ResponsesErrorCode;
+  readonly message: string;
+}
+
+/** Render one bounded Responses error envelope from status/type/message. */
+export function renderResponsesError(
+  status: number,
+  type: string,
+  message: string,
+  code: string | null = null,
+  param: string | null = null,
+): PreparedHttpResponse {
+  return {
+    status,
+    contentType: "application/json",
+    body: new TextEncoder().encode(
+      JSON.stringify({ error: { message: redactMessage(message), type, code, param } }),
+    ),
+  };
+}
+
+/** A prepared Responses error envelope carrying its status and safe headers. */
+export interface PreparedResponsesError {
+  readonly status: number;
+  readonly type: string;
+  readonly message: string;
+  readonly code: string | null;
+  readonly param: string | null;
+  readonly safeHeaders: Readonly<Record<string, string>>;
+}
+
+/** Render a prepared Responses error as an HTTP Response with only the safe
+ *  allowlisted headers attached. */
+export function renderResponsesErrorResponse(
+  error: PreparedResponsesError,
+): Response {
+  return new Response(
+    new TextEncoder().encode(
+      JSON.stringify({
+        error: {
+          message: error.message,
+          type: error.type,
+          code: error.code,
+          param: error.param,
+        },
+      }),
+    ),
+    {
+      status: error.status,
+      headers: {
+        "content-type": "application/json",
+        ...error.safeHeaders,
+      },
+    },
   );
 }

@@ -20,13 +20,9 @@ export {
 } from "./request.js";
 export {
   convertAssistantMessageToResponses,
-  renderResponsesError,
-  renderResponsesErrorResponse,
   validResponsesResponseId,
   type ConversionNoticeSink,
-  type PreparedResponsesError,
   type ResponsesEchoTool,
-  type ResponsesError,
   type ResponsesResponseProjection,
   type ResponsesResponseToolChoice,
   type ResponsesResponseObject,
@@ -35,7 +31,12 @@ export { renderResponsesSse } from "./sse.js";
 export {
   mapUpstreamFailureFact,
   redactMessage,
+  renderResponsesError,
+  renderResponsesErrorResponse,
   SAFE_RESPONSE_HEADERS,
+  type PreparedResponsesError,
+  type ResponsesError,
+  type ResponsesErrorCode,
 } from "./error-rendering.js";
 export {
   renderResponsesModelsList,

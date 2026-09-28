@@ -10,6 +10,8 @@ import { createOpenAIResponsesHandler } from "../../src/protocols/openai-respons
 import type { PublicModelSource } from "../../src/public-model-seam.js";
 import {
   createProviderNativeResponses,
+  type ProviderNativeModelCapabilities,
+  type ProviderNativeResponsesStreamOptions,
   supportsProviderNativeResponses,
 } from "../../src/provider-native-responses/index.js";
 import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
@@ -30,6 +32,15 @@ function responsesModel(
     contextWindow: 200_000,
     maxTokens: 64_000,
   };
+}
+
+/** The explicit Token-owned capability seam composition supplies to the lane. */
+function modelCapabilities(
+  responsesStreamOptions: ProviderNativeResponsesStreamOptions,
+): ProviderNativeModelCapabilities {
+  return Object.freeze({
+    responsesStreamOptions: () => responsesStreamOptions,
+  });
 }
 
 function request(
@@ -59,6 +70,7 @@ function dependencies(
   fetch: FetchFunction,
   diagnostics?: RequestJourneyObservationAuthority,
   publicModels?: PublicModelSource,
+  modelCapabilitiesOption?: ProviderNativeModelCapabilities,
 ): HttpBoundaryDependencies {
   const handler = createOpenAIResponsesHandler({
     models: source,
@@ -66,6 +78,9 @@ function dependencies(
       models: source,
       bindings: ambientProfileBindings,
       fetch,
+      ...(modelCapabilitiesOption === undefined
+        ? {}
+        : { modelCapabilities: modelCapabilitiesOption }),
     }),
     stateFile: "provider-native-contract-state.json",
     maxRequestBytes: 1_000_000,
@@ -526,7 +541,7 @@ describe("Provider Native Responses contract", () => {
     );
   });
 
-  it("records a safe upstream HTTP failure for alias errors without leaking bytes", async () => {
+  it("returns the upstream status and safe error message for an alias without leaking routing metadata", async () => {
     const model = responsesModel();
     const alias = "public/gpt-native";
     const publicModels: PublicModelSource = {
@@ -571,9 +586,8 @@ describe("Provider Native Responses contract", () => {
     );
     const body = await response.text();
 
-    expect(response.status).toBe(502);
-    expect(body).toContain("Upstream provider failed");
-    expect(body).not.toContain("Request Entity Too Large");
+    expect(response.status).toBe(413);
+    expect(body).toContain("Upstream provider returned HTTP 413: Request Entity Too Large.");
     expect(body).not.toContain("deepseek");
     expect(recorded.observations).toContainEqual(
       expect.objectContaining({
@@ -592,6 +606,147 @@ describe("Provider Native Responses contract", () => {
         }),
       }),
     );
+  });
+
+  it("shows the Goat stream_options rejection to alias callers", async () => {
+    const model = responsesModel();
+    const alias = "public/gpt-native";
+    const publicModels: PublicModelSource = {
+      requestSnapshot: async () =>
+        ({
+          resolve: (selector: string) =>
+            selector === alias
+              ? { providerId: model.provider, modelId: model.id }
+              : undefined,
+        }) as never,
+    };
+    const fetch: FetchFunction = async () =>
+      new Response(JSON.stringify({ error: { message: 'json: unknown field "stream_options"' } }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, undefined, publicModels),
+      request(JSON.stringify({ model: alias, input: "hi" })),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        message: expect.stringContaining('json: unknown field "stream_options"'),
+      },
+    });
+  });
+
+  it("omits only the declared top-level stream_options and records the bounded notice", async () => {
+    const model = responsesModel();
+    const recorded = recordingJourney();
+    const upstream: Request[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      upstream.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({
+          id: "resp_stream_options",
+          object: "response",
+          status: "completed",
+          model: "gpt-5",
+          output: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const response = await handleHttpRequest(
+      dependencies(
+        models(model),
+        fetch,
+        recorded.authority,
+        undefined,
+        modelCapabilities("omit"),
+      ),
+      request(
+        JSON.stringify({
+          model: "openai/gpt-5",
+          input: "hi",
+          stream_options: { include_usage: true },
+          nested: { stream_options: { keep: true } },
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(upstream[0]?.text()).resolves.toBe(
+      JSON.stringify({
+        model: "gpt-5",
+        input: "hi",
+        nested: { stream_options: { keep: true } },
+      }),
+    );
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "conversion_notice_observed",
+        code: "provider_native_stream_options_omitted",
+        severity: "warning",
+        location: expect.objectContaining({
+          phase: "lane_request_preparation",
+          lane: "provider_native",
+          step: "project_native_body",
+          attempt: 1,
+        }),
+      }),
+    );
+  });
+
+  it("forwards the top-level stream_options unchanged when the model does not omit it", async () => {
+    const model = responsesModel();
+    const recorded = recordingJourney();
+    const upstream: Request[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      upstream.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({
+          id: "resp_stream_options_kept",
+          object: "response",
+          status: "completed",
+          model: "gpt-5",
+          output: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const response = await handleHttpRequest(
+      dependencies(
+        models(model),
+        fetch,
+        recorded.authority,
+        undefined,
+        modelCapabilities("preserve"),
+      ),
+      request(
+        JSON.stringify({
+          model: "openai/gpt-5",
+          input: "hi",
+          stream_options: { include_usage: true },
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(upstream[0]?.json()).resolves.toEqual({
+      model: "gpt-5",
+      input: "hi",
+      stream_options: { include_usage: true },
+    });
+    expect(
+      recorded.observations.filter(
+        (observation) =>
+          observation.kind === "conversion_notice_observed" &&
+          observation.code === "provider_native_stream_options_omitted",
+      ),
+    ).toEqual([]);
   });
 
   it("records a safe upstream HTTP failure for non-alias errors", async () => {

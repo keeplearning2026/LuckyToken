@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   COMMANDCODE_MODEL_FACTS,
+  DEFAULT_COMMANDCODE_MODEL_CATALOG,
+  createCommandCodeModelCapabilities,
   freezeCommandCodeModelFacts,
   projectCommandCodeModel,
   selectCommandCodeModelApi,
@@ -81,6 +83,7 @@ describe("CommandCode model catalog", () => {
     const sourceShape = COMMANDCODE_MODEL_FACTS.map((facts) => ({
       id: facts.id,
       supportedEndpoints: [...facts.supportedEndpoints],
+      responsesStreamOptions: facts.responsesStreamOptions ?? null,
       name: facts.name,
       description: facts.description,
       input: [...facts.input],
@@ -98,7 +101,7 @@ describe("CommandCode model catalog", () => {
       .digest("hex");
 
     expect(fingerprint).toBe(
-      "5a0ad83bc7af7b76a84e08ff68aaab1bfc3f0dfa72804b0dd2c292c82fd801ae",
+      "bc43f423484a6d3e4a3626757fdcb4a8dd89a4e08fd0a44749bc5af99c6ef7fe",
     );
   });
 
@@ -446,6 +449,70 @@ describe("CommandCode model catalog", () => {
         supportsReasoningEffort: true,
       },
     });
+  });
+
+  it("declares one Responses stream_options disposition per Responses model", () => {
+    const declared = COMMANDCODE_MODEL_FACTS.filter(
+      (model) => model.responsesStreamOptions !== undefined,
+    );
+    const responses = COMMANDCODE_MODEL_FACTS.filter((model) =>
+      model.supportedEndpoints.includes("/responses"),
+    );
+
+    expect(declared).toHaveLength(responses.length);
+    expect(
+      declared.every((model) =>
+        model.supportedEndpoints.includes("/responses"),
+      ),
+    ).toBe(true);
+    expect(
+      declared
+        .filter((model) => model.responsesStreamOptions === "omit")
+        .map((model) => model.id),
+    ).toEqual([
+      "deepseek/deepseek-v4-pro",
+      "deepseek/deepseek-v4.1-flash",
+      "deepseek/deepseek-v4-flash-vision-exp",
+    ]);
+  });
+
+  it("projects the Responses stream_options disposition into the Token-owned capability view", () => {
+    const capabilities = createCommandCodeModelCapabilities(
+      DEFAULT_COMMANDCODE_MODEL_CATALOG,
+    );
+
+    expect(
+      capabilities.responsesStreamOptions("deepseek/deepseek-v4.1-flash"),
+    ).toBe("omit");
+    expect(capabilities.responsesStreamOptions("moonshotai/Kimi-K3")).toBe(
+      "preserve",
+    );
+    expect(
+      capabilities.responsesStreamOptions("stepfun/Step-3.5-Flash"),
+    ).toBeUndefined();
+    expect(capabilities.responsesStreamOptions("unknown-model")).toBeUndefined();
+    expect(Object.isFrozen(capabilities)).toBe(true);
+  });
+
+  it("keeps the Provider Native wire policy off the projected Pi Model", () => {
+    const model = COMMANDCODE_GOAT_MODELS.find(
+      (entry) => entry.id === "deepseek/deepseek-v4.1-flash",
+    );
+
+    expect(model).toBeDefined();
+    expect(Object.keys(model!).sort()).toEqual([
+      "api",
+      "baseUrl",
+      "contextWindow",
+      "cost",
+      "id",
+      "input",
+      "maxTokens",
+      "name",
+      "provider",
+      "reasoning",
+      "thinkingLevelMap",
+    ]);
   });
 
   it("keeps CommandCode Private on its own API despite shared selected APIs", () => {

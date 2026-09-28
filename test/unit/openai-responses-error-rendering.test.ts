@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  renderResponsesError,
-  renderResponsesErrorResponse,
-} from "../../src/protocols/openai-responses/response.js";
-import {
   extractSafeUpstreamErrorMessage,
   mapUpstreamFailureFact,
+  renderResponsesError,
+  renderResponsesErrorResponse,
   SAFE_RESPONSE_HEADERS,
 } from "../../src/protocols/openai-responses/error-rendering.js";
 import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";

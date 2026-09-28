@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   createProviderResponsesSender,
   type CreateProviderResponsesSenderOptions,
+  type ProviderNativeModelCapabilities,
+  type ProviderNativeResponsesStreamOptions,
   supportsProviderNativeResponses,
 } from "../../src/provider-native-responses/index.js";
 
@@ -40,6 +42,15 @@ function model(
     maxTokens: 10_000,
     ...(headers === undefined ? {} : { headers }),
   };
+}
+
+/** The explicit Token-owned capability seam composition supplies to the lane. */
+function modelCapabilities(
+  responsesStreamOptions: ProviderNativeResponsesStreamOptions,
+): ProviderNativeModelCapabilities {
+  return Object.freeze({
+    responsesStreamOptions: () => responsesStreamOptions,
+  });
 }
 
 function auth(
@@ -115,6 +126,152 @@ describe("Responses native provider sender", () => {
     await sender!.send("responses", raw, AbortSignal.timeout(5_000));
 
     await expect(captured.requests[0]!.text()).resolves.toBe(expected);
+  });
+
+  it("omits the declared unsupported top-level stream_options and keeps every other byte", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model(
+        "commandcode-goat",
+        "openai-responses",
+        "https://api.commandcode.ai/provider/v1",
+      ),
+      modelCapabilities: modelCapabilities("omit"),
+      auth: auth({ apiKey: "goat-key" }),
+      fetch: captured.fetch,
+    });
+    const raw =
+      '{\n "model" : "commandcode-goat/public-alias", "stream_options": {"include_usage":true}, "future_number":9007199254740993, "nested":{"stream_options":{"keep":1}}\n}';
+    const expected =
+      '{\n "model" : "real-model", "future_number":9007199254740993, "nested":{"stream_options":{"keep":1}}\n}';
+
+    await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(expected);
+    expect(captured.requests[0]?.url).toBe(
+      "https://api.commandcode.ai/provider/v1/responses",
+    );
+  });
+
+  it("omits a leading or trailing top-level stream_options without touching neighbours", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model(
+        "commandcode-goat",
+        "openai-responses",
+        "https://api.commandcode.ai/provider/v1",
+      ),
+      modelCapabilities: modelCapabilities("omit"),
+      auth: auth({ apiKey: "goat-key" }),
+      fetch: captured.fetch,
+    });
+    const leading = '{ "stream_options": {"include_usage":true}, "model" : "real-model" }';
+    const trailing =
+      '{ "model" : "real-model", "input": "hi", "stream_options" : {"include_usage":true}\n}';
+
+    await sender!.send("responses", leading, AbortSignal.timeout(5_000));
+    await sender!.send("responses", trailing, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(
+      '{ "model" : "real-model" }',
+    );
+    await expect(captured.requests[1]!.text()).resolves.toBe(
+      '{ "model" : "real-model", "input": "hi"\n}',
+    );
+  });
+
+  it.each([
+    ["a declared preserve", "preserve"],
+    ["no declared disposition", undefined],
+  ] as const)(
+    "keeps the caller's stream_options bytes for %s",
+    async (_label, policy) => {
+      const captured = capture();
+      const base = model(
+        "commandcode-goat",
+        "openai-responses",
+        "https://api.commandcode.ai/provider/v1",
+      );
+      const sender = createResponsesNativeSender({
+        model: base,
+        ...(policy === undefined
+          ? {}
+          : { modelCapabilities: modelCapabilities(policy) }),
+        auth: auth({ apiKey: "goat-key" }),
+        fetch: captured.fetch,
+      });
+      const raw = '{ "model" : "alias", "stream_options" : {"include_usage":true} }';
+
+      await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+
+      await expect(captured.requests[0]!.text()).resolves.toBe(
+        raw.replace('"alias"', '"real-model"'),
+      );
+    },
+  );
+
+  it("leaves duplicate top-level keys untouched instead of guessing which to drop", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model(
+        "commandcode-goat",
+        "openai-responses",
+        "https://api.commandcode.ai/provider/v1",
+      ),
+      modelCapabilities: modelCapabilities("omit"),
+      auth: auth({ apiKey: "goat-key" }),
+      fetch: captured.fetch,
+    });
+    const raw =
+      '{ "model" : "real-model", "stream_options" : {"include_usage":true}, "stream_options" : {"include_usage":false} }';
+
+    await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(raw);
+  });
+
+  it("asks the capability seam with the resolved Provider/model identity only for Responses", async () => {
+    const captured = capture();
+    const asked: Array<readonly [string, string]> = [];
+    const sender = createResponsesNativeSender({
+      model: model(
+        "commandcode-goat",
+        "openai-responses",
+        "https://api.commandcode.ai/provider/v1",
+      ),
+      modelCapabilities: {
+        responsesStreamOptions: (providerId, modelId) => {
+          asked.push([providerId, modelId]);
+          return "preserve";
+        },
+      },
+      auth: auth({ apiKey: "goat-key" }),
+      fetch: captured.fetch,
+    });
+    const raw = '{ "model" : "real-model", "stream_options" : {"include_usage":true} }';
+
+    await sender!.send("responses", raw, AbortSignal.timeout(5_000));
+    await sender!.send("compact", raw, AbortSignal.timeout(5_000));
+
+    expect(asked).toEqual([["commandcode-goat", "real-model"]]);
+    await expect(captured.requests[0]!.text()).resolves.toBe(raw);
+    await expect(captured.requests[1]!.text()).resolves.toBe(raw);
+  });
+
+  it("keeps native compact byte-identical for a model that omits Responses stream_options", async () => {
+    const captured = capture();
+    const sender = createResponsesNativeSender({
+      model: model("openai", "openai-responses", "https://api.openai.com/v1"),
+      modelCapabilities: modelCapabilities("omit"),
+      auth: auth({ apiKey: "sk-openai" }),
+      fetch: captured.fetch,
+    });
+    const raw =
+      '{ "model" : "real-model", "input" : [], "stream_options" : {"include_usage":true} }';
+
+    await sender!.send("compact", raw, AbortSignal.timeout(5_000));
+
+    await expect(captured.requests[0]!.text()).resolves.toBe(raw);
   });
 
   it("defers a developer message slice out of a closed tool-call group", async () => {

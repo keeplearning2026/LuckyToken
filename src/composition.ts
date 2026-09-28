@@ -31,6 +31,7 @@ import { createModelsDiscoveryHandler } from "./models-discovery.js";
 import type { PublicModelSource } from "./public-model-seam.js";
 import { createAnthropicProviderNativeLane } from "./provider-native-anthropic/index.js";
 import { createProviderNativeResponses } from "./provider-native-responses/index.js";
+import type { ProviderNativeModelCapabilities } from "./provider-native-responses/contract.js";
 import { bindProviderNativeResponsesConfiguration } from "./provider-native-responses/configuration.js";
 import { resolveRequestModel } from "./providers/request-composition.js";
 import { bindAnthropicConfiguration } from "./protocols/anthropic/configuration.js";
@@ -66,6 +67,10 @@ export interface ConfiguredTokenDataPlaneOptions {
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly publicModels: PublicModelSource;
   readonly diagnostics?: RequestJourneyObservationAuthority;
+  /** Token-owned Provider Native model wire capabilities, projected by the
+   *  Backend from the model-data authority. Absent keeps every control at its
+   *  preserve default. */
+  readonly providerNativeModelCapabilities?: ProviderNativeModelCapabilities;
   readonly isProtocolEnabled: (protocolId: string) => boolean;
   readonly fetch: FetchFunction;
   readonly codexDirectFetch?: CodexDirectFetch;
@@ -185,6 +190,9 @@ export async function createConfiguredTokenDataPlane(
       models: options.models,
       bindings: options.providerAuthBindings,
       fetch: options.fetch,
+      ...(options.providerNativeModelCapabilities === undefined
+        ? {}
+        : { modelCapabilities: options.providerNativeModelCapabilities }),
       configuration: bindProviderNativeResponsesConfiguration(
         responsesConfig.providerNativeConfiguration,
       ),

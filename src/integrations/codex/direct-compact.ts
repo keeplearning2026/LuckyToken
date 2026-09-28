@@ -16,7 +16,7 @@ import type {
 import {
   renderResponsesError,
   type PreparedHttpResponse,
-} from "../../protocols/openai-responses/response.js";
+} from "../../protocols/openai-responses/error-rendering.js";
 import {
   preserveDirectResponse,
   preserveDirectStatusText,
