@@ -46,6 +46,7 @@ type AuthType = "oauth" | "api_key";
 export interface ProviderModelRow {
   readonly providerId: string;
   readonly modelId: string;
+  readonly api?: string;
   readonly availability: "available" | "unavailable" | "unknown";
   readonly modelName: string;
   readonly on: boolean;
@@ -270,16 +271,18 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
     const rows: ProviderModelRow[] = [];
     for (const provider of publicModels?.state.providers ?? []) {
       const catalogProvider = catalogByProvider.get(provider.providerId);
-      const availabilityByModel = new Map(
-        catalogProvider?.models.map((model) => [model.id, model.availability]) ?? [],
+      const catalogModelById = new Map(
+        catalogProvider?.models.map((model) => [model.id, model]) ?? [],
       );
       for (const model of provider.models) {
         const modelName = modelNameFromInternalAlias(provider.providerId, model.alias);
         if (modelName === undefined) continue;
+        const catalogModel = catalogModelById.get(model.target);
         rows.push({
           providerId: provider.providerId,
           modelId: model.target,
-          availability: availabilityByModel.get(model.target) ?? "unavailable",
+          ...(catalogModel?.api === undefined ? {} : { api: catalogModel.api }),
+          availability: catalogModel?.availability ?? "unavailable",
           modelName,
           on: model.on,
           favorite: model.favorite,
@@ -1943,9 +1946,17 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
                           <span className="canonical-model-id">
                             Provider: {allProviders.find((provider) => provider.providerId === row.providerId)?.name ?? row.providerId}
                             {row.modelName === row.modelId ? "" : ` · Original model: ${row.modelId}`}
+                            {row.api === undefined ? "" : ` · Pi API: ${row.api}`}
                           </span>
-                        ) : row.modelName === row.modelId ? null : (
-                          <span className="canonical-model-id">Original model: {row.modelId}</span>
+                        ) : row.modelName === row.modelId ? (
+                          row.api === undefined ? null : (
+                            <span className="canonical-model-id">Pi API: {row.api}</span>
+                          )
+                        ) : (
+                          <span className="canonical-model-id">
+                            Original model: {row.modelId}
+                            {row.api === undefined ? "" : ` · Pi API: ${row.api}`}
+                          </span>
                         )}
                       </div>
                       <button

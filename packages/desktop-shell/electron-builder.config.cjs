@@ -10,6 +10,7 @@ module.exports = {
   appId: "com.keeplearning2026.Token",
   productName: "Token",
   artifactName: "Token-Setup.exe",
+  publish: null,
   directories: {
     output: process.env.TOKEN_NSIS_OUTPUT ?? path.join(__dirname, ".electron-out", "make", "nsis"),
   },

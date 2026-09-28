@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   COMMANDCODE_MODEL_FACTS,
+  commandCodeEndpointToApi,
   freezeCommandCodeModelFacts,
   projectCommandCodeModel,
-  selectCommandCodeModelApi,
 } from "@token/commandcode-model-catalog";
 import {
   COMMANDCODE_MODELS,
@@ -81,6 +81,7 @@ describe("CommandCode model catalog", () => {
     const sourceShape = COMMANDCODE_MODEL_FACTS.map((facts) => ({
       id: facts.id,
       supportedEndpoints: [...facts.supportedEndpoints],
+      endpoint: facts.endpoint,
       name: facts.name,
       description: facts.description,
       input: [...facts.input],
@@ -98,33 +99,31 @@ describe("CommandCode model catalog", () => {
       .digest("hex");
 
     expect(fingerprint).toBe(
-      "5a0ad83bc7af7b76a84e08ff68aaab1bfc3f0dfa72804b0dd2c292c82fd801ae",
+      "ebe329f842edd16cb94d26fea6dcba285a0a8838460d3b5c7f30c79df2079f02",
     );
   });
 
-  it("stores one reviewed Pi API selection per CommandCode model", () => {
+  it("stores one reviewed Goat endpoint selection per CommandCode model", () => {
     const byId = new Map(
       COMMANDCODE_MODEL_FACTS.map((model) => [model.id, model] as const),
     );
+    const api = (id: string) => {
+      const facts = byId.get(id);
+      expect(facts).toBeDefined();
+      return commandCodeEndpointToApi(facts!.endpoint);
+    };
 
-    expect(selectCommandCodeModelApi(byId.get("claude-sonnet-5")!)).toBe(
-      "anthropic-messages",
+    expect(byId.get("claude-sonnet-5")?.endpoint).toBe("/messages");
+    expect(api("claude-sonnet-5")).toBe("anthropic-messages");
+    expect(byId.get("gpt-5.6-sol")?.endpoint).toBe("/responses");
+    expect(api("gpt-5.6-sol")).toBe("openai-responses");
+    expect(api("deepseek/deepseek-v4.1-flash")).toBe("openai-responses");
+    expect(api("xiaomi/mimo-v2.6-flash")).toBe("openai-responses");
+    expect(byId.get("stepfun/Step-3.5-Flash")?.endpoint).toBe(
+      "/chat/completions",
     );
-    expect(selectCommandCodeModelApi(byId.get("gpt-5.6-sol")!)).toBe(
-      "openai-responses",
-    );
-    expect(
-      selectCommandCodeModelApi(byId.get("deepseek/deepseek-v4.1-flash")!),
-    ).toBe("openai-responses");
-    expect(
-      selectCommandCodeModelApi(byId.get("xiaomi/mimo-v2.6-flash")!),
-    ).toBe("openai-responses");
-    expect(
-      selectCommandCodeModelApi(byId.get("stepfun/Step-3.5-Flash")!),
-    ).toBe("openai-completions");
-    expect(
-      selectCommandCodeModelApi(byId.get("google/gemini-3.7-flash")!),
-    ).toBe("openai-completions");
+    expect(api("stepfun/Step-3.5-Flash")).toBe("openai-completions");
+    expect(api("google/gemini-3.7-flash")).toBe("openai-completions");
   });
 
   it("keeps source facts distinct from Pi projection policy", () => {
@@ -152,6 +151,7 @@ describe("CommandCode model catalog", () => {
       ),
     ).toMatchObject({
       supportedEndpoints: ["/chat/completions", "/responses"],
+      endpoint: "/responses",
       name: "MiMo V2.6 Flash",
       description: "efficient long-context agentic coding",
       input: ["text", "image"],
@@ -198,7 +198,8 @@ describe("CommandCode model catalog", () => {
       expect(Number.isSafeInteger(facts.contextWindow)).toBe(true);
       expect(facts.contextWindow).toBeGreaterThan(0);
       expect(facts.supportedEndpoints.length).toBeGreaterThan(0);
-      expect(() => selectCommandCodeModelApi(facts)).not.toThrow();
+      expect(facts.supportedEndpoints).toContain(facts.endpoint);
+      expect(() => commandCodeEndpointToApi(facts.endpoint)).not.toThrow();
       if (!facts.reasoning) expect(facts).not.toHaveProperty("thinkingLevelMap");
       expect(Object.isFrozen(facts)).toBe(true);
       expect(Object.isFrozen(facts.input)).toBe(true);
@@ -236,6 +237,7 @@ describe("CommandCode model catalog", () => {
         {
           id: "invalid-reasoning-map",
           supportedEndpoints: ["/responses"],
+          endpoint: "/responses",
           name: "Invalid",
           description: "invalid reasoning map fixture",
           input: ["text"],
@@ -419,7 +421,7 @@ describe("CommandCode model catalog", () => {
     for (const model of COMMANDCODE_GOAT_MODELS) {
       expect(model.provider).toBe("commandcode-goat");
       expect(model.api).toBe(
-        selectCommandCodeModelApi(sourceById.get(model.id)!),
+        commandCodeEndpointToApi(sourceById.get(model.id)!.endpoint),
       );
       expect(model.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
     }

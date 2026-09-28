@@ -295,6 +295,7 @@ export function createCatalogRefreshController(
             models.map((model) =>
               Object.freeze({
                 id: model.id,
+                api: model.api,
                 dynamic: dynamicIds.has(model.id),
                 availability:
                   state?.availability ?? ("unknown" as CatalogModelAvailability),

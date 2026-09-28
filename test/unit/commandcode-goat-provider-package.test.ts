@@ -101,6 +101,42 @@ describe("CommandCode Goat Provider Package", () => {
     });
   });
 
+  it("uses the explicit endpoint even when Responses is also supported", () => {
+    const provider = providerPackage.createProvider({
+      configuration: packageConfiguration({
+        schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
+        models: [
+          {
+            id: "explicit-chat",
+            name: "Explicit Chat",
+            description: "explicit Goat endpoint fixture",
+            supportedEndpoints: ["/chat/completions", "/responses"],
+            endpoint: "/chat/completions",
+            input: ["text"],
+            reasoning: false,
+            contextWindow: 100_000,
+            minimumPlan: "go",
+          },
+        ],
+      }),
+      configurationPath: "commandcode-models.json",
+      host: {
+        fetch: async () => new Response(null, { status: 500 }),
+        now: () => 1,
+        createUuid: () => "00000000-0000-4000-8000-000000000108",
+      },
+    });
+
+    expect(provider.getModels()[0]).toMatchObject({
+      id: "explicit-chat",
+      api: "openai-completions",
+      compat: {
+        thinkingFormat: "openai",
+        supportsReasoningEffort: true,
+      },
+    });
+  });
+
   it("dispatches Responses-selected models through the Pi Responses API", async () => {
     const requests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
@@ -166,6 +202,7 @@ describe("CommandCode Goat Provider Package", () => {
             name: "Future Goat Messages",
             description: "catalog-only Anthropic transport fixture",
             supportedEndpoints: ["/messages"],
+            endpoint: "/messages",
             input: ["text"],
             reasoning: false,
             contextWindow: 100_000,

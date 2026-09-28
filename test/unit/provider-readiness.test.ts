@@ -11,6 +11,7 @@ function snapshot(
     string,
     Array<{
       readonly id: string;
+      readonly api: string;
       readonly dynamic: boolean;
       readonly availability: "available" | "unavailable" | "unknown";
     }>
@@ -19,6 +20,7 @@ function snapshot(
     const list = byProvider.get(providerId) ?? [];
     list.push({
       id: `model-${list.length}`,
+      api: "fixture-api",
       dynamic: false,
       availability: value,
     });

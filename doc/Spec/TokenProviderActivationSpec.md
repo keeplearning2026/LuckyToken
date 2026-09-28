@@ -579,11 +579,13 @@ Both consume the same frozen startup catalog loaded from Token-owned
 `commandcode-models.json` by `@token/commandcode-model-catalog`. They do not
 share Provider credentials, transport, wire conversion, or response lifecycle.
 The tracked package `commandcode-models.json` is the only bundled model-data
-authority; it currently has 57 reviewed facts. The Windows installer offers
-to replace the user-side catalog and selects that option by default; Backend
-startup loads the resulting catalog. Private projects the full loaded catalog through its private API;
+authority; it currently has 57 reviewed facts. The certified Windows installer
+replaces the user-side catalog on install/reinstall; normal Backend startup only
+loads the resulting catalog. Private projects the full loaded catalog through
+its private API and does not use the catalog `endpoint` to choose that API.
 Goat selects loaded facts whose minimum plan is Go or GOAT (currently 39) and
-derives each Pi API from `supportedEndpoints`.
+maps each required `endpoint` directly to its Pi API; `endpoint` must belong
+to the model's `supportedEndpoints` capability set.
 
 The npm/package identity is an implementation detail and is never required in normal UI or first-run configuration.
 

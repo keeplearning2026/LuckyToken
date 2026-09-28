@@ -7353,9 +7353,11 @@ Request:
 ```
 
 Goat has fixed `Provider.id=commandcode-goat` and an independent Pi credential
-slot. Its per-model `Model.api` is selected from the Backend-startup
-`commandcode-models.json` `supportedEndpoints`; the same frozen catalog
-snapshot is injected into Private and Goat. Goat must not import Private request
+slot. Its per-model `Model.api` is the direct mapping of the required
+`commandcode-models.json` `endpoint`; that selected standard endpoint must
+belong to the model's `supportedEndpoints` capability set. The same frozen
+catalog snapshot is injected into Private and Goat, while Private keeps its
+own `commandcode-private` API and wire. Goat must not import Private request
 builders, credentials, transport, assembler, or response conversion. The tracked
 package JSON currently contains 57 reviewed facts and is the only bundled
 model-data authority used to seed or fall back when the user catalog is

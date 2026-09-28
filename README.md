@@ -37,9 +37,9 @@ npm run build
 ## Windows release
 
 Windows has one release authority: a per-user NSIS `Token-Setup.exe`.
-The assisted installer asks whether to replace the user's
-`commandcode-models.json`; that option is selected by default. The portable
-ZIP is not a Windows release artifact.
+Each install or reinstall replaces the user's `commandcode-models.json` with
+the current bundled catalog. Normal Backend startup never overwrites that file.
+The portable ZIP is not a Windows release artifact.
 
 Build and fully certify an unsigned local candidate:
 
@@ -315,11 +315,14 @@ automatically through the standard Pi Provider contract:
 Users must **not** add either bundled package to `providerPackages`; that key is
 reserved for explicit external/user Provider Packages. No `models.json` entry
 is required. The product-default CommandCode model-data authority is the tracked
-`packages/commandcode-model-catalog/commandcode-models.json`. The Windows
-installer offers to replace `dirname(config.json)/commandcode-models.json`
-and selects that option by default. The Backend loads the user-side file once
-per startup, seeds a missing file from the packaged catalog, and falls back to
-the packaged view with a warning when an existing file is invalid.
+`packages/commandcode-model-catalog/commandcode-models.json`. The certified
+Windows installer unconditionally replaces
+`dirname(config.json)/commandcode-models.json` on install/reinstall. Normal
+Backend startup loads the user-side file once, seeds a missing file from the
+packaged catalog, and falls back to the packaged view with a warning when an
+existing file is invalid. The catalog's `supportedEndpoints` is upstream
+standard-endpoint capability; `endpoint` is CommandCode Goat's selected
+standard endpoint and maps directly to its Pi `Model.api`.
 There is no second TypeScript model table. The Providers share the
 same frozen startup snapshot but own independent authentication, transport, and
 response lifecycles. The current JSON authority contains 57 reviewed facts;

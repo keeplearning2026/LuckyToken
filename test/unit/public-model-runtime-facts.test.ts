@@ -20,8 +20,8 @@ describe("Public Model runtime facts", () => {
           dynamic: true,
           state: "succeeded",
           models: [
-            { id: "opus", dynamic: true, availability: "available" },
-            { id: "sonnet", dynamic: true, availability: "available" },
+            { id: "opus", api: "anthropic-messages", dynamic: true, availability: "available" },
+            { id: "sonnet", api: "anthropic-messages", dynamic: true, availability: "available" },
           ],
         },
         {
@@ -30,7 +30,7 @@ describe("Public Model runtime facts", () => {
           dynamic: false,
           state: "known",
           models: [
-            { id: "gemini", dynamic: false, availability: "unavailable" },
+            { id: "gemini", api: "google-generative-ai", dynamic: false, availability: "unavailable" },
           ],
         },
       ],
@@ -97,7 +97,7 @@ describe("Public Model runtime facts", () => {
         name: "Fixture",
         dynamic: false,
         state: "known",
-        models: [{ id: "model", dynamic: false, availability: "available" }],
+        models: [{ id: "model", api: "fixture-api", dynamic: false, availability: "available" }],
       }],
     } as CatalogSnapshotProjection;
     const credentials = {

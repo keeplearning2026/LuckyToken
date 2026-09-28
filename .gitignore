@@ -10,6 +10,7 @@ OpenCodeAPIkey.txt
 **/auth.json
 .online-artifacts/
 /artifacts/
+/installer/
 .temp/
 temp/
 .task/

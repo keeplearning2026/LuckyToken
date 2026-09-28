@@ -3,10 +3,11 @@
 ## Release authority
 
 The Windows release artifact is the per-user assisted NSIS
-`Token-Setup.exe`. The installer asks whether to replace the user's
-`commandcode-models.json` and selects replacement by default. A portable ZIP
-is not published for Windows. Users with the older Squirrel install uninstall
-it first; the user `.Token` directory is preserved.
+`Token-Setup.exe`. Every install or reinstall replaces the user's
+`commandcode-models.json` with the catalog bundled in that installer. Normal
+Backend startup never performs this replacement. A portable ZIP is not published
+for Windows. Users with the older Squirrel install uninstall it first; the user
+`.Token` directory is preserved.
 
 One Forge Package and NSIS build invocation owns one candidate. Tests receive the absolute path
 of that invocation's packaged `Token.exe`; no release test may select a
@@ -46,17 +47,22 @@ directory without rebuilding or recompressing it.
    absent, and Anthropic plus CommandCode Private must appear through both the
    Control Plane catalog and the Providers UI.
 7. In official or explicitly opted-in machine certification, silently install
-   the selected Setup.exe in a blank Windows user, verify the default catalog
-   overwrite, launch the app and verify its Backend and Provider catalog, run the UI test against
-   the installed EXE, stop all installed processes, uninstall it, and prove
-   user state is preserved.
+   the selected Setup.exe in a blank Windows user, verify the user catalog is
+   byte-equivalent by SHA-256 to the installed bundled authority, replace the
+   user file with sentinel content, silently reinstall the same candidate and
+   verify the bundled authority replaces it again. Then launch the app and
+   verify its Backend and Provider catalog, run the UI test against the installed
+   EXE, stop all installed processes, uninstall it, and prove user state is
+   preserved.
 8. For an official release, require valid Authenticode signatures on the
    installer and installed EXE.
 9. Copy the exact NSIS installer and write `release-manifest.json` with
    commit, dirty state, Backend build identity, hashes, sizes, certification
    results, and promotability.
 
-Any failed step stops publication. Obsolete user configuration or persistence
-formats are not silently migrated by this process: current compatibility policy
-still applies, and incompatible state must enter explicit recovery rather than
-presenting a false successful startup.
+Any failed step stops publication. The CommandCode catalog is intentionally
+not migrated across schema versions: the certified Windows install/reinstall
+contract replaces it with the current bundled schema. Other persisted
+configuration follows the normal compatibility policy. macOS/Linux remain
+structurally supported but are not certified release authorities, so this
+Windows replacement guarantee must not be generalized to those platforms.

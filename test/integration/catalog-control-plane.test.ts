@@ -13,6 +13,7 @@ import {
   type ControlPlaneEndpoint,
   type RunningControlPlane,
 } from "@token/application-control-plane/control-plane";
+import { decodeCatalogCommandResult } from "../../packages/application-control-plane/src/wire.js";
 
 import { createModels, createProvider } from "@earendil-works/pi-ai";
 
@@ -101,7 +102,25 @@ async function createCatalogPlane(options?: {
     id: "catalog-plane-dynamic",
     name: "catalog-plane-dynamic",
     baseUrl: "https://controlled.example.com/v1",
-    models: [],
+    models: [
+      {
+        id: "fixture-model",
+        name: "Fixture Model",
+        api: "openai-responses",
+        provider: "catalog-plane-dynamic",
+        baseUrl: "https://controlled.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 100_000,
+        maxTokens: 16_384,
+      },
+    ],
     auth: {
       apiKey: {
         name: "Controlled API key",
@@ -292,8 +311,46 @@ describe("catalog commands through the Control Plane", () => {
     expect(result.snapshot.version).toBeGreaterThan(0);
     expect(result.snapshot.modelsJsonValid).toBe(true);
     expect(result.snapshot.providers.length).toBeGreaterThan(0);
+    expect(
+      result.snapshot.providers
+        .find((provider) => provider.providerId === "catalog-plane-dynamic")
+        ?.models.find((model) => model.id === "fixture-model")?.api,
+    ).toBe("openai-responses");
     expect(result.snapshot.refreshedAt).toBeGreaterThan(0);
     expect(result.refresh).toBeUndefined();
+  });
+
+  it("accepts an older v5 catalog projection that predates the additive api field", () => {
+    const result = decodeCatalogCommandResult({
+      outcome: "ok",
+      snapshot: {
+        version: 1,
+        modelsJsonValid: true,
+        providers: [
+          {
+            providerId: "legacy-provider",
+            name: "Legacy Provider",
+            dynamic: false,
+            state: "known",
+            models: [
+              {
+                id: "legacy-model",
+                dynamic: false,
+                availability: "available",
+              },
+            ],
+          },
+        ],
+        refreshErrors: [],
+      },
+    });
+
+    expect(result).toBeDefined();
+    expect(result?.snapshot.providers[0]?.models[0]).toEqual({
+      id: "legacy-model",
+      dynamic: false,
+      availability: "available",
+    });
   });
 
   it("schedules a non-blocking background refresh command", async () => {

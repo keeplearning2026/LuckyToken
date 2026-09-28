@@ -10,7 +10,9 @@ $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $installRoot = Join-Path $env:LOCALAPPDATA "Programs\Token"
 $installedExe = Join-Path $installRoot "Token.exe"
 $uninstallExe = Join-Path $installRoot "Uninstall Token.exe"
+$bundledCatalog = Join-Path $installRoot "resources\backend\node_modules\@token\commandcode-model-catalog\commandcode-models.json"
 $userState = Join-Path $env:USERPROFILE ".Token"
+$userCatalog = Join-Path $userState "commandcode-models.json"
 $descriptorPath = Join-Path $userState "control-plane.json"
 $evidence = [ordered]@{
   schemaVersion = "token-windows-installer-certification-v1"
@@ -79,7 +81,19 @@ try {
   Add-Check -Name "installed-executable" -Passed (Test-Path -LiteralPath $installedExe -PathType Leaf) -Detail $installedExe
   Add-Check -Name "bundled-node" -Passed (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $installedExe) "resources\backend\node\node.exe") -PathType Leaf)
   Add-Check -Name "bundled-backend" -Passed (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $installedExe) "resources\backend\dist\cli.js") -PathType Leaf)
-  Add-Check -Name "installer-default-catalog-overwrite" -Passed (Test-Path -LiteralPath (Join-Path $userState "commandcode-models.json") -PathType Leaf)
+  Add-Check -Name "bundled-commandcode-catalog" -Passed (Test-Path -LiteralPath $bundledCatalog -PathType Leaf) -Detail $bundledCatalog
+  Add-Check -Name "installer-commandcode-catalog" -Passed (Test-Path -LiteralPath $userCatalog -PathType Leaf) -Detail $userCatalog
+  $bundledCatalogHash = (Get-FileHash -LiteralPath $bundledCatalog -Algorithm SHA256).Hash
+  $userCatalogHash = (Get-FileHash -LiteralPath $userCatalog -Algorithm SHA256).Hash
+  Add-Check -Name "installer-catalog-matches-bundled-authority" -Passed ($userCatalogHash -eq $bundledCatalogHash) -Detail $userCatalogHash
+
+  Set-Content -LiteralPath $userCatalog -Value '{"sentinel":"installer-replacement"}' -Encoding utf8
+  $sentinelHash = (Get-FileHash -LiteralPath $userCatalog -Algorithm SHA256).Hash
+  Add-Check -Name "catalog-sentinel-differs-from-bundled" -Passed ($sentinelHash -ne $bundledCatalogHash) -Detail $sentinelHash
+  $reinstallProcess = Start-Process -FilePath $resolvedInstaller -ArgumentList @("/S") -PassThru -WindowStyle Hidden
+  Wait-ReleaseProcess -Process $reinstallProcess -TimeoutMilliseconds 300000 -Label "NSIS installer replacement check"
+  $reinstalledCatalogHash = (Get-FileHash -LiteralPath $userCatalog -Algorithm SHA256).Hash
+  Add-Check -Name "reinstall-replaces-user-catalog" -Passed ($reinstalledCatalogHash -eq $bundledCatalogHash) -Detail $reinstalledCatalogHash
 
   if ($RequireSignature) {
     $installedSignature = Get-AuthenticodeSignature -LiteralPath $installedExe

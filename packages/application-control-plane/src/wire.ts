@@ -639,6 +639,8 @@ function decodeCatalogModelProjection(
     !isRecord(value) ||
     typeof value.id !== "string" ||
     value.id.length === 0 ||
+    (value.api !== undefined &&
+      (typeof value.api !== "string" || value.api.length === 0)) ||
     typeof value.dynamic !== "boolean" ||
     typeof value.availability !== "string" ||
     !catalogModelAvailability.has(value.availability)
@@ -647,6 +649,7 @@ function decodeCatalogModelProjection(
   }
   return Object.freeze({
     id: value.id,
+    ...(value.api === undefined ? {} : { api: value.api }),
     dynamic: value.dynamic,
     availability: value.availability as CatalogModelAvailability,
   });

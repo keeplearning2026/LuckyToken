@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
-import { readdir } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repositoryRoot = resolve(desktopRoot, "..", "..");
 const outputRoot = join(desktopRoot, ".electron-out");
+const installerRoot = join(repositoryRoot, "installer");
+const installerOnly = process.argv.includes("--installer-only");
 
 async function directories() {
   return new Set((await readdir(outputRoot, { withFileTypes: true }).catch((error) => {
@@ -28,6 +31,11 @@ async function run(script, args, env = process.env) {
   });
 }
 
+if (installerOnly) {
+  await rm(outputRoot, { recursive: true, force: true });
+  await mkdir(outputRoot, { recursive: true });
+}
+
 const before = await directories();
 await run(require.resolve("@electron-forge/cli/dist/electron-forge.js"), ["package"]);
 const added = [...await directories()].filter((name) => !before.has(name));
@@ -45,3 +53,12 @@ await run(require.resolve("electron-builder/cli.js"), [
     WIN_CSC_KEY_PASSWORD: process.env.TOKEN_WINDOWS_CERTIFICATE_PASSWORD,
   }),
 });
+
+if (installerOnly) {
+  const installer = join(releaseRoot, "make", "nsis", "Token-Setup.exe");
+  const retainedInstaller = join(installerRoot, "Token-Setup.exe");
+  await mkdir(installerRoot, { recursive: true });
+  await copyFile(installer, retainedInstaller);
+  await rm(outputRoot, { recursive: true, force: true });
+  console.log(`Installer retained at ${retainedInstaller}`);
+}

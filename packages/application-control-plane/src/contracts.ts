@@ -265,6 +265,12 @@ export type CatalogRefreshTrigger =
  *  came from the Provider's dynamic catalog overlay (cache or network). */
 export interface CatalogModelProjection {
   readonly id: string;
+  /**
+   * Captured Pi Model.api from the active runtime catalog.
+   * Optional on the v5 wire so a newer Desktop can attach to an older
+   * wire-compatible CLI-owned Backend that predates this additive field.
+   */
+  readonly api?: string;
   readonly dynamic: boolean;
   readonly availability: CatalogModelAvailability;
 }

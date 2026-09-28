@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import {
   COMMANDCODE_MODEL_CATALOG_SCHEMA,
+  commandCodeEndpointToApi,
   loadCommandCodeModelCatalog,
   parseCommandCodeModelCatalogText,
-  selectCommandCodeModelApi,
 } from "@token/commandcode-model-catalog";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -21,12 +21,16 @@ async function tempDirectory(): Promise<string> {
 function model(
   id: string,
   supportedEndpoints: readonly string[],
+  endpoint = supportedEndpoints.includes("/responses")
+    ? "/responses"
+    : supportedEndpoints[0],
 ): Record<string, unknown> {
   return {
     id,
     name: id,
     description: `${id} fixture`,
     supportedEndpoints,
+    endpoint,
     input: ["text"],
     reasoning: false,
     contextWindow: 100_000,
@@ -43,42 +47,80 @@ afterEach(async () => {
 });
 
 describe("CommandCode model catalog file authority", () => {
-  it("selects one Pi API deterministically from supported endpoints", () => {
+  it("maps the explicitly selected endpoint to one Pi API", () => {
     const catalog = parseCommandCodeModelCatalogText(
       JSON.stringify({
         schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
         models: [
           model("messages-only", ["/messages"]),
           model("chat-only", ["/chat/completions"]),
-          model("chat-and-responses", ["/chat/completions", "/responses"]),
+          model(
+            "chat-and-responses",
+            ["/chat/completions", "/responses"],
+            "/chat/completions",
+          ),
         ],
       }),
       "fixture.json",
     );
 
-    expect(selectCommandCodeModelApi(catalog.models[0]!)).toBe(
+    expect(commandCodeEndpointToApi(catalog.models[0]!.endpoint)).toBe(
       "anthropic-messages",
     );
-    expect(selectCommandCodeModelApi(catalog.models[1]!)).toBe(
+    expect(commandCodeEndpointToApi(catalog.models[1]!.endpoint)).toBe(
       "openai-completions",
     );
-    expect(selectCommandCodeModelApi(catalog.models[2]!)).toBe(
-      "openai-responses",
+    expect(commandCodeEndpointToApi(catalog.models[2]!.endpoint)).toBe(
+      "openai-completions",
     );
   });
 
-  it("rejects an ambiguous Messages-plus-Responses endpoint combination", () => {
+  it("allows mixed endpoint capabilities when endpoint selects one member", () => {
+    const catalog = parseCommandCodeModelCatalogText(
+      JSON.stringify({
+        schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
+        models: [
+          model("messages-and-responses", ["/messages", "/responses"], "/messages"),
+        ],
+      }),
+      "fixture.json",
+    );
+
+    expect(catalog.models[0]).toMatchObject({
+      supportedEndpoints: ["/messages", "/responses"],
+      endpoint: "/messages",
+    });
+  });
+
+  it("requires endpoint and rejects a selection outside supportedEndpoints", () => {
+    const missingEndpoint = model("missing-endpoint", ["/responses"]);
+    delete missingEndpoint.endpoint;
     expect(() =>
-      parseCommandCodeModelCatalogText(
-        JSON.stringify({
-          schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
-          models: [
-            model("ambiguous", ["/messages", "/responses"]),
-          ],
-        }),
-        "fixture.json",
-      ),
-    ).toThrow(/supportedEndpoints/u);
+      parseCommandCodeModelCatalogText(JSON.stringify({
+        schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
+        models: [missingEndpoint],
+      })),
+    ).toThrow(/\.endpoint/u);
+
+    expect(() =>
+      parseCommandCodeModelCatalogText(JSON.stringify({
+        schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
+        models: [
+          model("outside-capability", ["/chat/completions"], "/responses"),
+        ],
+      })),
+    ).toThrow(/endpoint must belong to supportedEndpoints/u);
+  });
+
+  it("rejects the obsolete v1 schema instead of migrating it", () => {
+    expect(() =>
+      parseCommandCodeModelCatalogText(JSON.stringify({
+        schema: "luckytoken-commandcode-models-v1",
+        models: [
+          model("old-schema", ["/responses"]),
+        ],
+      })),
+    ).toThrow(/schema must be luckytoken-commandcode-models-v2/u);
   });
 
   it("rejects unsupported reasoning effort mappings", () => {
@@ -163,7 +205,13 @@ describe("CommandCode model catalog file authority", () => {
       JSON.stringify(
         {
           schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
-          models: [model("user-updated", ["/chat/completions"])],
+          models: [
+            model(
+              "user-updated",
+              ["/chat/completions", "/responses"],
+              "/chat/completions",
+            ),
+          ],
         },
         null,
         2,
@@ -176,9 +224,13 @@ describe("CommandCode model catalog file authority", () => {
     expect(restarted.catalog.models.map((entry) => entry.id)).toEqual([
       "user-updated",
     ]);
-    expect(selectCommandCodeModelApi(restarted.catalog.models[0]!)).toBe(
-      "openai-completions",
-    );
+    expect(restarted.catalog.models[0]).toMatchObject({
+      supportedEndpoints: ["/chat/completions", "/responses"],
+      endpoint: "/chat/completions",
+    });
+    expect(
+      commandCodeEndpointToApi(restarted.catalog.models[0]!.endpoint),
+    ).toBe("openai-completions");
   });
 
   it("falls back to the bundled default without overwriting an invalid user file", async () => {

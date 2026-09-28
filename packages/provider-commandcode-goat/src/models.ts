@@ -1,8 +1,8 @@
 import type { Model } from "@earendil-works/pi-ai";
 import {
   COMMANDCODE_MODEL_FACTS,
+  commandCodeEndpointToApi,
   projectCommandCodeModel,
-  selectCommandCodeModelApi,
   type CommandCodeModelApi,
   type CommandCodeModelFacts,
 } from "@token/commandcode-model-catalog";
@@ -26,7 +26,7 @@ function commandCodeGoatBaseUrl(api: CommandCodeModelApi): string {
 function projectCommandCodeGoatModel(
   facts: CommandCodeModelFacts,
 ): Model<CommandCodeModelApi> {
-  const api = selectCommandCodeModelApi(facts);
+  const api = commandCodeEndpointToApi(facts.endpoint);
   const projected = projectCommandCodeModel(facts, {
     provider: COMMANDCODE_GOAT_PROVIDER_ID,
     api,

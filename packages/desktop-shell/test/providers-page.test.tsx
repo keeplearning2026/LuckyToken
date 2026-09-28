@@ -148,8 +148,18 @@ const catalog = () => ({
         dynamic: true,
         state: "succeeded" as const,
         models: [
-          { id: "model-a", dynamic: true, availability: "available" as const },
-          { id: "model-b", dynamic: true, availability: "unavailable" as const },
+          {
+            id: "model-a",
+            api: "bedrock-converse",
+            dynamic: true,
+            availability: "available" as const,
+          },
+          {
+            id: "model-b",
+            api: "bedrock-converse",
+            dynamic: true,
+            availability: "unavailable" as const,
+          },
         ],
       },
     ],
@@ -206,6 +216,7 @@ async function render(options: {
   readonly executeCredentialProfiles?: DesktopControlPlaneApi["executeCredentialProfiles"];
   readonly executeProviderProfileAuth?: DesktopControlPlaneApi["executeProviderProfileAuth"];
   readonly respondAuth?: DesktopControlPlaneApi["respondAuth"];
+  readonly executeCatalog?: DesktopControlPlaneApi["executeCatalog"];
   readonly executePublicModels?: DesktopControlPlaneApi["executePublicModels"];
   readonly onRequestJourneys?: DesktopControlPlaneApi["onRequestJourneys"];
 } = {}): Promise<void> {
@@ -222,7 +233,7 @@ async function render(options: {
           ...(initial.options === undefined ? {} : { options: initial.options }),
         })),
       respondAuth: options.respondAuth ?? (async () => undefined),
-      executeCatalog: async () => catalog(),
+      executeCatalog: options.executeCatalog ?? (async () => catalog()),
       executePublicModels:
         options.executePublicModels ?? (async () => publicModels()),
       onRequestJourneys:
@@ -434,11 +445,129 @@ describe("Providers Profile product slice", () => {
       ),
     ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Hide model-a"]')).not.toBeNull();
+    expect(container.textContent).toContain("Pi API: bedrock-converse");
     expect(
       container.querySelector('button[aria-label="Rename model-beta"]'),
     ).not.toBeNull();
     expect(container.textContent).not.toContain("Rename");
     expect(container.textContent).not.toContain("Published");
+  });
+
+  it("displays runtime Pi APIs generically across different Providers", async () => {
+    const baseProfiles = emptyProfiles();
+    const profiles: ProfilesResult = {
+      ...baseProfiles,
+      state: {
+        providers: [
+          ...baseProfiles.state.providers,
+          {
+            providerId: "anthropic",
+            implementationAvailable: true,
+            revision: "absent",
+            ambient: {
+              kind: "external",
+              status: "unknown",
+              message: "External auth is resolved only when the Provider is used",
+            },
+            profiles: [],
+          },
+          {
+            providerId: "commandcode-private",
+            implementationAvailable: true,
+            revision: "absent",
+            ambient: {
+              kind: "external",
+              status: "unknown",
+              message: "External auth is resolved only when the Provider is used",
+            },
+            profiles: [],
+          },
+        ],
+      },
+    };
+    const executeCatalog: DesktopControlPlaneApi["executeCatalog"] = async () => ({
+      outcome: "ok",
+      snapshot: {
+        version: 1,
+        modelsJsonValid: true,
+        providers: [
+          {
+            providerId: "anthropic",
+            name: "Anthropic",
+            dynamic: false,
+            state: "known",
+            models: [
+              {
+                id: "claude-test",
+                api: "anthropic-messages",
+                dynamic: false,
+                availability: "available",
+              },
+            ],
+          },
+          {
+            providerId: "commandcode-private",
+            name: "CommandCode Private",
+            dynamic: false,
+            state: "known",
+            models: [
+              {
+                id: "private-test",
+                api: "commandcode-private",
+                dynamic: false,
+                availability: "available",
+              },
+            ],
+          },
+        ],
+        refreshErrors: [],
+      },
+    });
+    const executePublicModels: DesktopControlPlaneApi["executePublicModels"] = async () => ({
+      outcome: "ok",
+      state: {
+        revision: 1,
+        version: 1,
+        endpoint: { host: "127.0.0.1", port: 3000 },
+        providers: [
+          {
+            providerId: "anthropic",
+            on: true,
+            favorite: false,
+            models: [
+              {
+                alias: "anthropic/claude-test",
+                target: "claude-test",
+                on: true,
+                favorite: false,
+              },
+            ],
+          },
+          {
+            providerId: "commandcode-private",
+            on: true,
+            favorite: false,
+            models: [
+              {
+                alias: "commandcode-private/private-test",
+                target: "private-test",
+                on: true,
+                favorite: false,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await render({ profiles, executeCatalog, executePublicModels });
+
+    await clickAria("Manage anthropic models");
+    expect(container.textContent).toContain("Pi API: anthropic-messages");
+
+    await clickAria("Close models");
+    await clickAria("Manage commandcode-private models");
+    expect(container.textContent).toContain("Pi API: commandcode-private");
   });
 
   it("retries an idempotent Public Models update once after a stale revision", async () => {

@@ -46,6 +46,7 @@ export type CommandCodeThinkingLevelMap = Readonly<
 export interface CommandCodeModelFacts {
   readonly id: string;
   readonly supportedEndpoints: readonly CommandCodeSupportedEndpoint[];
+  readonly endpoint: CommandCodeSupportedEndpoint;
   readonly name: string;
   readonly description: string;
   readonly input: readonly ("text" | "image")[];
@@ -84,14 +85,15 @@ export function freezeCommandCodeModelFacts(
             endpoint !== "/messages" &&
             endpoint !== "/chat/completions" &&
             endpoint !== "/responses",
-        ) ||
-        (endpoints.has("/messages") && endpoints.size !== 1) ||
-        (!endpoints.has("/messages") &&
-          !endpoints.has("/chat/completions") &&
-          !endpoints.has("/responses"))
+        )
       ) {
         throw new Error(
           `CommandCode model ${value.id} has unsupported supportedEndpoints`,
+        );
+      }
+      if (!endpoints.has(value.endpoint)) {
+        throw new Error(
+          `CommandCode model ${value.id} endpoint must belong to supportedEndpoints`,
         );
       }
       if (value.input.length === 0 || new Set(value.input).size !== value.input.length) {
@@ -137,19 +139,15 @@ export function freezeCommandCodeModelFacts(
   );
 }
 
-export function selectCommandCodeModelApi(
-  facts: Pick<CommandCodeModelFacts, "supportedEndpoints">,
+export function commandCodeEndpointToApi(
+  endpoint: CommandCodeSupportedEndpoint,
 ): CommandCodeModelApi {
-  const endpoints = new Set(facts.supportedEndpoints);
-  if (endpoints.has("/messages")) {
-    if (endpoints.size !== 1) {
-      throw new Error(
-        "CommandCode supportedEndpoints cannot combine /messages with another endpoint",
-      );
-    }
-    return "anthropic-messages";
+  switch (endpoint) {
+    case "/messages":
+      return "anthropic-messages";
+    case "/chat/completions":
+      return "openai-completions";
+    case "/responses":
+      return "openai-responses";
   }
-  if (endpoints.has("/responses")) return "openai-responses";
-  if (endpoints.has("/chat/completions")) return "openai-completions";
-  throw new Error("CommandCode supportedEndpoints do not select a Pi API");
 }

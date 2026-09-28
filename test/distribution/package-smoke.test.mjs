@@ -112,13 +112,14 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
       installedCatalogPath,
       `${JSON.stringify(
         {
-          schema: "luckytoken-commandcode-models-v1",
+          schema: "luckytoken-commandcode-models-v2",
           models: [
             {
               id: "authority-probe",
               name: "Authority Probe",
               description: "proves the packaged JSON is the model-data authority",
               supportedEndpoints: ["/chat/completions", "/responses"],
+              endpoint: "/responses",
               input: ["text"],
               reasoning: false,
               contextWindow: 123456,

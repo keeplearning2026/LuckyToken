@@ -14,7 +14,7 @@ import {
 } from "./models.js";
 
 export const COMMANDCODE_MODEL_CATALOG_SCHEMA =
-  "luckytoken-commandcode-models-v1" as const;
+  "luckytoken-commandcode-models-v2" as const;
 
 export interface CommandCodeModelCatalog {
   readonly schema: typeof COMMANDCODE_MODEL_CATALOG_SCHEMA;
@@ -102,6 +102,20 @@ function parseInput(
   return input;
 }
 
+function parseEndpoint(
+  value: unknown,
+  description: string,
+): CommandCodeSupportedEndpoint {
+  if (
+    value !== "/messages" &&
+    value !== "/chat/completions" &&
+    value !== "/responses"
+  ) {
+    throw new Error(`${description} must be /messages, /chat/completions, or /responses`);
+  }
+  return value;
+}
+
 function parseSupportedEndpoints(
   value: unknown,
   description: string,
@@ -121,11 +135,6 @@ function parseSupportedEndpoints(
   });
   if (new Set(endpoints).size !== endpoints.length) {
     throw new Error(`${description} must contain unique endpoints`);
-  }
-  if (endpoints.includes("/messages") && endpoints.length !== 1) {
-    throw new Error(
-      `${description} cannot combine /messages with another endpoint`,
-    );
   }
   return endpoints;
 }
@@ -189,6 +198,7 @@ function parseModel(value: unknown, index: number): CommandCodeModelFacts {
       "name",
       "description",
       "supportedEndpoints",
+      "endpoint",
       "input",
       "reasoning",
       "thinkingLevelMap",
@@ -220,6 +230,17 @@ function parseModel(value: unknown, index: number): CommandCodeModelFacts {
     );
   }
 
+  const supportedEndpoints = parseSupportedEndpoints(
+    record.supportedEndpoints,
+    `${description}.supportedEndpoints`,
+  );
+  const endpoint = parseEndpoint(record.endpoint, `${description}.endpoint`);
+  if (!supportedEndpoints.includes(endpoint)) {
+    throw new Error(
+      `${description}.endpoint must belong to supportedEndpoints`,
+    );
+  }
+
   return {
     id: nonEmptyString(record.id, `${description}.id`),
     name: nonEmptyString(record.name, `${description}.name`),
@@ -227,10 +248,8 @@ function parseModel(value: unknown, index: number): CommandCodeModelFacts {
       record.description,
       `${description}.description`,
     ),
-    supportedEndpoints: parseSupportedEndpoints(
-      record.supportedEndpoints,
-      `${description}.supportedEndpoints`,
-    ),
+    supportedEndpoints,
+    endpoint,
     input: parseInput(record.input, `${description}.input`),
     reasoning: record.reasoning,
     ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),

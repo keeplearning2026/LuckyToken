@@ -633,5 +633,17 @@ describe("Responses native provider sender", () => {
     );
     expect(supportsProviderNativeResponses(goat, "responses")).toBe(true);
     expect(supportsProviderNativeResponses(goat, "compact")).toBe(false);
+
+    const goatCompletions = model(
+      "commandcode-goat",
+      "openai-completions",
+      "https://api.commandcode.ai/provider/v1",
+    );
+    expect(
+      supportsProviderNativeResponses(goatCompletions, "responses"),
+    ).toBe(false);
+    expect(
+      supportsProviderNativeResponses(goatCompletions, "compact"),
+    ).toBe(false);
   });
 });

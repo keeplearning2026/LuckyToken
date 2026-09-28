@@ -1,6 +1,6 @@
 export {
+  commandCodeEndpointToApi,
   freezeCommandCodeModelFacts,
-  selectCommandCodeModelApi,
   type CommandCodeModelApi,
   type CommandCodeModelFacts,
   type CommandCodePlan,
