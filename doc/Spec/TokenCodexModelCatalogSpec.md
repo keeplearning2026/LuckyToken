@@ -1,12 +1,12 @@
 # Token Codex Model Catalog Specification v1.1
 
-**Status:** IMPLEMENTED / VALIDATED ON CODEX 0.149.0
+**Status:** IMPLEMENTED / CATALOG VALIDATED ON CODEX 0.149.0; SEARCH VALIDATED ON 0.158.0-alpha.2.1
 
 **Date:** 2026-08-22
 
-**Observed Codex runtime:** `codex-cli 0.149.0`
+**Observed Codex runtimes:** `codex-cli 0.149.0` (catalog record) and `0.158.0-alpha.2.1` (standalone search record)
 
-**Scope:** `token-model-catalog.json` generation, the three Codex root routing fields, restore behavior, and CLI/online certification
+**Scope:** `token-model-catalog.json` generation, three Codex root routing fields, the standalone search feature, restore behavior, and CLI/online certification
 
 This document defines the implemented contract. Sections labelled **Confirmed** record observed source or runtime behavior. Contract rules state what Token implements and what future Codex versions must continue to prove.
 
@@ -25,12 +25,15 @@ The integration owns one file under the resolved Codex home:
 <CODEX_HOME>/token-model-catalog.json
 ```
 
-It changes only these three root-level `config.toml` fields while enabled:
+It manages these `config.toml` values while enabled:
 
 ```toml
 model_provider = "openai"
 openai_base_url = "http://127.0.0.1:<Token port>/v1"
 model_catalog_json = "<absolute path to CODEX_HOME/token-model-catalog.json>"
+
+[features]
+standalone_web_search = true
 ```
 
 It must not edit Codex's native catalog, `models_cache.json`, provider tables, authentication state, or unrelated configuration.
@@ -58,7 +61,7 @@ No reference project is authoritative for Token. Reference implementations provi
 
 - [Token catalog generator](../../src/integrations/codex/catalog.ts) projects native rows plus callable aliases.
 - [Native catalog source](../../src/integrations/codex/native-catalog-source.ts) invokes `codex debug models --bundled` first and reads `models_cache.json` only as a fallback; it never reconstructs native identity from Pi.
-- [Codex integration authority](../../src/integrations/codex/integration.ts) owns how the three root keys and Token catalog path are injected and restored.
+- [Codex integration authority](../../src/integrations/codex/integration.ts) owns how the three root keys, standalone search feature, and Token catalog path are injected and restored.
 - [Agent integration coordinator](../../src/integrations/agents/coordinator.ts) owns when Codex and Pi inject or restore, their enabled state, and their selected scope.
 - [Codex catalog tests](../../test/unit/codex-catalog.test.ts) currently cover native-row preservation, alias identity, collisions, unavailable targets, and the one-slash boundary.
 - [Native source tests](../../test/unit/codex-native-catalog-source.test.ts) cover installed-runtime discovery and the read-only cache fallback.
@@ -222,7 +225,7 @@ Runtime contract: on `codex-cli 0.149.0`, the built-in `openai` provider may fir
 
 The catalog field is therefore a capability declaration, not a proven global transport-disable switch. Token does not add a fourth owned root config field to suppress this behavior.
 
-Likewise, `supports_search_tool: false` prevents Token from advertising hosted search as a routed model capability, but it does not disable a user's independent global Codex web-search setting. Token always serves `POST /v1/alpha/search` as Codex Direct Mode and forwards it to the fixed ChatGPT Codex search upstream. It rewrites only the top-level JSON `model` to the Advanced setting `integrations.codex.searchModel` (default `gpt-6-luna`), preserving all other JSON text, raw query, caller end-to-end headers, and request content encoding while rebuilding transport-level headers. Invalid or undecodable search bodies fail before dispatch. Caller credentials are not compared with `auth.json`; the upstream owns authentication. `/v1/responses` and `/v1/responses/compact` retain their existing model-based lane selection.
+`supports_search_tool: false` gates Codex deferred `tool_search` discovery; it is not the hosted web-search switch. Token's Responses conversion currently drops hosted `web_search` declarations. While Codex integration is active, Token sets `[features].standalone_web_search = true` so supported Codex clients declare the `web.run` namespace tool and execute search themselves. Codex controls whether this feature is available and whether web search is disabled. Token always serves `POST /v1/alpha/search` as Codex Direct Mode and forwards it to the fixed ChatGPT Codex search upstream. It rewrites only the top-level JSON `model` to the Advanced setting `integrations.codex.searchModel` (default `gpt-6-luna`), preserving all other JSON text, raw query, caller end-to-end headers, and request content encoding while rebuilding transport-level headers. Invalid or undecodable search bodies fail before dispatch. Caller credentials are not compared with `auth.json`; the upstream owns authentication. `/v1/responses` and `/v1/responses/compact` retain their existing model-based lane selection.
 
 Codex Images (`POST /v1/images/generations`, `POST /v1/images/edits`) and Realtime (`POST /v1/live`, `POST /v1/realtime/calls`, plus the certified `/v1/live` and `/v1/realtime` WebSocket shapes) are also always installed. Images preserves opaque request bytes, raw query and caller end-to-end headers, including the caller's content-negotiation values. Its production Direct HTTP transport does not transparently decode upstream content encodings, so encoded response bytes and end-to-end representation headers remain authoritative while transport/framing headers are rebuilt for the new connection. Realtime preserves non-multipart bytes and performs only the required multipart `sdp`/optional JSON `session` conversion; WebSocket preserves raw query, end-to-end handshake headers, text/binary frames and close semantics while rebuilding connection-level handshake fields. These endpoints do not resolve Public Models or Provider Profiles, enter Pi/Semantic Conversion, retry, or fall back.
 
@@ -287,7 +290,7 @@ Generation is deterministic and the Token-owned file is atomically rewritten on 
 3. Run the parser and prompt-input gates in section 8 against the candidate.
 4. If either gate fails, report failure and leave `config.toml` and the published catalog unchanged.
 5. Atomically publish `<CODEX_HOME>/token-model-catalog.json`.
-6. Converge exactly the three root fields to the active target.
+6. Converge the three root fields and `[features].standalone_web_search = true` to the active target, preserving other feature entries.
 7. Atomically publish `config.toml` and read it back.
 8. Report `restartRequired: true`; never claim that an already-running Codex process reloaded the catalog.
 
@@ -303,6 +306,7 @@ Restore is target-driven, not history-driven. The user configures:
 integrations.codex.preimage.modelProvider
 integrations.codex.preimage.openaiBaseUrl
 integrations.codex.preimage.modelCatalogJson
+integrations.codex.preimage.standaloneWebSearch
 ```
 
 Each setting is independently interpreted:
@@ -312,11 +316,13 @@ Each setting is independently interpreted:
 | string | Set the corresponding root field to exactly that string |
 | `null` / blank UI value | Remove the corresponding root field |
 
+The standalone search restore value is independently `true`, `false`, or `null`. A boolean sets `[features].standalone_web_search`; `null` removes that key. If Token created an otherwise empty `[features]` table, restore removes that table as well. Existing unrelated entries remain.
+
 Defaults are all `null`: [settings catalog](../../src/settings/catalog.ts#L189). The UI intentionally maps an empty field to `null`: [Advanced settings](../../packages/desktop-shell/src/renderer/settings/AdvancedSettings.tsx#L91).
 
 Token does not guess what was previously present and does not continuously update these restore targets from `config.toml`. Changing the configured preimage while the integration is enabled changes the next restore result by user choice.
 
-After restore, read back all three root values before clearing managed state. The Token catalog file may remain on disk because the restored `model_catalog_json` no longer references it; it is Token-owned and will be overwritten by the next injection.
+After restore, read back all three root values and the standalone search feature before clearing managed state. The Token catalog file may remain on disk because the restored `model_catalog_json` no longer references it; it is Token-owned and will be overwritten by the next injection.
 
 ## 8. Validation gates
 
@@ -337,7 +343,7 @@ Tests must prove:
 - neutral base instructions contain no false native GPT identity;
 - catalog generation is deterministic;
 - failure before commit leaves both Codex files unchanged;
-- enable produces the exact three root fields and disable restores all eight presence/value combinations for three nullable fields.
+- enable produces the three root fields and standalone search feature; disable applies the configured restore values for all four settings.
 
 ### Gate B: installed CLI parser
 
@@ -371,9 +377,9 @@ Acceptance requires exit code 0 and confirms:
 
 On 0.149.0 this command renders the input list but does not echo the catalog's top-level `base_instructions`. Neutral identity and absence of the copied GPT identity are therefore verified directly on the generated entry in Gate A; they must not be inferred from absent `prompt-input` text.
 
-### Gate D: staged three-field config
+### Gate D: staged config
 
-Create an isolated Codex home containing the candidate catalog and a `config.toml` with exactly the three active root fields plus any unrelated fixture content. Run `debug models` and `debug prompt-input` without overriding those three fields. Read the fixture back and prove that unrelated content remains byte-equivalent except for the three owned root assignments.
+Create an isolated Codex home containing the candidate catalog and a `config.toml` with the three active root fields, `[features].standalone_web_search = true`, and unrelated fixture content. Run `debug models` and `debug prompt-input` without overriding the managed fields. Read the fixture back and prove unrelated fields remain intact.
 
 ### Gate E: real online `codex exec`
 
@@ -386,6 +392,7 @@ Minimum scenarios:
 3. Shell execution completes through the declared `shell_command` surface.
 4. Freeform apply-patch completes and its call/output relationship round-trips.
 5. One image-capable alias accepts an image; one text-only alias is not advertised as image-capable.
+6. With standalone search enabled and ChatGPT auth available, a routed alias exposes `web.run`, Codex calls `/v1/alpha/search`, the matching tool output returns in the next Responses request, and the final answer cites a source.
 
 Use `codex exec --ephemeral --json -m <alias> ...` or a process-specific temporary `CODEX_HOME` to avoid persisting a user session. Success requires all of:
 
@@ -403,7 +410,7 @@ The existing real-client harness is reusable evidence for wire behavior: [online
 After the online gate:
 
 1. disable the integration;
-2. verify the three root fields equal the configured nullable preimage exactly;
+2. verify the three root fields and standalone search feature equal the configured restore targets exactly;
 3. launch a fresh `codex debug models` or harmless Codex command to prove the restored config parses;
 4. confirm the Token catalog file is no longer referenced;
 5. confirm no `models_cache.json`, native catalog, or auth file was changed by Token.
@@ -421,7 +428,11 @@ All gates were exercised with the installed `codex-cli 0.149.0`. Every run used 
 | DeepSeek V4 Flash apply patch | `apply_patch_tool_type: freeform` | passed |
 | Qwen 3.8 Max image | reasoning `low/medium/xhigh`, text/image input | passed |
 
-Each enable first passed the installed-CLI parser and prompt preflight against the complete candidate catalog. Each disable restored the three nullable preimage values to `null` by removing those root fields while preserving unrelated fixture configuration. Codex itself appended a project trust table during some runs; restore deliberately preserved that unrelated Codex-owned change.
+In this 2026-08-21 record, each enable first passed the installed-CLI parser and prompt preflight against the complete candidate catalog. Each disable restored the then-managed three nullable preimage values to `null` by removing those root fields while preserving unrelated fixture configuration. Codex itself appended a project trust table during some runs; restore deliberately preserved that unrelated Codex-owned change.
+
+### Search validation record: 2026-09-28
+
+The installed `codex-cli 0.158.0-alpha.2.1` accepted `features.standalone_web_search = true`. With an isolated `CODEX_HOME` and a temporary, user-authorized ChatGPT auth file removed at the end of each run, three routed-model prompts completed real web searches for Node.js, Seattle weather, and TypeScript release notes. Captured routed requests showed the `web` namespace, `/v1/alpha/search`, and matching `web.run` call/output IDs. A native `gpt-6-luna` prompt also completed a real search through Direct Mode; its current Codex tool surface used a nested `functions.exec` call/output pair. The ChatGPT search upstream returned HTTP 200, and final answers included source links. On routed requests Token rewrote only the search request's model to `gpt-6-luna`; input and commands remained present.
 
 Some first online attempts received an upstream CommandCode `502` timeout and passed unchanged on retry. Those failures occurred after catalog/config parsing and routing; they are external provider availability evidence, not catalog schema failures.
 
@@ -445,7 +456,7 @@ The Codex synchronization feature is complete only when:
 
 - the generated catalog follows sections 3 through 6;
 - preflight failure changes no active Codex routing state;
-- the three root fields converge and read back exactly;
+- the three root fields and standalone search feature converge and read back exactly;
 - a new real CLI process completes the online scenarios through Token;
 - disabling restores the user-configured nullable preimage exactly; and
 - evidence shows Token did not modify Codex native catalogs, caches, or authentication state.

@@ -541,6 +541,51 @@ describe("15: Responses function/custom/namespace tool lifecycles", () => {
   });
 
   describe("namespace tools use a reversible Responses-owned naming scheme", () => {
+    it("round-trips Codex web.run declaration, call, and history", () => {
+      const declaration = {
+        type: "namespace",
+        name: "web",
+        description: "Tools in the web namespace.",
+        tools: [{ type: "function", name: "run", strict: false, parameters: { type: "object" } }],
+      };
+      const invocation = convertResponsesRequest(
+        { model: "m", input: "latest news", tools: [declaration] },
+        1,
+        policy(),
+      );
+      expect(invocation.invocation.pi.context.tools?.map((tool) => tool.name)).toEqual(["web__run"]);
+      expect(invocation.client.renderState.namespaceReverse).toEqual({
+        web__run: { namespace: "web", child: "run" },
+      });
+      const response = convertAssistantMessageToResponses(
+        assistantMessage({
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "search_1", name: "web__run", arguments: { search_query: [{ q: "latest news" }] } }],
+        }),
+        responseProjection(invocation.client.renderState.namespaceReverse === undefined
+          ? {}
+          : { namespaceReverse: invocation.client.renderState.namespaceReverse }),
+        "resp_web",
+        1,
+        undefined,
+      );
+      expect(response.output[0]).toMatchObject({
+        type: "function_call", name: "run", namespace: "web", call_id: "search_1",
+      });
+      const next = convertResponsesRequest(
+        {
+          model: "m",
+          tools: [declaration],
+          input: [response.output[0], { type: "function_call_output", call_id: "search_1", output: "found" }],
+        },
+        1,
+        policy(),
+      );
+      const priorCall = next.invocation.pi.context.messages.find((message) => message.role === "assistant");
+      expect(priorCall?.content).toContainEqual({
+        type: "toolCall", id: "search_1", name: "web__run", arguments: { search_query: [{ q: "latest news" }] },
+      });
+    });
     it("keeps flattened Codex namespace children inside the OpenAI tool-name alphabet", () => {
       const invocation = convertResponsesRequest(
         {

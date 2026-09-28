@@ -8,7 +8,12 @@
  * settings must declare `secret` and would never be rendered verbatim.
  */
 
-export type SettingType = "boolean" | "number" | "string" | "nullable-string";
+export type SettingType =
+  | "boolean"
+  | "number"
+  | "string"
+  | "nullable-string"
+  | "nullable-boolean";
 
 export type SettingSensitivity = "public" | "secret";
 
@@ -18,7 +23,8 @@ export type SettingValidation =
   | { readonly type: "boolean" }
   | { readonly type: "integer"; readonly minimum: number; readonly maximum: number }
   | { readonly type: "model-name" }
-  | { readonly type: "nullable-string" };
+  | { readonly type: "nullable-string" }
+  | { readonly type: "nullable-boolean" };
 
 type SettingScalar = boolean | number | string | null;
 
@@ -101,6 +107,15 @@ function validateValue(
       return {
         valid: false,
         error: `${definition.key} must be null or a non-empty string`,
+      };
+    }
+    return { valid: true };
+  }
+  if (definition.type === "nullable-boolean") {
+    if (value !== null && typeof value !== "boolean") {
+      return {
+        valid: false,
+        error: `${definition.key} must be null or a boolean`,
       };
     }
     return { valid: true };
@@ -228,6 +243,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
       applyMode: "hot-apply" as const,
     }),
   ),
+  Object.freeze({
+    key: "integrations.codex.preimage.standaloneWebSearch",
+    type: "nullable-boolean" as const,
+    default: null,
+    validation: Object.freeze({ type: "nullable-boolean" as const }),
+    sensitivity: "public" as const,
+    applyMode: "hot-apply" as const,
+  }),
 ]);
 
 const allKeys = Object.freeze(definitions.map((definition) => definition.key));

@@ -545,7 +545,8 @@ function decodeRegisteredSetting(
     (value.type !== "boolean" &&
       value.type !== "number" &&
       value.type !== "string" &&
-      value.type !== "nullable-string") ||
+      value.type !== "nullable-string" &&
+      value.type !== "nullable-boolean") ||
     !isSettingValue(value.default) ||
     (value.sensitivity !== "public" && value.sensitivity !== "secret") ||
     (value.applyMode !== "hot-apply" &&
@@ -553,7 +554,10 @@ function decodeRegisteredSetting(
     !isSettingValue(value.value) ||
     (value.type === "nullable-string" &&
       value.value !== null &&
-      typeof value.value !== "string")
+      typeof value.value !== "string") ||
+    (value.type === "nullable-boolean" &&
+      value.value !== null &&
+      typeof value.value !== "boolean")
   ) {
     return undefined;
   }

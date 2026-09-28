@@ -126,7 +126,7 @@ describe("Settings product slice", () => {
     const saveButton = container.querySelector('button[aria-label="Save restore values"]');
     expect(saveButton?.textContent).toBe("");
     expect(saveButton?.querySelector(".lucide-save")).not.toBeNull();
-    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.preimage.modelProvider", "integrations.codex.preimage.openaiBaseUrl", "integrations.codex.preimage.modelCatalogJson", "integrations.codex.searchModel"] });
+    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.preimage.modelProvider", "integrations.codex.preimage.openaiBaseUrl", "integrations.codex.preimage.modelCatalogJson", "integrations.codex.preimage.standaloneWebSearch", "integrations.codex.searchModel"] });
   });
 
   it("saves the configured Codex search model from Advanced settings", async () => {

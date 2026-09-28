@@ -38,9 +38,9 @@
  *     memory only
  *   - `~/.codex/Token-catalog.json` with the target model metadata.
  *
- * The suite copies only that target catalog entry into a temporary
- * `CODEX_HOME` and writes its own provider/profile configuration. User MCPs,
- * credentials, sessions, skills, and default model settings are not loaded.
+ * The suite creates a temporary `CODEX_HOME` and writes its own configuration.
+ * The opt-in `--use-codex-auth` search probe loads the user's ChatGPT auth
+ * into that temporary home and deletes it before returning.
  */
 
 import {
@@ -51,10 +51,11 @@ import {
 } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
 import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
@@ -138,6 +139,8 @@ interface OnlineArguments {
   /** Optional scenario-id filter for targeted reruns (e.g. `tool_shell`). */
   readonly onlyScenario: string | undefined;
   readonly injectedConfig: boolean;
+  readonly searchProbe: boolean;
+  readonly useCodexAuth: boolean;
 }
 
 /**
@@ -185,10 +188,20 @@ function parseArguments(args: readonly string[]): OnlineArguments {
   let batches = 1;
   let onlyScenario: string | undefined;
   let injectedConfig = false;
+  let searchProbe = false;
+  let useCodexAuth = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
     if (argument === "--injected-config") {
       injectedConfig = true;
+      continue;
+    }
+    if (argument === "--search-probe") {
+      searchProbe = true;
+      continue;
+    }
+    if (argument === "--use-codex-auth") {
+      useCodexAuth = true;
       continue;
     }
     if (argument === "--scenario") {
@@ -254,6 +267,8 @@ function parseArguments(args: readonly string[]): OnlineArguments {
     batches,
     onlyScenario,
     injectedConfig,
+    searchProbe,
+    useCodexAuth,
   };
 }
 
@@ -329,10 +344,12 @@ function createUpstreamLogger(
 ): {
   readonly fetch: FetchFunction;
   readonly urls: readonly string[];
+  readonly searchStatuses: readonly number[];
   readonly flush: () => Promise<void>;
 } {
   let sequence = 0;
   const urls: string[] = [];
+  const searchStatuses: number[] = [];
   const pending: Promise<void>[] = [];
   const upstreamDir = join(artifactDir, "upstream");
   const fetch: FetchFunction = async (input, init) => {
@@ -344,6 +361,7 @@ function createUpstreamLogger(
     const startedAt = performance.now();
     urls.push(request.url);
     const response = await upstream(request);
+    if (request.url.endsWith("/alpha/search")) searchStatuses.push(response.status);
     const responseBody = await response.clone().text();
     const seq = sequence;
     sequence += 1;
@@ -380,6 +398,7 @@ function createUpstreamLogger(
   return Object.freeze({
     fetch,
     urls,
+    searchStatuses,
     flush: async () => {
       await Promise.allSettled(pending);
     },
@@ -477,6 +496,7 @@ async function prepareIsolatedCodexHome(
         modelProvider: null,
         openaiBaseUrl: null,
         modelCatalogJson: null,
+        standaloneWebSearch: null,
       }),
     });
     const enabled = await authority.reconcile("enable");
@@ -1133,6 +1153,7 @@ interface Scenario {
   /** Extra Codex flags for this scenario (e.g. tool usage). */
   readonly extraArgs?: readonly string[];
   readonly imageInput?: boolean;
+  readonly modelOverride?: string;
   /**
    * Special orchestration:
    *  - "multi_turn": run the prompt as a multi-turn session (first turn
@@ -1314,6 +1335,28 @@ function directedScenarios(): readonly Scenario[] {
   ]);
 }
 
+function searchProbeScenarios(): readonly Scenario[] {
+  return Object.freeze([
+    {
+      id: "web_search_release",
+      prompt: "Use web.run to search the web for the latest stable Node.js release. Give the version and a source link. Do not use a shell or browser tool.",
+    },
+    {
+      id: "web_search_weather",
+      prompt: "Use web.run to search the web for today's weather in Seattle. Give the temperature and a source link. Do not use a shell or browser tool.",
+    },
+    {
+      id: "web_search_docs",
+      prompt: "Use web.run to search the web for the current TypeScript release notes. Give the latest version and a source link. Do not use a shell or browser tool.",
+    },
+    {
+      id: "web_search_native",
+      modelOverride: "gpt-6-luna",
+      prompt: "Use web.run to search the web for the current Node.js LTS version. Give the version and a source link. Do not use a shell or browser tool.",
+    },
+  ]);
+}
+
 /**
  * Random scenarios: combine a base instruction with a random marker and
  * occasionally request tools, to surface non-deterministic conversion bugs.
@@ -1455,7 +1498,13 @@ function createCapturingRuntime(
     async handle(request: Request): Promise<Response> {
       const marker = currentMarker() ?? "unknown";
       const cloned = request.clone();
-      const bodyText = await cloned.text();
+      const bodyBytes = Buffer.from(await cloned.arrayBuffer());
+      const encoding = cloned.headers.get("content-encoding")?.toLowerCase();
+      const bodyText = (encoding === "zstd"
+        ? zstdDecompressSync(bodyBytes)
+        : encoding === "gzip"
+          ? gunzipSync(bodyBytes)
+          : bodyBytes).toString("utf8");
       const requestsDir = join(artifactDir, "requests");
       await mkdir(requestsDir, { recursive: true });
       const seq = (sequence += 1);
@@ -1527,6 +1576,60 @@ async function assertCapturedModelSchemaProperty(
   throw new Error("codex_model_schema_property_missing");
 }
 
+async function assertCapturedSearchRoundTrip(
+  artifactDir: string,
+  marker: string,
+  nativeModel: boolean,
+): Promise<void> {
+  const requestsDir = join(artifactDir, "requests");
+  const names = (await readdir(requestsDir)).filter((name) => name.startsWith(`${marker}_`) && name.endsWith(".json"));
+  let declared = false;
+  let searched = false;
+  const callIds = new Set<string>();
+  const outputIds = new Set<string>();
+  for (const name of names) {
+    const captured = JSON.parse(await readFile(join(requestsDir, name), "utf8")) as {
+      url?: unknown;
+      body?: { tools?: unknown; input?: unknown; commands?: unknown };
+    };
+    if (typeof captured.url !== "string") continue;
+    if (captured.url.endsWith("/alpha/search")) {
+      searched ||= typeof captured.body?.commands === "object";
+      continue;
+    }
+    if (!captured.url.endsWith("/responses")) continue;
+    const tools = captured.body?.tools;
+    if (Array.isArray(tools)) {
+      declared ||= tools.some((tool: { type?: unknown; name?: unknown }) => tool.type === "namespace" && tool.name === "web");
+    }
+    const input = captured.body?.input;
+    if (Array.isArray(input)) {
+      for (const item of input as Array<{ type?: unknown; name?: unknown; namespace?: unknown; call_id?: unknown }>) {
+        if (nativeModel && item.type === "additional_tools") {
+          const additions = (item as { tools?: unknown }).tools;
+          declared ||= Array.isArray(additions) && additions.some((tool: { name?: unknown }) => tool.name === "functions");
+        }
+        if (typeof item.call_id !== "string") continue;
+        if (
+          (!nativeModel && item.type === "function_call" && item.name === "run" && item.namespace === "web") ||
+          (nativeModel && item.type === "custom_tool_call" && item.name === "exec")
+        ) {
+          callIds.add(item.call_id);
+        }
+        if (item.type === (nativeModel ? "custom_tool_call_output" : "function_call_output")) {
+          outputIds.add(item.call_id);
+        }
+      }
+    }
+  }
+  const returned = [...callIds].some((callId) => outputIds.has(callId));
+  const finalAnswer = await readFile(join(artifactDir, `${marker}.final.md`), "utf8");
+  const sourced = /https?:\/\/\S+/u.test(finalAnswer);
+  if (!declared || !searched || !returned || !sourced) {
+    throw new Error(`codex_web_search_round_trip_missing: declared=${declared} searched=${searched} returned=${returned} sourced=${sourced}`);
+  }
+}
+
 async function assertCapturedCustomToolRoundTrip(
   artifactDir: string,
   marker: string,
@@ -1588,8 +1691,13 @@ export async function runCodexCliOnlineSuite(
     batches,
     onlyScenario,
     injectedConfig,
+    searchProbe,
+    useCodexAuth,
   } = parseArguments(args);
   const aliasSegments = alias?.split("/") ?? [];
+  if (searchProbe && (!useCodexAuth || !injectedConfig)) {
+    throw new Error("--search-probe requires --use-codex-auth and --injected-config");
+  }
   if (
     injectedConfig &&
     (aliasSegments.length !== 2 || aliasSegments.some((segment) => segment.length === 0))
@@ -1621,7 +1729,15 @@ export async function runCodexCliOnlineSuite(
   const stateDirectory = join(directory, ".Token");
   const piDirectory = join(stateDirectory, "pi");
   await mkdir(piDirectory, { recursive: true });
-  const responsesToken = "unused-local-sdk-key";
+  let responsesToken = "unused-local-sdk-key";
+  if (useCodexAuth) {
+    const auth = JSON.parse(await readFile(join(homedir(), ".codex", "auth.json"), "utf8")) as {
+      tokens?: { access_token?: unknown };
+    };
+    const token = auth.tokens?.access_token;
+    if (typeof token !== "string" || token.length === 0) throw new Error("Codex access token is unavailable");
+    responsesToken = token;
+  }
   const stateFile = join(stateDirectory, "state", "openai-responses.json");
   const configPath = join(stateDirectory, "config.json");
   await writeFile(
@@ -1707,10 +1823,14 @@ export async function runCodexCliOnlineSuite(
           modelId: aliasTarget.model,
         });
   const upstreamLogger = createUpstreamLogger(artifactDir, globalThis.fetch);
+  const codexDirectModels = searchProbe
+    ? Object.freeze({ has: (modelId: string) => modelId === "gpt-6-luna" })
+    : undefined;
   let composition = await createConfiguredTokenDataPlane({
     config,
     credentialRecordStore,
     fetch: upstreamLogger.fetch,
+    ...(codexDirectModels === undefined ? {} : { codexDirectModels }),
     ...(publicModelAuthority === undefined ? {} : { publicModelAuthority }),
   });
   if (publicModelAuthority !== undefined) {
@@ -1773,8 +1893,23 @@ export async function runCodexCliOnlineSuite(
   console.error(`[codex-suite] server listening at ${codexBaseUrl}`);
 
   try {
+    if (useCodexAuth) {
+      const source = JSON.parse(await readFile(join(homedir(), ".codex", "auth.json"), "utf8")) as {
+        auth_mode?: unknown;
+        tokens?: unknown;
+        last_refresh?: unknown;
+      };
+      if (source.auth_mode !== "chatgpt" || typeof source.tokens !== "object" || source.tokens === null) {
+        throw new Error("Codex ChatGPT auth is unavailable");
+      }
+      await writeFile(join(preparedCodexHome.path, "auth.json"), JSON.stringify({
+        auth_mode: source.auth_mode,
+        tokens: source.tokens,
+        last_refresh: source.last_refresh,
+      }), { encoding: "utf8", mode: 0o600 });
+    }
     const summary = emptySummary();
-    const plan = buildPlan(batches);
+    const plan = searchProbe ? searchProbeScenarios() : buildPlan(batches);
     const scenarios =
       onlyScenario === undefined
         ? plan
@@ -1832,6 +1967,7 @@ export async function runCodexCliOnlineSuite(
                 config,
                 credentialRecordStore,
                 fetch: upstreamLogger.fetch,
+                ...(codexDirectModels === undefined ? {} : { codexDirectModels }),
                 ...(publicModelAuthority === undefined
                   ? {}
                   : { publicModelAuthority }),
@@ -1889,7 +2025,7 @@ export async function runCodexCliOnlineSuite(
             scenario.prompt,
             responsesToken,
             codexBaseUrl,
-            selector,
+            scenario.modelOverride ?? selector,
             sessionDir,
             artifactDir,
             marker,
@@ -1915,6 +2051,7 @@ export async function runCodexCliOnlineSuite(
             scenario.requiredCustomTool,
           );
         }
+        if (searchProbe) await assertCapturedSearchRoundTrip(artifactDir, marker, scenario.modelOverride !== undefined);
         if (scenario.requireModelSchemaProperty === true) {
           await assertCapturedModelSchemaProperty(artifactDir, marker);
         }
@@ -1955,10 +2092,16 @@ export async function runCodexCliOnlineSuite(
 
     // Server-side snapshot health after the batch.
     await assertSnapshotHealthy(stateFile);
-    const certifiedUpstreamPath = assertCommandCodeCodexRoute(
-      providerId,
-      upstreamLogger.urls,
-    );
+    if (
+      searchProbe &&
+      (upstreamLogger.searchStatuses.length < scenarios.length ||
+        upstreamLogger.searchStatuses.some((status) => status !== 200))
+    ) {
+      throw new Error(`codex_search_upstream_statuses=${upstreamLogger.searchStatuses.join(",")}`);
+    }
+    const certifiedUpstreamPath = searchProbe
+      ? undefined
+      : assertCommandCodeCodexRoute(providerId, upstreamLogger.urls);
 
     const stdout: string[] = [];
     stdout.push("=== Codex CLI online suite ===");
@@ -2007,9 +2150,19 @@ export async function runCodexCliOnlineSuite(
     try {
       await preparedCodexHome.restore();
     } finally {
-      await upstreamLogger.flush();
-      await server.close();
-      await composition.close();
+      try {
+        if (
+          resolve(preparedCodexHome.path) !== resolve(directory, "codex-home") ||
+          dirname(resolve(preparedCodexHome.path)) !== resolve(directory)
+        ) {
+          throw new Error("Refusing to remove an unexpected Codex home path");
+        }
+        await rm(preparedCodexHome.path, { recursive: true, force: true });
+      } finally {
+        await upstreamLogger.flush();
+        await server.close();
+        await composition.close();
+      }
     }
   }
 }

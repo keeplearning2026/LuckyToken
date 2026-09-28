@@ -104,7 +104,7 @@ export interface StatusSnapshot extends ApplicationStatus {
  *  validated. Restart-required settings also report the effective value. */
 export interface RegisteredSetting {
   readonly key: string;
-  readonly type: "boolean" | "number" | "string" | "nullable-string";
+  readonly type: "boolean" | "number" | "string" | "nullable-string" | "nullable-boolean";
   readonly default: boolean | number | string | null;
   readonly validation: unknown;
   readonly sensitivity: "public" | "secret";

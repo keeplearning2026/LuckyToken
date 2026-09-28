@@ -860,6 +860,7 @@ async function startNormalApplication(options: {
           "integrations.codex.preimage.modelProvider",
           "integrations.codex.preimage.openaiBaseUrl",
           "integrations.codex.preimage.modelCatalogJson",
+          "integrations.codex.preimage.standaloneWebSearch",
         ]);
         const value = (key: string): string | null => {
           const candidate = configured[key]?.value;
@@ -869,6 +870,11 @@ async function startNormalApplication(options: {
           modelProvider: value("integrations.codex.preimage.modelProvider"),
           openaiBaseUrl: value("integrations.codex.preimage.openaiBaseUrl"),
           modelCatalogJson: value("integrations.codex.preimage.modelCatalogJson"),
+          standaloneWebSearch: configured["integrations.codex.preimage.standaloneWebSearch"]?.value === true
+            ? true
+            : configured["integrations.codex.preimage.standaloneWebSearch"]?.value === false
+              ? false
+              : null,
         });
       },
     });

@@ -440,20 +440,22 @@ than asking the user to maintain a separate Codex provider/profile and a
 Token client token. The Electron UI exposes Enable/Disable and Sync
 operations through the Application Control Plane.
 
-When enabled, the Backend owns the managed root routing keys in Codex
+When enabled, the Backend owns these managed settings in Codex
 `config.toml`:
 
 ```text
 model_provider
 openai_base_url
 model_catalog_json
+[features].standalone_web_search
 ```
 
 The active target uses Codex's built-in `openai` Responses provider, points
 `openai_base_url` at Token's loopback `/v1` endpoint, and writes a generated
-model catalog under Token's Codex-integration state directory. Token
-stores the previous root values as a preimage and restores them on disable or
-Backend shutdown. If those root keys drift while integration is enabled, the
+model catalog under Codex home. The standalone web-search feature lets Codex
+execute `web.run` and send `/v1/alpha/search` to Token's Direct Mode endpoint.
+Token applies the user-configured restore targets on disable or Backend
+shutdown; each target defaults to removing the managed key. If those keys drift while integration is enabled, the
 state is reported as drift/conflict instead of guessing or overwriting
 silently.
 
@@ -479,7 +481,7 @@ Troubleshooting:
 |---|---|---|
 | Codex integration says `native` | Token has not taken ownership of Codex root routing keys | Enable integration |
 | state is `drifted` | Codex routing keys changed after Token applied them | Review the external change, then Sync or Disable |
-| state is `conflict` | duplicate/invalid root routing keys prevent safe management | fix `config.toml`, then retry |
+| state is `conflict` | invalid managed routing or standalone search keys prevent safe management | fix `config.toml`, then retry |
 | published model missing | Public Model/Provider state is not currently publishable | authenticate/enable it in Providers and Sync Codex |
 
 ## Explicit online verification

@@ -30,6 +30,7 @@ describe("authoritative registered settings catalog", () => {
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",
+      "integrations.codex.preimage.standaloneWebSearch",
     ]);
 
     const anthropic = byKey.get("protocols.anthropic-messages.enabled");
@@ -119,6 +120,17 @@ describe("authoritative registered settings catalog", () => {
       expect(registry.validate(key, "configured-value")).toMatchObject({ valid: true });
       expect(registry.validate(key, "")).toMatchObject({ valid: false });
     }
+    const featureKey = "integrations.codex.preimage.standaloneWebSearch";
+    expect(byKey.get(featureKey)).toMatchObject({
+      type: "nullable-boolean",
+      default: null,
+      validation: { type: "nullable-boolean" },
+      value: null,
+    });
+    expect(registry.validate(featureKey, null)).toEqual({ valid: true });
+    expect(registry.validate(featureKey, true)).toEqual({ valid: true });
+    expect(registry.validate(featureKey, false)).toEqual({ valid: true });
+    expect(registry.validate(featureKey, "false")).toMatchObject({ valid: false });
   });
 
   it("never exposes unregistered fields or ambient internal variables", () => {

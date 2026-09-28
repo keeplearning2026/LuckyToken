@@ -45,6 +45,7 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [storageNoticeError, setStorageNoticeError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [codexRestoreDraft, setCodexRestoreDraft] = useState<Readonly<Record<string, string>>>({});
+  const [standaloneSearchRestore, setStandaloneSearchRestore] = useState<"remove" | "true" | "false">("remove");
   const [searchModelDraft, setSearchModelDraft] = useState("gpt-6-luna");
   const [searchModelNotice, setSearchModelNotice] = useState<string>();
   const [searchModelError, setSearchModelError] = useState(false);
@@ -53,7 +54,7 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
 
   useEffect(() => {
     let active = true;
-    void api.control.executeSettings({ command: "query", keys: [...codexRestoreFields.map((field) => field.key), "integrations.codex.searchModel"] }).then((settings) => {
+    void api.control.executeSettings({ command: "query", keys: [...codexRestoreFields.map((field) => field.key), "integrations.codex.preimage.standaloneWebSearch", "integrations.codex.searchModel"] }).then((settings) => {
       if (!active) return;
       const searchModel = settings.settings["integrations.codex.searchModel"]?.value;
       if (typeof searchModel === "string") {
@@ -64,6 +65,8 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
         const value = settings.settings[field.key]?.value;
         return [field.key, typeof value === "string" ? value : ""];
       }))));
+      const standaloneValue = settings.settings["integrations.codex.preimage.standaloneWebSearch"]?.value;
+      setStandaloneSearchRestore(standaloneValue === true ? "true" : standaloneValue === false ? "false" : "remove");
     }, () => {
       if (!active) return;
       setStorageNotice("Codex restore values are temporarily unavailable.");
@@ -89,6 +92,16 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
           setStorageNoticeError(true);
           return;
         }
+      }
+      const standaloneResult = await api.control.executeSettings({
+        command: "set",
+        key: "integrations.codex.preimage.standaloneWebSearch",
+        value: standaloneSearchRestore === "remove" ? null : standaloneSearchRestore === "true",
+      });
+      if (standaloneResult.outcome === "storage_failure" || standaloneResult.outcome === "invalid_value") {
+        setStorageNotice(standaloneResult.error ?? "Codex restore values could not be saved.");
+        setStorageNoticeError(true);
+        return;
       }
       setStorageNotice("Codex restore values saved.");
       setStorageNoticeError(false);
@@ -158,6 +171,15 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
           <small>{field.description}</small>
           <input type="text" aria-label={`${field.label} restore value`} value={codexRestoreDraft[field.key] ?? ""} onChange={(event) => { const value = event.currentTarget.value; setCodexRestoreDraft((current) => ({ ...current, [field.key]: value })); }} />
         </label>)}
+        <label className="codex-restore-field">
+          <span className="codex-restore-label"><strong>Standalone web search</strong><code>[features].standalone_web_search</code></span>
+          <small>Value to restore when Token integration is disabled.</small>
+          <select aria-label="Standalone web search restore value" value={standaloneSearchRestore} onChange={(event) => setStandaloneSearchRestore(event.currentTarget.value as "remove" | "true" | "false")}>
+            <option value="remove">Remove setting</option>
+            <option value="true">True</option>
+            <option value="false">False</option>
+          </select>
+        </label>
       </div>
       {storageNotice === undefined ? null : <p className={storageNoticeError ? "error-text" : "setting-state"} role="status">{storageNotice}</p>}
       <div className="settings-form-actions">

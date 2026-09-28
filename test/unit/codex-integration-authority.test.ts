@@ -47,6 +47,7 @@ async function fixture(options: {
     readonly modelProvider: string | null;
     readonly openaiBaseUrl: string | null;
     readonly modelCatalogJson: string | null;
+    readonly standaloneWebSearch?: boolean | null;
   };
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "Token-codex-integration-"));
@@ -83,12 +84,13 @@ async function fixture(options: {
     ),
     buildCatalog,
     validateCatalog: options.validateCatalog ?? (async () => undefined),
-    restoreTarget: () =>
-      options.restoreTarget ?? {
+    restoreTarget: () => ({
         modelProvider: null,
         openaiBaseUrl: null,
         modelCatalogJson: null,
-      },
+        standaloneWebSearch: null,
+        ...options.restoreTarget,
+      }),
   });
   return { root, codexHome, stateDirectory, authority, buildScopes };
 }
@@ -314,11 +316,58 @@ describe("Codex integration authority", () => {
     expect(content).toContain("model_catalog_json = ");
     expect(content).toContain('model = "old-model"');
     expect(content).toContain("foo = true");
+    expect(content).toContain("standalone_web_search = true");
     expect(fx.authority.directModels.has("gpt-native")).toBe(true);
     expect(catalog.models.map((entry) => entry.slug)).toEqual([
       "gpt-native",
       "anthropic/claude-opus",
     ]);
+  });
+
+  it("manages standalone search without changing other feature entries", async () => {
+    const fx = await fixture({
+      config: 'model = "m"\r\n[features]\r\nfoo = true\r\nstandalone_web_search = false\r\n',
+      restoreTarget: {
+        modelProvider: null,
+        openaiBaseUrl: null,
+        modelCatalogJson: null,
+        standaloneWebSearch: false,
+      },
+    });
+    await fx.authority.reconcile("enable");
+    await fx.authority.reconcile("sync");
+    const active = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+    expect(active).toContain("foo = true\r\nstandalone_web_search = true\r\n");
+    expect((active.match(/standalone_web_search\s*=/gu) ?? [])).toHaveLength(1);
+    await fx.authority.reconcile("disable");
+    const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+    expect(restored).toContain("foo = true\r\nstandalone_web_search = false\r\n");
+  });
+
+  it("reports conflicting standalone search assignments without changing config", async () => {
+    const config = '[features]\nstandalone_web_search = true\nstandalone_web_search = false\n';
+    const fx = await fixture({ config });
+    const result = await fx.authority.reconcile("enable");
+    expect(result.observedState).toBe("conflict");
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(config);
+  });
+
+  it.each([
+    'features = { standalone_web_search = false }\n',
+    '"features"."standalone_web_search" = false\n',
+    '[features.extra]\nvalue = true\n',
+  ])("does not append a table over another TOML features form: %s", async (config) => {
+    const fx = await fixture({ config });
+    const result = await fx.authority.reconcile("enable");
+    expect(result.observedState).toBe("conflict");
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(config);
+  });
+
+  it("rejects a malformed quoted standalone feature key", async () => {
+    const config = '[features]\n"standalone_web_search" : false\n';
+    const fx = await fixture({ config });
+    expect((await fx.authority.reconcile("enable")).observedState).toBe("conflict");
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(config);
   });
 
   it("repeated active convergence never duplicates root keys and blank restore targets delete them", async () => {

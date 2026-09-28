@@ -94,9 +94,12 @@ export interface CodexRestoreTarget {
   readonly modelProvider: string | null;
   readonly openaiBaseUrl: string | null;
   readonly modelCatalogJson: string | null;
+  /** Restore value for `[features].standalone_web_search`; null removes the key. */
+  readonly standaloneWebSearch: boolean | null;
 }
 
-type RootValues = CodexRestoreTarget;
+type ConfigValues = CodexRestoreTarget;
+type RootValues = Pick<ConfigValues, "modelProvider" | "openaiBaseUrl" | "modelCatalogJson">;
 
 interface IntegrationState {
   readonly schemaVersion: typeof STATE_SCHEMA;
@@ -113,6 +116,13 @@ interface RootInspection {
   readonly values: RootValues;
   readonly duplicate: boolean;
   readonly invalid: boolean;
+}
+
+interface ConfigInspection {
+  readonly values: ConfigValues;
+  readonly duplicate: boolean;
+  readonly invalid: boolean;
+  readonly featureConflict: boolean;
 }
 
 function tomlString(value: string): string {
@@ -228,13 +238,55 @@ function inspectRoot(content: string): RootInspection {
   });
 }
 
-function rootError(inspection: RootInspection): string | undefined {
-  if (inspection.duplicate) {
-    return "Codex config.toml contains duplicate root routing keys.";
+function inspectConfig(content: string): ConfigInspection {
+  const root = inspectRoot(content);
+  const lines = content.replace(/\r\n/gu, "\n").split("\n");
+  const tableIndices = lines.flatMap((line, index) =>
+    /^\s*\[\s*(?:features|"features"|'features')\s*\]\s*(?:#.*)?$/u.test(line)
+      ? [index]
+      : [],
+  );
+  let featureValue: boolean | null = null;
+  let featureCount = 0;
+  let invalid = false;
+  for (const start of tableIndices) {
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const line = lines[index] as string;
+      if (/^\s*\[/u.test(line)) break;
+      if (/^\s*#/u.test(line)) continue;
+      const assignment = line.match(
+        /^\s*(?:standalone_web_search|"standalone_web_search"|'standalone_web_search')\s*=\s*(.*?)\s*(?:#.*)?$/u,
+      );
+      if (assignment !== null) {
+        featureCount += 1;
+        const raw = assignment[1]?.trim();
+        if (raw === "true" || raw === "false") featureValue = raw === "true";
+        else invalid = true;
+      } else if (/^\s*(?:standalone_web_search|"standalone_web_search"|'standalone_web_search')(?=\s|=|$)/u.test(line)) {
+        invalid = true;
+      }
+    }
   }
-  if (inspection.invalid) {
-    return "Codex config.toml contains an invalid root routing value.";
-  }
+  const firstTable = lines.findIndex((line) => /^\s*\[/u.test(line));
+  const rootLimit = firstTable < 0 ? lines.length : firstTable;
+  const featureToken = String.raw`(?:features|"features"|'features')`;
+  const rootFeature = new RegExp(`^\\s*${featureToken}\\s*(?:\\.|=)`, "u");
+  const featureHeader = new RegExp(`^\\s*\\[\\[?\\s*${featureToken}(?:\\s*[.\\]])`, "u");
+  if (lines.some((line, index) =>
+    (index < rootLimit && rootFeature.test(line)) ||
+    (featureHeader.test(line) && !tableIndices.includes(index)),
+  )) invalid = true;
+  return Object.freeze({
+    values: Object.freeze({ ...root.values, standaloneWebSearch: featureValue }),
+    duplicate: root.duplicate || tableIndices.length > 1 || featureCount > 1,
+    invalid: root.invalid || invalid,
+    featureConflict: tableIndices.length > 1 || featureCount > 1 || invalid,
+  });
+}
+
+function configError(inspection: ConfigInspection): string | undefined {
+  if (inspection.duplicate) return "Codex config.toml contains duplicate managed routing keys or [features] tables.";
+  if (inspection.invalid) return "Codex config.toml contains an invalid managed routing value.";
   return undefined;
 }
 
@@ -244,6 +296,10 @@ function rootValue(values: RootValues, key: RootKey): string | null {
 
 function sameRoot(left: RootValues, right: RootValues): boolean {
   return ROOT_KEYS.every((key) => rootValue(left, key) === rootValue(right, key));
+}
+
+function sameConfig(left: ConfigValues, right: ConfigValues): boolean {
+  return sameRoot(left, right) && left.standaloneWebSearch === right.standaloneWebSearch;
 }
 
 function findRootKeyIndices(lines: readonly string[], key: RootKey): readonly number[] {
@@ -284,6 +340,44 @@ function convergeRoot(content: string, target: RootValues): string {
     lines.splice(insertionIndex(lines), 0, `${key} = ${tomlString(desired)}`);
   }
 
+  const normalized = lines.join("\n");
+  return ending === "\n" ? normalized : normalized.replace(/\n/gu, "\r\n");
+}
+
+function convergeConfig(content: string, target: ConfigValues): string {
+  const rooted = convergeRoot(content, target);
+  const ending = eol(rooted);
+  const lines = rooted.replace(/\r\n/gu, "\n").split("\n");
+  const tableIndex = lines.findIndex((line) => /^\s*\[\s*(?:features|"features"|'features')\s*\]\s*(?:#.*)?$/u.test(line));
+  if (tableIndex < 0) {
+    if (target.standaloneWebSearch !== null) {
+      if (lines.at(-1) !== "") lines.push("");
+      lines.push("[features] # Token-managed standalone web search", `standalone_web_search = ${target.standaloneWebSearch}`, "");
+    }
+  } else {
+    let end = tableIndex + 1;
+    while (end < lines.length && !/^\s*\[/u.test(lines[end] as string)) end += 1;
+    const indices: number[] = [];
+    for (let index = tableIndex + 1; index < end; index += 1) {
+      if (/^\s*(?:standalone_web_search|"standalone_web_search"|'standalone_web_search')\s*=/u.test(lines[index] as string)) indices.push(index);
+    }
+    for (const index of indices.reverse()) lines.splice(index, 1);
+    if (target.standaloneWebSearch !== null) {
+      lines.splice(indices[0] ?? tableIndex + 1, 0, `standalone_web_search = ${target.standaloneWebSearch}`);
+    } else if (/^\s*\[features\] # Token-managed standalone web search\s*$/u.test(lines[tableIndex] as string)) {
+      let sectionEnd = tableIndex + 1;
+      while (sectionEnd < lines.length && !/^\s*\[/u.test(lines[sectionEnd] as string)) sectionEnd += 1;
+      const body = lines.slice(tableIndex + 1, sectionEnd);
+      if (body.every((line) => line.trim() === "")) {
+        lines.splice(tableIndex, sectionEnd - tableIndex);
+        if (tableIndex > 1 && lines[tableIndex - 1] === "" && lines[tableIndex - 2] === "") {
+          lines.splice(tableIndex - 1, 1);
+        }
+      } else {
+        lines[tableIndex] = "[features]";
+      }
+    }
+  }
   const normalized = lines.join("\n");
   return ending === "\n" ? normalized : normalized.replace(/\n/gu, "\r\n");
 }
@@ -472,11 +566,12 @@ async function readState(path: string): Promise<IntegrationState> {
   });
 }
 
-function activeTarget(endpoint: string, catalogPath: string): RootValues {
+function activeTarget(endpoint: string, catalogPath: string): ConfigValues {
   return Object.freeze({
     modelProvider: "openai",
     openaiBaseUrl: endpoint,
     modelCatalogJson: catalogPath,
+    standaloneWebSearch: true,
   });
 }
 
@@ -514,15 +609,15 @@ export function createCodexIntegrationAuthority(
     if (config === undefined) {
       message = "Codex config.toml was not found.";
     } else {
-      const inspection = inspectRoot(config);
-      const error = rootError(inspection);
+      const inspection = inspectConfig(config);
+      const error = configError(inspection);
       if (error !== undefined) {
         observedState = "conflict";
         message = error;
       } else if (
         state.managed &&
         endpoint !== undefined &&
-        sameRoot(inspection.values, activeTarget(endpoint, catalogPath))
+        sameConfig(inspection.values, activeTarget(endpoint, catalogPath))
       ) {
         observedState = "managed";
       } else if (state.managed) {
@@ -584,6 +679,9 @@ export function createCodexIntegrationAuthority(
         observedState: "unavailable",
         message: "Codex config.toml was not found.",
       });
+    }
+    if (inspectConfig(initialConfig).featureConflict) {
+      return project(state, { observedState: "conflict", message: "Codex config.toml contains a conflicting standalone web search setting." });
     }
     const nativeSnapshot = await options.nativeCatalog.load();
     if (nativeSnapshot.source === "unavailable") {
@@ -654,8 +752,11 @@ export function createCodexIntegrationAuthority(
         message: "Codex config.toml was not found.",
       });
     }
+    if (inspectConfig(currentConfig).featureConflict) {
+      return project(state, { observedState: "conflict", message: "Codex config.toml contains a conflicting standalone web search setting." });
+    }
     const desired = activeTarget(endpoint, catalogPath);
-    const nextConfig = convergeRoot(currentConfig, desired);
+    const nextConfig = convergeConfig(currentConfig, desired);
     await atomicWrite(configPath, nextConfig);
 
     const verified = await readOptional(configPath);
@@ -665,9 +766,9 @@ export function createCodexIntegrationAuthority(
         message: "Codex config.toml was not found after integration update.",
       });
     }
-    const verifiedInspection = inspectRoot(verified);
-    const verifiedError = rootError(verifiedInspection);
-    if (verifiedError !== undefined || !sameRoot(verifiedInspection.values, desired)) {
+    const verifiedInspection = inspectConfig(verified);
+    const verifiedError = configError(verifiedInspection);
+    if (verifiedError !== undefined || !sameConfig(verifiedInspection.values, desired)) {
       return project(state, {
         observedState: "conflict",
         message: verifiedError ?? "Codex config.toml did not converge to the Token routing target.",
@@ -706,8 +807,12 @@ export function createCodexIntegrationAuthority(
       modelProvider: null,
       openaiBaseUrl: null,
       modelCatalogJson: null,
+      standaloneWebSearch: null,
     };
-    const restoredConfig = convergeRoot(currentConfig, restoreTarget);
+    if (inspectConfig(currentConfig).featureConflict) {
+      return project(state, { observedState: "conflict", message: "Codex config.toml contains a conflicting standalone web search setting." });
+    }
+    const restoredConfig = convergeConfig(currentConfig, restoreTarget);
     const configChanged = restoredConfig !== currentConfig;
     if (configChanged) await atomicWrite(configPath, restoredConfig);
 
@@ -718,9 +823,9 @@ export function createCodexIntegrationAuthority(
         message: "Codex config.toml was not found after restore.",
       });
     }
-    const verifiedInspection = inspectRoot(verified);
-    const verifiedError = rootError(verifiedInspection);
-    if (verifiedError !== undefined || !sameRoot(verifiedInspection.values, restoreTarget)) {
+    const verifiedInspection = inspectConfig(verified);
+    const verifiedError = configError(verifiedInspection);
+    if (verifiedError !== undefined || !sameConfig(verifiedInspection.values, restoreTarget)) {
       return project(state, {
         observedState: "conflict",
         message: verifiedError ?? "Codex config.toml did not converge to the restore target.",

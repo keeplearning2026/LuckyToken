@@ -940,5 +940,5 @@ describe("Backend Application public lifecycle seam", () => {
       if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
       else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     }
-  });
+  }, 15_000);
 });

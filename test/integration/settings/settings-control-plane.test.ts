@@ -164,6 +164,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",
+      "integrations.codex.preimage.standaloneWebSearch",
     ]);
     expect(settings["protocols.anthropic-messages.enabled"]).toMatchObject({
       type: "boolean",
@@ -217,6 +218,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
         "integrations.codex.preimage.modelProvider",
         "integrations.codex.preimage.openaiBaseUrl",
         "integrations.codex.preimage.modelCatalogJson",
+        "integrations.codex.preimage.standaloneWebSearch",
       ],
     });
 
@@ -244,6 +246,15 @@ describe("settings through the Control Plane and real HTTP seams", () => {
         type: "nullable-string",
         default: null,
         validation: { type: "nullable-string" },
+        sensitivity: "public",
+        applyMode: "hot-apply",
+        value: null,
+      },
+      "integrations.codex.preimage.standaloneWebSearch": {
+        key: "integrations.codex.preimage.standaloneWebSearch",
+        type: "nullable-boolean",
+        default: null,
+        validation: { type: "nullable-boolean" },
         sensitivity: "public",
         applyMode: "hot-apply",
         value: null,
