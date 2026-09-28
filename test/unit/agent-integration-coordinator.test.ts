@@ -213,7 +213,7 @@ describe("Agent integration coordinator", () => {
     ]);
   });
 
-  it("applies startup rules and attempts every restore before blocking shutdown", async () => {
+  it("restores disabled agents at startup but shutdown only restores enabled ownership", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-lifecycle-"));
     const codex = recordingAdapter("codex");
     const pi = recordingAdapter("pi");
@@ -231,19 +231,35 @@ describe("Agent integration coordinator", () => {
     expect(started.outcome).toBe("ok");
     expect(codex.injectCalls).toHaveLength(codexInjectsBeforeStartup + 1);
     expect(pi.restoreCalls()).toBe(piRestoresBeforeStartup + 1);
+
+    // A disabled integration does not own an external same-name configuration.
+    // Its restore conflict must not block the whole product from quitting.
     pi.failRestore();
     const codexRestoresBeforeShutdown = codex.restoreCalls();
     const piRestoresBeforeShutdown = pi.restoreCalls();
 
+    await expect(coordinator.shutdown()).resolves.toMatchObject({ outcome: "ok" });
+    expect(codex.restoreCalls()).toBe(codexRestoresBeforeShutdown + 1);
+    expect(pi.restoreCalls()).toBe(piRestoresBeforeShutdown);
+  });
+
+  it("still blocks shutdown when an enabled integration cannot be restored", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-shutdown-failure-"));
+    const codex = recordingAdapter("codex");
+    const pi = recordingAdapter("pi");
+    const coordinator = createAgentIntegrationCoordinator({
+      stateDirectory,
+      snapshot: async () => snapshot(),
+      adapters: [codex.adapter, pi.adapter],
+    });
+    await coordinator.setEnabled("codex", true);
+    await coordinator.setEnabled("pi", true);
+    pi.failRestore();
+
     await expect(coordinator.shutdown()).rejects.toThrow(
       "Agent integrations could not all be restored before Token shutdown",
     );
-    expect(codex.restoreCalls()).toBe(codexRestoresBeforeShutdown + 1);
-    expect(pi.restoreCalls()).toBe(piRestoresBeforeShutdown + 1);
-    await expect(coordinator.query()).resolves.toMatchObject({
-      agents: expect.arrayContaining([
-        expect.objectContaining({ agentId: "codex", enabled: true, needsSync: true }),
-      ]),
-    });
+    expect(codex.restoreCalls()).toBe(1);
+    expect(pi.restoreCalls()).toBe(1);
   });
 });

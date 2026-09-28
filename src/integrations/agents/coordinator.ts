@@ -452,7 +452,9 @@ export function createAgentIntegrationCoordinator(
     const state = await readState();
     const nextById = new Map<AgentIntegrationId, StoredAgentState>();
     const results = await Promise.all(
-      state.agents.map(async (agent): Promise<AgentIntegrationOperationResult> => {
+      state.agents
+        .filter((agent) => agent.enabled)
+        .map(async (agent): Promise<AgentIntegrationOperationResult> => {
         const adapter = adapterById.get(agent.agentId);
         if (adapter === undefined) throw new Error(`Missing adapter: ${agent.agentId}`);
         try {

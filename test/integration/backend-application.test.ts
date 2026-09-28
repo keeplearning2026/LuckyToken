@@ -104,6 +104,32 @@ async function fixture(): Promise<{ configPath: string; descriptorPath: string; 
   return { configPath, descriptorPath, port };
 }
 
+async function writeCommandCodeCatalog(
+  configPath: string,
+  endpoint: "/chat/completions" | "/responses",
+): Promise<void> {
+  await writeFile(
+    join(dirname(configPath), "commandcode-models.json"),
+    `${JSON.stringify({
+      schema: "luckytoken-commandcode-models-v2",
+      models: [
+        {
+          id: "deepseek/deepseek-v4.1-flash",
+          name: "DeepSeek V4.1 Flash",
+          description: "restart endpoint fixture",
+          supportedEndpoints: ["/chat/completions", "/responses"],
+          endpoint,
+          input: ["text"],
+          reasoning: false,
+          contextWindow: 128_000,
+          minimumPlan: "go",
+        },
+      ],
+    }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 async function writeInjectableModel(configPath: string): Promise<void> {
   await writeFile(
     join(dirname(configPath), "models.json"),
@@ -156,6 +182,137 @@ describe("Backend Application public lifecycle seam", () => {
       expect(await readFile(authPath, "utf8")).toBe(legacy);
     } finally {
       await client.close();
+    }
+  });
+
+  it("quits even when a disabled Pi integration sees a user-owned Token provider", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const root = dirname(configPath);
+    const piAgentDirectory = join(root, "pi-agent-user-owned");
+    await mkdir(piAgentDirectory, { recursive: true });
+    const userModels = `{
+  "providers": {
+    "Token": {
+      "apiKey": "user-owned",
+      "models": []
+    }
+  }
+}\n`;
+    const modelsPath = join(piAgentDirectory, "models.json");
+    await writeFile(modelsPath, userModels, "utf8");
+
+    const previousPiAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = piAgentDirectory;
+    try {
+      const started = await startTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(started.kind).toBe("running");
+      if (started.kind !== "running") return;
+      applications.push(started.application);
+
+      const endpoint = await readControlPlaneDescriptor(descriptorPath);
+      const client = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      try {
+        await client.hello(controlPlaneVersion);
+        await expect(
+          client.executeAgentIntegrationsCommand({ command: "query" }),
+        ).resolves.toMatchObject({
+          state: {
+            agents: expect.arrayContaining([
+              expect.objectContaining({ agentId: "pi", enabled: false }),
+            ]),
+          },
+        });
+
+        const quit = await client.executeApplicationCommand({
+          command: "quit",
+          acknowledged: true,
+        });
+        expect(quit.outcome).toBe("drained");
+        expect(await readFile(modelsPath, "utf8")).toBe(userModels);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      if (previousPiAgentDirectory === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDirectory;
+      }
+    }
+  });
+
+  it("reloads the CommandCode endpoint after a real Backend quit and restart", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    await writeCommandCodeCatalog(configPath, "/responses");
+
+    const first = await startTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+    });
+    expect(first.kind).toBe("running");
+    if (first.kind !== "running") return;
+    applications.push(first.application);
+
+    const firstEndpoint = await readControlPlaneDescriptor(descriptorPath);
+    const firstClient = await connectControlPlane(firstEndpoint, {
+      createRequestId: randomUUID,
+      pipeConnector: createNodePipeTransport(),
+    });
+    try {
+      await firstClient.hello(controlPlaneVersion);
+      const before = await firstClient.executeCatalogCommand({ command: "query" });
+      expect(
+        before.snapshot.providers
+          .find((provider) => provider.providerId === "commandcode-goat")
+          ?.models.find((model) => model.id === "deepseek/deepseek-v4.1-flash")
+          ?.api,
+      ).toBe("openai-responses");
+
+      const quit = await firstClient.executeApplicationCommand({
+        command: "quit",
+        acknowledged: true,
+      });
+      expect(quit.outcome).toBe("drained");
+    } finally {
+      await firstClient.close();
+    }
+    await expect(first.application.exited).resolves.toEqual({ reason: "drained" });
+
+    await writeCommandCodeCatalog(configPath, "/chat/completions");
+
+    const second = await startTokenApplication({
+      configPath,
+      descriptorOverride: descriptorPath,
+      ownerKind: "cli",
+    });
+    expect(second.kind).toBe("running");
+    if (second.kind !== "running") return;
+    applications.push(second.application);
+
+    const secondEndpoint = await readControlPlaneDescriptor(descriptorPath);
+    const secondClient = await connectControlPlane(secondEndpoint, {
+      createRequestId: randomUUID,
+      pipeConnector: createNodePipeTransport(),
+    });
+    try {
+      await secondClient.hello(controlPlaneVersion);
+      const after = await secondClient.executeCatalogCommand({ command: "query" });
+      expect(
+        after.snapshot.providers
+          .find((provider) => provider.providerId === "commandcode-goat")
+          ?.models.find((model) => model.id === "deepseek/deepseek-v4.1-flash")
+          ?.api,
+      ).toBe("openai-completions");
+    } finally {
+      await secondClient.close();
     }
   });
 
