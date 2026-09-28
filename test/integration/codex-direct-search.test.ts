@@ -1,5 +1,12 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
-import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import {
+  deflateSync,
+  gunzipSync,
+  gzipSync,
+  inflateSync,
+  zstdCompressSync,
+  zstdDecompressSync,
+} from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
@@ -72,47 +79,93 @@ describe("Codex Direct Mode web search", () => {
     });
   });
 
-  it("preserves compressed request bytes with their content encoding", async () => {
-    const compressed = zstdCompressSync(Buffer.from('{"model":"caller-model","input":"hello"}'));
-    let outbound: Request | undefined;
-    const composition = await createOpenAIResponsesServingTestComposition({
-      clientApiKey: "client-token",
-      commandCodeApiKey: "provider-secret",
-      commandCodeBaseUrl: "https://commandcode.test",
-      fetch: async (input, init) => {
-        outbound = new Request(input, init);
-        return new Response("{}", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      },
-      modelId: "deepseek/deepseek-v4-flash",
-      codexDirectModels: noDirectModels,
-    });
-    compositions.push(composition);
-
-    await composition.runtime.handle(
-      new Request("http://Token.test/v1/alpha/search", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer codex-token",
-          "content-type": "application/json",
-          "content-encoding": "zstd",
-        },
-        body: compressed,
-      }),
-    );
-
-    expect({
-      contentEncoding: outbound?.headers.get("content-encoding"),
-      body: outbound === undefined
-        ? undefined
-        : zstdDecompressSync(new Uint8Array(await outbound.arrayBuffer())).toString("utf8"),
-    }).toEqual({
+  it.each([
+    {
+      name: "identity",
+      contentEncoding: undefined,
+      encode: (bytes: Uint8Array) => bytes,
+      decode: (bytes: Uint8Array) => Buffer.from(bytes),
+    },
+    {
+      name: "zstd",
       contentEncoding: "zstd",
-      body: '{"model":"gpt-6-luna","input":"hello"}',
-    });
-  });
+      encode: (bytes: Uint8Array) => zstdCompressSync(bytes),
+      decode: (bytes: Uint8Array) => zstdDecompressSync(bytes),
+    },
+    {
+      name: "gzip",
+      contentEncoding: "gzip",
+      encode: (bytes: Uint8Array) => gzipSync(bytes),
+      decode: (bytes: Uint8Array) => gunzipSync(bytes),
+    },
+    {
+      name: "x-gzip",
+      contentEncoding: "x-gzip",
+      encode: (bytes: Uint8Array) => gzipSync(bytes),
+      decode: (bytes: Uint8Array) => gunzipSync(bytes),
+    },
+    {
+      name: "deflate",
+      contentEncoding: "deflate",
+      encode: (bytes: Uint8Array) => deflateSync(bytes),
+      decode: (bytes: Uint8Array) => inflateSync(bytes),
+    },
+  ])(
+    "preserves $name request encoding across model rewrite",
+    async ({ contentEncoding, encode, decode }) => {
+      const source = Buffer.from(
+        '{"model":"caller-model","input":"hello"}',
+        "utf8",
+      );
+      const encoded = Uint8Array.from(encode(source));
+      let outbound: Request | undefined;
+      const composition = await createOpenAIResponsesServingTestComposition({
+        clientApiKey: "client-token",
+        commandCodeApiKey: "provider-secret",
+        commandCodeBaseUrl: "https://commandcode.test",
+        fetch: async (input, init) => {
+          outbound = new Request(input, init);
+          return new Response("{}", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+        modelId: "deepseek/deepseek-v4-flash",
+        codexDirectModels: noDirectModels,
+      });
+      compositions.push(composition);
+
+      const headers = new Headers({
+        authorization: "Bearer codex-token",
+        "content-type": "application/json",
+      });
+      if (contentEncoding !== undefined) {
+        headers.set("content-encoding", contentEncoding);
+      }
+      await composition.runtime.handle(
+        new Request("http://Token.test/v1/alpha/search", {
+          method: "POST",
+          headers,
+          body: encoded,
+        }),
+      );
+
+      const outboundBytes =
+        outbound === undefined
+          ? undefined
+          : new Uint8Array(await outbound.arrayBuffer());
+      expect({
+        contentEncoding: outbound?.headers.get("content-encoding"),
+        body:
+          outboundBytes === undefined
+            ? undefined
+            : decode(outboundBytes).toString("utf8"),
+      }).toEqual({
+        contentEncoding: contentEncoding ?? null,
+        body: '{"model":"gpt-6-luna","input":"hello"}',
+      });
+    },
+  );
 
   it("applies a changed search model immediately without changing nested data", async () => {
     let searchModel = "gpt-5.6-sol";

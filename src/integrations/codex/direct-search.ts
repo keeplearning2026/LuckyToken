@@ -28,6 +28,48 @@ export interface CreateCodexDirectSearchHandlerOptions {
   readonly model?: () => string;
 }
 
+type SearchRequestDecodeFailureReason =
+  | "unsupported_content_encoding"
+  | "request_body_exceeds_limit"
+  | "request_body_decode_failed";
+
+type SearchClientRequestUnavailableReason =
+  | SearchRequestDecodeFailureReason
+  | "request_body_read_failed"
+  | "request_body_read_aborted";
+
+type DecodedSearchRequest =
+  | { readonly state: "decoded"; readonly bytes: Uint8Array<ArrayBuffer> }
+  | {
+      readonly state: "unavailable";
+      readonly reason: SearchRequestDecodeFailureReason;
+    };
+
+interface RewrittenSearchRequest {
+  readonly decodedBytes: Uint8Array<ArrayBuffer>;
+  readonly outboundBytes: Uint8Array<ArrayBuffer>;
+}
+
+const SEARCH_CONTENT_ENCODINGS = new Set([
+  "",
+  "identity",
+  "zstd",
+  "gzip",
+  "x-gzip",
+  "deflate",
+]);
+
+const CLIENT_REQUEST_WIRE_LOCATION = {
+  phase: "protocol_ingress",
+  step: "read_and_decode_body",
+} as const;
+
+const DIRECT_OUTBOUND_REQUEST_WIRE_LOCATION = {
+  phase: "lane_request_preparation",
+  lane: "direct",
+  step: "construct_direct_envelope",
+} as const;
+
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -115,29 +157,53 @@ function invalidSearchBodyError(): Response {
   );
 }
 
-function rewriteSearchModel(
+/** Bounded decode of the Client Request Wire. Diagnostics retains these
+ *  decoded bytes, so transport compression never hides the search body. */
+function decodeSearchRequest(
   wireBytes: Uint8Array<ArrayBuffer>,
+  encodingHeader: string | null,
+  maximumBytes: number,
+): DecodedSearchRequest {
+  const encoding = (encodingHeader ?? "identity").trim().toLowerCase();
+  if (!SEARCH_CONTENT_ENCODINGS.has(encoding)) {
+    return { state: "unavailable", reason: "unsupported_content_encoding" };
+  }
+  try {
+    const limit = { maxOutputLength: maximumBytes };
+    const decoded: Uint8Array =
+      encoding === "identity" || encoding === ""
+        ? wireBytes
+        : encoding === "zstd"
+          ? zstdDecompressSync(wireBytes, limit)
+          : encoding === "gzip" || encoding === "x-gzip"
+            ? gunzipSync(wireBytes, limit)
+            : inflateSync(wireBytes, limit);
+    if (decoded.byteLength > maximumBytes) {
+      return { state: "unavailable", reason: "request_body_exceeds_limit" };
+    }
+    return {
+      state: "decoded",
+      bytes: decoded as Uint8Array<ArrayBuffer>,
+    };
+  } catch (error) {
+    return {
+      state: "unavailable",
+      reason:
+        (error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE"
+          ? "request_body_exceeds_limit"
+          : "request_body_decode_failed",
+    };
+  }
+}
+
+function rewriteSearchModel(
+  decoded: Uint8Array<ArrayBuffer>,
   encodingHeader: string | null,
   model: string,
   maximumBytes: number,
-): Uint8Array<ArrayBuffer> | undefined {
+): RewrittenSearchRequest | undefined {
   const encoding = (encodingHeader ?? "identity").trim().toLowerCase();
-  let decoded: Uint8Array;
   try {
-    const limit = { maxOutputLength: maximumBytes };
-    decoded = encoding === "identity" || encoding === ""
-      ? wireBytes
-      : encoding === "zstd"
-        ? zstdDecompressSync(wireBytes, limit)
-        : encoding === "gzip" || encoding === "x-gzip"
-          ? gunzipSync(wireBytes, limit)
-          : encoding === "deflate"
-            ? inflateSync(wireBytes, limit)
-            : new Uint8Array(0);
-    if (decoded.byteLength > maximumBytes ||
-      !["", "identity", "zstd", "gzip", "x-gzip", "deflate"].includes(encoding)) {
-      return undefined;
-    }
     const text = new TextDecoder("utf-8", { fatal: true }).decode(decoded);
     const errors: ParseError[] = [];
     const root = parseTree(text, errors, {
@@ -156,16 +222,21 @@ function rewriteSearchModel(
       JSON.stringify(model) +
       text.slice(modelNode.offset + modelNode.length),
     );
-    if (rewritten.byteLength > maximumBytes) return undefined;
-    return new Uint8Array(
-      encoding === "zstd"
-        ? zstdCompressSync(rewritten)
-        : encoding === "gzip" || encoding === "x-gzip"
-          ? gzipSync(rewritten)
-          : encoding === "deflate"
-            ? deflateSync(rewritten)
-            : rewritten,
-    );
+    if (rewritten.byteLength > maximumBytes) {
+      return undefined;
+    }
+    return {
+      decodedBytes: rewritten,
+      outboundBytes: new Uint8Array(
+        encoding === "zstd"
+          ? zstdCompressSync(rewritten)
+          : encoding === "gzip" || encoding === "x-gzip"
+            ? gzipSync(rewritten)
+            : encoding === "deflate"
+              ? deflateSync(rewritten)
+              : rewritten,
+      ),
+    };
   } catch {
     return undefined;
   }
@@ -207,6 +278,7 @@ async function readBoundedBody(
     while (true) {
       request.signal.throwIfAborted();
       const { value, done } = await reader.read();
+      request.signal.throwIfAborted();
       if (done) break;
       if (value === undefined || value.byteLength === 0) continue;
       length += value.byteLength;
@@ -238,6 +310,21 @@ function observeSearch(
   observation: Parameters<typeof observeRequestJourney>[1],
 ): void {
   if (context !== undefined) observeRequestJourney(context, observation);
+}
+
+function observeClientRequestUnavailable(
+  context: ClientProtocolRequestContext | undefined,
+  reason: SearchClientRequestUnavailableReason,
+): void {
+  observeSearch(context, {
+    kind: "artifact_observed",
+    artifactId: "client_request_wire",
+    artifactKind: "client_request_wire",
+    state: "unavailable",
+    mediaType: "application/json",
+    reason,
+    location: CLIENT_REQUEST_WIRE_LOCATION,
+  });
 }
 
 function completeSearch(
@@ -308,6 +395,42 @@ export function createCodexDirectSearchHandler(
       request: Request,
       context?: ClientProtocolRequestContext,
     ): Promise<Response> {
+      let body: Uint8Array<ArrayBuffer> | undefined;
+      try {
+        body = await readBoundedBody(request, options.maxRequestBytes);
+      } catch (error) {
+        if (request.signal.aborted) {
+          observeClientRequestUnavailable(context, "request_body_read_aborted");
+          throw error;
+        }
+        observeClientRequestUnavailable(context, "request_body_read_failed");
+        return completeSearch(context, requestReadFailureError());
+      }
+      if (body === undefined) {
+        observeClientRequestUnavailable(context, "request_body_exceeds_limit");
+        return completeSearch(context, payloadTooLargeError());
+      }
+      const decoded = decodeSearchRequest(
+        body,
+        request.headers.get("content-encoding"),
+        options.maxRequestBytes,
+      );
+      if (decoded.state === "unavailable") {
+        observeClientRequestUnavailable(context, decoded.reason);
+        return completeSearch(context, invalidSearchBodyError());
+      }
+      observeSearch(context, {
+        kind: "artifact_observed",
+        artifactId: "client_request_wire",
+        artifactKind: "client_request_wire",
+        state: "captured",
+        mediaType: "application/json",
+        bytes: decoded.bytes,
+        originalBytes: decoded.bytes.byteLength,
+        truncated: false,
+        location: CLIENT_REQUEST_WIRE_LOCATION,
+      });
+
       const laneLocation = {
         phase: "request_resolution",
         lane: "direct",
@@ -331,25 +454,27 @@ export function createCodexDirectSearchHandler(
         protocol: "codex-alpha-search",
         location: laneLocation,
       });
-      let body: Uint8Array<ArrayBuffer> | undefined;
-      try {
-        body = await readBoundedBody(request, options.maxRequestBytes);
-      } catch (error) {
-        if (request.signal.aborted) throw error;
-        return completeSearch(context, requestReadFailureError());
-      }
-      if (body === undefined) {
-        return completeSearch(context, payloadTooLargeError());
-      }
-      const outboundBody = rewriteSearchModel(
-        body,
+
+      const rewritten = rewriteSearchModel(
+        decoded.bytes,
         request.headers.get("content-encoding"),
         options.model?.() ?? DEFAULT_CODEX_SEARCH_MODEL,
         options.maxRequestBytes,
       );
-      if (outboundBody === undefined) {
+      if (rewritten === undefined) {
         return completeSearch(context, invalidSearchBodyError());
       }
+      observeSearch(context, {
+        kind: "artifact_observed",
+        artifactId: "direct_outbound_request_wire",
+        artifactKind: "direct_outbound_request_wire",
+        state: "captured",
+        mediaType: "application/json",
+        bytes: rewritten.decodedBytes,
+        originalBytes: rewritten.decodedBytes.byteLength,
+        truncated: false,
+        location: DIRECT_OUTBOUND_REQUEST_WIRE_LOCATION,
+      });
       const headers = requestHeaders(request.headers);
       const upstreamUrl = `${CODEX_SEARCH_URL}${new URL(request.url).search}`;
       let upstream: Response;
@@ -357,7 +482,7 @@ export function createCodexDirectSearchHandler(
         upstream = await options.fetch(upstreamUrl, {
           method: "POST",
           headers,
-          body: outboundBody,
+          body: rewritten.outboundBytes,
           signal: request.signal,
           redirect: "manual",
         });
