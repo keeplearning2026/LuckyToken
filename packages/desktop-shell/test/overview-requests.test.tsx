@@ -26,7 +26,7 @@ function summary(
 ): RequestJourneySummary {
   const abnormal =
     outcome === "failed" || outcome === "aborted" || outcome === "interrupted";
-  return { id, runtimeId: "runtime-1", requestId: `request-${id}`, operation: "model_generation", protocol: "anthropic-messages", lane: "provider_native", outcome, completeness: "complete", createdAt: today.getTime() + id, ...(outcome === "running" ? {} : { closedAt: today.getTime() + 1_000 + id }), ...(abnormal ? { diagnosis: { evidence: "observed", classification: "provider_timeout", safeMessage: "The provider timed out", origin: "provider", originPrecision: "external_boundary", location: failureLocation } as const } : {}), ...(usage === undefined ? {} : { usage }) };
+  return { id, runtimeId: "runtime-1", requestId: `request-${id}`, operation: "model_generation", path: "/v1/messages", protocol: "anthropic-messages", lane: "provider_native", outcome, completeness: "complete", createdAt: today.getTime() + id, ...(outcome === "running" ? {} : { closedAt: today.getTime() + 1_000 + id }), ...(abnormal ? { diagnosis: { evidence: "observed", classification: "provider_timeout", safeMessage: "The provider timed out", origin: "provider", originPrecision: "external_boundary", location: failureLocation } as const } : {}), ...(usage === undefined ? {} : { usage }) };
 }
 
 function detail(base: RequestJourneySummary): RequestJourneyRecord {
@@ -62,6 +62,25 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 async function flush(): Promise<void> { await act(async () => { await Promise.resolve(); await Promise.resolve(); }); }
 
 describe("Overview Request Journeys", () => {
+  it("shows concise Protocol labels for distinct admitted paths", async () => {
+    const records: RequestJourneySummary[] = [
+      { ...summary(21, "success"), path: "/v1/responses", protocol: "openai-responses" },
+      { ...summary(22, "success"), path: "/v1/responses/compact", protocol: "openai-responses" },
+      { ...summary(23, "success"), path: "/v1/alpha/search", protocol: "codex-alpha-search" },
+    ];
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records, hasMore: false } }),
+    } });
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    expect(container.querySelector('[data-request-column-header="protocol"]')?.textContent).toBe("Protocol");
+    expect(records.map((record) => container.querySelector(
+      `tr[data-request-id="${record.requestId}"] > .request-column-protocol`,
+    )?.textContent)).toEqual(["response", "response-compact", "codex-search"]);
+  });
+
   it("shows complete row usage before request details are loaded", async () => {
     const completed = summary(9, "success", {
       terminalClass: "done",

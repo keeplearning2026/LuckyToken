@@ -1,4 +1,5 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CodexDirectModelSource } from "../../src/codex-direct-seam.js";
@@ -20,8 +21,9 @@ describe("Codex Direct Mode web search", () => {
     );
   });
 
-  it("forwards caller credentials without consulting Token-owned Codex auth", async () => {
-    const requestBytes = Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0xff]);
+  it("rewrites only the top-level model and forwards caller credentials", async () => {
+    const requestText = '{ "model" : "caller-model", "input": {"model":"nested", "query":"hello"} }';
+    const expectedText = '{ "model" : "gpt-6-luna", "input": {"model":"nested", "query":"hello"} }';
     const responseBytes = Uint8Array.from([0x00, 0x80, 0xff, 0x41]);
     let outbound: Request | undefined;
     const fetch: FetchFunction = async (input, init) => {
@@ -47,9 +49,9 @@ describe("Codex Direct Mode web search", () => {
         headers: {
           authorization: "Bearer caller-owned-token",
           "chatgpt-account-id": "acct-caller",
-          "content-type": "application/octet-stream",
+          "content-type": "application/json",
         },
-        body: requestBytes,
+        body: requestText,
       }),
     );
 
@@ -58,23 +60,20 @@ describe("Codex Direct Mode web search", () => {
       upstreamUrl: outbound?.url,
       upstreamAuthorization: outbound?.headers.get("authorization"),
       upstreamAccountId: outbound?.headers.get("chatgpt-account-id"),
-      upstreamBody:
-        outbound === undefined
-          ? undefined
-          : Array.from(new Uint8Array(await outbound.arrayBuffer())),
+      upstreamBody: await outbound?.text(),
       responseBody: Array.from(new Uint8Array(await response.arrayBuffer())),
     }).toEqual({
       status: 207,
       upstreamUrl: "https://chatgpt.com/backend-api/codex/alpha/search",
       upstreamAuthorization: "Bearer caller-owned-token",
       upstreamAccountId: "acct-caller",
-      upstreamBody: Array.from(requestBytes),
+      upstreamBody: expectedText,
       responseBody: Array.from(responseBytes),
     });
   });
 
   it("preserves compressed request bytes with their content encoding", async () => {
-    const compressed = Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x01]);
+    const compressed = zstdCompressSync(Buffer.from('{"model":"caller-model","input":"hello"}'));
     let outbound: Request | undefined;
     const composition = await createOpenAIResponsesServingTestComposition({
       clientApiKey: "client-token",
@@ -106,14 +105,62 @@ describe("Codex Direct Mode web search", () => {
 
     expect({
       contentEncoding: outbound?.headers.get("content-encoding"),
-      bytes:
-        outbound === undefined
-          ? undefined
-          : Array.from(new Uint8Array(await outbound.arrayBuffer())),
+      body: outbound === undefined
+        ? undefined
+        : zstdDecompressSync(new Uint8Array(await outbound.arrayBuffer())).toString("utf8"),
     }).toEqual({
       contentEncoding: "zstd",
-      bytes: Array.from(compressed),
+      body: '{"model":"gpt-6-luna","input":"hello"}',
     });
+  });
+
+  it("applies a changed search model immediately without changing nested data", async () => {
+    let searchModel = "gpt-5.6-sol";
+    const outboundBodies: string[] = [];
+    const composition = await createOpenAIResponsesServingTestComposition({
+      clientApiKey: "client-token",
+      commandCodeApiKey: "provider-secret",
+      commandCodeBaseUrl: "https://commandcode.test",
+      fetch: async (input, init) => {
+        outboundBodies.push(await new Request(input, init).text());
+        return new Response("{}", { status: 200 });
+      },
+      modelId: "deepseek/deepseek-v4-flash",
+      codexDirectModels: noDirectModels,
+      codexSearchModel: () => searchModel,
+    });
+    compositions.push(composition);
+    const send = () => composition.runtime.handle(new Request("http://Token.test/v1/alpha/search", {
+      method: "POST",
+      headers: { authorization: "Bearer caller-token" },
+      body: '{"model":"caller-model","input":{"model":"nested"}}',
+    }));
+    expect((await send()).status).toBe(200);
+    searchModel = "gpt-6-luna";
+    expect((await send()).status).toBe(200);
+    expect(outboundBodies).toEqual([
+      '{"model":"gpt-5.6-sol","input":{"model":"nested"}}',
+      '{"model":"gpt-6-luna","input":{"model":"nested"}}',
+    ]);
+  });
+
+  it("rejects a search body without a top-level model before dispatch", async () => {
+    let contacted = false;
+    const composition = await createOpenAIResponsesServingTestComposition({
+      clientApiKey: "client-token",
+      commandCodeApiKey: "provider-secret",
+      commandCodeBaseUrl: "https://commandcode.test",
+      fetch: async () => { contacted = true; return new Response("{}"); },
+      modelId: "deepseek/deepseek-v4-flash",
+      codexDirectModels: noDirectModels,
+    });
+    compositions.push(composition);
+    const response = await composition.runtime.handle(new Request("http://Token.test/v1/alpha/search", {
+      method: "POST",
+      body: '{"input":"hello"}',
+    }));
+    expect(response.status).toBe(400);
+    expect(contacted).toBe(false);
   });
 
   it("preserves the search query string at the fixed Codex upstream", async () => {
@@ -137,7 +184,7 @@ describe("Codex Direct Mode web search", () => {
         {
           method: "POST",
           headers: { authorization: "Bearer codex-token" },
-          body: Uint8Array.from([0x7b, 0x7d]),
+          body: '{"model":"caller-model"}',
         },
       ),
     );
@@ -178,7 +225,7 @@ describe("Codex Direct Mode web search", () => {
           "accept-language": "zh-CN",
           "accept-encoding": "gzip, br",
         },
-        body: Uint8Array.from([0x7b, 0x7d]),
+        body: '{"model":"caller-model"}',
       }),
     );
 
@@ -236,7 +283,7 @@ describe("Codex Direct Mode web search", () => {
       new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
-        body: Uint8Array.from([0x7b, 0x7d]),
+        body: '{"model":"caller-model"}',
       }),
     );
 
@@ -279,7 +326,7 @@ describe("Codex Direct Mode web search", () => {
       new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer wrong-token" },
-        body: Uint8Array.from([0x7b, 0x7d]),
+        body: '{"model":"caller-model"}',
       }),
     );
 
@@ -384,7 +431,7 @@ describe("Codex Direct Mode web search", () => {
       new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
-        body: Uint8Array.from([0x7b, 0x7d]),
+        body: '{"model":"caller-model"}',
       }),
     );
 
@@ -427,7 +474,7 @@ describe("Codex Direct Mode web search", () => {
       new Request("http://Token.test/v1/alpha/search", {
         method: "POST",
         headers: { authorization: "Bearer codex-token" },
-        body: Uint8Array.from([0x7b, 0x7d]),
+        body: '{"model":"caller-model"}',
       }),
     );
 

@@ -301,6 +301,7 @@ describe("Providers Profile product slice", () => {
         runtimeId: "runtime-1",
         requestId: "request-9",
         operation: "model_generation",
+        path: "/v1/responses",
         profileId: "credential-a",
         outcome: "success",
         completeness: "complete",

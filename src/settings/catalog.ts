@@ -17,6 +17,7 @@ export type SettingApplyMode = "hot-apply" | "restart-required";
 export type SettingValidation =
   | { readonly type: "boolean" }
   | { readonly type: "integer"; readonly minimum: number; readonly maximum: number }
+  | { readonly type: "model-name" }
   | { readonly type: "nullable-string" };
 
 type SettingScalar = boolean | number | string | null;
@@ -110,6 +111,17 @@ function validateValue(
       error: `${definition.key} must be a ${definition.type}`,
     };
   }
+  if (definition.validation.type === "model-name") {
+    if (typeof value !== "string" ||
+      value.length > 128 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value)) {
+      return {
+        valid: false,
+        error: `${definition.key} must be a non-empty model name without spaces`,
+      };
+    }
+    return { valid: true };
+  }
   if (definition.validation.type === "integer") {
     if (
       !Number.isSafeInteger(value) ||
@@ -191,6 +203,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     type: "boolean",
     default: true,
     validation: Object.freeze({ type: "boolean" }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
+  Object.freeze({
+    key: "integrations.codex.searchModel",
+    type: "string",
+    default: "gpt-6-luna",
+    validation: Object.freeze({ type: "model-name" }),
     sensitivity: "public",
     applyMode: "hot-apply",
   }),

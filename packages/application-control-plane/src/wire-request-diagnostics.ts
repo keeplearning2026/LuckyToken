@@ -963,6 +963,7 @@ export function decodeRequestJourneySummary(
       "runtimeId",
       "requestId",
       "operation",
+      "path",
       "protocol",
       "lane",
       "requestedModel",
@@ -985,6 +986,7 @@ export function decodeRequestJourneySummary(
     !boundedText(value.runtimeId, MAX_ID_TEXT) ||
     !boundedText(value.requestId, MAX_ID_TEXT) ||
     !OPERATIONS.has(value.operation as RequestJourneyOperationCandidate) ||
+    !boundedText(value.path, 2_048) ||
     (value.protocol !== undefined &&
       !boundedText(value.protocol, MAX_PROTOCOL_TEXT)) ||
     (value.lane !== undefined && !LANES.has(value.lane as DataPlaneLane)) ||
@@ -1041,6 +1043,7 @@ export function decodeRequestJourneySummary(
     runtimeId: value.runtimeId,
     requestId: value.requestId,
     operation: value.operation as RequestJourneyOperationCandidate,
+    path: value.path as string,
     ...(value.protocol === undefined ? {} : { protocol: value.protocol }),
     ...(value.lane === undefined ? {} : { lane: value.lane as DataPlaneLane }),
     ...(value.requestedModel === undefined
@@ -1080,6 +1083,7 @@ export function decodeRequestJourneyRecord(
       "runtimeId",
       "requestId",
       "operation",
+      "path",
       "protocol",
       "lane",
       "requestedModel",
@@ -1116,6 +1120,7 @@ export function decodeRequestJourneyRecord(
     runtimeId: value.runtimeId,
     requestId: value.requestId,
     operation: value.operation,
+    path: value.path,
     ...(value.protocol === undefined ? {} : { protocol: value.protocol }),
     ...(value.lane === undefined ? {} : { lane: value.lane }),
     ...(value.requestedModel === undefined
@@ -1144,7 +1149,8 @@ export function decodeRequestJourneyRecord(
     ...(value.usage === undefined ? {} : { usage: value.usage }),
   });
   const admission = decodeAdmission(value.admission);
-  if (summary === undefined || admission === undefined) return undefined;
+  if (summary === undefined || admission === undefined ||
+    summary.path !== admission.path) return undefined;
 
   const timeline: RequestJourneyTimelineEvent[] = [];
   for (const raw of value.timeline) {

@@ -26,6 +26,7 @@ describe("authoritative registered settings catalog", () => {
       "application.quitDrainTimeoutMs",
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
+      "integrations.codex.searchModel",
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",
@@ -89,6 +90,16 @@ describe("authoritative registered settings catalog", () => {
       applyMode: "hot-apply",
       value: true,
     });
+
+    expect(byKey.get("integrations.codex.searchModel")).toMatchObject({
+      type: "string",
+      default: "gpt-6-luna",
+      validation: { type: "model-name" },
+      applyMode: "hot-apply",
+      value: "gpt-6-luna",
+    });
+    expect(registry.validate("integrations.codex.searchModel", "gpt-5.6-sol")).toEqual({ valid: true });
+    expect(registry.validate("integrations.codex.searchModel", "")).toMatchObject({ valid: false });
 
     for (const key of [
       "integrations.codex.preimage.modelProvider",

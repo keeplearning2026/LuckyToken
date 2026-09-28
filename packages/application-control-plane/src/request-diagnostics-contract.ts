@@ -106,6 +106,8 @@ export interface RequestJourneySummary {
   readonly runtimeId: string;
   readonly requestId: string;
   readonly operation: RequestJourneyOperationCandidate;
+  /** Admitted HTTP path, available in the list without loading full details. */
+  readonly path: string;
   readonly protocol?: string;
   readonly lane?: DataPlaneLane;
   /** Client-visible model selector captured at request time. */

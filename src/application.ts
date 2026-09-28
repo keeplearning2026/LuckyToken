@@ -958,6 +958,12 @@ async function startNormalApplication(options: {
             codexDirectFetch: createCodexDirectHttpFetch(),
             shutdownSignal: shutdownController.signal,
             codexDirectModels: codexIntegrationAuthority.directModels,
+            codexSearchModel: () => {
+              const value = settingsRegistry.query(["integrations.codex.searchModel"])[
+                "integrations.codex.searchModel"
+              ]?.value;
+              return typeof value === "string" ? value : "gpt-6-luna";
+            },
           });
           const listener = await startRunningDataPlaneListener({
             dataPlane: composition,

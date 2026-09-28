@@ -730,6 +730,7 @@ function diagnosticsWorkerMain(): void {
     readonly runtimeId: string;
     readonly requestId: string;
     readonly operation: string;
+    readonly path: string;
     readonly protocol: string | null;
     readonly lane: string | null;
     readonly requestedModel: string | null;
@@ -820,6 +821,7 @@ function diagnosticsWorkerMain(): void {
       runtimeId: row.runtimeId,
       requestId: row.requestId,
       operation: row.operation,
+      path: row.path,
       ...(row.protocol === null ? {} : { protocol: row.protocol }),
       ...(row.lane === null ? {} : { lane: row.lane }),
       ...(row.requestedModel === null
@@ -852,6 +854,7 @@ function diagnosticsWorkerMain(): void {
   const summarySelect = `
     SELECT r.id AS id, r.runtime_id AS runtimeId,
            j.request_id AS requestId, j.operation AS operation,
+           j.path AS path,
            j.protocol AS protocol, j.lane AS lane, j.outcome AS outcome,
            j.provider_id AS providerId, j.real_model_id AS realModelId,
            j.client_session_id AS clientSessionId,

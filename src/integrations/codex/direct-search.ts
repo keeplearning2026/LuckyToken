@@ -1,5 +1,14 @@
 import type { CodexDirectFetch } from "../../codex-direct-seam.js";
 import {
+  deflateSync,
+  gunzipSync,
+  gzipSync,
+  inflateSync,
+  zstdCompressSync,
+  zstdDecompressSync,
+} from "node:zlib";
+import { parseTree, type ParseError } from "jsonc-parser";
+import {
   observeRequestJourney,
   type ClientProtocolHandler,
   type ClientProtocolRequestContext,
@@ -11,10 +20,12 @@ import {
 
 export const CODEX_SEARCH_URL =
   "https://chatgpt.com/backend-api/codex/alpha/search";
+export const DEFAULT_CODEX_SEARCH_MODEL = "gpt-6-luna";
 
 export interface CreateCodexDirectSearchHandlerOptions {
   readonly fetch: CodexDirectFetch;
   readonly maxRequestBytes: number;
+  readonly model?: () => string;
 }
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -90,6 +101,74 @@ function payloadTooLargeError(): Response {
 
 function requestReadFailureError(): Response {
   return new Response(null, { status: 500 });
+}
+
+function invalidSearchBodyError(): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        type: "invalid_request_error",
+        message: "Search request must contain a top-level model string in JSON",
+      },
+    }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  );
+}
+
+function rewriteSearchModel(
+  wireBytes: Uint8Array<ArrayBuffer>,
+  encodingHeader: string | null,
+  model: string,
+  maximumBytes: number,
+): Uint8Array<ArrayBuffer> | undefined {
+  const encoding = (encodingHeader ?? "identity").trim().toLowerCase();
+  let decoded: Uint8Array;
+  try {
+    const limit = { maxOutputLength: maximumBytes };
+    decoded = encoding === "identity" || encoding === ""
+      ? wireBytes
+      : encoding === "zstd"
+        ? zstdDecompressSync(wireBytes, limit)
+        : encoding === "gzip" || encoding === "x-gzip"
+          ? gunzipSync(wireBytes, limit)
+          : encoding === "deflate"
+            ? inflateSync(wireBytes, limit)
+            : new Uint8Array(0);
+    if (decoded.byteLength > maximumBytes ||
+      !["", "identity", "zstd", "gzip", "x-gzip", "deflate"].includes(encoding)) {
+      return undefined;
+    }
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(decoded);
+    const errors: ParseError[] = [];
+    const root = parseTree(text, errors, {
+      allowTrailingComma: false,
+      disallowComments: true,
+    });
+    if (errors.length !== 0 || root?.type !== "object") return undefined;
+    const modelProperties = root.children?.filter(
+      (entry) => entry.children?.[0]?.value === "model",
+    );
+    if (modelProperties?.length !== 1) return undefined;
+    const modelNode = modelProperties[0]?.children?.[1];
+    if (modelNode?.type !== "string") return undefined;
+    const rewritten = new TextEncoder().encode(
+      text.slice(0, modelNode.offset) +
+      JSON.stringify(model) +
+      text.slice(modelNode.offset + modelNode.length),
+    );
+    if (rewritten.byteLength > maximumBytes) return undefined;
+    return new Uint8Array(
+      encoding === "zstd"
+        ? zstdCompressSync(rewritten)
+        : encoding === "gzip" || encoding === "x-gzip"
+          ? gzipSync(rewritten)
+          : encoding === "deflate"
+            ? deflateSync(rewritten)
+            : rewritten,
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function upstreamFailureError(): Response {
@@ -262,6 +341,15 @@ export function createCodexDirectSearchHandler(
       if (body === undefined) {
         return completeSearch(context, payloadTooLargeError());
       }
+      const outboundBody = rewriteSearchModel(
+        body,
+        request.headers.get("content-encoding"),
+        options.model?.() ?? DEFAULT_CODEX_SEARCH_MODEL,
+        options.maxRequestBytes,
+      );
+      if (outboundBody === undefined) {
+        return completeSearch(context, invalidSearchBodyError());
+      }
       const headers = requestHeaders(request.headers);
       const upstreamUrl = `${CODEX_SEARCH_URL}${new URL(request.url).search}`;
       let upstream: Response;
@@ -269,7 +357,7 @@ export function createCodexDirectSearchHandler(
         upstream = await options.fetch(upstreamUrl, {
           method: "POST",
           headers,
-          body,
+          body: outboundBody,
           signal: request.signal,
           redirect: "manual",
         });

@@ -70,6 +70,7 @@ export interface ConfiguredTokenDataPlaneOptions {
   readonly fetch: FetchFunction;
   readonly codexDirectFetch?: CodexDirectFetch;
   readonly codexDirectModels?: CodexDirectModelSource;
+  readonly codexSearchModel?: () => string;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
@@ -164,6 +165,9 @@ export async function createConfiguredTokenDataPlane(
     createCodexDirectSearchHandler({
       fetch: codexDirectFetch,
       maxRequestBytes: config.limits.maxRequestBytes,
+      ...(options.codexSearchModel === undefined
+        ? {}
+        : { model: options.codexSearchModel }),
     }),
     createCodexDirectImagesGenerationsHandler({
       fetch: codexDirectFetch,

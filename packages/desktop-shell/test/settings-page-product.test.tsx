@@ -126,7 +126,33 @@ describe("Settings product slice", () => {
     const saveButton = container.querySelector('button[aria-label="Save restore values"]');
     expect(saveButton?.textContent).toBe("");
     expect(saveButton?.querySelector(".lucide-save")).not.toBeNull();
-    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.preimage.modelProvider", "integrations.codex.preimage.openaiBaseUrl", "integrations.codex.preimage.modelCatalogJson"] });
+    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.preimage.modelProvider", "integrations.codex.preimage.openaiBaseUrl", "integrations.codex.preimage.modelCatalogJson", "integrations.codex.searchModel"] });
+  });
+
+  it("saves the configured Codex search model from Advanced settings", async () => {
+    const executeSettings = vi.fn(async (command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0]) => ({
+      outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
+      settings: {
+        "integrations.codex.searchModel": {
+          key: "integrations.codex.searchModel",
+          type: "string" as const,
+          default: "gpt-6-luna",
+          validation: { type: "model-name" },
+          sensitivity: "public" as const,
+          applyMode: "hot-apply" as const,
+          value: "gpt-5.6-sol",
+        },
+      },
+    }));
+    await render(createFakeDesktopApi({ control: { executeSettings } }));
+    await click("AdvancedCodex and diagnostics");
+    expect((container.querySelector('input[aria-label="Codex search model"]') as HTMLInputElement).value).toBe("gpt-5.6-sol");
+    await clickAria("Save Codex search model");
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: "integrations.codex.searchModel",
+      value: "gpt-5.6-sol",
+    });
   });
 
   it("uses compact, descriptive navigation instead of a duplicate Settings card", async () => {

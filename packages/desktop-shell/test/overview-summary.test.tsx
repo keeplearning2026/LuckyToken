@@ -214,6 +214,7 @@ describe("Overview analytics", () => {
         runtimeId: "runtime-1",
         requestId: "request-1",
         operation: "model_generation",
+        path: "/v1/responses",
         outcome: "success",
         completeness: "complete",
         createdAt: Date.now(),

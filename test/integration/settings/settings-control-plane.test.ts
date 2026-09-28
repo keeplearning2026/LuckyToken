@@ -160,6 +160,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "application.quitDrainTimeoutMs",
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
+      "integrations.codex.searchModel",
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",

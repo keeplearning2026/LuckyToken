@@ -52,6 +52,7 @@ export interface OpenAIResponsesServingTestOptions {
   configuration?: OpenAIResponsesConfiguration;
   diagnostics?: RequestJourneyObservationAuthority;
   codexDirectModels?: CodexDirectModelSource;
+  codexSearchModel?: () => string;
 }
 
 export interface OpenAIResponsesServingTestComposition {
@@ -142,6 +143,9 @@ export async function createOpenAIResponsesServingTestComposition(
   const searchHandler = createCodexDirectSearchHandler({
     fetch: options.fetch,
     maxRequestBytes: options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
+    ...(options.codexSearchModel === undefined
+      ? {}
+      : { model: options.codexSearchModel }),
   });
   const imagesHandlers = [
     createCodexDirectImagesGenerationsHandler({

@@ -45,11 +45,21 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [storageNoticeError, setStorageNoticeError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [codexRestoreDraft, setCodexRestoreDraft] = useState<Readonly<Record<string, string>>>({});
+  const [searchModelDraft, setSearchModelDraft] = useState("gpt-6-luna");
+  const [searchModelNotice, setSearchModelNotice] = useState<string>();
+  const [searchModelError, setSearchModelError] = useState(false);
+  const [searchModelBusy, setSearchModelBusy] = useState(false);
+  const [searchModelLoaded, setSearchModelLoaded] = useState(false);
 
   useEffect(() => {
     let active = true;
-    void api.control.executeSettings({ command: "query", keys: codexRestoreFields.map((field) => field.key) }).then((settings) => {
+    void api.control.executeSettings({ command: "query", keys: [...codexRestoreFields.map((field) => field.key), "integrations.codex.searchModel"] }).then((settings) => {
       if (!active) return;
+      const searchModel = settings.settings["integrations.codex.searchModel"]?.value;
+      if (typeof searchModel === "string") {
+        setSearchModelDraft(searchModel);
+        setSearchModelLoaded(true);
+      }
       setCodexRestoreDraft(Object.freeze(Object.fromEntries(codexRestoreFields.map((field) => {
         const value = settings.settings[field.key]?.value;
         return [field.key, typeof value === "string" ? value : ""];
@@ -88,7 +98,51 @@ export function AdvancedSettings({ api }: { readonly api: TokenDesktopApi }) {
     } finally { setBusy(false); }
   };
 
+  const saveSearchModel = async (): Promise<void> => {
+    setSearchModelBusy(true);
+    try {
+      const result = await api.control.executeSettings({
+        command: "set",
+        key: "integrations.codex.searchModel",
+        value: searchModelDraft.trim(),
+      });
+      if (result.outcome === "applied") {
+        const value = result.settings["integrations.codex.searchModel"]?.value;
+        if (typeof value === "string") setSearchModelDraft(value);
+        setSearchModelNotice("Search model saved and applied.");
+        setSearchModelError(false);
+      } else {
+        setSearchModelNotice(result.error ?? "Search model could not be saved.");
+        setSearchModelError(true);
+      }
+    } catch {
+      setSearchModelNotice("Search model could not be saved.");
+      setSearchModelError(true);
+    } finally {
+      setSearchModelBusy(false);
+    }
+  };
+
   return <section className="page-stack">
+    <div className="page-card settings-section">
+      <header className="settings-section-header">
+        <div className="settings-copy">
+          <p className="eyebrow">CODEX SEARCH</p>
+          <h3>Search request model</h3>
+          <p>Token sends <code>/v1/alpha/search</code> directly to Codex and replaces only the request model. The default is <code>gpt-6-luna</code>.</p>
+        </div>
+      </header>
+      <label className="field-row">
+        <span>Upstream model</span>
+        <input type="text" aria-label="Codex search model" value={searchModelDraft} onChange={(event) => setSearchModelDraft(event.currentTarget.value)} />
+      </label>
+      {searchModelNotice === undefined ? null : <p className={searchModelError ? "error-text" : "setting-state"} role="status">{searchModelNotice}</p>}
+      <div className="settings-form-actions">
+        <button type="button" className="settings-icon-button save" aria-label="Save Codex search model" aria-busy={searchModelBusy} title={searchModelBusy ? "Saving search model" : "Save search model"} disabled={searchModelBusy || !searchModelLoaded} onClick={() => void saveSearchModel()}>
+          <Save size={18} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
     <div className="page-card settings-section">
       <header className="settings-section-header">
         <div className="settings-copy">

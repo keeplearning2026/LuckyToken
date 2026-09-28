@@ -88,6 +88,23 @@ function displayStatus(record: RequestJourneySummary): string {
   return record.outcome === "running" ? "Running" : "—";
 }
 
+const PROTOCOL_LABEL_BY_PATH: Readonly<Record<string, string>> = Object.freeze({
+  "/v1/responses": "response",
+  "/v1/responses/compact": "response-compact",
+  "/v1/alpha/search": "codex-search",
+  "/v1/messages": "anthropic-message",
+  "/v1/models": "model-list",
+  "/v1/images/generations": "codex-image-generate",
+  "/v1/images/edits": "codex-image-edit",
+  "/v1/live": "codex-live",
+  "/v1/realtime": "codex-realtime",
+  "/v1/realtime/calls": "codex-realtime-call",
+});
+
+function displayProtocol(record: RequestJourneySummary): string {
+  return PROTOCOL_LABEL_BY_PATH[record.path] ?? record.protocol ?? "other";
+}
+
 function formatCompactTokenCount(value: number): string {
   const formatUnit = (scaled: number, unit: string): string =>
     `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(scaled)}${unit}`;
@@ -670,7 +687,7 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDes
           const duration = record.closedAt === undefined ? "-" : `${Math.max(0, record.closedAt - record.createdAt)} ms`;
           const startTime = formatTimestamp(record.createdAt);
           const session = record.clientSessionId ?? record.effectiveSessionId ?? "-";
-          const protocol = record.protocol ?? "-";
+          const protocol = displayProtocol(record);
           const model = record.requestedModel ?? "-";
           const status = displayStatus(record);
           const diagnosisLocation = record.diagnosis === undefined

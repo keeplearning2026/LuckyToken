@@ -50,12 +50,13 @@ describe("Request Journey Codex Direct Mode web search", () => {
         new Request("http://Token.test/v1/alpha/search", {
           method: "POST",
           headers: { authorization: "Bearer codex-token" },
-          body: Uint8Array.from([0x7b, 0x7d]),
+          body: '{"model":"caller-model"}',
         }),
       );
       expect(response.status).toBe(200);
       expect(response.headers.has("x-token-request-id")).toBe(false);
       const summary = await published;
+      expect(summary.path).toBe("/v1/alpha/search");
 
       const detail = await diagnostics.getRequestJourney({
         requestId: summary.requestId,

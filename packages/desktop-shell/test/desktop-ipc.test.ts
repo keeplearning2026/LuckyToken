@@ -17,6 +17,7 @@ const JOURNEY: RequestJourneySummary = Object.freeze({
   runtimeId: "52000000-0000-4000-8000-000000000001",
   requestId: "52000000-0000-4000-8000-000000000002",
   operation: "model_generation",
+  path: "/v1/responses",
   outcome: "running",
   completeness: "complete",
   createdAt: 1,
