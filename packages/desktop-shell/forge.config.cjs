@@ -1,16 +1,7 @@
 const path = require("node:path");
 
-const certificateFile = process.env.TOKEN_WINDOWS_CERTIFICATE_FILE;
-const certificatePassword = process.env.TOKEN_WINDOWS_CERTIFICATE_PASSWORD;
-
 const iconDirectory = path.resolve(__dirname, "assets");
 const iconBase = path.join(iconDirectory, "icon");
-
-if ((certificateFile === undefined) !== (certificatePassword === undefined)) {
-  throw new Error(
-    "Windows signing requires both TOKEN_WINDOWS_CERTIFICATE_FILE and TOKEN_WINDOWS_CERTIFICATE_PASSWORD",
-  );
-}
 
 module.exports = {
   outDir: `.electron-out/${process.pid}-${Date.now()}`,
@@ -25,22 +16,6 @@ module.exports = {
     ],
   },
   makers: [
-    {
-      name: "@electron-forge/maker-squirrel",
-      platforms: ["win32"],
-      config: {
-        name: "Token",
-        authors: "keeplearning2026",
-        description: "Local AI model gateway and desktop management application.",
-        exe: "Token.exe",
-        setupExe: "Token-Setup.exe",
-        setupIcon: `${iconBase}.ico`,
-        noMsi: true,
-        ...(certificateFile === undefined
-          ? {}
-          : { certificateFile, certificatePassword }),
-      },
-    },
     {
       name: "@electron-forge/maker-dmg",
       platforms: ["darwin"],

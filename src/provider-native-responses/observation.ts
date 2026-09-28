@@ -47,8 +47,8 @@ export function completeProviderResponsesStep(
   });
 }
 
-/** Read-only projection notice. The caller emits it from the single
- * project_native_body step, which may also carry the capability notice. */
+/** Read-only projection notice. At most one notice per request: the caller
+ * emits it from the single project_native_body step. */
 export function observeProviderResponsesBodyProjection(
   journey: RequestJourneyObserver | undefined,
   projection: Readonly<{
@@ -100,24 +100,5 @@ export function observeProviderResponsesArtifact(
     capturedBytes,
     truncated: capturedBytes < input.bytes.byteLength,
     location: input.location,
-  });
-}
-
-export const PROVIDER_NATIVE_STREAM_OPTIONS_OMITTED_NOTICE_CODE =
-  "provider_native_stream_options_omitted";
-
-/** Bounded notice for the one capability-driven wire edit the lane performs on
- *  the caller's own top-level JSON text. */
-export function observeProviderResponsesStreamOptionsOmitted(
-  journey: RequestJourneyObserver | undefined,
-  location: RequestJourneyLocation,
-): void {
-  observeProviderResponses(journey, {
-    kind: "conversion_notice_observed",
-    code: PROVIDER_NATIVE_STREAM_OPTIONS_OMITTED_NOTICE_CODE,
-    severity: "warning",
-    message:
-      "The resolved model does not accept stream_options; the top-level property was not forwarded.",
-    location,
   });
 }

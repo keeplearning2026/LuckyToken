@@ -6,8 +6,8 @@ plan is Go or GOAT under its own Provider identity; the current bundled
 bootstrap yields 40 Goat-visible models. Each model's selected API comes from
 `supportedEndpoints`: Responses and Chat Completions are active today, and Pi
 Anthropic Messages is pre-registered so a future Go/GOAT Messages model can be
-enabled by editing `commandcode-models.json` and restarting without rebuilding
-the package. OpenAI-style models use
+enabled by editing the user's `commandcode-models.json` and restarting, or by
+updating the packaged catalog in a new release. OpenAI-style models use
 `https://api.commandcode.ai/provider/v1`; Anthropic-style models use the
 provider root and let Pi append `/v1/messages`.
 

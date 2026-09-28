@@ -16,7 +16,6 @@ import { createCodexResponsesSender } from "./codex.js";
 import { ProviderResponsesNetworkError } from "./contract.js";
 import type {
   CreateProviderResponsesSenderOptions,
-  ProviderNativeModelCapabilities,
   ProviderResponsesLane,
   ProviderResponsesObservationContext,
   ProviderResponsesOperation,
@@ -32,8 +31,6 @@ import {
 
 export type {
   CreateProviderResponsesSenderOptions,
-  ProviderNativeModelCapabilities,
-  ProviderNativeResponsesStreamOptions,
   ProviderResponsesLane,
   ProviderResponsesOperation,
   ProviderResponsesSender,
@@ -46,9 +43,6 @@ export interface CreateProviderNativeResponsesOptions {
     "capture" | "runBound" | "advanceAfterFinal429"
   >;
   readonly fetch: FetchFunction;
-  /** Token-owned model wire capabilities. Absent leaves every Provider Native
-   *  wire control at its preserve default. */
-  readonly modelCapabilities?: ProviderNativeModelCapabilities;
   readonly configuration?: ProviderNativeResponsesConfiguration;
   readonly retryDependencies?: Partial<ProviderNativeResponsesRetryDependencies>;
 }
@@ -474,9 +468,6 @@ export function createProviderNativeResponses(
               model: input.model,
               auth,
               fetch: options.fetch,
-              ...(options.modelCapabilities === undefined
-                ? {}
-                : { modelCapabilities: options.modelCapabilities }),
               ...(input.operation === "responses"
                 ? { sessionId: input.sessionId }
                 : {}),

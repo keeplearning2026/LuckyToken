@@ -25,7 +25,7 @@ async function requireFile(path, label) {
   return path;
 }
 
-export async function discoverWindowsCandidate(outputRoot, version) {
+export async function discoverWindowsCandidate(outputRoot) {
   const resolvedOutputRoot = resolve(outputRoot);
   const packageRoot = join(resolvedOutputRoot, "token-win32-x64");
   const packagedExecutable = await requireFile(
@@ -36,7 +36,7 @@ export async function discoverWindowsCandidate(outputRoot, version) {
     join(packageRoot, "resources", "backend", "build-id.txt"),
     "packaged Backend build identity",
   );
-  const makeRoot = join(resolvedOutputRoot, "make", "squirrel.windows", "x64");
+  const makeRoot = join(resolvedOutputRoot, "make", "nsis");
   const makerEntries = await readdir(makeRoot, { withFileTypes: true });
   const installers = makerEntries
     .filter(
@@ -45,33 +45,14 @@ export async function discoverWindowsCandidate(outputRoot, version) {
     )
     .map((entry) => join(makeRoot, entry.name));
   if (installers.length !== 1) {
-    throw new Error(
-      `expected exactly one Squirrel Setup.exe, found ${installers.length}`,
-    );
+    throw new Error(`expected exactly one NSIS Setup.exe, found ${installers.length}`);
   }
-  const nupkgs = makerEntries
-    .filter(
-      (entry) =>
-        entry.isFile() && entry.name.endsWith(`-${version}-full.nupkg`),
-    )
-    .map((entry) => join(makeRoot, entry.name));
-  if (nupkgs.length !== 1) {
-    throw new Error(
-      `expected exactly one Squirrel full nupkg for ${version}, found ${nupkgs.length}`,
-    );
-  }
-  const releases = await requireFile(
-    join(makeRoot, "RELEASES"),
-    "Squirrel RELEASES metadata",
-  );
   return {
     outputRoot: resolvedOutputRoot,
     packageRoot,
     packagedExecutable,
     backendBuildIdPath,
     installer: installers[0],
-    nupkg: nupkgs[0],
-    releases,
   };
 }
 
@@ -156,7 +137,7 @@ async function makeCandidate() {
   });
   await npmCommand(
     ["run", "make:prepared", "--workspace", "@token/desktop-shell"],
-    { label: "Squirrel make" },
+    { label: "NSIS make" },
   );
   const after = await outputDirectories();
   const added = [...after].filter((entry) => !before.has(entry));
@@ -251,7 +232,7 @@ async function main() {
   }
 
   const outputRoot = options.reuseOutput ?? (await makeCandidate());
-  const candidate = await discoverWindowsCandidate(outputRoot, version);
+  const candidate = await discoverWindowsCandidate(outputRoot);
   const backendBuildId = (
     await readFile(candidate.backendBuildIdPath, "utf8")
   ).trim();
@@ -317,8 +298,6 @@ async function main() {
   const published = {};
   for (const [key, source] of Object.entries({
     installer: candidate.installer,
-    nupkg: candidate.nupkg,
-    releases: candidate.releases,
   })) {
     const destinationPath = join(destination, basename(source));
     await copyFile(source, destinationPath);

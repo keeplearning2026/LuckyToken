@@ -7,19 +7,22 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const forgeConfig = require("../../packages/desktop-shell/forge.config.cjs");
 
-test("Windows release make produces one Squirrel Setup.exe installer", () => {
+test("Windows release make produces one assisted NSIS Setup.exe installer", async () => {
   const windowsMakers = forgeConfig.makers.filter(
     (maker) => maker.platforms === undefined || maker.platforms.includes("win32"),
   );
 
   assert.deepEqual(
     windowsMakers.map((maker) => maker.name),
-    ["@electron-forge/maker-squirrel"],
+    [],
   );
-  assert.equal(windowsMakers[0].config.name, "Token");
-  assert.equal(windowsMakers[0].config.exe, "Token.exe");
-  assert.equal(windowsMakers[0].config.setupExe, "Token-Setup.exe");
-  assert.equal(windowsMakers[0].config.noMsi, true);
+  const builder = require("../../packages/desktop-shell/electron-builder.config.cjs");
+  assert.equal(builder.nsis.oneClick, false);
+  assert.equal(builder.nsis.perMachine, false);
+  assert.equal(builder.artifactName, "Token-Setup.exe");
+  const installerChoice = await readFile(builder.nsis.include, "utf8");
+  assert.match(installerChoice, /\$\{NSD_Check\} \$CatalogCheckbox/u);
+  assert.match(installerChoice, /CopyFiles \/SILENT/u);
 });
 
 test("portable ZIP is not a second Windows release authority", () => {
@@ -30,12 +33,12 @@ test("portable ZIP is not a second Windows release authority", () => {
   assert.equal(zip.platforms.includes("win32"), false);
 });
 
-test("Windows installation certification follows the Token Squirrel install root", async () => {
+test("Windows installation certification follows the Token NSIS install root", async () => {
   const script = await readFile(
     join(process.cwd(), "scripts", "windows-release-certification.ps1"),
     "utf8",
   );
 
-  assert.match(script, /Join-Path \$env:LOCALAPPDATA "Token"/);
+  assert.match(script, /Join-Path \$env:LOCALAPPDATA "Programs\\Token"/);
   assert.doesNotMatch(script, /Join-Path \$env:LOCALAPPDATA "luckytoken"/i);
 });

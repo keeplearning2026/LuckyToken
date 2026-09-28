@@ -1266,20 +1266,19 @@ Client Protocol 只生产这些 Pi contracts；Provider 只消费这些 Pi contr
 
 ## 6.2 Provider model data — 内置模型目录，单一权威来源
 
-> **小白理解：** CommandCode 的商品目录现在是 Token 用户数据目录里的
-> `commandcode-models.json`。Backend 每次启动只读取一次；你更新这个文件后重启
-> Backend 就生效，不需要重新构建软件。
+> **小白理解：** Windows 安装向导默认勾选“覆盖用户目录中的
+> `commandcode-models.json`”。取消勾选可保留现有目录；Backend 启动不会再次覆盖它。
 
 产品默认的唯一 CommandCode 模型数据权威是仓库跟踪的
-`packages/commandcode-model-catalog/commandcode-models.json`。安装后运行时权威是
-`dirname(config.json)/commandcode-models.json`：文件不存在时，
-`@token/commandcode-model-catalog` 从打包携带的同一 JSON 字节首次 seed；文件损坏时
-保留原文件、回退到同一 packaged JSON 的验证视图并发布 warning。代码中不再维护第二套
-TypeScript 模型表。一次 Backend 启动只加载一次并 freeze，同一 snapshot 同时注入 Private
+`packages/commandcode-model-catalog/commandcode-models.json`。Windows NSIS 安装向导
+默认勾选覆盖 `dirname(config.json)/commandcode-models.json`，也允许用户取消。
+Backend 启动只读取用户目录文件；缺失时从打包 JSON 首次 seed，文件无效时保留原文件、
+使用内置验证视图并发布 warning。代码中不再维护第二套 TypeScript 模型表。
+一次 Backend 启动只加载一次并 freeze，同一 snapshot 同时注入 Private
 与 Goat，所以两条路径不会在一次启动中看到不同 catalog。
 
 当前 tracked JSON 有 **57 个已核对模型事实**；packaged default 只是该 JSON 的解析视图，
-负责首次 seed/fallback。`supportedEndpoints` 保存 upstream capability，唯一 Pi API 由确定性规则选择：
+负责首次 seed 和无效文件的 fallback。`supportedEndpoints` 保存 upstream capability，唯一 Pi API 由确定性规则选择：
 `/messages → anthropic-messages`，含 `/responses → openai-responses`，否则
 `/chat/completions → openai-completions`。Private 仍把所有 facts 投影成自己的
 `commandcode-private` API；Goat 按 plan 再投影。两个 Provider 不共享认证、transport、
@@ -1293,14 +1292,8 @@ wire conversion 或 response lifecycle。
 - `reasoningEfforts`：官方推理档位（如 DeepSeek 仅 `high/max`、Qwen3.8-Max 仅
   `low/medium/xhigh`）；官方未标注档位时不推断任何可选档位；
 - `supportedEndpoints`：CommandCode upstream 支持的协议端点，运行时据此确定唯一 Pi `Model.api`；
-- `responsesStreamOptions`：只有暴露 `/responses` 的模型声明 `preserve` 或 `omit`，
-  决定 Provider Native 发送边界是否移除 caller 的顶层 `stream_options`。`omit` 只删除该
-  顶层字段并保留其余原始字节（嵌套同名字段、数字字面量都不改写），同时发布 bounded
-  诊断 notice；未声明等同于 `preserve`，Semantic Conversion 始终不消费该字段。该事实
-  由 `createCommandCodeModelCapabilities()` 投影成按 model id 查询的只读视图，再由
-  composition 按 Provider id 收敛成 Provider Native 的显式 capability seam：它不挂在
-  Pi `Model` 上，不进入 `compat`/`samplingParams`/`metadata`，因此任何 Model 复制、克隆
-  或字段白名单重建都不会悄悄丢失该策略；
+- Provider Native Responses 将 caller 的 `stream_options` 原样转发给上游 Provider，
+  不按模型省略；Semantic Conversion 不消费该字段；
 - `minimumPlan`：Go、GOAT、Pro 或 Max，供 Goat 选择当前订阅可用模型。
 
 目录故意不保存价格，因为价格变化快且 Token 没有 live pricing authority。Pi
@@ -2024,7 +2017,7 @@ Pi AI IR
 Go/GOAT 可见模型则使用 provider root，由 Pi Anthropic adapter 拼 `/v1/messages`。
 当前 57 个 tracked JSON facts 中，Go/GOAT 过滤后是 39 个模型。Goat Provider map
 预注册 Pi 的 `anthropic-messages`、`openai-responses` 与 `openai-completions`
-三个 transport adapter；因此未来只要更新 `commandcode-models.json`，新增任一已支持
+三个 transport adapter；因此未来只要更新用户目录的 `commandcode-models.json` 并重启，新增任一已支持
 endpoint 的 Go/GOAT 模型都不需要重新构建软件。它拥有独立 Pi credential slot，并且
 不 import 或复用 CommandCode Private 的 request builder、private protocol transport、
 JSONL assembler 或 response conversion。
@@ -2075,7 +2068,7 @@ flowchart LR
 │
 ├── commandcode-models.json
 │   owner: CommandCode catalog startup authority
-│   semantics: startup-only model facts + supportedEndpoints; edit then restart
+│   semantics: startup model facts + supportedEndpoints; installer may replace
 │
 ├── public-models.json
 │   owner: PublicModelAuthority
@@ -2117,7 +2110,7 @@ frequency、secret level 和 lifetime 不同：
 | `instance.sqlite` | Backend lifetime | 否 | `BEGIN IMMEDIATE` singleton authority；永不按文件存在与否判断 owner |
 | `control-plane.json` | Backend lifetime publication | capability 为敏感 management fact | discoverability only；不是 liveness |
 | `models.json` | 管理态 | 可能引用 credential source，但不应含明文状态投影 | Provider/model composition authority |
-| `commandcode-models.json` | 启动时配置事实 | 否 | CommandCode Private/Goat 共用 catalog；Backend 启动读取一次，修改后重启生效 |
+| `commandcode-models.json` | 启动时配置事实 | 否 | CommandCode Private/Goat 共用 catalog；NSIS 安装时默认覆盖，用户可取消 |
 | `public-models.json` | 管理态 | 否 | Public Model on/off、rename、endpoint；debounced persistence + shutdown flush |
 | Responses state snapshot | 动态协议状态 | 含会话内容 | bounded `previous_response_id` state |
 | Request Ledger / Diagnostics index + full-journey files | 动态 observation state | 仅落盘隔离进程完成脱敏的文件 | Diagnostics child-process-owned persistence |
@@ -2498,7 +2491,7 @@ flowchart LR
 | Capability cohesion | InstanceAuthority、DiscoveryPublication、Provider credential、Codex Direct Mode caller envelope、Provider JSONL state 分模块拥有 | 符合 |
 | Small contracts | Runtime 只有 `handle(Request)`；InstanceAuthority 只有 `acquire()`；DesktopBackendConnection 只有 `start()/dispose()` | 符合 |
 | Information lifecycle | request credential、Control Plane capability、Client Wire、Pi IR、Provider JSONL 都有明确死亡点；不把旧表示跨层保留 | 符合 |
-| 模型单一权威来源 | tracked `packages/commandcode-model-catalog/commandcode-models.json` 是唯一 bundled 数据权威；Backend 启动只加载一次用户侧实例并将同一 frozen snapshot 注入 Private/Goat；首次 seed/fallback 均来自同一 packaged JSON；当前 Goat 按 Go/GOAT 选择 39 个 | 符合 |
+| 模型单一权威来源 | tracked `packages/commandcode-model-catalog/commandcode-models.json` 是唯一 bundled 数据权威；NSIS 安装时默认覆盖用户目录文件、用户可取消；Backend 将一次加载的 frozen snapshot 注入 Private/Goat；当前 Goat 按 Go/GOAT 选择 39 个 | 符合 |
 | `pi-agent/` 不可变 | 当前 `0.86.1` reference tree（源码/生成物/配置/依赖）零修改；只通过 public `Models/Provider/CredentialStore` 接入；上游更新整体替换 | 符合 |
 | HTTP failure 信息边界 | Provider 在自己的 transport boundary 有界产生 neutral fact；conversion 只消费 Pi diagnostic，handler 不注入 custom fetch；native passthrough 另用窄 transport | 符合 |
 | Streaming lifecycle | Pi/CommandCode/Anthropic 三种 lifecycle 分开；EOF 不等于 success；partial tool state 不 materialize | 符合 |
@@ -2675,10 +2668,9 @@ method、request/response conversion、retry/cancel/online conformance 仍由新
 > 翻译。先让 Pi 的模型目录、名称消歧、Provider catalog 和认证清单支持多项；实际
 > 请求仍携带已经选定的那个 Pi `Model`。
 
-运行时 CommandCode models 的唯一权威来源是 Token 用户数据目录中的
-`commandcode-models.json`。增删模型或调整 `supportedEndpoints` 只需要更新该文件并
-重启 Backend；不需要重新构建软件，也不需要在通用 `models.json` 复制条目。仓库内
-tracked packaged `commandcode-models.json` 只用于首次 seed/fallback。CommandCode wire conversion 应继续
+运行时 CommandCode models 的权威来源是用户目录中的
+`commandcode-models.json`。增删模型或调整 `supportedEndpoints` 可更新该文件并重启；
+Windows 安装时默认以打包版本覆盖，用户可取消。CommandCode wire conversion 应继续
 只消费 invocation 中已 resolved 的 Pi `Model`。
 
 ## 12.4 更新 Pi

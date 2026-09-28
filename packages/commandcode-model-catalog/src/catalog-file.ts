@@ -5,12 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import {
   freezeCommandCodeModelFacts,
-  isCommandCodeResponsesStreamOptions,
   isCommandCodeReasoningEffort,
   type CommandCodeModelFacts,
   type CommandCodePlan,
   type CommandCodeReasoningEffort,
-  type CommandCodeResponsesStreamOptions,
   type CommandCodeSupportedEndpoint,
   type CommandCodeThinkingLevelMap,
 } from "./models.js";
@@ -132,16 +130,6 @@ function parseSupportedEndpoints(
   return endpoints;
 }
 
-function parseResponsesStreamOptions(
-  value: unknown,
-  description: string,
-): CommandCodeResponsesStreamOptions {
-  if (!isCommandCodeResponsesStreamOptions(value)) {
-    throw new Error(`${description} must be preserve or omit`);
-  }
-  return value;
-}
-
 const THINKING_LEVEL_KEYS = Object.freeze([
   "off",
   "minimal",
@@ -201,7 +189,6 @@ function parseModel(value: unknown, index: number): CommandCodeModelFacts {
       "name",
       "description",
       "supportedEndpoints",
-      "responsesStreamOptions",
       "input",
       "reasoning",
       "thinkingLevelMap",
@@ -244,14 +231,6 @@ function parseModel(value: unknown, index: number): CommandCodeModelFacts {
       record.supportedEndpoints,
       `${description}.supportedEndpoints`,
     ),
-    ...(record.responsesStreamOptions === undefined
-      ? {}
-      : {
-          responsesStreamOptions: parseResponsesStreamOptions(
-            record.responsesStreamOptions,
-            `${description}.responsesStreamOptions`,
-          ),
-        }),
     input: parseInput(record.input, `${description}.input`),
     reasoning: record.reasoning,
     ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),

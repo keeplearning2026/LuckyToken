@@ -7,9 +7,9 @@ param(
 $ErrorActionPreference = "Stop"
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
-$installRoot = Join-Path $env:LOCALAPPDATA "Token"
-$installedExe = Join-Path $installRoot "app-$Version\Token.exe"
-$updateExe = Join-Path $installRoot "Update.exe"
+$installRoot = Join-Path $env:LOCALAPPDATA "Programs\Token"
+$installedExe = Join-Path $installRoot "Token.exe"
+$uninstallExe = Join-Path $installRoot "Uninstall Token.exe"
 $userState = Join-Path $env:USERPROFILE ".Token"
 $descriptorPath = Join-Path $userState "control-plane.json"
 $evidence = [ordered]@{
@@ -72,19 +72,21 @@ New-Item -ItemType Directory -Path $testCodexHome -Force | Out-Null
 $env:CODEX_HOME = $testCodexHome
 
 try {
-  $setupProcess = Start-Process -FilePath $resolvedInstaller -ArgumentList @("--silent") -PassThru -WindowStyle Hidden
-  Wait-ReleaseProcess -Process $setupProcess -TimeoutMilliseconds 300000 -Label "Squirrel installer"
+  $setupProcess = Start-Process -FilePath $resolvedInstaller -ArgumentList @("/S") -PassThru -WindowStyle Hidden
+  Wait-ReleaseProcess -Process $setupProcess -TimeoutMilliseconds 300000 -Label "NSIS installer"
   Add-Check -Name "clean-install" -Passed $true -Detail "exit 0"
 
   Add-Check -Name "installed-executable" -Passed (Test-Path -LiteralPath $installedExe -PathType Leaf) -Detail $installedExe
   Add-Check -Name "bundled-node" -Passed (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $installedExe) "resources\backend\node\node.exe") -PathType Leaf)
   Add-Check -Name "bundled-backend" -Passed (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $installedExe) "resources\backend\dist\cli.js") -PathType Leaf)
+  Add-Check -Name "installer-default-catalog-overwrite" -Passed (Test-Path -LiteralPath (Join-Path $userState "commandcode-models.json") -PathType Leaf)
 
   if ($RequireSignature) {
     $installedSignature = Get-AuthenticodeSignature -LiteralPath $installedExe
     Add-Check -Name "installed-executable-signature" -Passed ($installedSignature.Status -eq "Valid") -Detail $installedSignature.Status
   }
 
+  Start-Process -FilePath $installedExe -WindowStyle Hidden | Out-Null
   Push-Location $repositoryRoot
   try {
     & node scripts/certify-running-install.mjs verify $descriptorPath
@@ -92,14 +94,14 @@ try {
   } finally {
     Pop-Location
   }
-  Add-Check -Name "installer-automatic-first-run-provider-catalog" -Passed ($automaticFirstRunExit -eq 0) -Detail "exit $automaticFirstRunExit"
+  Add-Check -Name "installer-first-run-provider-catalog" -Passed ($automaticFirstRunExit -eq 0) -Detail "exit $automaticFirstRunExit"
   Add-Check -Name "first-run-creates-user-state" -Passed (Test-Path -LiteralPath $userState -PathType Container) -Detail $userState
 
   $installedDesktopProcesses = @(
     Get-CimInstance Win32_Process |
       Where-Object { $_.ExecutablePath -eq $installedExe }
   )
-  Add-Check -Name "automatic-first-run-desktop-process" -Passed ($installedDesktopProcesses.Count -gt 0) -Detail $installedExe
+  Add-Check -Name "first-run-desktop-process" -Passed ($installedDesktopProcesses.Count -gt 0) -Detail $installedExe
   $installedDesktopProcesses |
     Sort-Object ProcessId -Descending |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -111,7 +113,7 @@ try {
   } finally {
     Pop-Location
   }
-  Add-Check -Name "automatic-first-run-cleanup" -Passed ($automaticFirstRunQuitExit -eq 0) -Detail "exit $automaticFirstRunQuitExit"
+  Add-Check -Name "first-run-cleanup" -Passed ($automaticFirstRunQuitExit -eq 0) -Detail "exit $automaticFirstRunQuitExit"
 
   $previousSelectedExecutable = $env:TOKEN_PACKAGED_EXECUTABLE
   try {
@@ -133,9 +135,9 @@ try {
   Add-Check -Name "installed-blank-first-run-provider-catalog" -Passed ($firstRunExit -eq 0) -Detail "node --test exit $firstRunExit"
 } finally {
   try {
-    if (Test-Path -LiteralPath $updateExe -PathType Leaf) {
-      $uninstallProcess = Start-Process -FilePath $updateExe -ArgumentList @("--uninstall", "-s") -PassThru -WindowStyle Hidden
-      Wait-ReleaseProcess -Process $uninstallProcess -TimeoutMilliseconds 120000 -Label "Squirrel uninstaller"
+    if (Test-Path -LiteralPath $uninstallExe -PathType Leaf) {
+      $uninstallProcess = Start-Process -FilePath $uninstallExe -ArgumentList @("/S") -PassThru -WindowStyle Hidden
+      Wait-ReleaseProcess -Process $uninstallProcess -TimeoutMilliseconds 120000 -Label "NSIS uninstaller"
       for ($attempt = 0; $attempt -lt 100 -and (Test-Path -LiteralPath $installedExe -PathType Leaf); $attempt += 1) {
         Start-Sleep -Milliseconds 100
       }

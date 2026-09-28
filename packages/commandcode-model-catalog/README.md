@@ -6,8 +6,10 @@ CommandCode model capability facts shared by Token's CommandCode Pi Providers.
 The tracked JSON file is the only bundled model-data authority. The exported
 default catalog and compatibility facts are validated frozen views of that same
 file; there is no second TypeScript model table. At runtime the user-side
-`dirname(config.json)/commandcode-models.json` is seeded from this file and is
-loaded once per Backend lifetime. The current authority contains 57 reviewed
+`dirname(config.json)/commandcode-models.json` is loaded once per Backend
+startup. The Windows installer offers to replace it with this file and selects
+that option by default. A missing file is seeded from the package. The current
+authority contains 57 reviewed
 callable models from the `command-code@1.32.1` source table after removing
 retired entries.
 
@@ -24,11 +26,5 @@ required `maxTokens` value of `64_000`. Reasoning without published effort
 levels projects every selectable Pi thinking level to `null` so callers cannot
 invent upstream support.
 
-Provider Native wire capabilities that Pi's `Model` contract cannot express
-project through `createCommandCodeModelCapabilities()` as one read-only view
-keyed by model id; they never ride on the Pi `Model`, `compat`,
-`samplingParams`, or any provider payload. `responsesStreamOptions` is such a
-fact: `omit` lets Provider Native drop the caller's top-level Responses
-`stream_options` at its own send boundary, while `preserve` (and an undeclared
-value) keeps the caller's bytes. Provider scoping stays with the caller that
-knows which Provider serves this catalog.
+Provider Native Responses forwards the caller's `stream_options` to the
+upstream Provider. The model catalog contains no per-model policy for this field.

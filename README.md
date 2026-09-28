@@ -36,8 +36,10 @@ npm run build
 
 ## Windows release
 
-Windows has one release authority: a per-user Squirrel.Windows
-`Token-Setup.exe`. The portable ZIP is not a Windows release artifact.
+Windows has one release authority: a per-user NSIS `Token-Setup.exe`.
+The assisted installer asks whether to replace the user's
+`commandcode-models.json`; that option is selected by default. The portable
+ZIP is not a Windows release artifact.
 
 Build and fully certify an unsigned local candidate:
 
@@ -47,7 +49,7 @@ npm run release:candidate
 
 This command runs the source gates, builds once, binds every packaged E2E to
 that exact EXE, verifies an isolated blank first run shows the built-in
-Provider catalog, and then writes the installer, update files, SHA-256 values,
+Provider catalog, and then writes the installer, SHA-256 values,
 build identity, and certification manifest under
 `artifacts/release-candidates/`.
 
@@ -63,13 +65,14 @@ npm run release:windows
 
 The official command runs in a blank Windows user and fails closed unless the
 installer and installed EXE have valid signatures and the complete real
-install/automatic-first-run/uninstall certification succeeds.
+install/first-run/uninstall certification succeeds.
 See `doc/release/WindowsReleaseProcess.md` for the release contract.
 
 Installing a produced release is per-user: run `Token-Setup.exe` from
-`artifacts/releases/<version>-<commit>/`. Squirrel installs Token for the
-current user without an elevation step, and the desktop starts its bundled
-Backend on first run.
+`artifacts/releases/<version>-<commit>/`. NSIS installs Token for the
+current user without an elevation step. The desktop starts its bundled Backend
+when launched. Uninstall an older Squirrel installation before running NSIS;
+the installer preserves the user's `.Token` directory.
 
 The integration suite uses an injected fixture `fetch` implementation. It does
 not call the real CommandCode service or read `CommandcodeAPIKey.txt`.
@@ -312,11 +315,12 @@ automatically through the standard Pi Provider contract:
 Users must **not** add either bundled package to `providerPackages`; that key is
 reserved for explicit external/user Provider Packages. No `models.json` entry
 is required. The product-default CommandCode model-data authority is the tracked
-`packages/commandcode-model-catalog/commandcode-models.json`. The installed
-runtime authority is `dirname(config.json)/commandcode-models.json`; a missing
-file is seeded byte-for-byte from the tracked packaged JSON, while an invalid
-file is preserved and the Backend falls back to that same packaged JSON with a
-warning. There is no second TypeScript model table. The Providers share the
+`packages/commandcode-model-catalog/commandcode-models.json`. The Windows
+installer offers to replace `dirname(config.json)/commandcode-models.json`
+and selects that option by default. The Backend loads the user-side file once
+per startup, seeds a missing file from the packaged catalog, and falls back to
+the packaged view with a warning when an existing file is invalid.
+There is no second TypeScript model table. The Providers share the
 same frozen startup snapshot but own independent authentication, transport, and
 response lifecycles. The current JSON authority contains 57 reviewed facts;
 Private projects all 57, while Goat exposes the 39 entries whose minimum plan

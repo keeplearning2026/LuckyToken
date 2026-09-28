@@ -1,6 +1,6 @@
 {
   "name": "@token/desktop-shell",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "main": ".vite/build/main.js",
   "scripts": {
@@ -12,7 +12,7 @@
     "build": "npm run assemble:backend && npm run clean:electron && electron-forge package",
     "package": "npm run assemble:backend && npm run clean:electron && electron-forge package",
     "make": "npm run assemble:backend && npm run make:prepared",
-    "make:prepared": "npm run clean:electron && electron-forge make",
+    "make:prepared": "npm run clean:electron && node scripts/make-windows-nsis.mjs",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx,mjs}\"",
     "test": "node ../../scripts/run-with-codex-test-sandbox.mjs -- npm run test:inner",
     "test:inner": "vitest run --config vitest.config.mjs",
@@ -25,8 +25,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@token/application-control-plane": "1.1.0",
-    "electron-squirrel-startup": "1.0.1",
+    "@token/application-control-plane": "1.1.1",
     "lucide-react": "^1.33.0",
     "react": "19.2.7",
     "react-dom": "19.2.7"
@@ -34,14 +33,13 @@
   "devDependencies": {
     "@electron-forge/cli": "^7.11.2",
     "@electron-forge/maker-dmg": "^7.11.2",
-    "@electron-forge/maker-squirrel": "7.11.2",
     "@electron-forge/maker-zip": "^7.11.2",
     "@electron-forge/plugin-vite": "^7.11.2",
-    "@types/electron-squirrel-startup": "1.0.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
     "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
     "jsdom": "^26.1.0",
     "playwright": "^1.62.1",
     "vite": "8.1.5"

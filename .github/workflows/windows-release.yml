@@ -51,7 +51,7 @@ jobs:
           TOKEN_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: npm run release:windows
 
-      - name: Upload the certified Squirrel release set
+      - name: Upload the certified NSIS installer
         uses: actions/upload-artifact@v7
         with:
           name: token-windows-release

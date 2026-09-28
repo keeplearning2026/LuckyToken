@@ -17,12 +17,6 @@ interface ForgeConfiguration {
     readonly icon: string;
     readonly extraResource: readonly string[];
   };
-  readonly makers: ReadonlyArray<{
-    readonly name: string;
-    readonly config: {
-      readonly setupIcon?: string;
-    };
-  }>;
 }
 
 function pngMetadata(path: string): {
@@ -225,15 +219,15 @@ describe("Electron desktop icons", () => {
     ).toEqual(macPngs.get("ic08"));
   });
 
-  it("configures the packaged app, runtime resources, and Squirrel installer", () => {
+  it("configures the packaged app, runtime resources, and NSIS installer icon", () => {
     const config = require("../forge.config.cjs") as ForgeConfiguration;
     expect(config.packagerConfig.icon).toBe(join(assetRoot, "icon"));
     expect(config.packagerConfig.extraResource).toEqual(
       ["backend", join(assetRoot, "icon.png")],
     );
-    expect(
-      config.makers.find((maker) => maker.name === "@electron-forge/maker-squirrel")
-        ?.config.setupIcon,
-    ).toBe(join(assetRoot, "icon.ico"));
+    const installer = require("../electron-builder.config.cjs") as {
+      readonly win: { readonly icon: string };
+    };
+    expect(installer.win.icon).toBe(join(assetRoot, "icon.ico"));
   });
 });

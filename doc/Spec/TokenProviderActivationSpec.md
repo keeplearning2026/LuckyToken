@@ -579,8 +579,9 @@ Both consume the same frozen startup catalog loaded from Token-owned
 `commandcode-models.json` by `@token/commandcode-model-catalog`. They do not
 share Provider credentials, transport, wire conversion, or response lifecycle.
 The tracked package `commandcode-models.json` is the only bundled model-data
-authority; it currently has 57 reviewed facts and is used for first-run
-seed/fallback. Private projects the full loaded catalog through its private API;
+authority; it currently has 57 reviewed facts. The Windows installer offers
+to replace the user-side catalog and selects that option by default; Backend
+startup loads the resulting catalog. Private projects the full loaded catalog through its private API;
 Goat selects loaded facts whose minimum plan is Go or GOAT (currently 39) and
 derives each Pi API from `supportedEndpoints`.
 

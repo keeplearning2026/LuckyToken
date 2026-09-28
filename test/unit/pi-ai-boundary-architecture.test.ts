@@ -103,7 +103,7 @@ describe("Pi AI semantic boundary architecture", () => {
   });
 
   it("composes compatibility once outside Profile retry and raw Pi execution", async () => {
-    const source = await readFile("src/composition.ts", "utf8");
+    const source = (await readFile("src/composition.ts", "utf8")).replace(/\r\n/gu, "\n");
     expect(source).toContain(
       "execute: createExecutionOperation(),",
     );

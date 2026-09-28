@@ -129,62 +129,11 @@ describe("CommandCode model catalog file authority", () => {
     ).toThrow(/\.off must be null/u);
   });
 
-  it("parses the declared Responses stream_options disposition", () => {
-    const catalog = parseCommandCodeModelCatalogText(
-      JSON.stringify({
-        schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
-        models: [
-          {
-            ...model("responses-preserve", ["/responses"]),
-            responsesStreamOptions: "preserve",
-          },
-          {
-            ...model("responses-omit", ["/chat/completions", "/responses"]),
-            responsesStreamOptions: "omit",
-          },
-          model("chat-only", ["/chat/completions"]),
-        ],
-      }),
-      "fixture.json",
-    );
-
-    expect(
-      catalog.models.map((entry) => entry.responsesStreamOptions),
-    ).toEqual(["preserve", "omit", undefined]);
-  });
-
-  it("rejects an unsupported Responses stream_options disposition", () => {
-    expect(() =>
-      parseCommandCodeModelCatalogText(
-        JSON.stringify({
-          schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
-          models: [
-            {
-              ...model("responses-invalid", ["/responses"]),
-              responsesStreamOptions: "strip",
-            },
-          ],
-        }),
-        "fixture.json",
-      ),
-    ).toThrow(/responsesStreamOptions must be preserve or omit/u);
-  });
-
-  it("rejects a Responses stream_options disposition without the Responses endpoint", () => {
-    expect(() =>
-      parseCommandCodeModelCatalogText(
-        JSON.stringify({
-          schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
-          models: [
-            {
-              ...model("chat-only-declaration", ["/chat/completions"]),
-              responsesStreamOptions: "omit",
-            },
-          ],
-        }),
-        "fixture.json",
-      ),
-    ).toThrow(/responsesStreamOptions without \/responses/u);
+  it("rejects the removed Responses stream policy field", () => {
+    expect(() => parseCommandCodeModelCatalogText(JSON.stringify({
+      schema: COMMANDCODE_MODEL_CATALOG_SCHEMA,
+      models: [{ ...model("old", ["/responses"]), responsesStreamOptions: "omit" }],
+    }))).toThrow(/unknown field: responsesStreamOptions/u);
   });
 
   it("seeds a missing user catalog and then reads user edits on the next startup", async () => {

@@ -2,11 +2,13 @@
 
 ## Release authority
 
-The Windows release artifact is the per-user Squirrel.Windows
-`Token-Setup.exe`. `RELEASES` and the full `.nupkg` belong to the same
-update set. A portable ZIP is not published for Windows.
+The Windows release artifact is the per-user assisted NSIS
+`Token-Setup.exe`. The installer asks whether to replace the user's
+`commandcode-models.json` and selects replacement by default. A portable ZIP
+is not published for Windows. Users with the older Squirrel install uninstall
+it first; the user `.Token` directory is preserved.
 
-One Forge Make invocation owns one candidate. Tests receive the absolute path
+One Forge Package and NSIS build invocation owns one candidate. Tests receive the absolute path
 of that invocation's packaged `Token.exe`; no release test may select a
 candidate by modification time. The tested Setup.exe is copied to the release
 directory without rebuilding or recompressing it.
@@ -36,22 +38,21 @@ directory without rebuilding or recompressing it.
    process-owning integration tests are not invalidated by Windows resource
    starvation.
 2. Build workspace packages and assemble the fixed Backend runtime.
-3. Run Electron Forge Make exactly once.
-4. Require exactly one packaged EXE, one Setup.exe, one full `.nupkg`, and one
-   `RELEASES` file from that output directory.
+3. Run Electron Forge Package and electron-builder NSIS once.
+4. Require exactly one packaged EXE and one Setup.exe from that output directory.
 5. Verify the packaged layout and distribution packages.
 6. Run packaged Electron journeys against the selected absolute EXE, including
    a genuinely blank user profile. The Data Plane must run, recovery must be
    absent, and Anthropic plus CommandCode Private must appear through both the
    Control Plane catalog and the Providers UI.
 7. In official or explicitly opted-in machine certification, silently install
-   the selected Setup.exe in a blank Windows user, verify Squirrel's automatic
-   first launch starts the Backend and Provider catalog, run the UI test against
+   the selected Setup.exe in a blank Windows user, verify the default catalog
+   overwrite, launch the app and verify its Backend and Provider catalog, run the UI test against
    the installed EXE, stop all installed processes, uninstall it, and prove
    user state is preserved.
 8. For an official release, require valid Authenticode signatures on the
    installer and installed EXE.
-9. Copy the exact Squirrel update set and write `release-manifest.json` with
+9. Copy the exact NSIS installer and write `release-manifest.json` with
    commit, dirty state, Backend build identity, hashes, sizes, certification
    results, and promotability.
 

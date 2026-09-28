@@ -10,8 +10,6 @@ import { createOpenAIResponsesHandler } from "../../src/protocols/openai-respons
 import type { PublicModelSource } from "../../src/public-model-seam.js";
 import {
   createProviderNativeResponses,
-  type ProviderNativeModelCapabilities,
-  type ProviderNativeResponsesStreamOptions,
   supportsProviderNativeResponses,
 } from "../../src/provider-native-responses/index.js";
 import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
@@ -32,15 +30,6 @@ function responsesModel(
     contextWindow: 200_000,
     maxTokens: 64_000,
   };
-}
-
-/** The explicit Token-owned capability seam composition supplies to the lane. */
-function modelCapabilities(
-  responsesStreamOptions: ProviderNativeResponsesStreamOptions,
-): ProviderNativeModelCapabilities {
-  return Object.freeze({
-    responsesStreamOptions: () => responsesStreamOptions,
-  });
 }
 
 function request(
@@ -70,7 +59,6 @@ function dependencies(
   fetch: FetchFunction,
   diagnostics?: RequestJourneyObservationAuthority,
   publicModels?: PublicModelSource,
-  modelCapabilitiesOption?: ProviderNativeModelCapabilities,
 ): HttpBoundaryDependencies {
   const handler = createOpenAIResponsesHandler({
     models: source,
@@ -78,9 +66,6 @@ function dependencies(
       models: source,
       bindings: ambientProfileBindings,
       fetch,
-      ...(modelCapabilitiesOption === undefined
-        ? {}
-        : { modelCapabilities: modelCapabilitiesOption }),
     }),
     stateFile: "provider-native-contract-state.json",
     maxRequestBytes: 1_000_000,
@@ -640,66 +625,7 @@ describe("Provider Native Responses contract", () => {
     });
   });
 
-  it("omits only the declared top-level stream_options and records the bounded notice", async () => {
-    const model = responsesModel();
-    const recorded = recordingJourney();
-    const upstream: Request[] = [];
-    const fetch: FetchFunction = async (input, init) => {
-      upstream.push(new Request(input, init));
-      return new Response(
-        JSON.stringify({
-          id: "resp_stream_options",
-          object: "response",
-          status: "completed",
-          model: "gpt-5",
-          output: [],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    };
-
-    const response = await handleHttpRequest(
-      dependencies(
-        models(model),
-        fetch,
-        recorded.authority,
-        undefined,
-        modelCapabilities("omit"),
-      ),
-      request(
-        JSON.stringify({
-          model: "openai/gpt-5",
-          input: "hi",
-          stream_options: { include_usage: true },
-          nested: { stream_options: { keep: true } },
-        }),
-      ),
-    );
-
-    expect(response.status).toBe(200);
-    await expect(upstream[0]?.text()).resolves.toBe(
-      JSON.stringify({
-        model: "gpt-5",
-        input: "hi",
-        nested: { stream_options: { keep: true } },
-      }),
-    );
-    expect(recorded.observations).toContainEqual(
-      expect.objectContaining({
-        kind: "conversion_notice_observed",
-        code: "provider_native_stream_options_omitted",
-        severity: "warning",
-        location: expect.objectContaining({
-          phase: "lane_request_preparation",
-          lane: "provider_native",
-          step: "project_native_body",
-          attempt: 1,
-        }),
-      }),
-    );
-  });
-
-  it("forwards the top-level stream_options unchanged when the model does not omit it", async () => {
+  it("always forwards the top-level stream_options unchanged", async () => {
     const model = responsesModel();
     const recorded = recordingJourney();
     const upstream: Request[] = [];
@@ -718,13 +644,7 @@ describe("Provider Native Responses contract", () => {
     };
 
     const response = await handleHttpRequest(
-      dependencies(
-        models(model),
-        fetch,
-        recorded.authority,
-        undefined,
-        modelCapabilities("preserve"),
-      ),
+      dependencies(models(model), fetch, recorded.authority),
       request(
         JSON.stringify({
           model: "openai/gpt-5",

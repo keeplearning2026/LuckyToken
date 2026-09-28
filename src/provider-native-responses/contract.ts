@@ -4,28 +4,6 @@ import type { CredentialActivitySink } from "../credentials/activity.js";
 
 export type ProviderResponsesOperation = "responses" | "compact";
 
-/** Token-owned Provider Native disposition for one model's top-level Responses
- *  `stream_options` property. */
-export type ProviderNativeResponsesStreamOptions = "preserve" | "omit";
-
-/**
- * Explicit Token-owned model capability seam for the Provider Native Responses
- * lane. Composition supplies it from the model-data authority by identity, so
- * the fact never rides on the Pi `Model`, `Context`, options, or any provider
- * payload, and no `Model` copy, clone, or rebuild can silently drop it.
- */
-export interface ProviderNativeModelCapabilities {
-  /**
-   * Declared disposition for one resolved Provider/model identity. An
-   * undeclared or unknown model returns `undefined`, which preserves the
-   * caller's own request bytes.
-   */
-  responsesStreamOptions(
-    providerId: string,
-    modelId: string,
-  ): ProviderNativeResponsesStreamOptions | undefined;
-}
-
 export class ProviderResponsesNetworkError extends Error {
   constructor(cause: unknown) {
     super("Provider native fetch failed", { cause });
@@ -85,5 +63,4 @@ export interface CreateProviderResponsesSenderOptions {
   readonly auth: AuthResult;
   readonly fetch: FetchFunction;
   readonly sessionId?: string;
-  readonly modelCapabilities?: ProviderNativeModelCapabilities;
 }

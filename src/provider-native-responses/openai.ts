@@ -6,7 +6,6 @@ import {
   applyHeaders,
   executeProviderFetch,
   hasHeader,
-  removeTopLevelJsonProperty,
 } from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
@@ -24,7 +23,6 @@ import {
   observeProviderResponses,
   observeProviderResponsesArtifact,
   observeProviderResponsesBodyProjection,
-  observeProviderResponsesStreamOptionsOmitted,
 } from "./observation.js";
 import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
 
@@ -131,30 +129,6 @@ export function createOpenAIResponsesSender(
           rewritten,
           projectionLocation,
         );
-        if (
-          operation === "responses" &&
-          options.modelCapabilities?.responsesStreamOptions(
-            model.provider,
-            model.id,
-          ) === "omit"
-        ) {
-          const omitted = removeTopLevelJsonProperty(
-            rewritten.text,
-            "stream_options",
-          );
-          if (omitted.removed) {
-            rewritten = {
-              parsed: omitted.parsed,
-              text: omitted.text,
-              outcome: rewritten.outcome,
-              deferredMessages: rewritten.deferredMessages,
-            };
-            observeProviderResponsesStreamOptionsOmitted(
-              observation?.journey,
-              projectionLocation,
-            );
-          }
-        }
         completeProviderResponsesStep(
           observation?.journey,
           projectionStep,
