@@ -1,4 +1,4 @@
-!include "nsDialogs.nsh"
+﻿!include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 
 Var CatalogOverwrite

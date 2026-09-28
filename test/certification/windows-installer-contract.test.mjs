@@ -20,7 +20,9 @@ test("Windows release make produces one assisted NSIS Setup.exe installer", asyn
   assert.equal(builder.nsis.oneClick, false);
   assert.equal(builder.nsis.perMachine, false);
   assert.equal(builder.artifactName, "Token-Setup.exe");
-  const installerChoice = await readFile(builder.nsis.include, "utf8");
+  const installerChoiceBytes = await readFile(builder.nsis.include);
+  assert.deepEqual([...installerChoiceBytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  const installerChoice = installerChoiceBytes.toString("utf8");
   assert.match(installerChoice, /\$\{NSD_Check\} \$CatalogCheckbox/u);
   assert.match(installerChoice, /CopyFiles \/SILENT/u);
 });
