@@ -13,6 +13,8 @@ OpenCodeAPIkey.txt
 /installer/
 .temp/
 temp/
+# Integration-test byproduct: a scratch Pi directory written at the repo root.
+.unused-in-memory-pi/
 .task/
 reference/
 onlinetest/*/.runs/
