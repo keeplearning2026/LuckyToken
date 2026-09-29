@@ -24,6 +24,7 @@ describe("authoritative registered settings catalog", () => {
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
       "application.quitDrainTimeoutMs",
+      "providerUsage.refreshIntervalMinutes",
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
@@ -63,6 +64,17 @@ describe("authoritative registered settings catalog", () => {
     expect(registry.validate("application.quitDrainTimeoutMs", 750)).toMatchObject({
       valid: true,
     });
+
+    expect(byKey.get("providerUsage.refreshIntervalMinutes")).toMatchObject({
+      type: "number",
+      default: 15,
+      validation: { type: "integer", minimum: 1, maximum: 1440 },
+      applyMode: "hot-apply",
+      value: 15,
+    });
+    expect(registry.validate("providerUsage.refreshIntervalMinutes", 1)).toEqual({ valid: true });
+    expect(registry.validate("providerUsage.refreshIntervalMinutes", 0)).toMatchObject({ valid: false });
+    expect(registry.validate("providerUsage.refreshIntervalMinutes", 1441)).toMatchObject({ valid: false });
 
     const fullJourneyCapture = byKey.get(
       "diagnostics.fullJourneyCapture.enabled",

@@ -158,6 +158,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
       "application.quitDrainTimeoutMs",
+      "providerUsage.refreshIntervalMinutes",
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",

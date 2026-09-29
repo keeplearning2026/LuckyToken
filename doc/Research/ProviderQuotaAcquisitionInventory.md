@@ -246,7 +246,7 @@ The first implementation should therefore distinguish:
 **Conditions**
 
 - Bearer API key only for the Token-bundled Goat Provider.
-- Canonical host must be `https://api.commandcode.ai`; the Provider's request base URL is `/provider`, but the quota endpoints are the `/alpha/...` routes on the same host.
+- Canonical host must be `https://api.commandcode.ai`; bundled Anthropic models use `/provider`, while bundled OpenAI models use `/provider/v1`. The quota endpoints are the `/alpha/...` routes on the same host.
 - The key must be authorized for `whoami`, `billing/credits`, `billing/subscriptions`, and `usage/summary`.
 - Personal accounts may have no `org.id`; the calls still work without `orgId`.
 
@@ -614,7 +614,7 @@ Authorization: Bearer <OpenRouter API key>
 
 - The upstream key must have a positive per-key spending cap.
 - A successful response with no cap is authoritative and must drop an old capped row.
-- Canonical host must be `https://openrouter.ai/api/v1`.
+- Canonical host must be `https://openrouter.ai`; Pi's OpenAI models use `/api/v1` and Anthropic models use `/api`. The quota endpoint stays `/api/v1/key`.
 
 **Our credentials**
 
@@ -658,7 +658,7 @@ Authorization: Bearer <OpenCode API key>
 **Conditions**
 
 - API key only.
-- Canonical host must be `https://opencode.ai/zen/go/v1`.
+- Canonical host must be `https://opencode.ai`; Pi's OpenAI models use `/zen/go/v1` and Anthropic models use `/zen/go`. The usage endpoint stays `/zen/go/v1/usage`.
 - The response must contain a `usage` object.
 
 **Our credentials**

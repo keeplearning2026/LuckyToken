@@ -1,4 +1,5 @@
 import type { AuthResult, FetchFunction } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -20,6 +21,7 @@ import { createOpenRouterUsageProbe } from "../../src/provider-usage/probes/open
 import { createXaiUsageProbe } from "../../src/provider-usage/probes/xai.js";
 import { createZaiUsageProbe } from "../../src/provider-usage/probes/zai.js";
 import { createZaiCodingCnUsageProbe } from "../../src/provider-usage/probes/zai-coding-cn.js";
+import { createBuiltInProviderUsageProbes } from "../../src/provider-usage/registry.js";
 import { PROVIDER_USAGE_RESPONSE_MAX_BYTES } from "../../src/provider-usage/wire.js";
 
 const API_KEY_AUTH: AuthResult = Object.freeze({
@@ -209,6 +211,29 @@ function probeFixtures(fetch: FetchFunction): readonly {
 }
 
 describe("Provider Usage probes", () => {
+  it("accepts every canonical model destination served by supported Pi built-ins", () => {
+    const fetch: FetchFunction = async () => { throw new Error("no network expected"); };
+    const probes = new Map(createBuiltInProviderUsageProbes(fetch).map((probe) => [probe.providerId, probe]));
+    const oauthProviders = new Set(["anthropic", "xai", "openai-codex"]);
+    for (const provider of builtinProviders()) {
+      const probe = probes.get(provider.id);
+      if (probe === undefined) continue;
+      for (const baseUrl of new Set(provider.getModels().map((model) => model.baseUrl))) {
+        expect(
+          probe.eligibility({
+            providerId: provider.id,
+            effectiveBaseUrl: baseUrl,
+            binding: {
+              kind: "managed",
+              authType: oauthProviders.has(provider.id) ? "oauth" : "api_key",
+            },
+          }),
+          `${provider.id}: ${baseUrl}`,
+        ).toEqual({ state: "eligible" });
+      }
+    }
+  });
+
   it("keeps CommandCode Goat and Private identities/destinations isolated", async () => {
     const transport = createFetch((url) => {
       if (url.endsWith("/alpha/whoami")) return json({ org: { id: "org-a" } });
@@ -299,6 +324,28 @@ describe("Provider Usage probes", () => {
         ],
       },
     });
+  });
+
+  it("does not publish empty facts from malformed Goat, Private, or OpenCode responses", async () => {
+    const transport = createFetch((url) =>
+      json(
+        url.endsWith("/alpha/whoami")
+          ? {}
+          : url.includes("opencode.ai")
+            ? { usage: {} }
+            : { credits: {}, windowLimits: {} },
+      ),
+    );
+    for (const probe of [
+      createCommandCodeGoatUsageProbe(transport.fetch),
+      createCommandCodePrivateUsageProbe(transport.fetch),
+      createOpenCodeGoUsageProbe(transport.fetch),
+    ]) {
+      expect(await acquire(probe), probe.providerId).toEqual({
+        state: "unavailable",
+        reason: "schema",
+      });
+    }
   });
 
   it("normalizes Kimi Code windows and total credits", async () => {

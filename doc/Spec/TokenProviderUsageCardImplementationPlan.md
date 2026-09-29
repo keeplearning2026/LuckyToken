@@ -1,6 +1,6 @@
-# Token Provider Usage Card Implementation Plan v0.5
+# Token Provider Usage Card Implementation Plan v0.6
 
-**Status:** IMPLEMENTED — DESTINATION / PASSIVE-RACE HARDENED
+**Status:** IMPLEMENTED — CANONICAL DESTINATIONS AND CONFIGURABLE AUTOMATIC REFRESH
 
 **Date:** 2026-09-29
 
@@ -38,6 +38,12 @@ Self-review v0.5 validation:
 - Desktop Vitest: 21 files / 127 tests passed;
 - targeted ESLint on all v0.5 touched files — passed;
 - full repository lint is currently blocked only by unrelated concurrent edits in `responses-native-provider-pi-parity.test.ts`.
+
+Destination correction (2026-09-29): The bundled Goat Provider serves Anthropic models at `/provider` and OpenAI models at `/provider/v1`. Pi's OpenCode Go and OpenRouter built-ins also serve models through two canonical paths each. Active usage checks every served model destination against its own probe's accepted paths and keeps the complete destination set in the cache/in-flight identity. A non-canonical member still rejects refresh before auth. Passive publication remains restricted to one unambiguous served destination. The focused Provider Usage suite passed 78/78 tests, desktop Provider-card tests passed 32/32, and root/Desktop typecheck and targeted ESLint passed.
+
+Automatic refresh amendment (2026-09-29): The v0.5 references below to “first release,” explicit-only refresh, and no background refresh describe the historical first release. The current application adds a Backend-owned automatic refresh timer for eligible Providers, defaulting to 15 minutes. `providerUsage.refreshIntervalMinutes` is a hot-applied integer setting from 1 to 1440 minutes in General settings. The timer starts after Backend startup, waits one full interval before the first cycle, limits the cycle to three concurrent Provider refreshes, skips unsupported and passive-only Providers, and stops on Backend shutdown. The Providers page reads Backend cache every 30 seconds while mounted, without causing an upstream quota request. Manual per-card refresh remains available. Goat's existing card metrics and labels are unchanged. Empty or malformed Goat, Private, and OpenCode Go quota payloads are unavailable/schema rather than an authoritative empty observation, retaining valid same-binding last-good data.
+
+v0.6 validation: focused root tests 73/73, Desktop tests 129/129, certification tests 74/74, root/Desktop typecheck, targeted ESLint, and Windows `npm run build` succeeded with version 1.3.2. The full release Vitest run had two CLI process startup timeouts under parallel load; the settings contract failure it also exposed was corrected and its focused test passed. Full repository lint remains blocked by three pre-existing unused-variable errors in `responses-native-provider-pi-parity.test.ts`.
 
 ---
 
@@ -620,12 +626,12 @@ First release uses one Backend-memory **current slot per Provider**:
 ```ts
 providerId -> {
   bindingIdentity,
-  effectiveBaseUrl,
+  destinationKey,
   observation
 }
 ```
 
-The Authority does not retain an unbounded history of credential generations. In-flight work uses the complete binding identity **plus the effective Provider destination** as its key, so a destination change cannot join an older request. Only the current Provider slot is retained after publication.
+The Authority does not retain an unbounded history of credential generations. In-flight work uses the complete binding identity **plus the sorted set of served model destinations** as its key, so a destination change cannot join an older request. Only the current Provider slot is retained after publication.
 
 There is no acquisition TTL in the first release because:
 
@@ -659,10 +665,10 @@ The complete active-refresh sequence is:
 capture Provider binding
       ↓
 derive effective Provider destination from served Models:
-  1. collect non-empty served model baseUrls;
-  2. exactly one unique model destination → use it;
-  3. multiple model destinations → unsafe/ambiguous destination;
-  4. no model destination → fall back to Provider baseUrl
+  1. collect distinct non-empty served model baseUrls;
+  2. check each served model destination with the exact Provider probe;
+  3. any rejected destination → unsupported/destination before auth;
+  4. no model destination → check Provider baseUrl
       ↓
 probe.eligibility({
   providerId,
@@ -682,7 +688,7 @@ runBound(capture, async () => {
 publishIfCurrent(capture)
 ```
 
-Eligibility is intentionally before `Models.getAuth()`: an unsupported auth type or unsafe destination must not trigger OAuth refresh and must not expose a credential to a quota endpoint. Provider-level `baseUrl` must never override a conflicting served model-level destination for this safety decision. If served models have multiple distinct destinations, proactive usage acquisition is `unsupported/destination`.
+Eligibility is intentionally before `Models.getAuth()`: an unsupported auth type or unsafe destination must not trigger OAuth refresh and must not expose a credential to a quota endpoint. Provider-level `baseUrl` must never override a conflicting served model-level destination for this safety decision. Multiple served model destinations are accepted only when the exact Provider probe independently accepts every one. Goat's `/provider` and `/provider/v1` are both canonical; a proxy or unverified path is rejected.
 
 Pi auth may additionally return a credential-scoped `auth.baseUrl` that overrides the request model at execution time. After auth resolution, but still before quota network acquisition, the Authority must re-run destination eligibility against that override when present. A non-canonical credential-scoped destination returns `unsupported/destination` and the probe is not invoked.
 
@@ -1293,7 +1299,7 @@ Prove:
 - unsupported binding performs zero auth and zero fetch;
 - unsupported/unsafe effective destination performs zero auth and zero fetch;
 - eligibility sees the served effective `baseUrl`, not only `providerId`;
-- served model destinations take precedence over Provider-level `baseUrl`, and multiple distinct model destinations are rejected before auth;
+- served model destinations take precedence over Provider-level `baseUrl`, and every distinct model destination is checked before auth; one rejected destination rejects the refresh;
 - an auth-resolved `baseUrl` override is checked again before probe network;
 - `query` performs zero auth and zero fetch;
 - `query` returns only a cache slot whose binding identity matches the current capture;

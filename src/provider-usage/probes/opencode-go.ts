@@ -70,6 +70,9 @@ export function createOpenCodeGoUsageProbe(fetch: FetchFunction): ProviderUsageP
         parseWindow(usage.weekly, "weekly"),
         parseWindow(usage.monthly, "monthly"),
       ].filter((value): value is ProviderUsageWindow => value !== undefined);
+      if (windows.length === 0) {
+        return Object.freeze({ state: "unavailable" as const, reason: "schema" as const });
+      }
       return Object.freeze({
         state: "observed" as const,
         facts: Object.freeze({

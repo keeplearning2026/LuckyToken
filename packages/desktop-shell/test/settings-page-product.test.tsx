@@ -218,4 +218,39 @@ describe("Settings product slice", () => {
     expect(container.querySelector('.settings-action-row .switch-control[aria-pressed="true"]')?.getAttribute("aria-label")).toBe("Disable auto-start");
     expect(container.querySelector('.settings-status')?.textContent).toBe("On");
   });
+
+  it("shows the default usage interval and saves a changed interval", async () => {
+    const settingKey = "providerUsage.refreshIntervalMinutes";
+    let minutes = 15;
+    const executeSettings = vi.fn(async (command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0]) => {
+      if (command.command === "set" && command.key === settingKey) {
+        minutes = command.value as number;
+      }
+      return {
+        outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
+        settings: {
+          [settingKey]: {
+            key: settingKey,
+            type: "number" as const,
+            default: 15,
+            validation: { type: "integer" as const, minimum: 1, maximum: 1440 },
+            sensitivity: "public" as const,
+            applyMode: "hot-apply" as const,
+            value: minutes,
+          },
+        },
+      };
+    });
+    await render(createFakeDesktopApi({ control: { executeSettings } }));
+    const input = container.querySelector('input[aria-label="Usage refresh interval in minutes"]') as HTMLInputElement;
+    expect(input.value).toBe("15");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "5");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Save usage interval");
+    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: settingKey, value: 5 });
+    expect(input.value).toBe("5");
+  });
 });

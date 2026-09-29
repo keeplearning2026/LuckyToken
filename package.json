@@ -1,6 +1,6 @@
 {
   "name": "token",
-  "version": "1.3.0",
+  "version": "1.3.2",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -35,7 +35,8 @@
     "test:cache:inner": "tsx test/online/cache-probe.ts",
     "build:packages": "npm run build --workspace @token/provider-contract && npm run build --workspace @token/commandcode-model-catalog && npm run build --workspace @token/provider-commandcode-private && npm run build --workspace @token/provider-commandcode-goat && npm run build --workspace @token/application-control-plane",
     "build:root": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
-    "build": "npm run build:packages && npm run build:root && npm run build --workspace @token/desktop-shell",
+    "build": "node scripts/build-installer.mjs",
+    "build:desktop-package": "npm run build:packages && npm run build:root && npm run build --workspace @token/desktop-shell",
     "release:assemble-backend": "node scripts/assemble-release-backend.mjs",
     "release:sync-version": "node scripts/sync-release-version.mjs && npm install --package-lock-only --ignore-scripts --no-audit --no-fund && node --test test/certification/release-version-sync.test.mjs",
     "release:verify-layout": "node --test test/certification/release-version-sync.test.mjs test/certification/release-layout.test.mjs",
@@ -93,15 +94,18 @@
     "test:online-smoke:run:goat:anthropic": "tsx test/online/run-commandcode-goat-anthropic-smoke.ts",
     "test:certification": "node scripts/run-with-codex-test-sandbox.mjs -- node --test test/certification/*.test.mjs",
     "test:distribution": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:distribution:inner",
-    "test:distribution:inner": "npm run build && node --test test/distribution/*.test.mjs && npm test --workspace @token/desktop-shell && npm run test:product-e2e:run --workspace @token/desktop-shell",
+    "test:distribution:inner": "npm run build:desktop-package && node --test test/distribution/*.test.mjs && npm test --workspace @token/desktop-shell && npm run test:product-e2e:run --workspace @token/desktop-shell",
     "test:unit": "node scripts/run-with-codex-test-sandbox.mjs -- vitest run test/unit --passWithNoTests",
-    "test:integration": "node scripts/run-with-codex-test-sandbox.mjs -- vitest run test/integration"
+    "test:integration": "node scripts/run-with-codex-test-sandbox.mjs -- vitest run test/integration",
+    "build:windows-installer": "npm run release:sync-version && npm run build:packages && npm run make --workspace @token/desktop-shell",
+    "build:macos-installer": "npm run release:sync-version && npm run build:packages && npm run make:macos-installer --workspace @token/desktop-shell",
+    "build:linux-bundle": "npm run release:sync-version && npm run build:packages && npm run make:linux-bundle --workspace @token/desktop-shell"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.87.0",
     "@anthropic-ai/sdk": "0.124.0",
-    "@token/provider-contract": "1.3.0",
-    "@token/application-control-plane": "1.3.0",
+    "@token/provider-contract": "1.3.2",
+    "@token/application-control-plane": "1.3.2",
     "jsonc-parser": "3.3.1",
     "openai": "6.40.0",
     "proper-lockfile": "4.1.2",
@@ -109,8 +113,8 @@
     "ws": "8.21.3"
   },
   "devDependencies": {
-    "@token/provider-commandcode-private": "1.3.0",
-    "@token/provider-commandcode-goat": "1.3.0",
+    "@token/provider-commandcode-private": "1.3.2",
+    "@token/provider-commandcode-goat": "1.3.2",
     "@types/node": "24.12.4",
     "@types/proper-lockfile": "4.1.4",
     "@types/ws": "8.18.1",

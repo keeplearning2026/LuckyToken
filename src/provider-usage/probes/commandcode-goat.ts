@@ -159,6 +159,9 @@ async function acquireCommandCodeGoat(
     windows: Object.freeze(windows),
     budgets: Object.freeze(budgets),
   });
+  if (windows.length === 0 && budgets.length === 0) {
+    return Object.freeze({ state: "unavailable", reason: "schema" });
+  }
   return Object.freeze({ state: "observed", facts });
 }
 
@@ -177,7 +180,7 @@ export function createCommandCodeGoatUsageProbe(
       return canonicalUrl(
         context.effectiveBaseUrl,
         ORIGIN,
-        ["/provider"],
+        ["/provider", "/provider/v1"],
       )
         ? Object.freeze({ state: "eligible" as const })
         : Object.freeze({ state: "unsupported_destination" as const });

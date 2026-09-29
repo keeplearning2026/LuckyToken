@@ -304,6 +304,8 @@ PRD §515 要求的矩阵必须逐 tuple 有认证用例；同一信封的 manag
 
 ## 9. Pi 镜像面与升级流程
 
+跨模块的统一升级审计流程见 [`TokenPiAIUpgradeAuditProcedure.md`](./TokenPiAIUpgradeAuditProcedure.md)。下表是其中 Provider Native 边界的专项检查；运行时发布包仍是行为真相。
+
 Native lane 对 Pi 的**类型耦合**只有 5 个公开类型（`FetchFunction`、`ProviderHeaders`、`Model`、`Models`、`AuthResult`，全部为 `import type`），因此升级几乎不会触发编译错误；真正的成本在**镜像的 wire 行为**，它漂移时是静默的。下表是升级时必须逐条重验的清单。
 
 | 镜像点 | Token 位置 | Pi 参考源（0.86.1 快照路径） | 重验时机 |
@@ -318,12 +320,12 @@ Native lane 对 Pi 的**类型耦合**只有 5 个公开类型（`FetchFunction`
 
 升级 checklist（沿用 `doc/PiAI-0.84.2-Upgrade-Audit.md` 的形态）：
 
-1. 提升 pi-ai 版本（含 checked-in 快照与 npm 依赖）；若走 B2′，同步提升厂商 SDK 版本。
+1. 提升运行时 pi-ai 依赖；checked-in 快照仅在另有维护需求时更新，行为以新安装的发布包为准。按 B2′ 同步厂商 SDK 直接依赖。
 2. 跑 certification + parity（T2/T7），记录红点。
 3. 逐条 diff 上表的"Pi 参考源"，对照运行时 `node_modules/@earendil-works/pi-ai/dist/api/*.js`（运行时为准）。
 4. 更新常量/规则、fixture 与本文档。
-5. 在线金丝雀：每个认证 provider 一条最小请求，确认无回归。
-6. 新增一份 upgrade audit 文档，记录 native lane 影响（包括"无影响"的结论）。
+5. 在线金丝雀属于另行授权的发布验证；未运行时记录为未验证，不得算入离线认证结果。
+6. 按统一流程新增 upgrade audit，逐项记录各边界及 native lane 的影响（包括"无影响"的结论）。
 
 ---
 

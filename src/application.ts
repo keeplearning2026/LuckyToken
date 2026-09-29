@@ -79,6 +79,7 @@ import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 import { createProviderRuntime } from "./providers/runtime.js";
 import { providerReadiness } from "./providers/readiness.js";
 import { createProviderUsageAuthority } from "./provider-usage/authority.js";
+import { createProviderUsageAutoRefresh } from "./provider-usage/auto-refresh.js";
 import { createProviderUsageControlPlaneHandler } from "./provider-usage/control-plane.js";
 import { createProviderUsageResponseObserver } from "./provider-usage/passive.js";
 import { createBuiltInProviderUsageProbes } from "./provider-usage/registry.js";
@@ -453,6 +454,7 @@ async function startNormalApplication(options: {
     | { readonly unsubscribe: () => void }
     | undefined;
   let attentionRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  let providerUsageAutoRefresh: ReturnType<typeof createProviderUsageAutoRefresh> | undefined;
   let cleanupPromise: Promise<void> | undefined;
   let lifecycle: ControlledTokenApplication | undefined;
   let desktopOwnerLease: DesktopOwnerLeaseAuthority | undefined;
@@ -474,6 +476,8 @@ async function startNormalApplication(options: {
 
   const closeOwnedResources = async (): Promise<readonly unknown[]> => {
     const failures: unknown[] = [];
+    await providerUsageAutoRefresh?.close().catch((error: unknown) => failures.push(error));
+    providerUsageAutoRefresh = undefined;
     if (attentionRefreshTimer !== undefined) {
       clearInterval(attentionRefreshTimer);
       attentionRefreshTimer = undefined;
@@ -734,6 +738,15 @@ async function startNormalApplication(options: {
     });
     const providerUsageCommandHandler =
       createProviderUsageControlPlaneHandler(providerUsageAuthority);
+    providerUsageAutoRefresh = createProviderUsageAutoRefresh({
+      authority: providerUsageAuthority,
+      intervalMinutes: () => {
+        const value = settingsRegistry.query(["providerUsage.refreshIntervalMinutes"])[
+          "providerUsage.refreshIntervalMinutes"
+        ]?.value;
+        return typeof value === "number" ? value : 15;
+      },
+    });
     const credentialManagement = providerRuntime.credentialManagement;
     reconcilePublicModelsNow = (
       snapshot: PublicModelCatalogSnapshot,
@@ -1139,7 +1152,17 @@ async function startNormalApplication(options: {
           return publish(status);
         });
       },
-      settingsCommandHandler,
+      settingsCommandHandler: async (command) => {
+        const result = await settingsCommandHandler(command);
+        if (
+          command.command === "set" &&
+          command.key === "providerUsage.refreshIntervalMinutes" &&
+          result.outcome === "applied"
+        ) {
+          providerUsageAutoRefresh?.reschedule();
+        }
+        return result;
+      },
       settingsProjection: () => settingsRegistry.snapshot(),
       diagnostics: ownedDiagnosticsAuthority,
       diagnosticsProjection: () =>
@@ -1346,6 +1369,7 @@ async function startNormalApplication(options: {
     attentionRefreshTimer.unref();
 
     await supervisor.execute("start", publish);
+    providerUsageAutoRefresh.start();
     // Backend startup is the automatic apply point for enabled Agent integrations.
     // Data Plane listener restarts never resync external Agent files.
     if (lastPublishedStatus.modelDataPlane === "running") {

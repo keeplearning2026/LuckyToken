@@ -952,6 +952,29 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).toContain("Week 25%");
   });
 
+  it("shows an automatic refresh result from cache without issuing a quota refresh", async () => {
+    vi.useFakeTimers();
+    let observed = false;
+    const executeProviderUsage = vi.fn<DesktopControlPlaneApi["executeProviderUsage"]>(async () => ({
+      outcome: "ok",
+      snapshot: {
+        providers: [observed
+          ? { providerId: "aws-provider", state: "observed", observedAt: 1, refreshable: true, windows: [{ kind: "weekly", usedPercent: 25 }], budgets: [] }
+          : { providerId: "aws-provider", state: "unobserved" }],
+      },
+    }));
+    try {
+      await render({ profiles: managedProfiles(), executeProviderUsage });
+      expect(container.textContent).toContain("Usage not refreshed");
+      observed = true;
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(container.textContent).toContain("Week 25%");
+      expect(executeProviderUsage.mock.calls.every(([command]) => command.command === "query")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps per-card usage refresh reachable when the initial cache query rejects", async () => {
     let calls = 0;
     const executeProviderUsage = vi.fn<

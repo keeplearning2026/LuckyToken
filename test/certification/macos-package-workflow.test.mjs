@@ -14,8 +14,7 @@ test("GitHub macOS packaging builds the installer on a macOS runner without clai
   assert.match(workflow, /default: macos-/u);
   assert.match(workflow, /npm ci --ignore-scripts/u);
   assert.match(workflow, /npm rebuild electron macos-alias fs-xattr/u);
-  assert.match(workflow, /npm run release:assemble-backend/u);
-  assert.match(workflow, /npm run make:prepared --workspace @token\/desktop-shell/u);
+  assert.match(workflow, /npm run build/u);
   assert.match(workflow, /\*\.dmg/u);
   assert.match(workflow, /include-hidden-files: true/u);
   assert.equal(workflow.includes("release:windows"), false);

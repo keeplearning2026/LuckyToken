@@ -51,13 +51,8 @@ jobs:
           # fs-xattr), so they are rebuilt explicitly for the runner's Node.
           npm rebuild electron macos-alias fs-xattr
 
-      - name: Assemble the portable Backend
-        run: |
-          npm run build:packages
-          npm run release:assemble-backend
-
       - name: Package the application and the installer
-        run: npm run make:prepared --workspace @token/desktop-shell
+        run: npm run build
 
       - name: Verify the packaged Backend layout
         shell: bash

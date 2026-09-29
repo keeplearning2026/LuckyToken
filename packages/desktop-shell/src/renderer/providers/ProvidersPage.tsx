@@ -142,6 +142,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   const seenCatalogVersion = useRef(-1);
   const usageBindingKeyByProvider = useRef(new Map<string, string>());
   const usageEpochByProvider = useRef(new Map<string, number>());
+  const usageRefreshVersion = useRef(0);
   const draggingModelId = useRef<string | undefined>(undefined);
   const draggingProfileId = useRef<string | undefined>(undefined);
 
@@ -306,6 +307,43 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
       active = false;
     };
   }, [api, profileState]);
+
+  useEffect(() => {
+    let active = true;
+    let queryInFlight = false;
+    const timer = setInterval(() => {
+      if (queryInFlight) return;
+      queryInFlight = true;
+      const expectedEpochs = new Map(usageEpochByProvider.current);
+      const expectedRefreshVersion = usageRefreshVersion.current;
+      void api.control.executeProviderUsage({ command: "query" }).then(
+        (result) => {
+          if (!active || usageRefreshVersion.current !== expectedRefreshVersion) return;
+          setProviderUsageById((current) => {
+            const next = { ...current };
+            for (const row of result.snapshot.providers) {
+              if (
+                !expectedEpochs.has(row.providerId) ||
+                expectedEpochs.get(row.providerId) !==
+                usageEpochByProvider.current.get(row.providerId)
+              ) {
+                continue;
+              }
+              next[row.providerId] = row;
+            }
+            return next;
+          });
+        },
+        () => undefined,
+      ).finally(() => {
+        queryInFlight = false;
+      });
+    }, 30_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [api]);
 
   useEffect(() => {
     let active = true;
@@ -594,6 +632,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   };
 
   const refreshProviderUsage = async (providerId: string): Promise<void> => {
+    usageRefreshVersion.current += 1;
     const expectedEpoch = usageEpochByProvider.current.get(providerId) ?? 0;
     setUsageRefreshingProviders((current) => {
       const next = new Set(current);

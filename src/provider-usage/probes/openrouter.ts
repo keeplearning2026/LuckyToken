@@ -22,7 +22,7 @@ export function createOpenRouterUsageProbe(fetch: FetchFunction): ProviderUsageP
       if (context.binding.kind !== "managed" || context.binding.authType !== "api_key") {
         return Object.freeze({ state: "unsupported_binding" as const });
       }
-      return canonicalUrl(context.effectiveBaseUrl, ORIGIN, ["/api/v1"])
+      return canonicalUrl(context.effectiveBaseUrl, ORIGIN, ["/api", "/api/v1"])
         ? Object.freeze({ state: "eligible" as const })
         : Object.freeze({ state: "unsupported_destination" as const });
     },

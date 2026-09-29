@@ -159,6 +159,9 @@ async function acquireCommandCodePrivate(
     windows: Object.freeze(windows),
     budgets: Object.freeze(budgets),
   });
+  if (windows.length === 0 && budgets.length === 0) {
+    return Object.freeze({ state: "unavailable", reason: "schema" });
+  }
   return Object.freeze({ state: "observed", facts });
 }
 

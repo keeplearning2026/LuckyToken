@@ -4,6 +4,7 @@ import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AdvancedSettings } from "./AdvancedSettings.js";
 import { DataSettings } from "./DataSettings.js";
 import { GeneralSettings } from "./GeneralSettings.js";
+import { ProviderUsageSettings } from "./ProviderUsageSettings.js";
 import { ResponseRepairSettings } from "./ResponseRepairSettings.js";
 
 type SettingsSection = "general" | "data" | "advanced" | "responseRepair";
@@ -56,7 +57,10 @@ export function SettingsPage({ api }: { readonly api: TokenDesktopApi }) {
         aria-labelledby={`settings-tab-${section}`}
       >
         {section === "general" ? (
-          <GeneralSettings api={api} />
+          <>
+            <GeneralSettings api={api} />
+            <ProviderUsageSettings api={api} />
+          </>
         ) : section === "data" ? (
           <DataSettings api={api} />
         ) : section === "responseRepair" ? (

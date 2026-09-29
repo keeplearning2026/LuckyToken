@@ -12,6 +12,7 @@ import type {
   ProviderUsageProbe,
   ProviderUsageProbeInput,
 } from "../../src/provider-usage/contract.js";
+import { createCommandCodeGoatUsageProbe } from "../../src/provider-usage/probes/commandcode-goat.js";
 
 function managed(
   credentialId: string,
@@ -166,6 +167,65 @@ function observedProbe(options: {
 }
 
 describe("ProviderUsageAuthority", () => {
+  it("refreshes Goat when its served models use both canonical API paths", async () => {
+    const providerId = "commandcode-goat";
+    const root = "https://api.commandcode.ai/provider";
+    const bindings = createBinding(managed("goat", "g1", "s1", "api_key", providerId));
+    let authCalls = 0;
+    let modelBaseUrls = [root, `${root}/v1`];
+    const models = {
+      getProviders: () => [{ id: providerId, name: "CommandCode Goat", baseUrl: root }],
+      getProvider: (id: string) =>
+        id === providerId ? { id: providerId, name: "CommandCode Goat", baseUrl: root } : undefined,
+      getModels: () => modelBaseUrls.map((baseUrl) => ({ provider: providerId, baseUrl })),
+      getAuth: async () => {
+        authCalls += 1;
+        return { auth: { apiKey: "fixture-secret" }, source: "fixture" };
+      },
+    } as unknown as Pick<Models, "getProviders" | "getProvider" | "getModels" | "getAuth">;
+    const fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      return new Response(
+        JSON.stringify(
+          url.endsWith("/alpha/whoami")
+            ? {}
+            : {
+                windowLimits: {
+                  fiveHour: { cap: 10, used: 5 },
+                },
+              },
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const authority = createProviderUsageAuthority({
+      models,
+      binding: bindings.binding,
+      probes: [createCommandCodeGoatUsageProbe(fetch)],
+    });
+
+    const result = await authority.refresh(providerId);
+
+    expect(result.refresh).toEqual({ providerId, outcome: "succeeded" });
+    expect(authCalls).toBe(1);
+    expect(result.snapshot.providers).toMatchObject([
+      { state: "observed", observation: { windows: [{ usedPercent: 50 }] } },
+    ]);
+
+    modelBaseUrls = [root, "https://proxy.example/v1"];
+    expect((await authority.query()).providers[0]).toEqual({
+      state: "unsupported",
+      providerId,
+      reason: "destination",
+    });
+    expect((await authority.refresh(providerId)).refresh).toEqual({
+      providerId,
+      outcome: "unsupported",
+      reason: "destination",
+    });
+    expect(authCalls).toBe(1);
+  });
+
   it("does not resolve auth when the current binding is unsupported", async () => {
     const current = managed("a", "g1", "s1", "oauth");
     const bindings = createBinding(current);
@@ -623,7 +683,7 @@ describe("ProviderUsageAuthority", () => {
     expect(models.authCalls()).toBe(0);
   });
 
-  it("rejects ambiguous served model destinations before auth", async () => {
+  it("rejects a served model destination outside the probe's accepted paths before auth", async () => {
     const bindings = createBinding(managed("a", "g1", "s1"));
     const models = createModels({
       providerBaseUrl: "https://fixture.invalid",
@@ -639,9 +699,9 @@ describe("ProviderUsageAuthority", () => {
       probes: [
         observedProbe({
           eligibility: (context) =>
-            context.effectiveBaseUrl === undefined
-              ? { state: "unsupported_destination" }
-              : { state: "eligible" },
+            context.effectiveBaseUrl === "https://fixture.invalid"
+              ? { state: "eligible" }
+              : { state: "unsupported_destination" },
         }),
       ],
     });

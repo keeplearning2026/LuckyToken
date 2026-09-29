@@ -206,6 +206,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     applyMode: "hot-apply",
   }),
   Object.freeze({
+    key: "providerUsage.refreshIntervalMinutes",
+    type: "number",
+    default: 15,
+    validation: Object.freeze({ type: "integer", minimum: 1, maximum: 1440 }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
+  Object.freeze({
     key: "diagnostics.fullJourneyCapture.enabled",
     type: "boolean",
     default: false,
