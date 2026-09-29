@@ -42,7 +42,6 @@ export interface ClientPiOptions {
   readonly temperature?: ModelsSimpleStreamOptions["temperature"];
   readonly reasoning?: ModelsSimpleStreamOptions["reasoning"];
   readonly toolChoice?: ModelsSimpleStreamOptions["toolChoice"];
-  readonly samplingParams?: Readonly<Record<string, unknown>>;
   readonly cacheRetention?: ModelsSimpleStreamOptions["cacheRetention"];
   readonly thinkingBudgets?: Readonly<
     NonNullable<ModelsSimpleStreamOptions["thinkingBudgets"]>
@@ -74,7 +73,6 @@ const PROTOCOL_OPTION_KEYS = new Set([
   "temperature",
   "reasoning",
   "toolChoice",
-  "samplingParams",
   "cacheRetention",
   "thinkingBudgets",
   "metadata",
@@ -126,58 +124,6 @@ function cloneAndFreezeValue(value: unknown): unknown {
     return Object.freeze(clone);
   }
   return value;
-}
-
-function validateSnapshotValue(
-  value: unknown,
-  path: string,
-  ancestors = new WeakSet<object>(),
-): void {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new InvocationCompositionFailure(`${path} must contain only finite numbers`);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    if (ancestors.has(value)) {
-      throw new InvocationCompositionFailure(`${path} must not contain cycles`);
-    }
-    ancestors.add(value);
-    for (let index = 0; index < value.length; index += 1) {
-      if (!Object.hasOwn(value, index)) {
-        throw new InvocationCompositionFailure(`${path} must not contain sparse arrays`);
-      }
-      validateSnapshotValue(value[index], `${path}[${index}]`, ancestors);
-    }
-    ancestors.delete(value);
-    return;
-  }
-  if (isRecord(value)) {
-    if (ancestors.has(value)) {
-      throw new InvocationCompositionFailure(`${path} must not contain cycles`);
-    }
-    ancestors.add(value);
-    for (const [key, entry] of Object.entries(value)) {
-      validateSnapshotValue(entry, `${path}.${key}`, ancestors);
-    }
-    ancestors.delete(value);
-    return;
-  }
-  throw new InvocationCompositionFailure(`${path} must contain immutable JSON values`);
-}
-
-function validateSamplingParams(value: unknown): void {
-  if (!isRecord(value)) {
-    throw new InvocationCompositionFailure("samplingParams must be an object");
-  }
-  for (const [key, entry] of Object.entries(value)) {
-    if (key.length === 0 || entry === undefined) {
-      throw new InvocationCompositionFailure(`samplingParams.${key || "<empty>"} is invalid`);
-    }
-    validateSnapshotValue(entry, `samplingParams.${key}`);
-  }
 }
 
 function validateThinkingBudgets(value: unknown): void {
@@ -241,9 +187,6 @@ function validateProtocolOptions(options: ClientPiOptions): void {
     throw new InvocationCompositionFailure(
       "Client Protocol toolChoice must be auto or none",
     );
-  }
-  if (options.samplingParams !== undefined) {
-    validateSamplingParams(options.samplingParams);
   }
   if (
     options.cacheRetention !== undefined &&
@@ -439,11 +382,6 @@ export function composeOptions(
   }
   if (protocolOptions.toolChoice !== undefined) {
     effective.toolChoice = protocolOptions.toolChoice;
-  }
-  if (protocolOptions.samplingParams !== undefined) {
-    effective.samplingParams = cloneAndFreezeValue(
-      protocolOptions.samplingParams,
-    ) as Record<string, unknown>;
   }
   if (protocolOptions.cacheRetention !== undefined) {
     effective.cacheRetention = protocolOptions.cacheRetention;

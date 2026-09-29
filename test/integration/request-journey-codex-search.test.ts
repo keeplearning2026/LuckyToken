@@ -287,51 +287,54 @@ describe("Request Journey Codex Direct Mode web search", () => {
     }
   });
 
-  it("records supported-encoding decode failure before Direct lane commitment", async () => {
-    let contacted = false;
-    const harness = await createSearchJourneyHarness({
-      fetch: async () => {
-        contacted = true;
-        return new Response("{}");
-      },
-    });
-
-    try {
-      const response = await harness.composition.runtime.handle(
-        new Request("http://Token.test/v1/alpha/search", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "content-encoding": "gzip",
-          },
-          body: Uint8Array.from([0x00, 0x01, 0x02, 0x03]),
-        }),
-      );
-      expect(response.status).toBe(400);
-      expect(contacted).toBe(false);
-
-      const summary = await harness.published;
-      const detail = await harness.diagnostics.getRequestJourney({
-        requestId: summary.requestId,
+  it.each(["zstd", "gzip", "deflate"] as const)(
+    "records damaged %s body decode failure before Direct lane commitment",
+    async (contentEncoding) => {
+      let contacted = false;
+      const harness = await createSearchJourneyHarness({
+        fetch: async () => {
+          contacted = true;
+          return new Response("{}");
+        },
       });
-      expect(detail.lane).toBeUndefined();
-      expect(detail.artifacts).toContainEqual(
-        expect.objectContaining({
-          artifactId: "client_request_wire",
-          artifactKind: "client_request_wire",
-          state: "unavailable",
-          reason: "request_body_decode_failed",
-        }),
-      );
-      expect(detail.artifacts).not.toContainEqual(
-        expect.objectContaining({
-          artifactId: "direct_outbound_request_wire",
-        }),
-      );
-    } finally {
-      await harness.close();
-    }
-  });
+
+      try {
+        const response = await harness.composition.runtime.handle(
+          new Request("http://Token.test/v1/alpha/search", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "content-encoding": contentEncoding,
+            },
+            body: Uint8Array.from([0x00, 0x01, 0x02, 0x03]),
+          }),
+        );
+        expect(response.status).toBe(400);
+        expect(contacted).toBe(false);
+
+        const summary = await harness.published;
+        const detail = await harness.diagnostics.getRequestJourney({
+          requestId: summary.requestId,
+        });
+        expect(detail.lane).toBeUndefined();
+        expect(detail.artifacts).toContainEqual(
+          expect.objectContaining({
+            artifactId: "client_request_wire",
+            artifactKind: "client_request_wire",
+            state: "unavailable",
+            reason: "request_body_decode_failed",
+          }),
+        );
+        expect(detail.artifacts).not.toContainEqual(
+          expect.objectContaining({
+            artifactId: "direct_outbound_request_wire",
+          }),
+        );
+      } finally {
+        await harness.close();
+      }
+    },
+  );
 
   it("records raw body overflow before Direct lane commitment", async () => {
     let contacted = false;

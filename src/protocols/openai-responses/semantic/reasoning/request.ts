@@ -35,9 +35,6 @@ function cloneOptions(
 ): ModelsSimpleStreamOptions {
   return {
     ...options,
-    ...(options.samplingParams === undefined
-      ? {}
-      : { samplingParams: { ...options.samplingParams } }),
     ...(options.metadata === undefined
       ? {}
       : { metadata: { ...options.metadata } }),

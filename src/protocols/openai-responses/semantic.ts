@@ -563,7 +563,6 @@ export async function executeSemanticResponses(
               temperature: executionInvocation.invocation.pi.options.temperature,
               reasoning: executionInvocation.invocation.pi.options.reasoning,
               toolChoice: executionInvocation.invocation.pi.options.toolChoice,
-              samplingParams: executionInvocation.invocation.pi.options.samplingParams,
               cacheRetention: executionInvocation.invocation.pi.options.cacheRetention,
               thinkingBudgets: executionInvocation.invocation.pi.options.thinkingBudgets,
               metadata: executionInvocation.invocation.pi.options.metadata,

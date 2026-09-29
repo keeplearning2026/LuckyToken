@@ -875,7 +875,6 @@ async function handleAnthropicMessages(
           maxTokens: piOptions.maxTokens,
           temperature: piOptions.temperature,
           reasoning: piOptions.reasoning,
-          samplingParams: piOptions.samplingParams,
           cacheRetention: piOptions.cacheRetention,
           thinkingBudgets: piOptions.thinkingBudgets,
           metadata: piOptions.metadata,
