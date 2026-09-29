@@ -79,6 +79,10 @@ test("Direct Mode, Provider Native, and Semantic Conversion are pairwise indepen
     // Protocol coordinators select lanes; lane contracts and the shared
     // Responses error envelope are boundary leaves, not conversion owners.
     "Semantic Conversion": [
+      // The Provider Native namespace repair lives in this directory because
+      // the protocol coordinator owns response rewrites. It must never be
+      // reachable from a Semantic Conversion module, so this file is checked
+      // for that import by name below.
       path.join(repositoryRoot, "src/protocols/openai-responses/semantic"),
       path.join(repositoryRoot, "src/protocols/openai-responses/semantic.ts"),
       path.join(repositoryRoot, "src/protocols/openai-responses/compact-semantic.ts"),
@@ -111,6 +115,21 @@ test("Direct Mode, Provider Native, and Semantic Conversion are pairwise indepen
         ),
     });
   }
+
+  // The Provider Native namespace repair lives in the protocol directory, so
+  // the lane-directory rule above no longer covers it. Semantic Conversion must
+  // not reach it: only the lane coordinator may apply a Provider Native
+  // response rewrite.
+  await assertNoDependency({
+    entries: [
+      ...lanes["Semantic Conversion"],
+      ...lanes["Direct Mode"],
+    ],
+    forbidden: (dependency) =>
+      dependency.endsWith(
+        "protocols/openai-responses/function-call-namespace-repair.ts",
+      ),
+  });
 });
 
 test("Anthropic online certification has independent Provider-owned policies and Claude-only Agent entry points", async () => {

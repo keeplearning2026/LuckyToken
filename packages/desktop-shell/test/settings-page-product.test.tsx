@@ -159,12 +159,48 @@ describe("Settings product slice", () => {
     await render(createFakeDesktopApi({ platform: { getAutoStart: async () => false } }));
 
     expect(container.querySelectorAll(".settings-heading")).toHaveLength(0);
-    expect(container.querySelectorAll('.settings-tabs [role="tab"]')).toHaveLength(3);
+    expect(container.querySelectorAll('.settings-tabs [role="tab"]')).toHaveLength(4);
     expect(container.textContent).toContain("Startup behavior");
     expect(container.textContent).toContain("Start Token automatically");
     const autoStart = container.querySelector('.settings-action-row .switch-control[aria-pressed="false"]');
     expect(autoStart?.getAttribute("aria-label")).toBe("Enable auto-start");
     expect(autoStart?.textContent).toBe("");
+  });
+
+  it("toggles the Provider Native namespace repair from Response repair settings", async () => {
+    const settingKey =
+      "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative";
+    const executeSettings = vi.fn(async (command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0]) => ({
+      outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
+      settings: {
+        [settingKey]: {
+          key: settingKey,
+          type: "boolean" as const,
+          default: true,
+          validation: { type: "boolean" as const },
+          sensitivity: "public" as const,
+          applyMode: "hot-apply" as const,
+          value: (command.command === "set" ? command.value : true) as boolean,
+        },
+      },
+    }));
+    await render(createFakeDesktopApi({ control: { executeSettings } }));
+
+    await click("Response repairProtocol response repairs");
+
+    const toggle = container.querySelector(
+      '.switch-control[aria-label="Disable function-call namespace repair"]',
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+
+    await clickAria("Disable function-call namespace repair");
+
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: settingKey,
+      value: false,
+    });
   });
 
   it("enables Windows auto-start from General settings and reflects the effective state", async () => {

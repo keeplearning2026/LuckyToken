@@ -59,6 +59,7 @@ function dependencies(
   fetch: FetchFunction,
   diagnostics?: RequestJourneyObservationAuthority,
   publicModels?: PublicModelSource,
+  functionCallNamespaceRepair?: () => boolean,
 ): HttpBoundaryDependencies {
   const handler = createOpenAIResponsesHandler({
     models: source,
@@ -72,6 +73,9 @@ function dependencies(
     createResponseId: () => "resp_test",
     now: () => 1,
     ...(publicModels === undefined ? {} : { publicModels }),
+    ...(functionCallNamespaceRepair === undefined
+      ? {}
+      : { functionCallNamespaceRepair }),
   });
   return {
     clientProtocols: [handler],
@@ -409,6 +413,64 @@ describe("Provider Native Responses contract", () => {
     expect(result.indexOf('"id":"msg_b"')).toBeLessThan(
       result.indexOf('"id":"msg_a"'),
     );
+  });
+
+  it("inserts the namespace before alias projection and preserves both rewrites", async () => {
+    const model = responsesModel();
+    const alias = "public/gpt-native";
+    const publicModels: PublicModelSource = {
+      requestSnapshot: async () =>
+        ({
+          resolve: (selector: string) =>
+            selector === alias
+              ? { providerId: model.provider, modelId: model.id }
+              : undefined,
+        }) as never,
+    };
+    const upstreamSse =
+      `data: ${JSON.stringify({
+        type: "response.created",
+        sequence_number: 0,
+        response: { id: "resp_1", status: "in_progress", model: model.id, output: [] },
+      })}\n\n` +
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        sequence_number: 1,
+        output_index: 0,
+        item: {
+          type: "function_call",
+          call_id: "call_1",
+          name: "lookup",
+          arguments: "{}",
+        },
+      })}\n\n`;
+    const fetch: FetchFunction = async () =>
+      new Response(upstreamSse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, undefined, publicModels),
+      request(JSON.stringify({
+        model: alias,
+        input: "hi",
+        stream: true,
+        tools: [
+          {
+            type: "namespace",
+            name: "dynamic_tools",
+            tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+          },
+        ],
+      })),
+    );
+
+    expect(response.status).toBe(200);
+    const result = await response.text();
+    expect(result).toContain(`"model":"${alias}"`);
+    expect(result).not.toContain(`"model":"${model.id}"`);
+    expect(result).toContain('"name":"lookup","namespace":"dynamic_tools"');
   });
 
   it("still applies alias projection when lifecycle normalization is skipped", async () => {
@@ -790,6 +852,203 @@ describe("Provider Native Responses contract", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     await expect(response.text()).resolves.toBe(sse);
+  });
+
+  it("inserts the declared namespace into a Provider Native function_call", async () => {
+    const model = responsesModel();
+    const sse =
+      'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
+      'data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}}\n\n' +
+      "data: [DONE]\n\n";
+    const fetch: FetchFunction = async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({
+        model: "openai/gpt-5",
+        input: "hi",
+        stream: true,
+        tools: [
+          {
+            type: "namespace",
+            name: "dynamic_tools",
+            tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+          },
+        ],
+      })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain(
+      '"name":"lookup","namespace":"dynamic_tools"',
+    );
+  });
+
+  it("reports the repair notice and balances its journey step", async () => {
+    const model = responsesModel();
+    const sse =
+      'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
+      'data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}}\n\n' +
+      "data: [DONE]\n\n";
+    const fetch: FetchFunction = async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    const recorded = recordingJourney();
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, recorded.authority),
+      request(JSON.stringify({
+        model: "openai/gpt-5",
+        input: "hi",
+        stream: true,
+        tools: [
+          {
+            type: "namespace",
+            name: "dynamic_tools",
+            tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+          },
+        ],
+      })),
+    );
+
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(recorded.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "conversion_notice_observed",
+        code: "provider_native_function_call_namespace_repaired",
+        severity: "info",
+        location: {
+          phase: "lane_response_processing",
+          lane: "provider_native",
+          step: "repair_function_call_namespace",
+        },
+      }),
+    );
+    const entered = recorded.observations.filter(
+      (entry) =>
+        entry.kind === "step_entered" &&
+        (entry as { stepInstanceId?: string }).stepInstanceId ===
+          "p5.repair_function_call_namespace",
+    );
+    const completed = recorded.observations.filter(
+      (entry) =>
+        entry.kind === "step_completed" &&
+        (entry as { stepInstanceId?: string }).stepInstanceId ===
+          "p5.repair_function_call_namespace",
+    );
+    expect(entered).toHaveLength(1);
+    expect(completed).toHaveLength(1);
+  });
+
+  it("returns the upstream bytes untouched when the repair is switched off", async () => {
+    const model = responsesModel();
+    const sse =
+      'data: {"type":"response.created","sequence_number":0,"response":{"status":"in_progress"}}\n\n' +
+      'data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}}\n\n' +
+      "data: [DONE]\n\n";
+    const fetch: FetchFunction = async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch, undefined, undefined, () => false),
+      request(JSON.stringify({
+        model: "openai/gpt-5",
+        input: "hi",
+        stream: true,
+        tools: [
+          {
+            type: "namespace",
+            name: "dynamic_tools",
+            tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+          },
+        ],
+      })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe(sse);
+  });
+
+  it("repairs a buffered Provider Native JSON body", async () => {
+    const model = responsesModel();
+    const body = JSON.stringify({
+      id: "resp_1",
+      output: [
+        { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+      ],
+    });
+    const fetch: FetchFunction = async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({
+        model: "openai/gpt-5",
+        input: "hi",
+        tools: [
+          {
+            type: "namespace",
+            name: "dynamic_tools",
+            tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+          },
+        ],
+      })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      output: [{ name: "lookup", namespace: "dynamic_tools" }],
+    });
+  });
+
+  it("leaves a Provider Native body untouched when its bytes are not valid UTF-8", async () => {
+    const model = responsesModel();
+    const sse =
+      'data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}}\n\n';
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode(sse),
+      0x0a,
+      0xff,
+      0x0a,
+    ]);
+    const fetch: FetchFunction = async () =>
+      new Response(bytes, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(JSON.stringify({
+        model: "openai/gpt-5",
+        input: "hi",
+        stream: true,
+        tools: [
+          {
+            type: "namespace",
+            name: "dynamic_tools",
+            tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+          },
+        ],
+      })),
+    );
+
+    expect(response.status).toBe(200);
+    const received = new Uint8Array(await response.arrayBuffer());
+    expect(Array.from(received)).toEqual(Array.from(bytes));
   });
 
   it("normalizes interleaved Provider Native SSE before returning it", async () => {

@@ -161,6 +161,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
+      "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",

@@ -229,6 +229,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     sensitivity: "public",
     applyMode: "hot-apply",
   }),
+  Object.freeze({
+    key: "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
+    type: "boolean",
+    default: true,
+    validation: Object.freeze({ type: "boolean" }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
   ...[
     "modelProvider",
     "openaiBaseUrl",

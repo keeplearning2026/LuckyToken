@@ -55,6 +55,10 @@ import {
 } from "./native-response.js";
 import { extractResponsesPassthroughUsage } from "./passthrough-usage.js";
 import { normalizeNativeResponsesSse } from "./native-sse-lifecycle-normalizer.js";
+import {
+  deriveFunctionCallNamespaceIndex,
+  repairFunctionCallNamespaces,
+} from "./function-call-namespace-repair.js";
 import { executeSemanticResponses } from "./semantic.js";
 import type {
   ProviderResponsesLane,
@@ -68,6 +72,8 @@ export interface OpenAIResponsesHandlerOptions {
   readonly models: Models;
   readonly directLane?: DirectResponsesLane;
   readonly providerNativeLane?: ProviderResponsesLane;
+  /** Settings-backed switch for Provider Native function-call namespace repair. */
+  readonly functionCallNamespaceRepair?: () => boolean;
   readonly createSessionId?: () => string;
   readonly configuration?: OpenAIResponsesConfiguration;
   readonly stateFile: string;
@@ -96,6 +102,7 @@ interface OpenAIResponsesDependencies {
   readonly models: Models;
   readonly directLane: DirectResponsesLane | undefined;
   readonly providerNativeLane: ProviderResponsesLane | undefined;
+  readonly functionCallNamespaceRepair: (() => boolean) | undefined;
   readonly createSessionId: () => string;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly sessionState: ResponseSessionState;
@@ -1185,6 +1192,65 @@ async function providerNativeBranch(
     );
   }
 
+  // Providers sometimes omit the `namespace` of a declared
+  // namespace child. The caller resolves a bare child name under the default
+  // namespace, fails the lookup, and reports `unsupported call: <child>`. The
+  // child -> namespace mapping is read from the caller's own request
+  // declarations; ambiguous or undeclared names are left untouched.
+  // The repair is optional infrastructure: any failure, including a throwing
+  // settings supplier or an unexpected body shape, must leave the bytes that
+  // entered this stage exactly as they arrived. `ignoreBOM` keeps a leading byte-order mark
+  // in the string so the encode round trip cannot drop it.
+  const repairLocation = {
+    phase: "lane_response_processing",
+    lane: "provider_native",
+    step: "repair_function_call_namespace",
+  } as const;
+  enterResponsesJourneyStep(
+    journey,
+    "p5.repair_function_call_namespace",
+    repairLocation,
+  );
+  try {
+    const repairEnabled =
+      upstream.status >= 200 &&
+      upstream.status < 300 &&
+      dependencies.functionCallNamespaceRepair?.() !== false;
+    if (repairEnabled) {
+      // `fatal` keeps the module away from bodies whose bytes are not valid
+      // UTF-8: a successful decode proves the decode/encode round trip is
+      // byte-exact, so every untouched byte survives.
+      const decoded = new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: true,
+      }).decode(body);
+      if (decoded.includes("function_call")) {
+        const repair = repairFunctionCallNamespaces(
+          decoded,
+          deriveFunctionCallNamespaceIndex(rawBody),
+        );
+        if (repair.kind === "repaired") {
+          body = new TextEncoder().encode(repair.body);
+          observeResponsesJourney(journey, {
+            kind: "conversion_notice_observed",
+            code: "provider_native_function_call_namespace_repaired",
+            severity: "info",
+            message: "Provider Native function_call namespace was repaired.",
+            location: repairLocation,
+          });
+        }
+      }
+    }
+  } catch {
+    // The repair-stage input bytes stay authoritative.
+  } finally {
+    completeResponsesJourneyStep(
+      journey,
+      "p5.repair_function_call_namespace",
+      repairLocation,
+    );
+  }
+
   // Ticket 15 symmetry: a successful upstream response must expose the
   // requested alias, never the canonical model id. The buffered body is
   // projected before any byte is committed; an unprojectable shape fails
@@ -1302,6 +1368,7 @@ export function createOpenAIResponsesHandler(
     models: options.models,
     directLane: options.directLane,
     providerNativeLane: options.providerNativeLane,
+    functionCallNamespaceRepair: options.functionCallNamespaceRepair,
     createSessionId: options.createSessionId ?? randomUUID,
     configuration,
     sessionState,

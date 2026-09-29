@@ -53,6 +53,7 @@ export interface OpenAIResponsesServingTestOptions {
   diagnostics?: RequestJourneyObservationAuthority;
   codexDirectModels?: CodexDirectModelSource;
   codexSearchModel?: () => string;
+  functionCallNamespaceRepair?: () => boolean;
 }
 
 export interface OpenAIResponsesServingTestComposition {
@@ -134,6 +135,9 @@ export async function createOpenAIResponsesServingTestComposition(
       ? {}
       : { configuration: options.configuration }),
     ...(directLane === undefined ? {} : { directLane }),
+    ...(options.functionCallNamespaceRepair === undefined
+      ? {}
+      : { functionCallNamespaceRepair: options.functionCallNamespaceRepair }),
   });
   const modelsHandler = createModelsDiscoveryHandler({
     models,

@@ -27,6 +27,7 @@ describe("authoritative registered settings catalog", () => {
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
+      "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",

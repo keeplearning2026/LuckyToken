@@ -145,11 +145,18 @@ fail-open diagnostics path rather than the Client Wire.
 | 6 | P4 | `classify_native_retry` | response/error and Provider contract | retry decision and delay | invalid retry delay, retry policy failure |
 | 7 | P4 | `advance_provider_profile` | validated final HTTP 429 and binding | next request-bound Profile or terminal decision | no eligible Profile, transition failure |
 | 8 | P4 | `read_provider_native_response` | upstream response handle | bounded response bytes/stream artifact | body read, stream parse, unexpected EOF |
-| 9 | P5 | `project_native_alias` | response wire and client alias | alias-safe response wire | missing/ambiguous model position |
-| 10 | P5 | `preserve_provider_response` | compatible provider wire | Client Wire response candidate | protocol incompatibility |
-| 11 | P5 | `observe_provider_native_usage` | preserved response | optional normalized usage | malformed optional usage; never change response outcome |
+| 9 | P5 | `observe_provider_native_usage` | buffered upstream response | optional normalized usage | malformed optional usage; never change response outcome |
+| 10 | P5 | `repair_function_call_namespace` | buffered Provider Native response and the caller's declared tools | inserted `namespace` on a `function_call` the caller declared uniquely, plus the bounded `provider_native_function_call_namespace_repaired` notice | malformed body, certified event with a malformed carrier, duplicate keys, non-UTF-8 bytes, a refused request-side authority (repeated key inside `tools`), ambiguous or undeclared child (all fail-open to the stage input bytes) |
+| 11 | P5 | `project_native_alias` | response wire and client alias | alias-safe response wire | missing/ambiguous model position |
+| 12 | P5 | `preserve_provider_response` | compatible provider wire | Client Wire response candidate | protocol incompatibility |
 
 This lane never enters Pi AI IR or Pi Provider semantic execution. Its credential, request construction, retry, transport, and response processing remain independent from Direct Mode and Semantic Conversion.
+
+The `Order` column lists the steps that own a documented contract outcome, in
+execution order. Steps that only move bytes between those boundaries — response
+buffering, SSE lifecycle normalization — are described in their own plans rather
+than repeated here, so an absent row is not an absent step. Usage observation runs
+immediately after buffering, before lifecycle normalization.
 
 ## 6. Semantic Conversion request direction: Client Wire to Pi IR
 

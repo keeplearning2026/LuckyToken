@@ -71,6 +71,8 @@ export interface ConfiguredTokenDataPlaneOptions {
   readonly codexDirectFetch?: CodexDirectFetch;
   readonly codexDirectModels?: CodexDirectModelSource;
   readonly codexSearchModel?: () => string;
+  /** Settings-backed switch for Provider Native function-call namespace repair. */
+  readonly functionCallNamespaceRepair?: () => boolean;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
@@ -228,6 +230,9 @@ export async function createConfiguredTokenDataPlane(
         requestTimeoutMs: config.limits.requestTimeoutMs,
         now,
         executeOperation: semanticExecution,
+        ...(options.functionCallNamespaceRepair === undefined
+          ? {}
+          : { functionCallNamespaceRepair: options.functionCallNamespaceRepair }),
         ...(directLane === undefined ? {} : { directLane }),
       }),
       createOpenAIResponsesCompactHandler({

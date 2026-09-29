@@ -970,6 +970,11 @@ async function startNormalApplication(options: {
               ]?.value;
               return typeof value === "string" ? value : "gpt-6-luna";
             },
+            functionCallNamespaceRepair: () =>
+              settingsRegistry.query([
+                "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
+              ])["protocols.openai-responses.responseRepair.functionCallNamespace.providerNative"]
+                ?.value !== false,
           });
           const listener = await startRunningDataPlaneListener({
             dataPlane: composition,

@@ -191,6 +191,13 @@ local credential authority.
 
 Provider Native Preservation may use resolved Pi Model/auth facts but never enters Pi IR
 or Pi Provider execution and never borrows Direct Mode request builders or transports.
+Its response path commits a successful upstream response after three bounded rewrites,
+in this order: SSE lifecycle normalization, the function-call namespace insertion, then
+the model alias projection. The insertion is documented in
+`doc/Spec/TokenProviderNativeFunctionCallNamespaceRepair.md` (setting
+`protocols.openai-responses.responseRepair.functionCallNamespace.providerNative`, default
+on; it only inserts the `namespace` property of a `function_call` whose child the request
+declared uniquely, and never rewrites an existing value or an item name).
 
 Semantic Conversion uses Client Protocol modules and Pi Provider execution and never
 imports either preservation lane's request builders, credentials, transports, or

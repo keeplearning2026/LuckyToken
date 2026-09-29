@@ -4,8 +4,9 @@ import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AdvancedSettings } from "./AdvancedSettings.js";
 import { DataSettings } from "./DataSettings.js";
 import { GeneralSettings } from "./GeneralSettings.js";
+import { ResponseRepairSettings } from "./ResponseRepairSettings.js";
 
-type SettingsSection = "general" | "data" | "advanced";
+type SettingsSection = "general" | "data" | "advanced" | "responseRepair";
 
 const sections: ReadonlyArray<Readonly<{
   id: SettingsSection;
@@ -15,6 +16,11 @@ const sections: ReadonlyArray<Readonly<{
   { id: "general", label: "General", description: "Startup behavior" },
   { id: "data", label: "Data & privacy", description: "History and backups" },
   { id: "advanced", label: "Advanced", description: "Codex and diagnostics" },
+  {
+    id: "responseRepair",
+    label: "Response repair",
+    description: "Protocol response repairs",
+  },
 ]);
 
 export function SettingsPage({ api }: { readonly api: TokenDesktopApi }) {
@@ -53,6 +59,8 @@ export function SettingsPage({ api }: { readonly api: TokenDesktopApi }) {
           <GeneralSettings api={api} />
         ) : section === "data" ? (
           <DataSettings api={api} />
+        ) : section === "responseRepair" ? (
+          <ResponseRepairSettings api={api} />
         ) : (
           <AdvancedSettings api={api} />
         )}
