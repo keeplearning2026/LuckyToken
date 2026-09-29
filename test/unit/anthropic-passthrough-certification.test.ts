@@ -199,17 +199,37 @@ describe("11: native Anthropic passthrough certification", () => {
             max_tokens: 32,
             messages: [{ role: "user", content: "hi" }],
           }),
-          { "x-stainless-retry-count": "1", "x-stainless-timeout": "60000" },
+          {
+            "user-agent": "client-user-agent",
+            "x-stainless-retry-count": "1",
+            "x-stainless-timeout": "60000",
+            "anthropic-beta": "client-beta",
+            "x-session-affinity": "client-affinity",
+            session_id: "client-session",
+          },
         ),
       );
       expect(response.status).toBe(200);
       expect(upstreamRequests[0]?.headers.get("x-stainless-retry-count")).toBe(
         "0",
       );
-      expect(upstreamRequests[0]?.headers.get("x-stainless-timeout")).toBe(
-        null,
-      );
+      // The client cannot inject transport identity: the SDK computes its own
+      // timeout (it derives one from `max_tokens` for non-streaming bodies).
+      expect(
+        upstreamRequests[0]?.headers.get("x-stainless-timeout"),
+      ).toMatch(/^\d+$/u);
+      expect(
+        upstreamRequests[0]?.headers.get("x-stainless-timeout"),
+      ).not.toBe("60000");
       expect(upstreamRequests[0]?.headers.get("x-stainless-lang")).toBe("js");
+      expect(upstreamRequests[0]?.headers.get("user-agent")).not.toBe(
+        "client-user-agent",
+      );
+      expect(upstreamRequests[0]?.headers.get("anthropic-beta")).not.toBe(
+        "client-beta",
+      );
+      expect(upstreamRequests[0]?.headers.get("x-session-affinity")).toBeNull();
+      expect(upstreamRequests[0]?.headers.get("session_id")).toBeNull();
     } finally {
       restore();
     }

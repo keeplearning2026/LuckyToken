@@ -5,6 +5,9 @@ type ProviderUsageCommandResult = Awaited<
 >;
 type ProviderUsageProviderProjection =
   ProviderUsageCommandResult["snapshot"]["providers"][number];
+type ProviderUsageRefreshProjection = NonNullable<
+  ProviderUsageCommandResult["refresh"]
+>;
 type ObservedProviderUsageProjection = Extract<
   ProviderUsageProviderProjection,
   { readonly state: "observed" }
@@ -17,6 +20,26 @@ export interface ProviderCardUsagePresentation {
   readonly secondary: readonly string[];
   readonly status?: string;
   readonly refreshable: boolean;
+}
+
+export function providerUsageRefreshFailureNotice(): string {
+  return "Provider usage could not be refreshed.";
+}
+
+export function providerUsageRefreshNotice(
+  refresh: ProviderUsageRefreshProjection | undefined,
+): string | undefined {
+  if (refresh?.outcome === "unavailable") {
+    return providerUsageRefreshFailureNotice();
+  }
+  if (refresh?.outcome === "unsupported") {
+    return refresh.reason === "destination"
+      ? "Provider usage cannot be refreshed for this endpoint."
+      : refresh.reason === "binding"
+        ? "Provider usage cannot be refreshed for this account type."
+        : "Provider usage cannot be refreshed.";
+  }
+  return undefined;
 }
 
 function percent(value: number): string {
@@ -77,7 +100,7 @@ export function projectProviderCardUsage(
       primary: Object.freeze([]),
       secondary: Object.freeze([]),
       status: "Usage not refreshed",
-      refreshable: provider !== undefined,
+      refreshable: true,
     });
   }
   if (provider.state === "unsupported") {
@@ -106,10 +129,11 @@ export function projectProviderCardUsage(
   const secondary: string[] = [];
 
   for (const window of provider.windows) {
-    primary.push(`${windowLabel(window)} ${percent(window.usedPercent)}`);
+    const label = windowLabel(window);
+    primary.push(`${label} ${percent(window.usedPercent)}`);
     if (window.resetAt !== undefined) {
       const reset = resetText(window.resetAt, now);
-      if (reset !== undefined) secondary.push(`${windowLabel(window)} ${reset}`);
+      if (reset !== undefined) secondary.push(`${label} ${reset}`);
     }
   }
 

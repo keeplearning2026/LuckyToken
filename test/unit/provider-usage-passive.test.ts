@@ -83,6 +83,7 @@ describe("Provider Usage passive observation", () => {
     expect(observePassive).toHaveBeenCalledWith(
       "anthropic",
       capture,
+      "https://api.anthropic.com",
       {
         windows: [{ kind: "five_hour", usedPercent: 50 }],
         budgets: [],

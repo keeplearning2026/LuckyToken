@@ -30,6 +30,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
       "src/provider-native-responses/codex.ts",
       "src/provider-native-responses/azure.ts",
       "src/provider-native-responses/common.ts",
+      "src/provider-native-responses/certification.ts",
       "src/provider-native-responses/contract.ts",
     ]) {
       const text = await source(file);
@@ -59,6 +60,7 @@ describe("OpenAI Responses three-lane architecture certification", () => {
       "src/provider-native-anthropic/index.ts",
       "src/provider-native-anthropic/transport.ts",
       "src/provider-native-anthropic/body-projection.ts",
+      "src/provider-native-anthropic/certification.ts",
     ]) {
       const text = await source(file);
       expect(text).not.toMatch(/semantic-conversion/u);

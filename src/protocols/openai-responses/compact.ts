@@ -253,6 +253,7 @@ async function providerCompact(
   model: Parameters<ProviderResponsesLane["claims"]>[0],
   alias: string | undefined,
   journey: RequestJourneyObserver | undefined,
+  requestTimeoutMs: number | undefined,
 ): Promise<Response> {
   let finalAttempt = 1;
   const observation: ProviderResponsesObservationContext | undefined =
@@ -274,6 +275,7 @@ async function providerCompact(
       rawBody,
       signal: request.signal,
       operation: "compact",
+      ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
       ...(observation === undefined ? {} : { observation }),
     });
   } catch (error) {
@@ -660,6 +662,7 @@ export function createOpenAIResponsesCompactHandler(
               model,
               alias,
               journey,
+              options.requestTimeoutMs,
             );
           }
         }

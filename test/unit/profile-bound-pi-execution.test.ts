@@ -119,6 +119,7 @@ describe("Profile-bound Pi execution", () => {
     const current = capture("credential-primary", "Production", "selection-1");
     const callerResponses: unknown[] = [];
     const usageResponses: unknown[] = [];
+    const usageModels: unknown[] = [];
     const usageCaptures: ProviderAuthBindingCapture[] = [];
     const underlying: ExecutionOperation = async (
       _models,
@@ -128,10 +129,16 @@ describe("Profile-bound Pi execution", () => {
       _facts,
       observation,
     ) => {
-      await observation?.providerResponse?.({
-        status: 200,
-        headers: { "x-fixture": "1" },
-      });
+      await observation?.providerResponse?.(
+        {
+          status: 200,
+          headers: { "x-fixture": "1" },
+        },
+        {
+          provider: "fixture-provider",
+          baseUrl: "https://effective.example/v1",
+        } as never,
+      );
       return { role: "assistant", content: [], stopReason: "stop" } as never;
     };
     const execute = createProfileBoundPiExecution({
@@ -142,7 +149,8 @@ describe("Profile-bound Pi execution", () => {
       },
       execute: underlying,
       resolveCredentialActivity: credentialActivityForExecutionFacts,
-      providerResponseObservation: ({ capture: boundCapture, response }) => {
+      providerResponseObservation: ({ model: observedModel, capture: boundCapture, response }) => {
+        usageModels.push(observedModel);
         usageCaptures.push(boundCapture);
         usageResponses.push(response);
       },
@@ -165,6 +173,12 @@ describe("Profile-bound Pi execution", () => {
       { status: 200, headers: { "x-fixture": "1" } },
     ]);
     expect(usageResponses).toEqual(callerResponses);
+    expect(usageModels).toEqual([
+      expect.objectContaining({
+        provider: "fixture-provider",
+        baseUrl: "https://effective.example/v1",
+      }),
+    ]);
     expect(usageCaptures).toEqual([current]);
   });
 
@@ -178,10 +192,13 @@ describe("Profile-bound Pi execution", () => {
       _facts,
       observation,
     ) => {
-      await observation?.providerResponse?.({
-        status: 200,
-        headers: { "x-fixture": "1" },
-      });
+      await observation?.providerResponse?.(
+        {
+          status: 200,
+          headers: { "x-fixture": "1" },
+        },
+        { provider: "fixture-provider" } as never,
+      );
       return { role: "assistant", content: [], stopReason: "stop" } as never;
     };
     const execute = createProfileBoundPiExecution({

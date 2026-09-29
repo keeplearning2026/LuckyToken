@@ -92,10 +92,15 @@ async function readBoundedJson(
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  const cancelOnAbort = (): void => {
+    void reader.cancel(signal.reason).catch(() => undefined);
+  };
+  signal.addEventListener("abort", cancelOnAbort, { once: true });
   try {
     for (;;) {
       signal.throwIfAborted();
       const next = await reader.read();
+      signal.throwIfAborted();
       if (next.done) break;
       total += next.value.byteLength;
       if (total > PROVIDER_USAGE_RESPONSE_MAX_BYTES) {
@@ -104,7 +109,15 @@ async function readBoundedJson(
       }
       chunks.push(next.value);
     }
+  } catch (error) {
+    try {
+      await reader.cancel(signal.aborted ? signal.reason : error);
+    } catch {
+      // Best-effort only.
+    }
+    throw error;
   } finally {
+    signal.removeEventListener("abort", cancelOnAbort);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);
@@ -140,7 +153,12 @@ export async function fetchProviderUsageJson(
       reason: response.status === 401 || response.status === 403 ? "auth" : "upstream",
     });
   }
-  const body = await readBoundedJson(response, signal).catch(() => undefined);
+  let body: unknown | undefined;
+  try {
+    body = await readBoundedJson(response, signal);
+  } catch {
+    return Object.freeze({ response, reason: "network" });
+  }
   if (body === undefined) {
     return Object.freeze({ response, reason: "schema" });
   }

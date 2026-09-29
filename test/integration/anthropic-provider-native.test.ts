@@ -116,6 +116,83 @@ describe("Anthropic Provider Native lane", () => {
     });
   });
 
+  it("rebuilds Anthropic SDK identity, timeout, and auth after a 429 Profile switch", async () => {
+    const captures: ManagedProviderAuthBindingCapture[] = [1, 2].map((index) => ({
+      facts: {
+        kind: "managed",
+        providerId: "anthropic",
+        credentialId: `credential-${index}`,
+        authType: "api_key",
+        authMethodLabel: "Anthropic credentials",
+        displayName: `Profile ${index}`,
+        credentialGeneration: `credential-generation-${index}`,
+        selectionGeneration: `selection-generation-${index}`,
+      },
+    }));
+    let currentCapture = captures[0]!;
+    let transition = 0;
+    const sent: Request[] = [];
+    const lane = createAnthropicProviderNativeLane({
+      models: {
+        getAuth: async () => ({
+          auth: { apiKey: `key-${currentCapture.facts.credentialId}` },
+        }),
+      } as Pick<Models, "getAuth">,
+      bindings: {
+        capture: async () => captures[0]!,
+        runBound: async <T>(
+          binding: ProviderAuthBindingCapture,
+          operation: () => Promise<T>,
+        ) => {
+          currentCapture = binding as ManagedProviderAuthBindingCapture;
+          return operation();
+        },
+        advanceAfterFinal429: async () => ({
+          outcome: "switched",
+          capture: captures[++transition]!,
+        }),
+      },
+      resolveRequestModel: (value) => value,
+      fetch: async (input, init) => {
+        sent.push(new Request(input, init));
+        return sent.length === 1
+          ? new Response("limited", { status: 429 })
+          : new Response(
+              '{"type":"message","model":"claude-test","content":[]}',
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            );
+      },
+    });
+
+    const result = await lane.execute({
+      model: model("anthropic-messages", "https://api.anthropic.com"),
+      rawBody: '{"model":"anthropic/claude-test","messages":[]}',
+      request: request(),
+      requestId: "req_client",
+      requestTimeoutMs: 123_456,
+      onExecutionStart: () => undefined,
+    });
+
+    expect(result.outcome).toBe("success");
+    expect(sent).toHaveLength(2);
+    expect(sent.map((entry) => entry.headers.get("x-api-key"))).toEqual([
+      "key-credential-1",
+      "key-credential-2",
+    ]);
+    expect(
+      sent.map((entry) => entry.headers.get("x-stainless-retry-count")),
+    ).toEqual(["0", "0"]);
+    expect(
+      sent.map((entry) => entry.headers.get("x-stainless-timeout")),
+    ).toEqual(["123", "123"]);
+    expect(sent[1]!.headers.get("user-agent")).toBe(
+      sent[0]!.headers.get("user-agent"),
+    );
+  });
+
   it("stops after three outer Profile attempts even if a binding Adapter keeps switching", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2, 3, 4].map((index) => ({
       facts: {
@@ -164,6 +241,7 @@ describe("Anthropic Provider Native lane", () => {
 
   it("publishes fail-open Provider response metadata with the exact Profile capture", async () => {
     const observed: Array<{
+      readonly model: Model<string>;
       readonly capture: ProviderAuthBindingCapture;
       readonly response: unknown;
     }> = [];
@@ -180,10 +258,17 @@ describe("Anthropic Provider Native lane", () => {
           },
         ),
       { auth: { apiKey: "provider-key" }, source: "fixture" },
-      (value) => value,
+      (value) => ({
+        ...value,
+        baseUrl: "https://effective.example.com/gateway",
+      }),
       fixedManagedProfileBindings("api_key"),
-      ({ capture, response }) => {
-        observed.push({ capture, response });
+      ({ model: observedModel, capture, response }) => {
+        observed.push({
+          model: observedModel as Model<string>,
+          capture,
+          response,
+        });
       },
     );
 
@@ -197,6 +282,9 @@ describe("Anthropic Provider Native lane", () => {
 
     expect(result.outcome).toBe("success");
     expect(observed).toHaveLength(1);
+    expect(observed[0]?.model.baseUrl).toBe(
+      "https://effective.example.com/gateway",
+    );
     expect(observed[0]?.capture.facts).toMatchObject({
       kind: "managed",
       authType: "api_key",
@@ -234,7 +322,7 @@ describe("Anthropic Provider Native lane", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("owns effective model, endpoint, credentials, header precedence and raw-wire dispatch", async () => {
+  it("owns effective model, SDK endpoint, credentials, and header precedence", async () => {
     const rawBody = '{ "model": "fixture/claude-test", "max_tokens": 1, "messages": [] }';
     const calls: Array<readonly [RequestInfo | URL, RequestInit | undefined]> = [];
     const fetch: FetchFunction = async (input, init) => {
@@ -250,7 +338,7 @@ describe("Anthropic Provider Native lane", () => {
     const lane = createLane(
       fetch,
       { auth: { apiKey: "provider-key", headers: {
-        Authorization: "Bearer provider-token", "X-Api-Key": "must-not-win", "X-Operator": "operator",
+        Authorization: "Bearer provider-token", "X-Api-Key": "composed-provider-key", "X-Operator": "operator",
       } }, source: "fixture" },
       (value) => ({ ...value, baseUrl: "https://effective.example.com/gateway" }),
     );
@@ -260,12 +348,16 @@ describe("Anthropic Provider Native lane", () => {
     expect(result.outcome).toBe("success");
     expect(onExecutionStart).toHaveBeenCalledTimes(1);
     const call = calls[0];
-    expect(String(call?.[0])).toBe("https://effective.example.com/gateway/v1/messages");
-    expect(call?.[1]?.body).toBe(
-      '{ "model": "claude-test", "max_tokens": 1, "messages": [] }',
+    expect(String(call?.[0])).toBe(
+      "https://effective.example.com/gateway/v1/messages?beta=true",
     );
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      model: "claude-test",
+      max_tokens: 1,
+      messages: [],
+    });
     const headers = new Headers(call?.[1]?.headers);
-    expect(headers.get("x-api-key")).toBe("provider-key");
+    expect(headers.get("x-api-key")).toBe("composed-provider-key");
     expect(headers.get("authorization")).toBe("Bearer provider-token");
     expect(headers.get("x-operator")).toBe("operator");
     expect(headers.get("anthropic-beta")).not.toBe("tools-2025-04-14");
@@ -348,7 +440,7 @@ describe("Anthropic Provider Native lane", () => {
       "Bearer not-an-oauth-shaped-token",
     );
     expect(upstreamRequest!.headers.get("x-api-key")).toBeNull();
-    expect(upstreamRequest!.headers.get("user-agent")).toBe("claude-cli/2.1.75");
+    expect(upstreamRequest!.headers.get("user-agent")).toBe("claude-cli/2.1.251");
     expect(upstreamRequest!.headers.get("x-app")).toBe("cli");
     expect(upstreamRequest!.headers.get("anthropic-beta")).toContain(
       "claude-code-20250219",
@@ -405,9 +497,9 @@ describe("Anthropic Provider Native lane", () => {
     await managedApiKey.execute(input);
     await ambient.execute(input);
 
-    expect(bodies).toEqual([
-      '{ "model": "claude-test", "messages": [] }',
-      '{ "model": "claude-test", "messages": [] }',
+    expect(bodies.map((body) => JSON.parse(body))).toEqual([
+      { model: "claude-test", messages: [] },
+      { model: "claude-test", messages: [] },
     ]);
     expect(headers[0]!.get("x-api-key")).toBe("sk-ant-oat-misleading-text");
     expect(headers[0]!.get("authorization")).toBeNull();

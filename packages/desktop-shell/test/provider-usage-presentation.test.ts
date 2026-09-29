@@ -1,8 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import { projectProviderCardUsage } from "../src/renderer/providers/provider-usage-presentation.js";
+import {
+  projectProviderCardUsage,
+  providerUsageRefreshFailureNotice,
+  providerUsageRefreshNotice,
+} from "../src/renderer/providers/provider-usage-presentation.js";
 
 describe("Provider usage presentation", () => {
+  it("keeps explicit refresh reachable before the initial cache query succeeds", () => {
+    expect(projectProviderCardUsage(undefined, 0)).toMatchObject({
+      status: "Usage not refreshed",
+      refreshable: true,
+    });
+    expect(providerUsageRefreshFailureNotice()).toBe(
+      "Provider usage could not be refreshed.",
+    );
+    expect(
+      providerUsageRefreshNotice({
+        providerId: "anthropic",
+        outcome: "unsupported",
+        reason: "destination",
+      }),
+    ).toBe("Provider usage cannot be refreshed for this endpoint.");
+  });
+
   it("formats structured windows and balances without Provider wire knowledge", () => {
     expect(
       projectProviderCardUsage(

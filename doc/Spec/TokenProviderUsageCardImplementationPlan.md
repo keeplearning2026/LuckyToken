@@ -1,6 +1,6 @@
-# Token Provider Usage Card Implementation Plan v0.3
+# Token Provider Usage Card Implementation Plan v0.5
 
-**Status:** IMPLEMENTED — RELEASE CERTIFIED
+**Status:** IMPLEMENTED — DESTINATION / PASSIVE-RACE HARDENED
 
 **Date:** 2026-09-29
 
@@ -14,12 +14,30 @@
 
 **Implementation certification (2026-09-29):**
 
+Pre-hardening v0.3 baseline:
+
 - `npm run typecheck` — passed;
 - `npm run lint` — passed;
 - `npm run test:release` — passed;
 - release certification: 73/73 passed;
 - root Vitest under release concurrency: 277 files / 2487 tests passed;
 - Desktop Vitest: 21 files / 122 tests passed.
+
+Post-review v0.4 validation:
+
+- `npm run lint` — passed;
+- Application Control Plane build — passed;
+- Provider Usage focused suite: 7 files / 74 tests passed;
+- Desktop Vitest: 21 files / 125 tests passed.
+
+Self-review v0.5 validation:
+
+- root `tsc --noEmit` — passed;
+- Application Control Plane and Desktop typecheck — passed;
+- Provider Usage / Anthropic Native focused suite: 8 files / 99 tests passed;
+- Desktop Vitest: 21 files / 127 tests passed;
+- targeted ESLint on all v0.5 touched files — passed;
+- full repository lint is currently blocked only by unrelated concurrent edits in `responses-native-provider-pi-parity.test.ts`.
 
 ---
 
@@ -525,7 +543,7 @@ read effective Provider destination
 probe eligibility(binding + destination)
       ↓
 eligible only:
-join/create in-flight work for that exact identity
+join/create in-flight work for that exact binding + effective-destination identity
       ↓
 runBound(capture, same Authority signal)
       ↓
@@ -607,7 +625,7 @@ providerId -> {
 }
 ```
 
-The Authority does not retain an unbounded history of credential generations. In-flight work uses the complete binding identity as its key, but only the current Provider slot is retained after publication.
+The Authority does not retain an unbounded history of credential generations. In-flight work uses the complete binding identity **plus the effective Provider destination** as its key, so a destination change cannot join an older request. Only the current Provider slot is retained after publication.
 
 There is no acquisition TTL in the first release because:
 
@@ -620,7 +638,9 @@ The Authority stores `observedAt`; presentation may show age/staleness. A TTL ca
 Important behavior:
 
 - successful observed facts replace the current slot;
-- an authoritative empty success also replaces the current slot and clears old bars/budgets;
+- passive observations also replace the whole current slot; partial passive merging is not allowed while the contract has only one observation-level `observedAt`, because carrying forward an absent old fact would falsely refresh its age;
+- an authoritative empty success replaces the current slot only when the Provider response positively proves the prior fact no longer exists; missing or malformed expected rows are `unavailable/schema`, not empty success;
+- OpenRouter explicit uncapped state and Z.AI well-formed inference-empty limits are examples of authoritative empty; missing MiniMax `general` rows and missing DeepSeek balance rows are not;
 - failed refresh does not erase a valid last-success observation for the same current binding;
 - when no same-binding success exists, the refresh response may report `unavailable`, but the Authority does not retain a separate unbounded failure history; a later cache-only query may return `unobserved`;
 - a different binding never reuses the previous slot;
@@ -638,7 +658,11 @@ The complete active-refresh sequence is:
 ```text
 capture Provider binding
       ↓
-read effective Provider baseUrl from served Models
+derive effective Provider destination from served Models:
+  1. collect non-empty served model baseUrls;
+  2. exactly one unique model destination → use it;
+  3. multiple model destinations → unsafe/ambiguous destination;
+  4. no model destination → fall back to Provider baseUrl
       ↓
 probe.eligibility({
   providerId,
@@ -649,14 +673,18 @@ probe.eligibility({
 unsupported? return without auth/network
       ↓
 runBound(capture, async () => {
-  models.getAuth(providerId, { signal })
+  auth = models.getAuth(providerId, { signal })
+  if auth.auth.baseUrl exists:
+    re-check probe eligibility against that credential-scoped destination
   probe.acquire({ auth, signal })
 })
       ↓
 publishIfCurrent(capture)
 ```
 
-Eligibility is intentionally before `Models.getAuth()`: an unsupported auth type or unsafe destination must not trigger OAuth refresh and must not expose a credential to a quota endpoint.
+Eligibility is intentionally before `Models.getAuth()`: an unsupported auth type or unsafe destination must not trigger OAuth refresh and must not expose a credential to a quota endpoint. Provider-level `baseUrl` must never override a conflicting served model-level destination for this safety decision. If served models have multiple distinct destinations, proactive usage acquisition is `unsupported/destination`.
+
+Pi auth may additionally return a credential-scoped `auth.baseUrl` that overrides the request model at execution time. After auth resolution, but still before quota network acquisition, the Authority must re-run destination eligibility against that override when present. A non-canonical credential-scoped destination returns `unsupported/destination` and the probe is not invoked.
 
 The probe owns how `AuthResult` maps to the quota request. The Authority must not assume Bearer auth.
 
@@ -713,13 +741,16 @@ The Authority accepts already-normalized facts through:
 observePassive(
   providerId: string,
   capture: ProviderAuthBindingCapture,
+  effectiveBaseUrl: string,
   facts: ProviderUsageFacts,
-): void
+): Promise<boolean>
 ```
 
-Passive publication uses the same current-binding/generation checks as active acquisition and is additionally accepted only for the canonical Anthropic effective destination. Observation failure is fail-open and never affects request success.
+Passive publication uses the same current-binding/generation checks as active acquisition and is additionally accepted only when the **actual request Model destination** equals the Provider's current unambiguous served destination. Pi's public `onResponse(response, model)` second argument supplies the resolved request Model in Semantic Conversion; Anthropic Provider Native passes its resolved `requestModel`. A mixed/moved destination therefore cannot publish or display a stale/incorrect Anthropic observation. Observation failure is fail-open and never affects request success.
 
 A passive-only observation may be displayed even though the current binding has no proactive refresh path. The Control Plane therefore carries an observed-state `refreshable: boolean`; Anthropic API-key passive observations render normally with `refreshable: false`.
+
+Because Provider Usage is intentionally not part of `StatusSnapshot`, a successful Request Journey with a Provider/Profile attribution triggers a **cache-only** Provider Usage `query` in the Providers page. The Renderer applies only that Provider's row under its existing local epoch guard. This makes newly observed passive usage visible without any automatic quota/OAuth network request.
 
 ### Meta `response.subscription_usage` — gated/deferred
 
@@ -1137,9 +1168,9 @@ Never expose:
 
 # 17. Test plan
 
-## 17.1 Per-Provider probe tests
+## 17.1 Probe and shared wire tests
 
-Every supported Provider receives tests for:
+Every supported Provider receives Provider-owned tests for:
 
 - eligible managed auth type;
 - unsupported managed auth type where applicable;
@@ -1147,21 +1178,27 @@ Every supported Provider receives tests for:
 - canonical effective destination;
 - overlaid/non-canonical destination rejection before auth;
 - success fixture;
+- malformed Provider schema;
+- missing auth after eligible resolution;
 - authoritative empty success where the Provider can legitimately remove a prior limit;
 - partial valid response where supported;
-- malformed JSON;
-- malformed schema;
-- oversized body;
-- parent-signal timeout/abort;
-- 401/403;
-- 429;
-- 5xx;
-- missing auth after eligible resolution;
-- invalid reset timestamps;
-- out-of-range percentage;
-- no credential leakage.
+- Provider-specific headers/query/auth construction;
+- Provider-specific normalization and omission of invalid optional facts;
+- no credential leakage from typed results.
 
-Provider-specific eligibility, wire construction, failure classification, and normalization are tested only here.
+The shared Provider Usage wire layer is tested once, independently of Provider semantics, for:
+
+- malformed JSON;
+- oversized body;
+- body-read failure;
+- parent-signal timeout/abort and body cancellation;
+- 401/403 → `auth`;
+- 429/5xx → `upstream`;
+- redirect rejection;
+- invalid reset timestamps;
+- out-of-range percentages.
+
+In addition, every registered probe is run through a common HTTP-failure matrix (401/403/429/5xx, malformed JSON, oversized response, parent abort) to certify that each probe preserves the shared typed failure contract.
 
 ## 17.2 CommandCode separation
 
@@ -1256,10 +1293,14 @@ Prove:
 - unsupported binding performs zero auth and zero fetch;
 - unsupported/unsafe effective destination performs zero auth and zero fetch;
 - eligibility sees the served effective `baseUrl`, not only `providerId`;
+- served model destinations take precedence over Provider-level `baseUrl`, and multiple distinct model destinations are rejected before auth;
+- an auth-resolved `baseUrl` override is checked again before probe network;
 - `query` performs zero auth and zero fetch;
 - `query` returns only a cache slot whose binding identity matches the current capture;
 - query current-guard failure retries at most once and otherwise returns `unobserved`;
-- concurrent same-binding refreshes join one in-flight operation;
+- concurrent same-binding, same-destination refreshes join one in-flight operation;
+- a destination change never joins older in-flight work;
+- query and refresh publication re-check the effective destination inside the final current-binding publication guard;
 - different Providers never share in-flight work;
 - different credential generations never share in-flight work;
 - the Authority's one abort signal is passed to both `Models.getAuth(..., { signal })` and probe acquisition;
@@ -1301,6 +1342,8 @@ Prove:
 - stale Usage query results are rejected by renderer-local epoch;
 - stale refresh results are rejected by renderer-local epoch;
 - automatic 429 Profile switching follows the same invalidation path;
+- a successful Provider Request Journey triggers only a cache-only Usage requery so passive observations become visible;
+- post-auth `unsupported/binding|destination` refresh outcomes produce presentation-owned user feedback even when cache-only query cannot observe the auth-local reason;
 - all display strings come from the projector.
 
 ## 17.7 Non-interference

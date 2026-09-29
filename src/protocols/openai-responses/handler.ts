@@ -1003,6 +1003,9 @@ async function providerNativeBranch(
         signal: request.signal,
         sessionId,
         operation: "responses",
+        ...(dependencies.requestTimeoutMs === undefined
+          ? {}
+          : { requestTimeoutMs: dependencies.requestTimeoutMs }),
         ...(observation === undefined ? {} : { observation }),
       }),
       request.signal,

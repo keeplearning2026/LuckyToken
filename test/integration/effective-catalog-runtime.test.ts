@@ -197,7 +197,7 @@ describe("effective composition in the data plane", () => {
     // override) survived the overlay.
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0]?.url).toBe(
-      "https://anthropic-gateway.example.com/v1/messages",
+      "https://anthropic-gateway.example.com/v1/messages?beta=true",
     );
     expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe("gateway-key");
   });
@@ -242,10 +242,10 @@ describe("effective composition in the data plane", () => {
     expect(appended.status).toBe(200);
     expect(upstreamRequests).toHaveLength(2);
     expect(upstreamRequests[0]?.url).toBe(
-      "https://anthropic-gateway.example.com/v1/messages",
+      "https://anthropic-gateway.example.com/v1/messages?beta=true",
     );
     expect(upstreamRequests[1]?.url).toBe(
-      "https://anthropic-gateway.example.com/v1/messages",
+      "https://anthropic-gateway.example.com/v1/messages?beta=true",
     );
   });
 
@@ -329,7 +329,7 @@ describe("effective composition in the data plane", () => {
     expect(configured.status).toBe(200);
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0]?.url).toBe(
-      "https://radius-gateway.example.com/v1/messages",
+      "https://radius-gateway.example.com/v1/messages?beta=true",
     );
     expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe("radius-key");
 
@@ -421,7 +421,7 @@ describe("effective composition in the data plane", () => {
     // credential through the built-in resolution path.
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0]?.url).toBe(
-      "https://api.anthropic.com/v1/messages",
+      "https://api.anthropic.com/v1/messages?beta=true",
     );
     expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe(
       "stored-builtin-key",

@@ -468,7 +468,7 @@ function buildProjection(
 
   const reordered = order.map((source) => input[source]);
   return {
-    parsed: { ...parsed, input: reordered },
+    parsed: { ...parsed, model: modelId, input: reordered },
     text: projected,
     outcome: "deferred",
     deferredMessages: movedCount,

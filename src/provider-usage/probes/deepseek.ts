@@ -60,8 +60,8 @@ export function createDeepSeekUsageProbe(fetch: FetchFunction): ProviderUsagePro
       });
       if (row === undefined) {
         return Object.freeze({
-          state: "observed" as const,
-          facts: Object.freeze({ windows: Object.freeze([]), budgets: Object.freeze([]) }),
+          state: "unavailable" as const,
+          reason: "schema" as const,
         });
       }
       const amount =

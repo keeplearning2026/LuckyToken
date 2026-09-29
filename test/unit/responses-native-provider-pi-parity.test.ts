@@ -13,10 +13,39 @@ import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import { createProviderResponsesSender } from "../../src/provider-native-responses/index.js";
+import { PROVIDER_NATIVE_RESPONSES_CERTIFIED } from "../../src/provider-native-responses/certification.js";
 import { COMMANDCODE_GOAT_MODELS } from "../../packages/provider-commandcode-goat/src/models.js";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000123";
 const CONTEXT = normalizeContext({ messages: [] });
+const OPENAI_BASE_URLS: Readonly<Record<string, string>> = {
+  openai: "https://api.openai.com/v1",
+  xai: "https://api.x.ai/v1",
+  opencode: "https://opencode.ai/zen/v1",
+  "opencode-go": "https://opencode.ai/zen/go/v1",
+  "cloudflare-ai-gateway": "https://gateway.example.com/openai",
+  "github-copilot": "https://api.githubcopilot.com",
+  "commandcode-goat": "https://api.commandcode.ai/provider/v1",
+};
+const OPENAI_CASES = PROVIDER_NATIVE_RESPONSES_CERTIFIED
+  .filter((entry) => entry.transport === "openai" && entry.provider !== "commandcode-goat")
+  .flatMap((entry) =>
+    entry.authTypes.flatMap((authType) =>
+      entry.operations.map((operation) => ({
+        provider: entry.provider,
+        api: entry.api,
+        operation,
+        authType,
+        baseUrl: OPENAI_BASE_URLS[entry.provider],
+      })),
+    ),
+  );
+const GOAT_AUTH_TYPES = PROVIDER_NATIVE_RESPONSES_CERTIFIED.find(
+  (entry) => entry.provider === "commandcode-goat",
+)?.authTypes ?? [];
+const AZURE_AUTH_TYPES = PROVIDER_NATIVE_RESPONSES_CERTIFIED.find(
+  (entry) => entry.transport === "azure",
+)?.authTypes ?? [];
 
 function model<TApi extends string>(
   provider: string,
@@ -83,6 +112,7 @@ async function captureTokenRequest(
   selectedModel: Model<string>,
   selectedAuth: AuthResult,
   rawBody: string,
+  operation: "responses" | "compact" = "responses",
 ): Promise<Request> {
   let captured: Request | undefined;
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -93,14 +123,21 @@ async function captureTokenRequest(
     model: selectedModel,
     auth: selectedAuth,
     fetch,
-    sessionId: SESSION_ID,
+    ...(operation === "responses" ? { sessionId: SESSION_ID } : {}),
   });
-  await sender!.send("responses", rawBody, AbortSignal.timeout(5_000));
+  await sender!.send(operation, rawBody, AbortSignal.timeout(5_000));
   return captured!;
 }
 
-function selectedHeaders(request: Request, names: readonly string[]): Record<string, string | null> {
-  return Object.fromEntries(names.map((name) => [name, request.headers.get(name)]));
+/**
+ * The complete outbound header set, sorted so the comparison is order-free.
+ * Provider Native parity is "the whole envelope matches Pi", not "a reviewed
+ * subset matches", so no header may be excluded here.
+ */
+function fullHeaders(request: Request): Record<string, string> {
+  return Object.fromEntries(
+    [...request.headers.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
 }
 
 async function requestJson(request: Request): Promise<Record<string, unknown>> {
@@ -112,7 +149,7 @@ async function requestJson(request: Request): Promise<Record<string, unknown>> {
 }
 
 describe("Provider Native Responses Pi HTTP parity", () => {
-  it("matches pinned Pi for the real CommandCode Goat Responses projection", async () => {
+  it.each(GOAT_AUTH_TYPES)("matches pinned Pi for real CommandCode Goat Responses with %s auth", async (_authType) => {
     const selectedModel = COMMANDCODE_GOAT_MODELS.find(
       (entry) => entry.id === "deepseek/deepseek-v4.1-flash",
     );
@@ -148,62 +185,87 @@ describe("Provider Native Responses Pi HTTP parity", () => {
       auth("goat-key"),
       rawBody,
     );
-    const stableHeaders = [
-      "accept",
-      "authorization",
-      "content-type",
-      "session_id",
-      "x-client-request-id",
-    ] as const;
-
     expect(lucky.url).toBe(pi.url);
     expect(lucky.method).toBe(pi.method);
-    expect(selectedHeaders(lucky, stableHeaders)).toEqual(
-      selectedHeaders(pi, stableHeaders),
-    );
+    expect(fullHeaders(lucky)).toEqual(fullHeaders(pi));
     await expect(requestJson(lucky)).resolves.toEqual(await requestJson(pi));
   });
 
-  it("matches Pi's OpenAI SDK URL, stable headers, session affinity, and body shape", async () => {
-    const selectedModel = model("openai", "openai-responses", "https://api.openai.com/v1");
-    const projectedBody = {
-      model: selectedModel.id,
-      input: "hello",
-      stream: true,
-      future_provider_field: { enabled: true },
-    };
-    const rawBody = JSON.stringify({ ...projectedBody, model: "public-alias" });
-    const pi = await capturePiRequest((fetch) =>
-      streamOpenAIResponses(selectedModel, CONTEXT, {
-        apiKey: "provider-key",
-        fetch,
-        sessionId: SESSION_ID,
-        maxRetries: 0,
-        onPayload: () => projectedBody,
-      }),
-    );
-    const lucky = await captureTokenRequest(
-      selectedModel,
-      auth("provider-key"),
-      rawBody,
-    );
-    const stableHeaders = [
-      "accept",
-      "authorization",
-      "content-type",
-      "session_id",
-      "x-client-request-id",
-      "x-provider-static",
-    ] as const;
+  it.each(OPENAI_CASES.filter((entry) => entry.operation === "responses"))(
+    "matches pinned Pi's complete $provider/$api/$operation/$authType envelope",
+    async ({ provider, baseUrl }) => {
+      if (baseUrl === undefined) throw new Error(`Missing parity URL for ${provider}`);
+      const selectedModel = model(provider, "openai-responses", baseUrl);
+      const projectedBody = {
+        model: selectedModel.id,
+        input: "hello",
+        stream: true,
+        future_provider_field: { enabled: true },
+      };
+      const rawBody = JSON.stringify({
+        ...projectedBody,
+        model: "public-alias",
+      });
+      const pi = await capturePiRequest((fetch) =>
+        streamOpenAIResponses(selectedModel, CONTEXT, {
+          apiKey: "provider-key",
+          fetch,
+          sessionId: SESSION_ID,
+          maxRetries: 0,
+          onPayload: () => projectedBody,
+        }),
+      );
+      const lucky = await captureTokenRequest(
+        selectedModel,
+        auth("provider-key"),
+        rawBody,
+      );
+      expect(lucky.url).toBe(pi.url);
+      expect(lucky.method).toBe(pi.method);
+      expect(fullHeaders(lucky)).toEqual(fullHeaders(pi));
+      await expect(requestJson(lucky)).resolves.toEqual(await requestJson(pi));
+    },
+  );
 
-    expect(lucky.url).toBe(pi.url);
-    expect(lucky.method).toBe(pi.method);
-    expect(selectedHeaders(lucky, stableHeaders)).toEqual(selectedHeaders(pi, stableHeaders));
-    await expect(requestJson(lucky)).resolves.toEqual(await requestJson(pi));
-    expect(lucky.headers.has("x-stainless-retry-count")).toBe(false);
-  });
+  it.each(OPENAI_CASES.filter((entry) => entry.operation === "compact"))(
+    "matches Pi's SDK-owned header envelope for $provider/$api/$operation/$authType",
+    async ({ provider, baseUrl }) => {
+      if (baseUrl === undefined) throw new Error(`Missing parity URL for ${provider}`);
+      const selectedModel = model(provider, "openai-responses", baseUrl);
+      const compactBody = {
+        model: selectedModel.id,
+        input: [],
+        future_provider_field: { compact: true },
+      };
+      const pi = await capturePiRequest((fetch) =>
+        streamOpenAIResponses(selectedModel, CONTEXT, {
+          apiKey: "provider-key",
+          fetch,
+          maxRetries: 0,
+          onPayload: () => ({
+            model: selectedModel.id,
+            input: "header-reference",
+            stream: true,
+          }),
+        }),
+      );
+      const lucky = await captureTokenRequest(
+        selectedModel,
+        auth("provider-key"),
+        JSON.stringify({ ...compactBody, model: "public-alias" }),
+        "compact",
+      );
 
-  it("matches Pi's Azure SDK URL, auth, API version, and body shape", async () => {
+      expect(lucky.method).toBe(pi.method);
+      expect(fullHeaders(lucky)).toEqual(fullHeaders(pi));
+      expect(lucky.url).toBe(
+        `${baseUrl.replace(/\/+$/u, "")}/responses/compact`,
+      );
+      await expect(requestJson(lucky)).resolves.toEqual(compactBody);
+    },
+  );
+
+  it.each(AZURE_AUTH_TYPES)("matches Pi's Azure SDK URL, auth, API version, and body shape with %s auth", async (_authType) => {
     const selectedModel = model(
       "azure-openai-responses",
       "azure-openai-responses",
@@ -226,13 +288,48 @@ describe("Provider Native Responses Pi HTTP parity", () => {
       }),
     );
     const lucky = await captureTokenRequest(selectedModel, auth("azure-key"), rawBody);
-    const stableHeaders = ["accept", "api-key", "content-type", "x-provider-static"] as const;
-
     expect(lucky.url).toBe(pi.url);
     expect(lucky.method).toBe(pi.method);
-    expect(selectedHeaders(lucky, stableHeaders)).toEqual(selectedHeaders(pi, stableHeaders));
+    expect(fullHeaders(lucky)).toEqual(fullHeaders(pi));
     await expect(requestJson(lucky)).resolves.toEqual(await requestJson(pi));
-    expect(lucky.headers.has("authorization")).toBe(false);
+  });
+
+  it.each(AZURE_AUTH_TYPES)("matches the pinned Azure SDK-owned header envelope for compact with %s auth", async (_authType) => {
+    const selectedModel = model(
+      "azure-openai-responses",
+      "azure-openai-responses",
+      "https://my-resource.openai.azure.com/openai/v1",
+    );
+    const pi = await capturePiRequest((fetch) =>
+      streamAzureResponses(selectedModel, CONTEXT, {
+        apiKey: "azure-key",
+        fetch,
+        maxRetries: 0,
+        onPayload: () => ({
+          model: selectedModel.id,
+          input: "header-reference",
+          stream: true,
+        }),
+      }),
+    );
+    const compactBody = {
+      model: selectedModel.id,
+      input: [],
+      future_provider_field: { compact: true },
+    };
+    const lucky = await captureTokenRequest(
+      selectedModel,
+      auth("azure-key"),
+      JSON.stringify({ ...compactBody, model: "public-alias" }),
+      "compact",
+    );
+
+    expect(lucky.method).toBe(pi.method);
+    expect(fullHeaders(lucky)).toEqual(fullHeaders(pi));
+    expect(lucky.url).toBe(
+      "https://my-resource.openai.azure.com/openai/v1/responses/compact?api-version=v1",
+    );
+    await expect(requestJson(lucky)).resolves.toEqual(compactBody);
   });
 
   it("matches Pi's Codex SSE URL, identity headers, session, zstd, and body shape", async () => {
@@ -260,23 +357,58 @@ describe("Provider Native Responses Pi HTTP parity", () => {
       }),
     );
     const lucky = await captureTokenRequest(selectedModel, auth(token), rawBody);
-    const stableHeaders = [
-      "accept",
-      "authorization",
-      "chatgpt-account-id",
-      "content-encoding",
-      "content-type",
-      "openai-beta",
-      "originator",
-      "session-id",
-      "user-agent",
-      "x-client-request-id",
-      "x-provider-static",
-    ] as const;
-
     expect(lucky.url).toBe(pi.url);
     expect(lucky.method).toBe(pi.method);
-    expect(selectedHeaders(lucky, stableHeaders)).toEqual(selectedHeaders(pi, stableHeaders));
+    expect(fullHeaders(lucky)).toEqual(fullHeaders(pi));
     await expect(requestJson(lucky)).resolves.toEqual(await requestJson(pi));
+  });
+
+  it("keeps the pinned Pi Codex identity envelope on compact without Responses-only headers", async () => {
+    const selectedModel = model(
+      "openai-codex",
+      "openai-codex-responses",
+      "https://chatgpt.com/backend-api",
+    );
+    const token = codexToken("acct-compact-parity");
+    const pi = await capturePiRequest((fetch) =>
+      streamCodexResponses(selectedModel, CONTEXT, {
+        apiKey: token,
+        fetch,
+        sessionId: SESSION_ID,
+        maxRetries: 0,
+        transport: "sse",
+        onPayload: () => ({
+          model: selectedModel.id,
+          input: "header-reference",
+          stream: true,
+        }),
+      }),
+    );
+    const compactBody = {
+      model: selectedModel.id,
+      input: [],
+      future_provider_field: { compact: true },
+    };
+    const lucky = await captureTokenRequest(
+      selectedModel,
+      auth(token),
+      JSON.stringify({ ...compactBody, model: "public-alias" }),
+      "compact",
+    );
+
+    expect(lucky.method).toBe(pi.method);
+    expect(lucky.url).toBe(
+      "https://chatgpt.com/backend-api/codex/responses/compact",
+    );
+    expect(fullHeaders(lucky)).toEqual({
+      accept: "application/json",
+      authorization: pi.headers.get("authorization")!,
+      "chatgpt-account-id": pi.headers.get("chatgpt-account-id")!,
+      "content-type": "application/json",
+      originator: pi.headers.get("originator")!,
+      "user-agent": pi.headers.get("user-agent")!,
+      "x-provider-static": "provider-value",
+    });
+    await expect(requestJson(lucky)).resolves.toEqual(compactBody);
   });
 });

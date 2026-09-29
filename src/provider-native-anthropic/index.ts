@@ -5,7 +5,6 @@ import {
   type ProviderAuthBindingAuthority,
   type ProviderAuthBindingCapture,
 } from "../credentials/profile-contract.js";
-import type { CredentialActivitySink } from "../credentials/activity.js";
 import type {
   RequestJourneyLocation,
   RequestJourneyObservationInput,
@@ -18,12 +17,15 @@ import type {
 } from "../protocols/anthropic/native-lane-contract.js";
 import type { RequestModelResolver } from "../protocols/anthropic/options.js";
 import { AnthropicNativeBodyProjectionError } from "./body-projection.js";
+import { isAnthropicNativePassthroughModel } from "./certification.js";
 import {
   AnthropicPassthroughBodyReadError,
-  AnthropicPassthroughTransportError,
-  isAnthropicNativePassthroughModel,
-  passthroughAnthropicRequest,
+  bufferAnthropicNativeResponse,
   projectAnthropicPassthroughBody,
+} from "./response.js";
+import {
+  AnthropicPassthroughTransportError,
+  passthroughAnthropicRequest,
 } from "./transport.js";
 import { extractAnthropicNativeTerminalUsage } from "./usage.js";
 
@@ -188,17 +190,9 @@ export function createAnthropicProviderNativeLane(
 ): AnthropicProviderNativeLane {
   return Object.freeze({
     claims: isAnthropicNativePassthroughModel,
-    async execute(input: {
-      readonly model: Model<string>;
-      readonly rawBody: string;
-      readonly request: Request;
-      readonly alias?: string;
-      readonly requestId: string;
-      readonly sessionId?: string;
-      readonly onExecutionStart: () => void;
-      readonly credentialActivity?: CredentialActivitySink;
-      readonly journey?: RequestJourneyObserver;
-    }): Promise<AnthropicNativeExecutionResult> {
+    async execute(
+      input: Parameters<AnthropicProviderNativeLane["execute"]>[0],
+    ): Promise<AnthropicNativeExecutionResult> {
       const signal = input.request.signal;
       const initialCaptureLocation = {
         phase: "lane_request_preparation",
@@ -308,17 +302,19 @@ export function createAnthropicProviderNativeLane(
                 "success",
               );
 
-              let upstream: Awaited<
-                ReturnType<typeof passthroughAnthropicRequest>
-              >;
+              const requestModel = options.resolveRequestModel(
+                input.model,
+                auth,
+              );
+              let upstreamResponse: Response;
               try {
                 if (!started) {
                   started = true;
                   input.onExecutionStart();
                 }
-                upstream = await raceWithSignal(
+                upstreamResponse = await raceWithSignal(
                   passthroughAnthropicRequest({
-                    model: options.resolveRequestModel(input.model, auth),
+                    model: requestModel,
                     rawBody: input.rawBody,
                     apiKey,
                     signal,
@@ -346,6 +342,9 @@ export function createAnthropicProviderNativeLane(
                     ...(input.sessionId === undefined
                       ? {}
                       : { sessionId: input.sessionId }),
+                    ...(input.requestTimeoutMs === undefined
+                      ? {}
+                      : { requestTimeoutMs: input.requestTimeoutMs }),
                     ...(auth?.auth.headers === undefined
                       ? {}
                       : { composedHeaders: auth.auth.headers }),
@@ -356,7 +355,6 @@ export function createAnthropicProviderNativeLane(
                 if (signal.aborted) throw error;
                 if (
                   error instanceof AnthropicPassthroughTransportError ||
-                  error instanceof AnthropicPassthroughBodyReadError ||
                   error instanceof AnthropicNativeBodyProjectionError
                 ) {
                   return {
@@ -365,9 +363,7 @@ export function createAnthropicProviderNativeLane(
                       502,
                       error instanceof AnthropicPassthroughTransportError
                         ? "Upstream provider request failed"
-                        : error instanceof AnthropicPassthroughBodyReadError
-                          ? "Upstream provider response could not be read"
-                          : "Provider Native request could not be projected safely",
+                        : "Provider Native request could not be projected safely",
                       input.requestId,
                     ),
                     diagnostic: { error },
@@ -377,9 +373,97 @@ export function createAnthropicProviderNativeLane(
               }
 
               signal.throwIfAborted();
+              const readLocation = {
+                phase: "upstream_execution",
+                lane: "provider_native",
+                step: "read_provider_native_response",
+                attempt: profileAttempt,
+              } as const;
+              const readStep =
+                `p4.read_provider_native_response.${profileAttempt}`;
+              enterAnthropicProviderNativeStep(
+                input.journey,
+                readStep,
+                readLocation,
+              );
+              observeAnthropicProviderNative(input.journey, {
+                kind: "attempt_observed",
+                attempt: profileAttempt,
+                ...(capture.facts.kind === "managed"
+                  ? { profileId: capture.facts.credentialId }
+                  : {}),
+                status: upstreamResponse.status,
+                transition: "response",
+                location: readLocation,
+              });
+              let upstream: Awaited<
+                ReturnType<typeof bufferAnthropicNativeResponse>
+              >;
+              try {
+                upstream = await bufferAnthropicNativeResponse(
+                  upstreamResponse,
+                  signal,
+                );
+                observeAnthropicProviderNative(input.journey, {
+                  kind: "artifact_observed",
+                  artifactId:
+                    `provider_native_upstream_response_wire.${profileAttempt}`,
+                  artifactKind: "provider_native_upstream_response_wire",
+                  state: "captured",
+                  ...(upstream.headers["content-type"] === undefined
+                    ? {}
+                    : { mediaType: upstream.headers["content-type"] }),
+                  bytes: upstream.body,
+                  originalBytes: upstream.body.byteLength,
+                  capturedBytes: upstream.body.byteLength,
+                  truncated: false,
+                  location: readLocation,
+                });
+                completeAnthropicProviderNativeStep(
+                  input.journey,
+                  readStep,
+                  readLocation,
+                  "success",
+                );
+              } catch (error) {
+                observeAnthropicProviderNative(input.journey, {
+                  kind: "artifact_observed",
+                  artifactId:
+                    `provider_native_upstream_response_wire.${profileAttempt}`,
+                  artifactKind: "provider_native_upstream_response_wire",
+                  state: "unavailable",
+                  ...(upstreamResponse.headers.get("content-type") === null
+                    ? {}
+                    : {
+                        mediaType:
+                          upstreamResponse.headers.get("content-type")!,
+                      }),
+                  reason: "response_body_read_failed",
+                  location: readLocation,
+                });
+                completeAnthropicProviderNativeStep(
+                  input.journey,
+                  readStep,
+                  readLocation,
+                  signal.aborted ? "aborted" : "failed",
+                );
+                if (signal.aborted) throw error;
+                if (error instanceof AnthropicPassthroughBodyReadError) {
+                  return {
+                    outcome: "failed",
+                    response: errorResponse(
+                      502,
+                      "Upstream provider response could not be read",
+                      input.requestId,
+                    ),
+                    diagnostic: { error },
+                  };
+                }
+                throw error;
+              }
               try {
                 const pending = options.providerResponseObservation?.({
-                  model: input.model,
+                  model: requestModel,
                   capture,
                   response: {
                     status: upstream.status,

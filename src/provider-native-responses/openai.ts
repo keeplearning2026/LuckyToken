@@ -1,22 +1,16 @@
 import type { Model } from "@earendil-works/pi-ai";
+import { arch, platform, release } from "node:os";
+import OpenAI from "openai";
 
+import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
 import { resolveRequestModel } from "../providers/request-composition.js";
-import {
-  appendEndpoint,
-  applyHeaders,
-  executeProviderFetch,
-  hasHeader,
-} from "./common.js";
 import type {
   CreateProviderResponsesSenderOptions,
   ProviderResponsesPhysicalAttemptObservation,
   ProviderResponsesOperation,
   ProviderResponsesSender,
 } from "./contract.js";
-import {
-  projectProviderNativeBody,
-  type ProviderNativeBodyProjection,
-} from "./tool-call-adjacency.js";
+import { ProviderResponsesNetworkError } from "./contract.js";
 import {
   completeProviderResponsesStep,
   enterProviderResponsesStep,
@@ -24,7 +18,16 @@ import {
   observeProviderResponsesArtifact,
   observeProviderResponsesBodyProjection,
 } from "./observation.js";
-import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
+import { runShieldedSdkRequest } from "./sdk-dispatch.js";
+import {
+  projectProviderNativeBody,
+  type ProviderNativeBodyProjection,
+} from "./tool-call-adjacency.js";
+
+/** Pi's `getPiUserAgent()`; Provider Native mirrors Pi's identity exactly. */
+function piUserAgent(): string {
+  return `pi (${platform()} ${release()}; ${arch()})`;
+}
 
 function assertTransportAuth(
   provider: string,
@@ -32,12 +35,16 @@ function assertTransportAuth(
   headers: CreateProviderResponsesSenderOptions["auth"]["auth"]["headers"],
 ): void {
   if (apiKey) return;
-  if (
-    hasHeader(headers, "authorization") ||
-    hasHeader(headers, "cf-aig-authorization")
-  ) {
-    return;
-  }
+  const has = (name: string): boolean =>
+    headers !== undefined &&
+    Object.entries(headers).some(
+      ([key, value]) =>
+        key.toLowerCase() === name &&
+        value !== null &&
+        value !== undefined &&
+        value.trim().length > 0,
+    );
+  if (has("authorization") || has("cf-aig-authorization")) return;
   throw new Error(`No API key for provider: ${provider}`);
 }
 
@@ -56,24 +63,29 @@ function hasImageInput(value: unknown, depth = 0): boolean {
   return Object.values(record).some((entry) => hasImageInput(entry, depth + 1));
 }
 
-function inferCopilotInitiator(body: Record<string, unknown>): "user" | "agent" {
-  if (typeof body.input === "string") return "user";
-  if (!Array.isArray(body.input) || body.input.length === 0) return "user";
-  const last = body.input[body.input.length - 1];
-  if (typeof last !== "object" || last === null || Array.isArray(last)) return "agent";
-  return (last as Record<string, unknown>).role === "user" ? "user" : "agent";
-}
-
+/**
+ * GitHub Copilot request headers. Pi derives them from the Pi `Context`; the
+ * preservation lane has no `Context`, so the same facts are read from the
+ * client-authored body (the lane already owns the body for projection).
+ */
 function copilotDynamicHeaders(body: Record<string, unknown>): Record<string, string> {
+  const initiator = ((): "user" | "agent" => {
+    if (typeof body.input === "string") return "user";
+    if (!Array.isArray(body.input) || body.input.length === 0) return "user";
+    const last = body.input[body.input.length - 1];
+    if (typeof last !== "object" || last === null || Array.isArray(last)) return "agent";
+    return (last as Record<string, unknown>).role === "user" ? "user" : "agent";
+  })();
   return {
-    "X-Initiator": inferCopilotInitiator(body),
+    "X-Initiator": initiator,
     "Openai-Intent": "conversation-edits",
     ...(hasImageInput(body.input) ? { "Copilot-Vision-Request": "true" } : {}),
   };
 }
 
+/** Pi's `createClient` session-affinity block, format-for-format. */
 function applySessionAffinityHeaders(
-  headers: Headers,
+  headers: Record<string, string | null | undefined>,
   model: Model<string>,
   sessionId: string,
 ): void {
@@ -83,11 +95,36 @@ function applySessionAffinityHeaders(
       ? "openrouter"
       : "openai");
   if (format === "openrouter") {
-    headers.set("x-session-id", sessionId);
+    headers["x-session-id"] = sessionId;
     return;
   }
-  if (format === "openai") headers.set("session_id", sessionId);
-  headers.set("x-client-request-id", sessionId);
+  if (format === "openai") headers.session_id = sessionId;
+  headers["x-client-request-id"] = sessionId;
+}
+
+/**
+ * Build the same default headers Pi's `createClient` builds, in the same
+ * order: Pi user agent, model headers, Copilot dynamic headers, session
+ * affinity, then the composed Provider/auth headers last.
+ */
+function buildDefaultHeaders(
+  model: Model<string>,
+  body: Record<string, unknown>,
+  options: CreateProviderResponsesSenderOptions,
+  sessionId: string | undefined,
+): Record<string, string | null | undefined> {
+  const headers: Record<string, string | null | undefined> = {
+    "User-Agent": piUserAgent(),
+    ...model.headers,
+  };
+  if (model.provider === "github-copilot") {
+    Object.assign(headers, copilotDynamicHeaders(body));
+  }
+  if (sessionId !== undefined) {
+    applySessionAffinityHeaders(headers, model, sessionId);
+  }
+  Object.assign(headers, options.auth.auth.headers);
+  return headers;
 }
 
 export function createOpenAIResponsesSender(
@@ -157,65 +194,19 @@ export function createOpenAIResponsesSender(
         envelopeStep,
         envelopeLocation,
       );
-      let headers: Headers;
-      let url: string;
-      try {
-        headers = new Headers({
-          accept: "application/json",
-          "content-type": "application/json",
-        });
-        const apiKey = options.auth.auth.apiKey;
-        if (apiKey !== undefined && apiKey.length > 0) {
-          headers.set("authorization", `Bearer ${apiKey}`);
-        }
-        applyHeaders(headers, model.headers);
-        if (model.provider === "github-copilot") {
-          applyHeaders(headers, copilotDynamicHeaders(rewritten.parsed));
-        }
-        if (operation === "responses") {
-          if (options.sessionId === undefined) {
-            throw new Error("Provider Native Responses requires a session ID");
-          }
-          applySessionAffinityHeaders(headers, model, options.sessionId);
-        }
-        applyHeaders(headers, options.auth.auth.headers);
-        headers.set("content-type", "application/json");
-
-        const endpoint =
-          operation === "compact" ? "/responses/compact" : "/responses";
-        url = appendEndpoint(model.baseUrl, endpoint);
-        if (observation !== undefined) {
-          publishSafeHttpEnvelopeArtifact(observation.journey, {
-            artifactId: `provider_native_outbound_request_envelope.${attempt}`,
-            artifactKind: "provider_native_outbound_request_envelope",
-            method: "POST",
-            url,
-            headers,
-            location: envelopeLocation,
-          });
-          observeProviderResponsesArtifact(observation.journey, {
-            artifactId: `provider_native_outbound_request_wire.${attempt}`,
-            artifactKind: "provider_native_outbound_request_wire",
-            bytes: new TextEncoder().encode(rewritten.text),
-            mediaType: "application/json",
-            location: envelopeLocation,
-          });
-        }
-        completeProviderResponsesStep(
-          observation?.journey,
-          envelopeStep,
-          envelopeLocation,
-          "success",
-        );
-      } catch (error) {
-        completeProviderResponsesStep(
-          observation?.journey,
-          envelopeStep,
-          envelopeLocation,
-          "failed",
-        );
-        throw error;
-      }
+      const params = rewritten.parsed;
+      const defaultHeaders = buildDefaultHeaders(
+        model,
+        params,
+        options,
+        operation === "responses" ? options.sessionId : undefined,
+      );
+      completeProviderResponsesStep(
+        observation?.journey,
+        envelopeStep,
+        envelopeLocation,
+        "success",
+      );
 
       const dispatchLocation = {
         phase: "upstream_execution",
@@ -238,27 +229,63 @@ export function createOpenAIResponsesSender(
         transition: "started",
         location: dispatchLocation,
       });
+
       let response: Response;
       try {
-        response = await executeProviderFetch(options.fetch, url, {
-          method: "POST",
-          headers,
-          body: rewritten.text,
-          signal,
-        });
-        publishSafeHttpEnvelopeArtifact(observation?.journey, {
-          artifactId: `provider_native_upstream_response_envelope.${attempt}`,
-          artifactKind: "provider_native_upstream_response_envelope",
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-          location: dispatchLocation,
-        });
-        completeProviderResponsesStep(
-          observation?.journey,
-          dispatchStep,
-          dispatchLocation,
-          "success",
+        response = await runShieldedSdkRequest(
+          {
+            fetch: options.fetch,
+            signal,
+            onRequest: (url, init) => {
+              if (observation === undefined) return;
+              const outboundHeaders = new Headers(init.headers);
+              publishSafeHttpEnvelopeArtifact(observation.journey, {
+                artifactId: `provider_native_outbound_request_envelope.${attempt}`,
+                artifactKind: "provider_native_outbound_request_envelope",
+                method: init.method ?? "POST",
+                url,
+                headers: outboundHeaders,
+                location: envelopeLocation,
+              });
+              const body =
+                typeof init.body === "string" ? init.body : undefined;
+              if (body === undefined) return;
+              observeProviderResponsesArtifact(observation.journey, {
+                artifactId: `provider_native_outbound_request_wire.${attempt}`,
+                artifactKind: "provider_native_outbound_request_wire",
+                bytes: new TextEncoder().encode(body),
+                mediaType:
+                  outboundHeaders.get("content-type") ?? "application/json",
+                location: envelopeLocation,
+              });
+            },
+          },
+          async (fetchForSdk) => {
+            const client = new OpenAI({
+              apiKey: options.auth.auth.apiKey ?? "unused",
+              baseURL: model.baseUrl,
+              dangerouslyAllowBrowser: true,
+              fetch: fetchForSdk,
+              defaultHeaders,
+            });
+            const requestOptions = {
+              signal,
+              maxRetries: 0,
+              ...(options.requestTimeoutMs === undefined
+                ? {}
+                : { timeout: options.requestTimeoutMs }),
+            };
+            if (operation === "compact") {
+              await client.responses.compact(
+                params as unknown as Parameters<
+                  typeof client.responses.compact
+                >[0],
+                requestOptions,
+              );
+            } else {
+              await client.responses.create(params, requestOptions);
+            }
+          },
         );
       } catch (error) {
         completeProviderResponsesStep(
@@ -267,8 +294,24 @@ export function createOpenAIResponsesSender(
           dispatchLocation,
           signal.aborted ? "aborted" : "failed",
         );
-        throw error;
+        throw error instanceof OpenAI.APIConnectionError
+          ? new ProviderResponsesNetworkError(error)
+          : error;
       }
+      publishSafeHttpEnvelopeArtifact(observation?.journey, {
+        artifactId: `provider_native_upstream_response_envelope.${attempt}`,
+        artifactKind: "provider_native_upstream_response_envelope",
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        location: dispatchLocation,
+      });
+      completeProviderResponsesStep(
+        observation?.journey,
+        dispatchStep,
+        dispatchLocation,
+        "success",
+      );
 
       const readLocation = {
         phase: "upstream_execution",
@@ -277,11 +320,7 @@ export function createOpenAIResponsesSender(
         attempt,
       } as const;
       const readStep = `p4.read_provider_native_response.${attempt}`;
-      enterProviderResponsesStep(
-        observation?.journey,
-        readStep,
-        readLocation,
-      );
+      enterProviderResponsesStep(observation?.journey, readStep, readLocation);
       observeProviderResponses(observation?.journey, {
         kind: "attempt_observed",
         attempt,

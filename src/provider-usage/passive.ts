@@ -96,6 +96,11 @@ export function createProviderUsageResponseObserver(
     }
     const facts = parseAnthropicPassiveUsage(response);
     if (facts === undefined) return;
-    await authority.observePassive("anthropic", capture, facts);
+    await authority.observePassive(
+      "anthropic",
+      capture,
+      model.baseUrl,
+      facts,
+    );
   };
 }

@@ -21,7 +21,11 @@ import {
 } from "lucide-react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
-import { projectProviderCardUsage } from "./provider-usage-presentation.js";
+import {
+  projectProviderCardUsage,
+  providerUsageRefreshFailureNotice,
+  providerUsageRefreshNotice,
+} from "./provider-usage-presentation.js";
 
 type ProfilesResult = Awaited<
   ReturnType<TokenDesktopApi["control"]["executeCredentialProfiles"]>
@@ -318,6 +322,29 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
         .catch(() => {
           if (active) setAuthError(true);
         });
+
+      const providerId = record.providerId;
+      if (providerId === undefined) return;
+      const expectedEpoch = usageEpochByProvider.current.get(providerId) ?? 0;
+      void api.control.executeProviderUsage({ command: "query" }).then(
+        (result) => {
+          if (
+            !active ||
+            (usageEpochByProvider.current.get(providerId) ?? 0) !== expectedEpoch
+          ) {
+            return;
+          }
+          const row = result.snapshot.providers.find(
+            (candidate) => candidate.providerId === providerId,
+          );
+          if (row === undefined) return;
+          setProviderUsageById((current) => ({
+            ...current,
+            [providerId]: row,
+          }));
+        },
+        () => undefined,
+      );
     });
     return () => {
       active = false;
@@ -590,12 +617,11 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
           [providerId]: row,
         }));
       }
-      if (result.refresh?.outcome === "unavailable") {
-        setNotice("Provider usage could not be refreshed.");
-      }
+      const refreshNotice = providerUsageRefreshNotice(result.refresh);
+      if (refreshNotice !== undefined) setNotice(refreshNotice);
     } catch {
       if ((usageEpochByProvider.current.get(providerId) ?? 0) === expectedEpoch) {
-        setNotice("Provider usage could not be refreshed.");
+        setNotice(providerUsageRefreshFailureNotice());
       }
     } finally {
       setUsageRefreshingProviders((current) => {
@@ -1157,11 +1183,11 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
             <span className="provider-usage-primary">
               {usagePresentation.primary.join(" · ")}
             </span>
-          ) : (
+          ) : usagePresentation.status !== undefined ? (
             <span className="provider-usage-status">
-              {usagePresentation.status ?? "Usage available"}
+              {usagePresentation.status}
             </span>
-          )}
+          ) : null}
           {usagePresentation.secondary.length > 0 ? (
             <span className="provider-usage-secondary">
               {usagePresentation.secondary.join(" · ")}

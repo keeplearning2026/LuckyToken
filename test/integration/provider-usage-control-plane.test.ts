@@ -125,6 +125,37 @@ describe("Provider Usage Control Plane", () => {
     });
   });
 
+  it("returns a Control Plane error when the Provider Usage handler throws", async () => {
+    const transport = createNodePipeTransport();
+    const server = await startControlPlane({
+      endpoint: endpoint(),
+      application: { id: "Token", version: "test" },
+      initialStatus: {
+        modelDataPlane: "stopped",
+        provider: "unconfigured",
+      },
+      pipeServerFactory: transport,
+      access: nodePipeFallbackAccess,
+      providerUsageCommandHandler: async () => {
+        throw new Error("unexpected authority failure");
+      },
+    });
+    servers.push(server);
+    const client = await connectControlPlane(server.endpoint, {
+      createRequestId: () => `request-${++nextId}`,
+      pipeConnector: transport,
+    });
+    clients.push(client);
+    await client.hello(controlPlaneVersion);
+
+    await expect(
+      client.executeProviderUsageCommand({
+        command: "refresh",
+        providerId: "openrouter",
+      }),
+    ).rejects.toThrow();
+  });
+
   it("fails closed when the host emits malformed Provider Usage data", async () => {
     const transport = createNodePipeTransport();
     const server = await startControlPlane({

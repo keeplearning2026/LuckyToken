@@ -157,6 +157,7 @@ export interface ProviderUsageAuthority {
   observePassive(
     providerId: string,
     capture: ProviderAuthBindingCapture,
+    effectiveBaseUrl: string,
     facts: ProviderUsageFacts,
   ): Promise<boolean>;
 }

@@ -736,6 +736,9 @@ async function handleAnthropicMessages(
           ...(projectAlias === undefined ? {} : { alias: projectAlias }),
           requestId,
           sessionId: requestIdentity.effectiveSessionId,
+          ...(dependencies.requestTimeoutMs === undefined
+            ? {}
+            : { requestTimeoutMs: dependencies.requestTimeoutMs }),
           onExecutionStart: () => undefined,
           ...(journey === undefined ? {} : { journey }),
         });

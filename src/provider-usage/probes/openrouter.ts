@@ -42,16 +42,19 @@ export function createOpenRouterUsageProbe(fetch: FetchFunction): ProviderUsageP
         return Object.freeze({ state: "unavailable" as const, reason: result.reason });
       }
       const body = asRecord(result.body);
-      const data = asRecord(body?.data) ?? body;
-      if (data === undefined) {
+      const data = asRecord(body?.data);
+      if (data === undefined || !Object.hasOwn(data, "limit")) {
         return Object.freeze({ state: "unavailable" as const, reason: "schema" as const });
       }
-      const limit = toFiniteNumber(data.limit);
-      if (limit === undefined || limit <= 0) {
+      if (data.limit === null) {
         return Object.freeze({
           state: "observed" as const,
           facts: Object.freeze({ windows: Object.freeze([]), budgets: Object.freeze([]) }),
         });
+      }
+      const limit = toFiniteNumber(data.limit);
+      if (limit === undefined || limit <= 0) {
+        return Object.freeze({ state: "unavailable" as const, reason: "schema" as const });
       }
       const remainingRaw = toFiniteNumber(data.limit_remaining);
       const usage = toFiniteNumber(data.usage);

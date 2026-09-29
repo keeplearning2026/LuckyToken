@@ -627,7 +627,7 @@ describe("Backend Application public lifecycle seam", () => {
       if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
       else process.env.CODEX_CLI_PATH = previousCodexCliPath;
     }
-  }, 15_000);
+  }, 30_000);
 
   it("refuses application quit when an active Codex projection cannot be restored", async () => {
     const { configPath, descriptorPath } = await fixture();

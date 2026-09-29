@@ -1,26 +1,26 @@
 import type { AuthResult, Model } from "@earendil-works/pi-ai";
+import { arch, platform, release } from "node:os";
+import { AzureOpenAI } from "openai";
 
-import {
-  appendEndpoint,
-  applyHeaders,
-  executeProviderFetch,
-} from "./common.js";
+import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
 import type {
   CreateProviderResponsesSenderOptions,
-  ProviderResponsesPhysicalAttemptObservation,
   ProviderResponsesOperation,
   ProviderResponsesSender,
 } from "./contract.js";
+import { ProviderResponsesNetworkError } from "./contract.js";
 import {
   completeProviderResponsesStep,
   enterProviderResponsesStep,
   observeProviderResponsesBodyProjection,
 } from "./observation.js";
+import { runShieldedSdkRequest } from "./sdk-dispatch.js";
 import {
   projectProviderNativeBody,
   type ProviderNativeBodyProjection,
 } from "./tool-call-adjacency.js";
 
+const DEFAULT_AZURE_API_VERSION = "v1";
 
 function providerEnv(name: string, auth: AuthResult): string | undefined {
   return auth.env?.[name] || process.env[name] || undefined;
@@ -39,6 +39,7 @@ function parseDeploymentNameMap(value: string | undefined): Map<string, string> 
   return map;
 }
 
+/** Pinned Pi `normalizeAzureBaseUrl`. */
 function normalizeBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/u, "");
   let url: URL;
@@ -65,6 +66,7 @@ function normalizeBaseUrl(baseUrl: string): string {
   return url.toString().replace(/\/+$/u, "");
 }
 
+/** Pinned Pi `resolveAzureConfig`. */
 function resolveBaseUrl(model: Model<string>, auth: AuthResult): string {
   const configured =
     providerEnv("AZURE_OPENAI_BASE_URL", auth)?.trim() ||
@@ -79,6 +81,20 @@ function resolveBaseUrl(model: Model<string>, auth: AuthResult): string {
   );
 }
 
+function resolveApiVersion(auth: AuthResult): string {
+  return (
+    providerEnv("AZURE_OPENAI_API_VERSION", auth) || DEFAULT_AZURE_API_VERSION
+  );
+}
+
+function resolveDeploymentName(model: Model<string>, auth: AuthResult): string {
+  return (
+    parseDeploymentNameMap(
+      providerEnv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", auth),
+    ).get(model.id) || model.id
+  );
+}
+
 export function createAzureResponsesSender(
   options: CreateProviderResponsesSenderOptions,
 ): ProviderResponsesSender {
@@ -87,11 +103,13 @@ export function createAzureResponsesSender(
     throw new Error("No API key for provider: azure-openai-responses");
   }
   const baseUrl = resolveBaseUrl(options.model, options.auth);
-  const apiVersion = providerEnv("AZURE_OPENAI_API_VERSION", options.auth) || "v1";
-  const deploymentName =
-    parseDeploymentNameMap(
-      providerEnv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", options.auth),
-    ).get(options.model.id) || options.model.id;
+  const apiVersion = resolveApiVersion(options.auth);
+  const deploymentName = resolveDeploymentName(options.model, options.auth);
+  const defaultHeaders = {
+    "User-Agent": `pi (${platform()} ${release()}; ${arch()})`,
+    ...options.model.headers,
+    ...options.auth.auth.headers,
+  };
 
   return Object.freeze({
     supportsNativeCompact: true,
@@ -99,15 +117,16 @@ export function createAzureResponsesSender(
       operation: ProviderResponsesOperation,
       rawBody: string,
       signal: AbortSignal,
-      observation?: ProviderResponsesPhysicalAttemptObservation,
+      observation?: Parameters<ProviderResponsesSender["send"]>[3],
     ): Promise<Response> {
+      const attempt = observation?.attempt ?? 1;
       const projectionLocation = {
         phase: "lane_request_preparation",
         lane: "provider_native",
         step: "project_native_body",
-        attempt: observation?.attempt ?? 1,
+        attempt,
       } as const;
-      const projectionStep = `p3.project_native_body.${projectionLocation.attempt}`;
+      const projectionStep = `p3.project_native_body.${attempt}`;
       enterProviderResponsesStep(
         observation?.journey,
         projectionStep,
@@ -136,24 +155,112 @@ export function createAzureResponsesSender(
         );
         throw error;
       }
-      const headers = new Headers({
-        accept: "application/json",
-        "api-key": apiKey,
-        "content-type": "application/json",
-      });
-      applyHeaders(headers, options.model.headers);
-      applyHeaders(headers, options.auth.auth.headers);
-      headers.set("content-type", "application/json");
 
-      const endpoint = operation === "compact" ? "/responses/compact" : "/responses";
-      const url = new URL(appendEndpoint(baseUrl, endpoint));
-      url.searchParams.set("api-version", apiVersion);
-      return executeProviderFetch(options.fetch, url, {
-        method: "POST",
-        headers,
-        body: rewritten.text,
-        signal,
+      const envelopeLocation = {
+        phase: "lane_request_preparation",
+        lane: "provider_native",
+        step: "reconstruct_provider_envelope",
+        attempt,
+      } as const;
+      const envelopeStep = `p3.reconstruct_provider_envelope.${attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        envelopeStep,
+        envelopeLocation,
+      );
+      const params = rewritten.parsed;
+      completeProviderResponsesStep(
+        observation?.journey,
+        envelopeStep,
+        envelopeLocation,
+        "success",
+      );
+
+      const dispatchLocation = {
+        phase: "upstream_execution",
+        lane: "provider_native",
+        step: "dispatch_provider_native",
+        attempt,
+      } as const;
+      const dispatchStep = `p4.dispatch_provider_native.${attempt}`;
+      enterProviderResponsesStep(
+        observation?.journey,
+        dispatchStep,
+        dispatchLocation,
+      );
+
+      let response: Response;
+      try {
+        response = await runShieldedSdkRequest(
+          {
+            fetch: options.fetch,
+            signal,
+            onRequest: (url, init) => {
+              if (observation === undefined) return;
+              publishSafeHttpEnvelopeArtifact(observation.journey, {
+                artifactId: `provider_native_outbound_request_envelope.${attempt}`,
+                artifactKind: "provider_native_outbound_request_envelope",
+                method: init.method ?? "POST",
+                url,
+                headers: new Headers(init.headers),
+                location: envelopeLocation,
+              });
+            },
+          },
+          async (fetchForSdk) => {
+            const client = new AzureOpenAI({
+              apiKey,
+              apiVersion,
+              dangerouslyAllowBrowser: true,
+              fetch: fetchForSdk,
+              defaultHeaders,
+              baseURL: baseUrl,
+            });
+            const requestOptions = {
+              signal,
+              maxRetries: 0,
+              ...(options.requestTimeoutMs === undefined
+                ? {}
+                : { timeout: options.requestTimeoutMs }),
+            };
+            if (operation === "compact") {
+              await client.responses.compact(
+                params as unknown as Parameters<
+                  typeof client.responses.compact
+                >[0],
+                requestOptions,
+              );
+            } else {
+              await client.responses.create(params, requestOptions);
+            }
+          },
+        );
+      } catch (error) {
+        completeProviderResponsesStep(
+          observation?.journey,
+          dispatchStep,
+          dispatchLocation,
+          signal.aborted ? "aborted" : "failed",
+        );
+        throw error instanceof AzureOpenAI.APIConnectionError
+          ? new ProviderResponsesNetworkError(error)
+          : error;
+      }
+      publishSafeHttpEnvelopeArtifact(observation?.journey, {
+        artifactId: `provider_native_upstream_response_envelope.${attempt}`,
+        artifactKind: "provider_native_upstream_response_envelope",
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        location: dispatchLocation,
       });
+      completeProviderResponsesStep(
+        observation?.journey,
+        dispatchStep,
+        dispatchLocation,
+        "success",
+      );
+      return response;
     },
   });
 }

@@ -18,11 +18,12 @@ function managed(
   credentialGeneration: string,
   selectionGeneration: string,
   authType: "api_key" | "oauth" = "api_key",
+  providerId = "fixture",
 ): ProviderAuthBindingCapture {
   return Object.freeze({
     facts: Object.freeze({
       kind: "managed" as const,
-      providerId: "fixture",
+      providerId,
       credentialId,
       authType,
       authMethodLabel: authType === "oauth" ? "OAuth" : "API key",
@@ -90,17 +91,22 @@ function createBinding(initial: ProviderAuthBindingCapture) {
 
 function createModels(options: {
   readonly baseUrl?: string;
+  readonly providerBaseUrl?: string;
+  readonly modelBaseUrls?: readonly string[];
   readonly auth?: AuthResult;
   readonly onGetAuth?: (signal: AbortSignal | undefined) => void;
 }) {
   let authCalls = 0;
-  let baseUrl = options.baseUrl;
+  let providerBaseUrl = options.providerBaseUrl ?? options.baseUrl;
+  let modelBaseUrls =
+    options.modelBaseUrls ??
+    (options.baseUrl === undefined ? [] : [options.baseUrl]);
   const models = {
     getProviders: () => [
       {
         id: "fixture",
         name: "Fixture",
-        ...(baseUrl === undefined ? {} : { baseUrl }),
+        ...(providerBaseUrl === undefined ? {} : { baseUrl: providerBaseUrl }),
       } as unknown as Provider,
     ],
     getProvider: (id: string) =>
@@ -108,13 +114,11 @@ function createModels(options: {
         ? ({
             id: "fixture",
             name: "Fixture",
-            ...(baseUrl === undefined ? {} : { baseUrl }),
+            ...(providerBaseUrl === undefined ? {} : { baseUrl: providerBaseUrl }),
           } as unknown as Provider)
         : undefined,
     getModels: () =>
-      baseUrl === undefined
-        ? []
-        : [{ provider: "fixture", baseUrl }],
+      modelBaseUrls.map((baseUrl) => ({ provider: "fixture", baseUrl })),
     getAuth: async (_providerId: string, overrides?: { readonly signal?: AbortSignal }) => {
       authCalls += 1;
       options.onGetAuth?.(overrides?.signal);
@@ -128,7 +132,11 @@ function createModels(options: {
     models,
     authCalls: () => authCalls,
     setBaseUrl(next: string | undefined) {
-      baseUrl = next;
+      providerBaseUrl = next;
+      modelBaseUrls = next === undefined ? [] : [next];
+    },
+    setModelBaseUrls(next: readonly string[]) {
+      modelBaseUrls = next;
     },
   };
 }
@@ -222,6 +230,46 @@ describe("ProviderUsageAuthority", () => {
       reason: "destination",
     });
     expect(models.authCalls()).toBe(0);
+  });
+
+  it("re-checks credential-scoped baseUrl after auth before quota network", async () => {
+    const bindings = createBinding(managed("a", "g1", "s1"));
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: {
+        auth: {
+          apiKey: "secret",
+          baseUrl: "https://credential-proxy.example/v1",
+        },
+      },
+    });
+    let acquireCalls = 0;
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [
+        observedProbe({
+          eligibility: (context) =>
+            context.effectiveBaseUrl === "https://fixture.invalid"
+              ? { state: "eligible" }
+              : { state: "unsupported_destination" },
+          acquire: async () => {
+            acquireCalls += 1;
+            return { state: "observed", facts: { windows: [], budgets: [] } };
+          },
+        }),
+      ],
+    });
+
+    const result = await authority.refresh("fixture");
+
+    expect(result.refresh).toEqual({
+      providerId: "fixture",
+      outcome: "unsupported",
+      reason: "destination",
+    });
+    expect(models.authCalls()).toBe(1);
+    expect(acquireCalls).toBe(0);
   });
 
   it("uses one Authority signal for auth resolution and probe acquisition", async () => {
@@ -417,7 +465,14 @@ describe("ProviderUsageAuthority", () => {
       budgets: [],
     };
 
-    expect(await authority.observePassive("fixture", a, facts)).toBe(true);
+    expect(
+      await authority.observePassive(
+        "fixture",
+        a,
+        "https://fixture.invalid",
+        facts,
+      ),
+    ).toBe(true);
     expect((await authority.query()).providers[0]).toMatchObject({
       state: "observed",
       observation: {
@@ -427,7 +482,14 @@ describe("ProviderUsageAuthority", () => {
     });
 
     bindings.setCurrent(b);
-    expect(await authority.observePassive("fixture", a, facts)).toBe(false);
+    expect(
+      await authority.observePassive(
+        "fixture",
+        a,
+        "https://fixture.invalid",
+        facts,
+      ),
+    ).toBe(false);
     expect((await authority.query()).providers[0]).toEqual({
       state: "unobserved",
       providerId: "fixture",
@@ -453,10 +515,15 @@ describe("ProviderUsageAuthority", () => {
     });
 
     expect(
-      await authority.observePassive("fixture", capture, {
-        windows: [{ kind: "weekly", usedPercent: 22 }],
-        budgets: [],
-      }),
+      await authority.observePassive(
+        "fixture",
+        capture,
+        "https://fixture.invalid",
+        {
+          windows: [{ kind: "weekly", usedPercent: 22 }],
+          budgets: [],
+        },
+      ),
     ).toBe(true);
 
     expect((await authority.query()).providers[0]).toEqual({
@@ -472,7 +539,7 @@ describe("ProviderUsageAuthority", () => {
     expect(models.authCalls()).toBe(0);
   });
 
-  it("merges partial passive observations for the same current binding", async () => {
+  it("replaces passive observations instead of carrying forward stale facts", async () => {
     const capture = managed("a", "g1", "s1", "api_key");
     const bindings = createBinding(capture);
     const models = createModels({
@@ -491,14 +558,24 @@ describe("ProviderUsageAuthority", () => {
       now: () => ++tick,
     });
 
-    await authority.observePassive("fixture", capture, {
-      windows: [{ kind: "weekly", usedPercent: 20 }],
-      budgets: [],
-    });
-    await authority.observePassive("fixture", capture, {
-      windows: [{ kind: "five_hour", usedPercent: 50 }],
-      budgets: [],
-    });
+    await authority.observePassive(
+      "fixture",
+      capture,
+      "https://fixture.invalid",
+      {
+        windows: [{ kind: "weekly", usedPercent: 20 }],
+        budgets: [],
+      },
+    );
+    await authority.observePassive(
+      "fixture",
+      capture,
+      "https://fixture.invalid",
+      {
+        windows: [{ kind: "five_hour", usedPercent: 50 }],
+        budgets: [],
+      },
+    );
 
     expect((await authority.query()).providers[0]).toEqual({
       state: "observed",
@@ -506,13 +583,77 @@ describe("ProviderUsageAuthority", () => {
       observation: {
         providerId: "fixture",
         observedAt: 2,
-        windows: [
-          { kind: "weekly", usedPercent: 20 },
-          { kind: "five_hour", usedPercent: 50 },
-        ],
+        windows: [{ kind: "five_hour", usedPercent: 50 }],
         budgets: [],
       },
     });
+  });
+
+  it("uses served model destinations ahead of Provider baseUrl", async () => {
+    const bindings = createBinding(managed("a", "g1", "s1"));
+    const models = createModels({
+      providerBaseUrl: "https://fixture.invalid",
+      modelBaseUrls: ["https://proxy.example/v1"],
+      auth: { auth: { apiKey: "secret" } },
+    });
+    const seen: Array<string | undefined> = [];
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [
+        observedProbe({
+          eligibility: (context) => {
+            seen.push(context.effectiveBaseUrl);
+            return context.effectiveBaseUrl === "https://fixture.invalid"
+              ? { state: "eligible" }
+              : { state: "unsupported_destination" };
+          },
+        }),
+      ],
+    });
+
+    const result = await authority.refresh("fixture");
+
+    expect(seen).toEqual(["https://proxy.example/v1", "https://proxy.example/v1"]);
+    expect(result.refresh).toEqual({
+      providerId: "fixture",
+      outcome: "unsupported",
+      reason: "destination",
+    });
+    expect(models.authCalls()).toBe(0);
+  });
+
+  it("rejects ambiguous served model destinations before auth", async () => {
+    const bindings = createBinding(managed("a", "g1", "s1"));
+    const models = createModels({
+      providerBaseUrl: "https://fixture.invalid",
+      modelBaseUrls: [
+        "https://fixture.invalid",
+        "https://proxy.example/v1",
+      ],
+      auth: { auth: { apiKey: "secret" } },
+    });
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [
+        observedProbe({
+          eligibility: (context) =>
+            context.effectiveBaseUrl === undefined
+              ? { state: "unsupported_destination" }
+              : { state: "eligible" },
+        }),
+      ],
+    });
+
+    const result = await authority.refresh("fixture");
+
+    expect(result.refresh).toEqual({
+      providerId: "fixture",
+      outcome: "unsupported",
+      reason: "destination",
+    });
+    expect(models.authCalls()).toBe(0);
   });
 
   it("does not reuse a cached observation after the effective Provider destination changes", async () => {
@@ -549,6 +690,546 @@ describe("ProviderUsageAuthority", () => {
       providerId: "fixture",
       reason: "destination",
     });
+  });
+
+  it("drops a query candidate when the effective destination changes during publication", async () => {
+    const capture = managed("a", "g1", "s1");
+    const bindings = createBinding(capture);
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [observedProbe()],
+      now: () => 1,
+    });
+
+    await authority.refresh("fixture");
+    bindings.beforeNextPublish(() => {
+      models.setBaseUrl("https://proxy.example/v1");
+    });
+
+    expect((await authority.query()).providers[0]).toEqual({
+      state: "unobserved",
+      providerId: "fixture",
+    });
+  });
+
+  it("does not de-duplicate in-flight refreshes across destination changes", async () => {
+    const capture = managed("a", "g1", "s1");
+    const bindings = createBinding(capture);
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    const releases: Array<() => void> = [];
+    let acquireCalls = 0;
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [
+        observedProbe({
+          acquire: async () => {
+            acquireCalls += 1;
+            await new Promise<void>((resolve) => releases.push(resolve));
+            return {
+              state: "observed",
+              facts: { windows: [], budgets: [] },
+            };
+          },
+        }),
+      ],
+    });
+
+    const first = authority.refresh("fixture");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    models.setBaseUrl("https://proxy.example/v1");
+    const second = authority.refresh("fixture");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(acquireCalls).toBe(2);
+    for (const release of releases) release();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.refresh.outcome).toBe("superseded");
+    expect(secondResult.refresh.outcome).toBe("succeeded");
+  });
+
+  it("rejects passive observations from a destination different from the current served destination", async () => {
+    const capture = managed("a", "g1", "s1", "api_key");
+    const bindings = createBinding(capture);
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [observedProbe()],
+    });
+
+    expect(
+      await authority.observePassive(
+        "fixture",
+        capture,
+        "https://proxy.example/v1",
+        {
+          windows: [{ kind: "weekly", usedPercent: 10 }],
+          budgets: [],
+        },
+      ),
+    ).toBe(false);
+    expect((await authority.query()).providers[0]).toEqual({
+      state: "unobserved",
+      providerId: "fixture",
+    });
+  });
+
+  it("rejects passive observations when served models have ambiguous destinations", async () => {
+    const capture = managed("a", "g1", "s1", "api_key");
+    const bindings = createBinding(capture);
+    const models = createModels({
+      providerBaseUrl: "https://fixture.invalid",
+      modelBaseUrls: [
+        "https://fixture.invalid",
+        "https://proxy.example/v1",
+      ],
+      auth: { auth: { apiKey: "secret" } },
+    });
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [observedProbe()],
+    });
+
+    expect(
+      await authority.observePassive(
+        "fixture",
+        capture,
+        "https://fixture.invalid",
+        {
+          windows: [{ kind: "weekly", usedPercent: 10 }],
+          budgets: [],
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps cache-only query free of auth/acquisition and retries capture failure once", async () => {
+    const capture = managed("a", "g1", "s1");
+    let captureCalls = 0;
+    let acquireCalls = 0;
+    const binding = {
+      capture: async () => {
+        captureCalls += 1;
+        if (captureCalls === 1) throw new Error("transient capture failure");
+        return capture;
+      },
+      publishIfCurrent: async (
+        _capture: ProviderAuthBindingCapture,
+        publish: (assertCurrent: () => void) => Promise<void> | void,
+      ) => {
+        await publish(() => undefined);
+        return true;
+      },
+      runBound: async <T>(
+        _capture: ProviderAuthBindingCapture,
+        operation: () => Promise<T>,
+      ) => operation(),
+    } as unknown as ProviderAuthBindingAuthority;
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding,
+      probes: [
+        observedProbe({
+          acquire: async () => {
+            acquireCalls += 1;
+            return { state: "observed", facts: { windows: [], budgets: [] } };
+          },
+        }),
+      ],
+    });
+
+    expect(await authority.query()).toEqual({
+      providers: [{ state: "unobserved", providerId: "fixture" }],
+    });
+    expect(captureCalls).toBe(2);
+    expect(models.authCalls()).toBe(0);
+    expect(acquireCalls).toBe(0);
+  });
+
+  it("returns unobserved when query capture remains unstable", async () => {
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    let captureCalls = 0;
+    const binding = {
+      capture: async () => {
+        captureCalls += 1;
+        throw new Error("capture unavailable");
+      },
+    } as unknown as ProviderAuthBindingAuthority;
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding,
+      probes: [observedProbe()],
+    });
+
+    expect(await authority.query()).toEqual({
+      providers: [{ state: "unobserved", providerId: "fixture" }],
+    });
+    expect(captureCalls).toBe(2);
+    expect(models.authCalls()).toBe(0);
+  });
+
+  it("keeps last-good observation when an explicit refresh fails", async () => {
+    const bindings = createBinding(managed("a", "g1", "s1"));
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    let fail = false;
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [
+        observedProbe({
+          acquire: async () =>
+            fail
+              ? { state: "unavailable", reason: "network" }
+              : {
+                  state: "observed",
+                  facts: {
+                    windows: [{ kind: "weekly", usedPercent: 41 }],
+                    budgets: [],
+                  },
+                },
+        }),
+      ],
+      now: () => 7,
+    });
+
+    await authority.refresh("fixture");
+    fail = true;
+    const failed = await authority.refresh("fixture");
+
+    expect(failed.refresh).toEqual({
+      providerId: "fixture",
+      outcome: "unavailable",
+      reason: "network",
+    });
+    expect(failed.snapshot.providers[0]).toMatchObject({
+      state: "observed",
+      observation: {
+        observedAt: 7,
+        windows: [{ kind: "weekly", usedPercent: 41 }],
+      },
+    });
+  });
+
+  it("does not share in-flight work across credential generations", async () => {
+    const g1 = managed("a", "g1", "s1");
+    const g2 = managed("a", "g2", "s2");
+    const bindings = createBinding(g1);
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [
+        observedProbe({
+          acquire: async () => {
+            calls += 1;
+            await new Promise<void>((resolve) => releases.push(resolve));
+            return { state: "observed", facts: { windows: [], budgets: [] } };
+          },
+        }),
+      ],
+    });
+
+    const first = authority.refresh("fixture");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    bindings.setCurrent(g2);
+    const second = authority.refresh("fixture");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toBe(2);
+    for (const release of releases) release();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.refresh.outcome).toBe("superseded");
+    expect(secondResult.refresh.outcome).toBe("succeeded");
+  });
+
+  it("retains only one current cache slot per Provider", async () => {
+    const a = managed("a", "g1", "s1");
+    const b = managed("b", "g2", "s2");
+    const bindings = createBinding(a);
+    const models = createModels({
+      baseUrl: "https://fixture.invalid",
+      auth: { auth: { apiKey: "secret" } },
+    });
+    let usedPercent = 10;
+    const authority = createProviderUsageAuthority({
+      models: models.models,
+      binding: bindings.binding,
+      probes: [
+        observedProbe({
+          acquire: async () => ({
+            state: "observed",
+            facts: {
+              windows: [{ kind: "weekly", usedPercent }],
+              budgets: [],
+            },
+          }),
+        }),
+      ],
+    });
+
+    await authority.refresh("fixture");
+    bindings.setCurrent(b);
+    usedPercent = 20;
+    await authority.refresh("fixture");
+    bindings.setCurrent(a);
+
+    expect((await authority.query()).providers[0]).toEqual({
+      state: "unobserved",
+      providerId: "fixture",
+    });
+  });
+
+  it("contains a throwing eligibility probe so other Providers still query", async () => {
+    const captures = new Map([
+      ["broken", managed("broken", "g1", "s1", "api_key", "broken")],
+      ["healthy", managed("healthy", "g1", "s1", "api_key", "healthy")],
+    ]);
+    const binding = {
+      capture: async (providerId: string) => captures.get(providerId)!,
+      publishIfCurrent: async (
+        _capture: ProviderAuthBindingCapture,
+        publish: (assertCurrent: () => void) => Promise<void> | void,
+      ) => {
+        await publish(() => undefined);
+        return true;
+      },
+      runBound: async <T>(
+        _capture: ProviderAuthBindingCapture,
+        operation: () => Promise<T>,
+      ) => operation(),
+    } as unknown as ProviderAuthBindingAuthority;
+    const providers = ["broken", "healthy"].map(
+      (id) => ({ id, name: id, baseUrl: `https://${id}.invalid` }) as unknown as Provider,
+    );
+    const models = {
+      getProviders: () => providers,
+      getProvider: (id: string) => providers.find((provider) => provider.id === id),
+      getModels: (id: string) => [{ provider: id, baseUrl: `https://${id}.invalid` }],
+      getAuth: async () => ({ auth: { apiKey: "secret" } }),
+    } as unknown as Pick<
+      Models,
+      "getProviders" | "getProvider" | "getModels" | "getAuth"
+    >;
+    const authority = createProviderUsageAuthority({
+      models,
+      binding,
+      probes: [
+        {
+          providerId: "broken",
+          eligibility: () => {
+            throw new Error("probe bug");
+          },
+          acquire: async () => ({
+            state: "observed",
+            facts: { windows: [], budgets: [] },
+          }),
+        },
+        {
+          providerId: "healthy",
+          eligibility: () => ({ state: "eligible" }),
+          acquire: async () => ({
+            state: "observed",
+            facts: { windows: [], budgets: [] },
+          }),
+        },
+      ],
+    });
+
+    expect(await authority.query()).toEqual({
+      providers: [
+        { state: "unobserved", providerId: "broken" },
+        { state: "unobserved", providerId: "healthy" },
+      ],
+    });
+  });
+
+  it("keeps CommandCode Goat and Private cache/binding identities isolated", async () => {
+    const captures = new Map<string, ProviderAuthBindingCapture>([
+      [
+        "commandcode-goat",
+        managed("goat-a", "g1", "s1", "api_key", "commandcode-goat"),
+      ],
+      [
+        "commandcode-private",
+        managed("private-a", "p1", "s1", "api_key", "commandcode-private"),
+      ],
+    ]);
+    const binding = {
+      capture: async (providerId: string) => captures.get(providerId)!,
+      publishIfCurrent: async (
+        capture: ProviderAuthBindingCapture,
+        publish: (assertCurrent: () => void) => Promise<void> | void,
+      ) => {
+        const current = captures.get(capture.facts.providerId);
+        if (current === undefined || !sameCapture(capture, current)) return false;
+        await publish(() => undefined);
+        return sameCapture(capture, captures.get(capture.facts.providerId)!);
+      },
+      runBound: async <T>(
+        capture: ProviderAuthBindingCapture,
+        operation: () => Promise<T>,
+      ) => {
+        const current = captures.get(capture.facts.providerId);
+        if (current === undefined || !sameCapture(capture, current)) {
+          throw new Error("stale");
+        }
+        return operation();
+      },
+    } as unknown as ProviderAuthBindingAuthority;
+    const ids = ["commandcode-goat", "commandcode-private"] as const;
+    const providers = ids.map(
+      (id) => ({ id, name: id, baseUrl: `https://${id}.invalid` }) as unknown as Provider,
+    );
+    const models = {
+      getProviders: () => providers,
+      getProvider: (id: string) => providers.find((provider) => provider.id === id),
+      getModels: (id: string) => [{ provider: id, baseUrl: `https://${id}.invalid` }],
+      getAuth: async () => ({ auth: { apiKey: "same-wire-secret" } }),
+    } as unknown as Pick<
+      Models,
+      "getProviders" | "getProvider" | "getModels" | "getAuth"
+    >;
+    const probe = (providerId: string): ProviderUsageProbe => ({
+      providerId,
+      eligibility: () => ({ state: "eligible" }),
+      acquire: async () => ({
+        state: "observed",
+        facts: {
+          windows: [{ kind: "weekly", usedPercent: 50 }],
+          budgets: [],
+        },
+      }),
+    });
+    const authority = createProviderUsageAuthority({
+      models,
+      binding,
+      probes: ids.map(probe),
+      now: () => 1,
+    });
+
+    await authority.refresh("commandcode-goat");
+    await authority.refresh("commandcode-private");
+    expect(await authority.query()).toMatchObject({
+      providers: [
+        {
+          state: "observed",
+          observation: {
+            providerId: "commandcode-goat",
+            windows: [{ kind: "weekly", usedPercent: 50 }],
+          },
+        },
+        {
+          state: "observed",
+          observation: {
+            providerId: "commandcode-private",
+            windows: [{ kind: "weekly", usedPercent: 50 }],
+          },
+        },
+      ],
+    });
+
+    captures.set(
+      "commandcode-goat",
+      managed("goat-a", "g2", "s2", "api_key", "commandcode-goat"),
+    );
+
+    expect(await authority.query()).toMatchObject({
+      providers: [
+        { state: "unobserved", providerId: "commandcode-goat" },
+        {
+          state: "observed",
+          observation: { providerId: "commandcode-private" },
+        },
+      ],
+    });
+  });
+
+  it("does not share in-flight work across Providers", async () => {
+    const captures = new Map([
+      ["a", managed("a", "g1", "s1", "api_key", "a")],
+      ["b", managed("b", "g1", "s1", "api_key", "b")],
+    ]);
+    const binding = {
+      capture: async (providerId: string) => captures.get(providerId)!,
+      publishIfCurrent: async (
+        _capture: ProviderAuthBindingCapture,
+        publish: (assertCurrent: () => void) => Promise<void> | void,
+      ) => {
+        await publish(() => undefined);
+        return true;
+      },
+      runBound: async <T>(
+        _capture: ProviderAuthBindingCapture,
+        operation: () => Promise<T>,
+      ) => operation(),
+    } as unknown as ProviderAuthBindingAuthority;
+    const providers = ["a", "b"].map(
+      (id) => ({ id, name: id, baseUrl: `https://${id}.invalid` }) as unknown as Provider,
+    );
+    const models = {
+      getProviders: () => providers,
+      getProvider: (id: string) => providers.find((provider) => provider.id === id),
+      getModels: (id: string) => [{ provider: id, baseUrl: `https://${id}.invalid` }],
+      getAuth: async () => ({ auth: { apiKey: "secret" } }),
+    } as unknown as Pick<
+      Models,
+      "getProviders" | "getProvider" | "getModels" | "getAuth"
+    >;
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const probe = (providerId: string): ProviderUsageProbe => ({
+      providerId,
+      eligibility: () => ({ state: "eligible" }),
+      acquire: async () => {
+        calls += 1;
+        await gate;
+        return { state: "observed", facts: { windows: [], budgets: [] } };
+      },
+    });
+    const authority = createProviderUsageAuthority({
+      models,
+      binding,
+      probes: [probe("a"), probe("b")],
+    });
+
+    const first = authority.refresh("a");
+    const second = authority.refresh("b");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toBe(2);
+    release();
+    await Promise.all([first, second]);
   });
 
   it("de-duplicates concurrent refreshes only for the same complete binding", async () => {

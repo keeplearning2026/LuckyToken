@@ -499,8 +499,8 @@ describe("Anthropic Provider Native Request Journey", () => {
       expect(outboundAttempts).toHaveLength(2);
       expect(outboundAttempts.map((attempt) => attempt.attempt)).toEqual([1, 2]);
       expect(outboundAttempts.map((attempt) => attempt.url)).toEqual([
-        "https://provider.example.com/gateway/v1/messages",
-        "https://provider.example.com/gateway/v1/messages",
+        "https://provider.example.com/gateway/v1/messages?beta=true",
+        "https://provider.example.com/gateway/v1/messages?beta=true",
       ]);
       expect(outboundAttempts.map((attempt) => attempt.authorization)).toEqual([
         `Bearer ${PROVIDER_TOKEN_A}`,
@@ -511,8 +511,8 @@ describe("Anthropic Provider Native Request Journey", () => {
         null,
       ]);
       expect(outboundAttempts.map((attempt) => attempt.userAgent)).toEqual([
-        "claude-cli/2.1.75",
-        "claude-cli/2.1.75",
+        "claude-cli/2.1.251",
+        "claude-cli/2.1.251",
       ]);
       expect(
         outboundAttempts.every((attempt) =>

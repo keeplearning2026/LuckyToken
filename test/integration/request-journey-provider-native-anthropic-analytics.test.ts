@@ -398,7 +398,7 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
       });
       expect(enabled.outbound).toHaveLength(1);
       expect(enabled.outbound[0]).toMatchObject({
-        url: "https://provider.example.com/gateway/v1/messages",
+        url: "https://provider.example.com/gateway/v1/messages?beta=true",
         method: "POST",
         headers: {
           accept: "application/json",
@@ -462,7 +462,7 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
       });
       expect(sseEnabled.outbound).toHaveLength(1);
       expect(sseEnabled.outbound[0]).toMatchObject({
-        url: "https://provider.example.com/gateway/v1/messages",
+        url: "https://provider.example.com/gateway/v1/messages?beta=true",
         method: "POST",
         headers: {
           accept: "application/json",

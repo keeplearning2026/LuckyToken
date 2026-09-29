@@ -1,3 +1,5 @@
+import type { Model } from "@earendil-works/pi-ai";
+
 import { ExecutionFailure, type ExecutionOperation } from "../execution.js";
 import {
   isManagedProviderAuthBindingCapture,
@@ -76,15 +78,21 @@ export function createProfileBoundPiExecution(options: {
                   options.providerResponseObservation === undefined
                     ? {}
                     : {
-                        providerResponse: (response: unknown) => {
+                        providerResponse: (
+                          response: unknown,
+                          responseModel: Model<string>,
+                        ) => {
                           try {
-                            observation?.providerResponse?.(response);
+                            observation?.providerResponse?.(
+                              response,
+                              responseModel,
+                            );
                           } catch {
                             // Caller observation remains fail-open.
                           }
                           try {
                             const pending = options.providerResponseObservation?.({
-                              model,
+                              model: responseModel,
                               capture,
                               response,
                             });

@@ -20,6 +20,7 @@ import { createOpenRouterUsageProbe } from "../../src/provider-usage/probes/open
 import { createXaiUsageProbe } from "../../src/provider-usage/probes/xai.js";
 import { createZaiUsageProbe } from "../../src/provider-usage/probes/zai.js";
 import { createZaiCodingCnUsageProbe } from "../../src/provider-usage/probes/zai-coding-cn.js";
+import { PROVIDER_USAGE_RESPONSE_MAX_BYTES } from "../../src/provider-usage/wire.js";
 
 const API_KEY_AUTH: AuthResult = Object.freeze({
   auth: Object.freeze({ apiKey: "fixture-secret" }),
@@ -65,17 +66,146 @@ function createFetch(
   return { fetch, calls };
 }
 
-async function acquire(probe: ProviderUsageProbe, auth: AuthResult = API_KEY_AUTH) {
-  return probe.acquire({
-    auth,
-    signal: new AbortController().signal,
-  });
+async function acquire(
+  probe: ProviderUsageProbe,
+  auth: AuthResult = API_KEY_AUTH,
+  signal: AbortSignal = new AbortController().signal,
+) {
+  return probe.acquire({ auth, signal });
 }
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: unknown) =>
     Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
   return `${encode({ alg: "none" })}.${encode(payload)}.`;
+}
+
+function probeFixtures(fetch: FetchFunction): readonly {
+  readonly name: string;
+  readonly probe: ProviderUsageProbe;
+  readonly baseUrl: string;
+  readonly authType: "api_key" | "oauth";
+  readonly auth: AuthResult;
+}[] {
+  return [
+    {
+      name: "CommandCode Goat",
+      probe: createCommandCodeGoatUsageProbe(fetch),
+      baseUrl: "https://api.commandcode.ai/provider",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "CommandCode Private",
+      probe: createCommandCodePrivateUsageProbe(fetch),
+      baseUrl: "https://api.commandcode.ai",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "OpenCode Go",
+      probe: createOpenCodeGoUsageProbe(fetch),
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "Kimi Coding",
+      probe: createKimiCodingUsageProbe(fetch),
+      baseUrl: "https://api.kimi.com/coding",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "DeepSeek",
+      probe: createDeepSeekUsageProbe(fetch),
+      baseUrl: "https://api.deepseek.com",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "OpenRouter",
+      probe: createOpenRouterUsageProbe(fetch),
+      baseUrl: "https://openrouter.ai/api/v1",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "MiniMax",
+      probe: createMiniMaxUsageProbe(fetch),
+      baseUrl: "https://api.minimax.io/anthropic",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "MiniMax CN",
+      probe: createMiniMaxCnUsageProbe(fetch),
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "Moonshot",
+      probe: createMoonshotAiUsageProbe(fetch),
+      baseUrl: "https://api.moonshot.ai/v1",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "Moonshot CN",
+      probe: createMoonshotAiCnUsageProbe(fetch),
+      baseUrl: "https://api.moonshot.cn/v1",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "Z.AI",
+      probe: createZaiUsageProbe(fetch),
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "Z.AI Coding CN",
+      probe: createZaiCodingCnUsageProbe(fetch),
+      baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "Anthropic",
+      probe: createAnthropicUsageProbe(fetch),
+      baseUrl: "https://api.anthropic.com",
+      authType: "oauth",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "xAI",
+      probe: createXaiUsageProbe(fetch),
+      baseUrl: "https://api.x.ai/v1",
+      authType: "oauth",
+      auth: {
+        auth: { apiKey: jwt({ sub: "user-123" }) },
+        source: "oauth",
+      },
+    },
+    {
+      name: "OpenAI Codex",
+      probe: createOpenAiCodexUsageProbe(fetch),
+      baseUrl: "https://chatgpt.com/backend-api",
+      authType: "oauth",
+      auth: {
+        auth: {
+          apiKey: jwt({
+            "https://api.openai.com/auth": {
+              chatgpt_account_id: "acct-123",
+            },
+          }),
+        },
+        source: "oauth",
+      },
+    },
+  ];
 }
 
 describe("Provider Usage probes", () => {
@@ -209,6 +339,15 @@ describe("Provider Usage probes", () => {
     });
   });
 
+  it("does not treat missing DeepSeek balance rows as authoritative empty", async () => {
+    const transport = createFetch(() => json({ balance_infos: [] }));
+    const probe = createDeepSeekUsageProbe(transport.fetch);
+    expect(await acquire(probe)).toEqual({
+      state: "unavailable",
+      reason: "schema",
+    });
+  });
+
   it("projects DeepSeek balance without fabricating a percentage", async () => {
     const transport = createFetch(() =>
       json({
@@ -319,6 +458,33 @@ describe("Provider Usage probes", () => {
         throw new Error("Expected observed MiniMax usage");
       }
       expect(result.facts.windows[1]?.usedPercent).toBeCloseTo(18.8, 10);
+    });
+  }
+
+  for (const fixture of [
+    {
+      name: "MiniMax international missing plan",
+      probe: createMiniMaxUsageProbe,
+      baseUrl: "https://api.minimax.io/anthropic",
+    },
+    {
+      name: "MiniMax China missing plan",
+      probe: createMiniMaxCnUsageProbe,
+      baseUrl: "https://api.minimaxi.com/anthropic",
+    },
+  ] as const) {
+    it(`does not treat ${fixture.name} as authoritative empty`, async () => {
+      const transport = createFetch(() =>
+        json({
+          base_resp: { status_code: 0 },
+          model_remains: [{ model_name: "video" }],
+        }),
+      );
+      const probe = fixture.probe(transport.fetch);
+      expect(await acquire(probe)).toEqual({
+        state: "unavailable",
+        reason: "schema",
+      });
     });
   }
 
@@ -566,6 +732,149 @@ describe("Provider Usage probes", () => {
         budgets: [{ kind: "reset_credits", available: 2 }],
       },
     });
+  });
+
+  it("certifies managed eligibility and denies ambient bindings for every registered probe", () => {
+    const transport = createFetch(() => {
+      throw new Error("network must not be reached");
+    });
+    for (const fixture of probeFixtures(transport.fetch)) {
+      expect(
+        fixture.probe.eligibility(
+          context(
+            fixture.probe.providerId,
+            fixture.baseUrl,
+            fixture.authType,
+          ),
+        ),
+        fixture.name,
+      ).toEqual({ state: "eligible" });
+      expect(
+        fixture.probe.eligibility({
+          providerId: fixture.probe.providerId,
+          effectiveBaseUrl: fixture.baseUrl,
+          binding: { kind: "ambient" },
+        }),
+        fixture.name,
+      ).toEqual({ state: "unsupported_binding" });
+    }
+    expect(transport.calls).toEqual([]);
+  });
+
+  it("returns typed auth failure without network when eligible acquisition lacks auth", async () => {
+    const transport = createFetch(() => {
+      throw new Error("network must not be reached");
+    });
+    const missingAuth = { auth: {}, source: "fixture" } as AuthResult;
+    for (const fixture of probeFixtures(transport.fetch)) {
+      await expect(
+        acquire(fixture.probe, missingAuth),
+        fixture.name,
+      ).resolves.toEqual({
+        state: "unavailable",
+        reason: "auth",
+      });
+    }
+    expect(transport.calls).toEqual([]);
+  });
+
+  for (const [status, reason] of [
+    [401, "auth"],
+    [403, "auth"],
+    [429, "upstream"],
+    [500, "upstream"],
+  ] as const) {
+    it(`classifies HTTP ${status} for every registered probe without leaking credentials`, async () => {
+      const transport = createFetch(() => json({}, status));
+      for (const fixture of probeFixtures(transport.fetch)) {
+        const result = await acquire(fixture.probe, fixture.auth);
+        expect(result, fixture.name).toEqual({
+          state: "unavailable",
+          reason,
+        });
+        expect(JSON.stringify(result), fixture.name).not.toContain(
+          "fixture-secret",
+        );
+      }
+    });
+  }
+
+  it("rejects malformed provider schemas for every registered probe", async () => {
+    const transport = createFetch(() => json({}));
+    for (const fixture of probeFixtures(transport.fetch)) {
+      await expect(
+        acquire(fixture.probe, fixture.auth),
+        fixture.name,
+      ).resolves.toEqual({
+        state: "unavailable",
+        reason: "schema",
+      });
+    }
+  });
+
+  it("classifies malformed JSON and oversized responses for every registered probe", async () => {
+    const malformedTransport = createFetch(
+      () =>
+        new Response("{", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    for (const fixture of probeFixtures(malformedTransport.fetch)) {
+      await expect(
+        acquire(fixture.probe, fixture.auth),
+        fixture.name,
+      ).resolves.toEqual({
+        state: "unavailable",
+        reason: "schema",
+      });
+    }
+
+    const oversizedTransport = createFetch(
+      () =>
+        new Response("", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-length": String(PROVIDER_USAGE_RESPONSE_MAX_BYTES + 1),
+          },
+        }),
+    );
+    for (const fixture of probeFixtures(oversizedTransport.fetch)) {
+      await expect(
+        acquire(fixture.probe, fixture.auth),
+        fixture.name,
+      ).resolves.toEqual({
+        state: "unavailable",
+        reason: "schema",
+      });
+    }
+  });
+
+  it("honors parent-signal abort for every registered probe", async () => {
+    const fetch: FetchFunction = async (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal?.addEventListener(
+          "abort",
+          () => reject(signal.reason),
+          { once: true },
+        );
+      });
+
+    for (const fixture of probeFixtures(fetch)) {
+      const controller = new AbortController();
+      const pending = acquire(fixture.probe, fixture.auth, controller.signal);
+      controller.abort(new Error("parent abort"));
+      await expect(pending, fixture.name).resolves.toEqual({
+        state: "unavailable",
+        reason: "network",
+      });
+    }
   });
 
   it("rejects non-canonical effective destinations in every registered probe", () => {

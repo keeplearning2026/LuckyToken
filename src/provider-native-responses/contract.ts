@@ -31,6 +31,10 @@ export type ProviderResponsesLaneInput = {
   readonly model: Model<string>;
   readonly rawBody: string;
   readonly signal: AbortSignal;
+  /** Effective Provider request timeout, the same fact the Semantic lane
+   *  passes to Pi. Provider Native mirrors it so SDK timeout/identity headers
+   *  match Pi's envelope instead of inventing a different value. */
+  readonly requestTimeoutMs?: number;
   readonly credentialActivity?: CredentialActivitySink;
   readonly observation?: ProviderResponsesObservationContext;
 } & (
@@ -63,4 +67,5 @@ export interface CreateProviderResponsesSenderOptions {
   readonly auth: AuthResult;
   readonly fetch: FetchFunction;
   readonly sessionId?: string;
+  readonly requestTimeoutMs?: number;
 }

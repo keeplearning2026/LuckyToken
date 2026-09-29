@@ -952,6 +952,196 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).toContain("Week 25%");
   });
 
+  it("keeps per-card usage refresh reachable when the initial cache query rejects", async () => {
+    let calls = 0;
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      calls += 1;
+      if (command.command === "query") {
+        throw new Error("query unavailable");
+      }
+      return {
+        outcome: "ok",
+        snapshot: {
+          providers: [
+            {
+              providerId: "aws-provider",
+              state: "observed",
+              observedAt: 1,
+              refreshable: true,
+              windows: [{ kind: "weekly", usedPercent: 33 }],
+              budgets: [],
+            },
+          ],
+        },
+        refresh: {
+          providerId: "aws-provider",
+          outcome: "succeeded",
+        },
+      };
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage,
+    });
+
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(container.textContent).toContain("Usage not refreshed");
+    await clickAria("Refresh AWS Provider usage");
+
+    expect(executeProviderUsage).toHaveBeenCalledWith({
+      command: "refresh",
+      providerId: "aws-provider",
+    });
+    expect(container.textContent).toContain("Week 33%");
+  });
+
+  it("re-queries cache-only usage after a successful Provider request so passive observations appear", async () => {
+    let listener: RequestJourneyListener | undefined;
+    let queries = 0;
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      if (command.command !== "query") {
+        throw new Error("passive observation must not trigger refresh");
+      }
+      queries += 1;
+      return {
+        outcome: "ok",
+        snapshot: {
+          providers: [
+            queries === 1
+              ? {
+                  providerId: "aws-provider",
+                  state: "unobserved" as const,
+                }
+              : {
+                  providerId: "aws-provider",
+                  state: "observed" as const,
+                  observedAt: 2,
+                  refreshable: false,
+                  windows: [{ kind: "weekly" as const, usedPercent: 44 }],
+                  budgets: [],
+                },
+          ],
+        },
+      };
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage,
+      onRequestJourneys: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    });
+
+    expect(container.textContent).toContain("Usage not refreshed");
+
+    await act(async () => {
+      listener?.({
+        id: 10,
+        runtimeId: "runtime-1",
+        requestId: "request-10",
+        operation: "model_generation",
+        path: "/v1/messages",
+        providerId: "aws-provider",
+        profileId: "credential-a",
+        outcome: "success",
+        completeness: "complete",
+        createdAt: 1_725_000_000_000,
+        closedAt: 1_725_000_001_000,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("Week 44%");
+    expect(
+      executeProviderUsage.mock.calls.some(
+        ([command]) => command.command === "refresh",
+      ),
+    ).toBe(false);
+  });
+
+  it("shows a safe notice when usage refresh is unsupported after auth resolution", async () => {
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      if (command.command === "query") {
+        return {
+          outcome: "ok",
+          snapshot: {
+            providers: [
+              {
+                providerId: "aws-provider",
+                state: "unobserved",
+              },
+            ],
+          },
+        };
+      }
+      return {
+        outcome: "ok",
+        snapshot: {
+          providers: [
+            {
+              providerId: "aws-provider",
+              state: "unobserved",
+            },
+          ],
+        },
+        refresh: {
+          providerId: "aws-provider",
+          outcome: "unsupported",
+          reason: "destination",
+        },
+      };
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage,
+    });
+
+    await clickAria("Refresh AWS Provider usage");
+
+    expect(container.textContent).toContain(
+      "Provider usage cannot be refreshed for this endpoint.",
+    );
+  });
+
+  it("shows a safe per-Provider notice when usage refresh transport fails", async () => {
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      if (command.command === "query") {
+        return {
+          outcome: "ok",
+          snapshot: {
+            providers: [
+              {
+                providerId: "aws-provider",
+                state: "unobserved",
+              },
+            ],
+          },
+        };
+      }
+      throw new Error("control-plane failure");
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage,
+    });
+
+    await clickAria("Refresh AWS Provider usage");
+
+    expect(container.textContent).toContain(
+      "Provider usage could not be refreshed.",
+    );
+  });
+
   it("clears old usage on credential binding change and applies only the current cache query", async () => {
     let backendListener:
       | Parameters<DesktopControlPlaneApi["onBackendState"]>[0]

@@ -165,8 +165,10 @@ describe("Client Protocol request-model seam", () => {
       );
       const response = await handleHttpRequest(dependencies, anthropicRequest());
       expect(response.status).toBe(200);
+      // The SDK builds the URL, so an unresolved placeholder is percent
+      // encoded exactly as Pi's own request would encode it.
       expect(capture.urls[0]).toContain(
-        "{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
+        "%7BCLOUDFLARE_ACCOUNT_ID%7D/%7BCLOUDFLARE_GATEWAY_ID%7D/anthropic",
       );
     });
 
@@ -181,7 +183,7 @@ describe("Client Protocol request-model seam", () => {
       const response = await handleHttpRequest(dependencies, anthropicRequest());
       expect(response.status).toBe(200);
       expect(capture.urls[0]).toBe(
-        "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/anthropic/v1/messages",
+        "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/anthropic/v1/messages?beta=true",
       );
     });
   });

@@ -9,9 +9,11 @@ import {
   normalizeProviderUsageFacts,
   type ProviderUsageAuthority,
   type ProviderUsageBindingContext,
+  type ProviderUsageEligibility,
   type ProviderUsageEligibilityContext,
   type ProviderUsageObservation,
   type ProviderUsageProbe,
+  type ProviderUsageProbeResult,
   type ProviderUsageRefreshResult,
   type ProviderUsageSnapshot,
   type ProviderUsageState,
@@ -43,69 +45,22 @@ function bindingIdentity(capture: ProviderAuthBindingCapture): string {
     : `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
 }
 
-function inflightIdentity(capture: ProviderAuthBindingCapture): string {
+function inflightIdentity(
+  capture: ProviderAuthBindingCapture,
+  effectiveBaseUrl: string,
+): string {
   const facts = capture.facts;
-  return facts.kind === "ambient"
-    ? bindingIdentity(capture)
-    : `${bindingIdentity(capture)}\u0000${facts.selectionGeneration}`;
+  const binding =
+    facts.kind === "ambient"
+      ? bindingIdentity(capture)
+      : `${bindingIdentity(capture)}\u0000${facts.selectionGeneration}`;
+  return `${binding}\u0000${effectiveBaseUrl}`;
 }
 
 function bindingContext(capture: ProviderAuthBindingCapture): ProviderUsageBindingContext {
   return capture.facts.kind === "ambient"
     ? Object.freeze({ kind: "ambient" })
     : Object.freeze({ kind: "managed", authType: capture.facts.authType });
-}
-
-function unavailable(providerId: string): ProviderUsageState {
-  return Object.freeze({ state: "unavailable", providerId, reason: "auth" });
-}
-
-function passiveWindowKey(
-  window: ProviderUsageObservation["windows"][number],
-): string {
-  const scope =
-    window.scope?.kind === "model" ? window.scope.modelLabel : "";
-  const duration =
-    window.kind === "custom" ? window.durationMinutes ?? "" : "";
-  return `${window.kind}\u0000${scope}\u0000${duration}`;
-}
-
-function passiveBudgetKey(
-  budget: ProviderUsageObservation["budgets"][number],
-): string {
-  return budget.kind === "balance"
-    ? `${budget.kind}\u0000${budget.currency}`
-    : budget.kind === "credits"
-      ? `${budget.kind}\u0000${budget.currency ?? ""}`
-      : budget.kind;
-}
-
-function mergePassiveFacts(
-  previous: ProviderUsageObservation | undefined,
-  incoming: Pick<ProviderUsageObservation, "windows" | "budgets">,
-): Pick<ProviderUsageObservation, "windows" | "budgets"> {
-  if (previous === undefined) {
-    return Object.freeze({
-      windows: incoming.windows,
-      budgets: incoming.budgets,
-    });
-  }
-  const windows = new Map(
-    previous.windows.map((window) => [passiveWindowKey(window), window] as const),
-  );
-  for (const window of incoming.windows) {
-    windows.set(passiveWindowKey(window), window);
-  }
-  const budgets = new Map(
-    previous.budgets.map((budget) => [passiveBudgetKey(budget), budget] as const),
-  );
-  for (const budget of incoming.budgets) {
-    budgets.set(passiveBudgetKey(budget), budget);
-  }
-  return Object.freeze({
-    windows: Object.freeze([...windows.values()]),
-    budgets: Object.freeze([...budgets.values()]),
-  });
 }
 
 export function createProviderUsageAuthority(
@@ -125,15 +80,21 @@ export function createProviderUsageAuthority(
   const timeoutMs = options.refreshTimeoutMs ?? PROVIDER_USAGE_REFRESH_TIMEOUT_MS;
 
   const effectiveBaseUrl = (providerId: string): string | undefined => {
-    const provider = options.models.getProvider(providerId);
-    if (provider?.baseUrl !== undefined) return provider.baseUrl;
     const modelBaseUrls = new Set(
       options.models
         .getModels(providerId)
         .map((model) => model.baseUrl)
-        .filter((baseUrl): baseUrl is string => typeof baseUrl === "string"),
+        .filter(
+          (baseUrl): baseUrl is string =>
+            typeof baseUrl === "string" && baseUrl.trim().length > 0,
+        ),
     );
-    return modelBaseUrls.size === 1 ? [...modelBaseUrls][0] : undefined;
+    if (modelBaseUrls.size === 1) return [...modelBaseUrls][0];
+    if (modelBaseUrls.size > 1) return undefined;
+    const providerBaseUrl = options.models.getProvider(providerId)?.baseUrl;
+    return typeof providerBaseUrl === "string" && providerBaseUrl.trim().length > 0
+      ? providerBaseUrl
+      : undefined;
   };
 
   const eligibilityFor = (
@@ -142,7 +103,10 @@ export function createProviderUsageAuthority(
     capture: ProviderAuthBindingCapture,
     baseUrl: string | undefined,
   ) => {
-    if (options.models.getProvider(providerId) === undefined) {
+    if (
+      options.models.getProvider(providerId) === undefined ||
+      baseUrl === undefined
+    ) {
       return Object.freeze({ state: "unsupported_destination" as const });
     }
     const context: ProviderUsageEligibilityContext = Object.freeze({
@@ -169,10 +133,17 @@ export function createProviderUsageAuthority(
     try {
       capture = await options.binding.capture(providerId);
     } catch {
-      return unavailable(providerId);
+      if (retry) return queryProvider(providerId, false);
+      return Object.freeze({ state: "unobserved", providerId });
     }
     const baseUrl = effectiveBaseUrl(providerId);
-    const eligibility = eligibilityFor(providerId, probe, capture, baseUrl);
+    let eligibility: ProviderUsageEligibility;
+    try {
+      eligibility = eligibilityFor(providerId, probe, capture, baseUrl);
+    } catch {
+      if (retry) return queryProvider(providerId, false);
+      return Object.freeze({ state: "unobserved", providerId });
+    }
     const slot = cache.get(providerId);
     const matchingSlot =
       slot !== undefined &&
@@ -203,6 +174,7 @@ export function createProviderUsageAuthority(
 
     let published: ProviderUsageState | undefined;
     const current = await options.binding.publishIfCurrent(capture, () => {
+      if (effectiveBaseUrl(providerId) !== baseUrl) return;
       published = candidate;
     });
     if (current && published !== undefined) return published;
@@ -222,7 +194,23 @@ export function createProviderUsageAuthority(
     capture: ProviderAuthBindingCapture,
   ): Promise<ProviderUsageRefreshResult> => {
     const baseUrl = effectiveBaseUrl(providerId);
-    const eligibility = eligibilityFor(providerId, probe, capture, baseUrl);
+    if (baseUrl === undefined) {
+      return Object.freeze({
+        providerId,
+        outcome: "unsupported",
+        reason: "destination",
+      });
+    }
+    let eligibility: ProviderUsageEligibility;
+    try {
+      eligibility = eligibilityFor(providerId, probe, capture, baseUrl);
+    } catch {
+      return Object.freeze({
+        providerId,
+        outcome: "unavailable",
+        reason: "upstream",
+      });
+    }
     if (eligibility.state === "unsupported_binding") {
       return Object.freeze({
         providerId,
@@ -238,18 +226,32 @@ export function createProviderUsageAuthority(
       });
     }
 
-    const key = inflightIdentity(capture);
+    const key = inflightIdentity(capture, baseUrl);
     const existing = inflight.get(key);
     if (existing !== undefined) return existing;
 
     const pending = (async (): Promise<ProviderUsageRefreshResult> => {
       const signal = AbortSignal.timeout(timeoutMs);
-      let acquired;
+      let acquired:
+        | ProviderUsageProbeResult
+        | { readonly state: "unsupported_destination" };
       try {
         acquired = await options.binding.runBound(capture, async () => {
           const auth = await options.models.getAuth(providerId, { signal });
           if (auth === undefined) {
             return Object.freeze({ state: "unavailable" as const, reason: "auth" as const });
+          }
+          const authBaseUrl = auth.auth.baseUrl?.trim();
+          if (authBaseUrl !== undefined && authBaseUrl.length > 0) {
+            const authEligibility = eligibilityFor(
+              providerId,
+              probe,
+              capture,
+              authBaseUrl,
+            );
+            if (authEligibility.state !== "eligible") {
+              return Object.freeze({ state: "unsupported_destination" as const });
+            }
           }
           return probe.acquire({ auth, signal });
         });
@@ -275,6 +277,13 @@ export function createProviderUsageAuthority(
         });
       }
 
+      if (acquired.state === "unsupported_destination") {
+        return Object.freeze({
+          providerId,
+          outcome: "unsupported",
+          reason: "destination",
+        });
+      }
       if (acquired.state === "unavailable") {
         return Object.freeze({
           providerId,
@@ -301,9 +310,10 @@ export function createProviderUsageAuthority(
       }
       let committed = false;
       const current = await options.binding.publishIfCurrent(capture, () => {
+        if (effectiveBaseUrl(providerId) !== baseUrl) return;
         cache.set(providerId, Object.freeze({
           bindingIdentity: bindingIdentity(capture),
-          ...(baseUrl === undefined ? {} : { effectiveBaseUrl: baseUrl }),
+          effectiveBaseUrl: baseUrl,
           observation,
         }));
         committed = true;
@@ -323,7 +333,8 @@ export function createProviderUsageAuthority(
   const observePassive = async (
     providerId: string,
     capture: ProviderAuthBindingCapture,
-    rawFacts: Parameters<ProviderUsageAuthority["observePassive"]>[2],
+    observedBaseUrl: string,
+    rawFacts: Parameters<ProviderUsageAuthority["observePassive"]>[3],
   ): Promise<boolean> => {
     if (
       capture.facts.providerId !== providerId ||
@@ -334,29 +345,21 @@ export function createProviderUsageAuthority(
     const facts = normalizeProviderUsageFacts(rawFacts);
     if (facts === undefined) return false;
     const baseUrl = effectiveBaseUrl(providerId);
+    if (baseUrl === undefined || observedBaseUrl !== baseUrl) return false;
+    const observation: ProviderUsageObservation = Object.freeze({
+      providerId,
+      observedAt: now(),
+      windows: facts.windows,
+      budgets: facts.budgets,
+    });
     let committed = false;
     const current = await options.binding.publishIfCurrent(capture, () => {
       if (effectiveBaseUrl(providerId) !== baseUrl) return;
-      const identity = bindingIdentity(capture);
-      const previousSlot = cache.get(providerId);
-      const previous =
-        previousSlot !== undefined &&
-        previousSlot.bindingIdentity === identity &&
-        previousSlot.effectiveBaseUrl === baseUrl
-          ? previousSlot.observation
-          : undefined;
-      const merged = mergePassiveFacts(previous, facts);
-      const observation: ProviderUsageObservation = Object.freeze({
-        providerId,
-        observedAt: now(),
-        windows: merged.windows,
-        budgets: merged.budgets,
-      });
       cache.set(
         providerId,
         Object.freeze({
-          bindingIdentity: identity,
-          ...(baseUrl === undefined ? {} : { effectiveBaseUrl: baseUrl }),
+          bindingIdentity: bindingIdentity(capture),
+          effectiveBaseUrl: baseUrl,
           observation,
         }),
       );

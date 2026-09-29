@@ -738,6 +738,81 @@ describe("Provider Native Responses HTTP retry", () => {
     expect(transitions).toBe(2);
   });
 
+  it("rebuilds SDK identity, timeout, and auth after a 429 Profile switch", async () => {
+    const captures: ManagedProviderAuthBindingCapture[] = [1, 2].map((index) => ({
+      facts: {
+        kind: "managed",
+        providerId: "openai",
+        credentialId: `credential-${index}`,
+        authType: "api_key",
+        authMethodLabel: "OpenAI credentials",
+        displayName: `Profile ${index}`,
+        credentialGeneration: `credential-generation-${index}`,
+        selectionGeneration: `selection-generation-${index}`,
+      },
+    }));
+    let currentCapture = captures[0]!;
+    let transition = 0;
+    const requests: Request[] = [];
+    const lane = createProviderNativeResponsesRaw({
+      models: {
+        getAuth: async () => ({
+          auth: { apiKey: `key-${currentCapture.facts.credentialId}` },
+        }),
+      } as Pick<Models, "getAuth">,
+      bindings: {
+        capture: async () => captures[0]!,
+        runBound: async <T>(
+          binding: ProviderAuthBindingCapture,
+          operation: () => Promise<T>,
+        ) => {
+          currentCapture = binding as ManagedProviderAuthBindingCapture;
+          return operation();
+        },
+        advanceAfterFinal429: async () => ({
+          outcome: "switched",
+          capture: captures[++transition]!,
+        }),
+      },
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return requests.length === 1
+          ? new Response("limited", { status: 429 })
+          : new Response('{"status":"completed"}', {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+      },
+      configuration: parseProviderNativeResponsesConfiguration({
+        transport: { maxRetries: 0 },
+      }),
+    });
+
+    const response = await lane.execute({
+      model: model(),
+      rawBody: '{"model":"alias","input":"hello"}',
+      operation: "responses",
+      signal: AbortSignal.timeout(5_000),
+      sessionId: SESSION_ID,
+      requestTimeoutMs: 123_456,
+    });
+
+    expect(response.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(
+      requests.map((request) => request.headers.get("authorization")),
+    ).toEqual(["Bearer key-credential-1", "Bearer key-credential-2"]);
+    expect(
+      requests.map((request) => request.headers.get("x-stainless-retry-count")),
+    ).toEqual(["0", "0"]);
+    expect(
+      requests.map((request) => request.headers.get("x-stainless-timeout")),
+    ).toEqual(["123", "123"]);
+    expect(
+      requests.map((request) => request.headers.get("user-agent")),
+    ).toEqual([requests[0]!.headers.get("user-agent"), requests[0]!.headers.get("user-agent")]);
+  });
+
   it("never applies Responses retry policy to Compact", async () => {
     let calls = 0;
     const lane = createProviderNativeResponses({

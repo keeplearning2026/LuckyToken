@@ -30,13 +30,14 @@ Responses request
 → provider-native Responses transport
 ```
 
-This lane also bypasses Pi AI IR. Raw Responses wire remains authoritative except for boundary-required model identity projection, the bounded tool-call adjacency deferral defined by the Provider Native adjacency contract (`operation === "responses"` only), Provider auth/header construction, endpoint construction, content encoding, and response alias projection. For ordinary `POST /v1/responses`, Token constructs the raw request body itself and otherwise mirrors the pinned Pi AI HTTP transport contract:
+This lane also bypasses Pi AI IR. The client JSON request remains the model-visible semantic authority except for boundary-required model identity projection, the bounded tool-call adjacency deferral defined by the Provider Native adjacency contract (`operation === "responses"` only), Provider auth/header construction, endpoint construction, content encoding, and response alias projection. OpenAI-compatible and Azure Provider Native requests use the pinned vendor SDK to serialize the projected JSON and generate the same request envelope as pinned Pi:
 
 - OpenAI-compatible Responses uses Pi model/auth facts and Pi session-affinity formats (`openai`, `openai-nosession`, or `openrouter`).
 - Azure Responses uses Pi's normalized endpoint, deployment identity, API version, and `api-key` authentication without session headers.
-- Codex Responses uses the Pi SSE contract: OAuth account identity, `originator: pi`, Pi user agent, experimental Responses header, effective session headers, and zstd when available. WebSocket parity is outside this contract.
-- Client credential, cookie, proxy, and `x-stainless-*` transport identity headers are not forwarded. Pi model/auth headers are authoritative.
-- The body is not semantically reconstructed: only the top-level `model` string is projected, plus the closed adjacency deferral that relocates original developer message element slices inside `input`. Unknown and future fields, JSON numeric spellings, whitespace, and nested values otherwise remain client-authored.
+- Codex Responses remains on the Pi SSE contract: OAuth account identity, `originator: pi`, Pi user agent, experimental Responses header, effective session headers, and zstd when available. WebSocket parity is outside this contract.
+- Client credential, cookie, proxy, and `x-stainless-*` transport identity headers are not forwarded. Pi model/auth headers and the pinned SDK identity are authoritative.
+- Provider Native does not invent request fields. It projects the top-level `model` and, for ordinary Responses only, may perform the closed adjacency deferral. Unknown and future JSON fields and nested values survive with the same parsed JSON meaning.
+- Byte-level JSON fidelity is deliberately not part of Provider Native B2′: SDK serialization may change property formatting, whitespace, numeric lexical spelling, and other representation details inherent to parse/serialize. Certification therefore compares JSON semantics and separately verifies that no unrequested field is injected.
 
 Compact remains a separately tested native operation, never receives the adjacency deferral, and does not inherit ordinary Responses retry/session parity.
 

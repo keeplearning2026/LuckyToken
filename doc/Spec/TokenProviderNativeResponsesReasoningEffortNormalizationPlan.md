@@ -5,6 +5,12 @@ Scope: Provider Native Preservation，且仅 `operation === "responses"`（不�
 对顶层 `reasoning.effort` 的窄字段归一化。
 Authority: 无。本文只定义提案与证据；第 7 节列出需要修订的既有契约断言，实施前需所有者授权。
 
+> **B2′ 基线更新（2026-09-29）：** 本文写作时假定 Provider Native Responses 最终 outbound
+> body 维持文本级逐字节保真；该假定已被 `TokenProviderNativeEnvelopeParityPlan.md` 的
+> B2′ 决策取代。若未来实施本提案，文中所有“逐字节”不变量只能用于 reasoning-effort
+> 投影器内部的局部编辑证明；最终 wire 必须按 pinned SDK parse/serialize 归一化后的 JSON
+> 语义等价 + 无未请求字段注入认证，不能恢复旧的 raw JSON byte contract。
+
 ## 0. 结论摘要
 
 能拿到模型推理信息，且不需要新增能力表。

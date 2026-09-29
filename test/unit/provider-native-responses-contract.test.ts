@@ -155,9 +155,25 @@ describe("Provider Native Responses contract", () => {
     expect(upstream).toHaveLength(1);
     expect(upstream[0]?.url).toBe("https://responses.example.com/responses");
     expect(upstream[0]?.headers.get("authorization")).toBe("Bearer sk-responses");
-    await expect(upstream[0]?.text()).resolves.toBe(
-      rawBody.replace('"openai/gpt-5"', '"gpt-5"'),
-    );
+    // Decision D5: the vendor SDK serializes the projected body, so unknown
+    // and future fields survive by value while JSON spellings do not. The
+    // certified surface is the JSON value, not the client's byte spelling.
+    const forwarded = JSON.parse(await upstream[0]!.text()) as Record<string, unknown>;
+    expect(forwarded).toEqual({
+      model: "gpt-5",
+      input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [
+            { type: "function", name: "lookup", namespace: "dynamic_tools" },
+          ],
+        },
+      ],
+      future_number: 9007199254740992,
+      negative_zero: 0,
+      future_field: { opaque: true },
+    });
   });
 
 
@@ -188,9 +204,9 @@ describe("Provider Native Responses contract", () => {
 
     expect(response.status).toBe(200);
     expect(upstream).toHaveLength(1);
-    await expect(upstream[0]?.text()).resolves.toBe(
-      JSON.stringify({ model: "gpt-5", input: reordered }),
-    );
+    await expect(
+      JSON.parse(await upstream[0]!.text()),
+    ).toEqual({ model: "gpt-5", input: reordered });
     expect(recorded.observations).toContainEqual(
       expect.objectContaining({
         kind: "conversion_notice_observed",

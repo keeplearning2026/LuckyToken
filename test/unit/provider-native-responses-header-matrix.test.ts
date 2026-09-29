@@ -80,8 +80,13 @@ describe("Provider Native Responses header boundary", () => {
         authorization: "Bearer client-secret",
         cookie: "session=abc",
         "x-api-key": "client-key",
+        "user-agent": "client-user-agent",
         "x-stainless-retry-count": "2",
+        "x-stainless-timeout": "999999",
         "openai-beta": "client-beta",
+        "x-session-affinity": "client-affinity",
+        session_id: "client-session",
+        "x-client-request-id": "client-request",
         "content-length": "999",
         "content-encoding": "gzip",
       },
@@ -98,7 +103,12 @@ describe("Provider Native Responses header boundary", () => {
     expect(captured).toHaveLength(1);
     const outbound = captured[0]!;
     expect(outbound.headers.get("authorization")).toBe("Bearer sk-provider");
-    expect(outbound.headers.has("x-stainless-retry-count")).toBe(false);
+    // The client's `x-stainless-retry-count: 2` cannot survive; the SDK owns
+    // this header and reports its own (disabled) retry counter.
+    expect(outbound.headers.get("x-stainless-retry-count")).toBe("0");
+    expect(outbound.headers.get("user-agent")).not.toBe("client-user-agent");
+    expect(outbound.headers.get("x-stainless-timeout")).not.toBe("999999");
+    expect(outbound.headers.get("x-session-affinity")).toBeNull();
     expect(outbound.headers.get("session_id")).toBe(
       "00000000-0000-4000-8000-000000000123",
     );

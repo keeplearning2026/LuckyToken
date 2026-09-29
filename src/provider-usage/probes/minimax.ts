@@ -52,8 +52,8 @@ export function createMiniMaxUsageProbe(fetch: FetchFunction): ProviderUsageProb
       const general = rows.map(asRecord).find((row) => row?.model_name === "general");
       if (general === undefined) {
         return Object.freeze({
-          state: "observed" as const,
-          facts: Object.freeze({ windows: Object.freeze([]), budgets: Object.freeze([]) }),
+          state: "unavailable" as const,
+          reason: "schema" as const,
         });
       }
       const windows: ProviderUsageWindow[] = [];
@@ -82,6 +82,12 @@ export function createMiniMaxUsageProbe(fetch: FetchFunction): ProviderUsageProb
             }));
           }
         }
+      }
+      if (windows.length === 0) {
+        return Object.freeze({
+          state: "unavailable" as const,
+          reason: "schema" as const,
+        });
       }
       return Object.freeze({
         state: "observed" as const,

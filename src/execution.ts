@@ -59,7 +59,10 @@ export type ExecutionOperation = (
 /** Fail-open infrastructure observation of Pi's public request/response seams. */
 export interface ExecutionObservation {
   readonly providerRequest?: (payload: unknown) => void;
-  readonly providerResponse?: (response: unknown) => void;
+  readonly providerResponse?: (
+    response: unknown,
+    model: Model<string>,
+  ) => void;
 }
 
 export function createExecutionOperation(): ExecutionOperation {
@@ -99,9 +102,12 @@ export async function execute(
     ...(observation?.providerResponse === undefined
       ? {}
       : {
-          onResponse(response) {
+          onResponse(response, responseModel) {
             try {
-              observation.providerResponse?.(response);
+              observation.providerResponse?.(
+                response,
+                responseModel as Model<string>,
+              );
             } catch {
               // Observation is fail-open and never changes Provider handling.
             }

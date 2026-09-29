@@ -452,7 +452,7 @@ describe("composed Provider-facing headers on the native passthrough wire", () =
     expect(response.status).toBe(200);
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0]!.url).toBe(
-      "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/anthropic/v1/messages",
+      "https://gateway.ai.cloudflare.com/v1/cf-account-123/cf-gateway-456/anthropic/v1/messages?beta=true",
     );
     expect(upstreamRequests[0]!.headers.get("cf-aig-authorization")).toBe(
       "Bearer cf-api-token-canary",

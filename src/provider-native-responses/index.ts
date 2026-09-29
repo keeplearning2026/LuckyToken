@@ -8,6 +8,11 @@ import {
 import { renderResponsesError } from "../protocols/openai-responses/error-rendering.js";
 import { createAzureResponsesSender } from "./azure.js";
 import {
+  certifiedResponsesOperation,
+  certifiedResponsesTransport,
+  type ProviderResponsesTransportKind,
+} from "./certification.js";
+import {
   bindProviderNativeResponsesConfiguration,
   parseProviderNativeResponsesConfiguration,
   type ProviderNativeResponsesConfiguration,
@@ -278,65 +283,17 @@ function errorResponse(status: number, type: string, message: string): Response 
   });
 }
 
-type ProviderResponsesTransportKind = "openai" | "codex" | "azure";
-
-const CERTIFIED_OPENAI_RESPONSES_PROVIDERS = new Set([
-  "openai",
-  "xai",
-  "opencode",
-  "opencode-go",
-  "cloudflare-ai-gateway",
-  "github-copilot",
-  "commandcode-goat",
-]);
-
-const CERTIFIED_OPENAI_COMPACT_PROVIDERS = new Set([
-  "openai",
-  "xai",
-  "opencode",
-  "opencode-go",
-  "cloudflare-ai-gateway",
-  "github-copilot",
-]);
-
 function providerResponsesTransportKind(
   model: Model<string>,
 ): ProviderResponsesTransportKind | undefined {
-  if (
-    model.api === "openai-responses" &&
-    CERTIFIED_OPENAI_RESPONSES_PROVIDERS.has(model.provider)
-  ) {
-    return "openai";
-  }
-  if (
-    model.provider === "openai-codex" &&
-    model.api === "openai-codex-responses"
-  ) {
-    return "codex";
-  }
-  if (
-    model.provider === "azure-openai-responses" &&
-    model.api === "azure-openai-responses"
-  ) {
-    return "azure";
-  }
-  return undefined;
+  return certifiedResponsesTransport(model.provider, model.api);
 }
 
 export function supportsProviderNativeResponses(
   model: Model<string>,
   operation: ProviderResponsesOperation,
 ): boolean {
-  const transport = providerResponsesTransportKind(model);
-  if (transport === undefined) return false;
-  if (operation === "responses") return true;
-  switch (transport) {
-    case "openai":
-      return CERTIFIED_OPENAI_COMPACT_PROVIDERS.has(model.provider);
-    case "codex":
-    case "azure":
-      return true;
-  }
+  return certifiedResponsesOperation(model.provider, model.api, operation);
 }
 
 function createProviderResponsesSenderForTransport(
@@ -468,6 +425,9 @@ export function createProviderNativeResponses(
               model: input.model,
               auth,
               fetch: options.fetch,
+              ...(input.requestTimeoutMs === undefined
+                ? {}
+                : { requestTimeoutMs: input.requestTimeoutMs }),
               ...(input.operation === "responses"
                 ? { sessionId: input.sessionId }
                 : {}),

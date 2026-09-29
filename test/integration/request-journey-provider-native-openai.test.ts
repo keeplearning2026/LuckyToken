@@ -519,9 +519,11 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
         `Bearer ${PROVIDER_TOKEN_A}`,
         `Bearer ${PROVIDER_TOKEN_B}`,
       ]);
-      expect(outboundAttempts.map((attempt) => attempt.body)).toEqual([
-        expectedOutboundBody,
-        expectedOutboundBody,
+      expect(
+        outboundAttempts.map((attempt) => JSON.parse(attempt.body)),
+      ).toEqual([
+        JSON.parse(expectedOutboundBody),
+        JSON.parse(expectedOutboundBody),
       ]);
       expect(
         outboundAttempts.map(({ contentType, accept }) => ({ contentType, accept })),
@@ -877,7 +879,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
             artifactId: "provider_native_outbound_request_wire.1",
             artifactKind: "provider_native_outbound_request_wire",
             state: "captured",
-            originalBytes: Buffer.byteLength(expectedOutboundBody),
+            originalBytes: Buffer.byteLength(persistedOutboundBody),
           }),
           expect.objectContaining({
             artifactId: "provider_native_upstream_response_wire.1",
@@ -899,7 +901,7 @@ describe("OpenAI Responses Provider Native Request Journey", () => {
             artifactId: "provider_native_outbound_request_wire.2",
             artifactKind: "provider_native_outbound_request_wire",
             state: "captured",
-            originalBytes: Buffer.byteLength(expectedOutboundBody),
+            originalBytes: Buffer.byteLength(persistedOutboundBody),
           }),
           expect.objectContaining({
             artifactId: "provider_native_upstream_response_wire.2",

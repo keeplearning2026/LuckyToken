@@ -31,6 +31,10 @@ export interface AnthropicProviderNativeLane {
     readonly requestId: string;
     /** Validated request-edge session identity; never read from generic headers. */
     readonly sessionId?: string;
+    /** Effective Provider request timeout, the same fact the Semantic lane
+     *  passes to Pi. Provider Native mirrors it so the SDK timeout header and
+     *  actual client timeout match Pi instead of inventing a different value. */
+    readonly requestTimeoutMs?: number;
     readonly onExecutionStart: () => void;
     readonly credentialActivity?: CredentialActivitySink;
     readonly journey?: RequestJourneyObserver;

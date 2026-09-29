@@ -78,6 +78,10 @@ async function requestJson(request: Request): Promise<Record<string, unknown>> {
   return JSON.parse(decoded) as Record<string, unknown>;
 }
 
+function sdkJsonSemantics(raw: string): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(JSON.parse(raw))) as Record<string, unknown>;
+}
+
 function codexToken(accountId: string): string {
   const payload = Buffer.from(
     JSON.stringify({
@@ -88,7 +92,7 @@ function codexToken(accountId: string): string {
 }
 
 describe("Responses native provider sender", () => {
-  it("preserves the raw request bytes exactly when the selected model already matches", async () => {
+  it("preserves request JSON semantics when the selected model already matches", async () => {
     const captured = capture();
     const sender = createResponsesNativeSender({
       model: model("openai", "openai-responses", "https://api.openai.com/v1"),
@@ -99,10 +103,12 @@ describe("Responses native provider sender", () => {
 
     await sender!.send("responses", raw, AbortSignal.timeout(5_000));
 
-    await expect(captured.requests[0]!.text()).resolves.toBe(raw);
+    await expect(requestJson(captured.requests[0]!)).resolves.toEqual(
+      sdkJsonSemantics(raw),
+    );
   });
 
-  it("patches only the top-level model literal without normalizing unrelated JSON tokens", async () => {
+  it("projects only the top-level model semantic before SDK serialization", async () => {
     const captured = capture();
     const sender = createResponsesNativeSender({
       model: model("openai", "openai-responses", "https://api.openai.com/v1"),
@@ -110,14 +116,15 @@ describe("Responses native provider sender", () => {
       fetch: captured.fetch,
     });
     const raw = '{\n "model" : "alias", "future_number":9007199254740993, "negative_zero":-0, "scientific":1e+30, "nested":{"model":"leave-me"}\n}';
-    const expected = raw.replace('"alias"', '"real-model"');
+    const expected = sdkJsonSemantics(raw);
+    expected.model = "real-model";
 
     await sender!.send("responses", raw, AbortSignal.timeout(5_000));
 
-    await expect(captured.requests[0]!.text()).resolves.toBe(expected);
+    await expect(requestJson(captured.requests[0]!)).resolves.toEqual(expected);
   });
 
-  it("forwards the caller's stream_options bytes with the resolved model", async () => {
+  it("preserves caller stream_options semantics with the resolved model", async () => {
     const captured = capture();
     const sender = createResponsesNativeSender({
       model: model("commandcode-goat", "openai-responses", "https://provider.example/v1"),
@@ -125,12 +132,12 @@ describe("Responses native provider sender", () => {
       fetch: captured.fetch,
     });
     const raw = '{\n "model" : "alias", "stream_options" : {"include_usage":true}, "future_number":9007199254740993, "nested":{"stream_options":{"keep":1}}\n}';
+    const expected = sdkJsonSemantics(raw);
+    expected.model = "real-model";
 
     await sender!.send("responses", raw, AbortSignal.timeout(5_000));
 
-    await expect(captured.requests[0]!.text()).resolves.toBe(
-      raw.replace('"alias"', '"real-model"'),
-    );
+    await expect(requestJson(captured.requests[0]!)).resolves.toEqual(expected);
   });
 
   it("defers a developer message slice out of a closed tool-call group", async () => {
@@ -157,7 +164,7 @@ describe("Responses native provider sender", () => {
     );
   });
 
-  it("keeps the baseline byte contract when the group is not interrupted", async () => {
+  it("keeps baseline request semantics when the group is not interrupted", async () => {
     const captured = capture();
     const sender = createResponsesNativeSender({
       model: model("openai", "openai-responses", "https://api.openai.com/v1"),
@@ -166,11 +173,12 @@ describe("Responses native provider sender", () => {
     });
     const raw =
       '{\n "model" : "alias", "input": [{"type":"function_call","call_id":"a","name":"exec_command","arguments":"{}"},{"type":"function_call_output","call_id":"a","output":"ok"}]\n}';
-    const expected = raw.replace('"alias"', '"real-model"');
+    const expected = sdkJsonSemantics(raw);
+    expected.model = "real-model";
 
     await sender!.send("responses", raw, AbortSignal.timeout(5_000));
 
-    await expect(captured.requests[0]!.text()).resolves.toBe(expected);
+    await expect(requestJson(captured.requests[0]!)).resolves.toEqual(expected);
   });
 
   it("returns raw non-2xx upstream Responses instead of converting them into transport errors", async () => {

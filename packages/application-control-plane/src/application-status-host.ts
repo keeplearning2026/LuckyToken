@@ -1015,10 +1015,12 @@ export async function startApplicationStatusHost(
           try {
             handled = await options.providerUsageCommandHandler(request.command);
           } catch {
-            handled = {
-              outcome: "unavailable",
-              snapshot: Object.freeze({ providers: Object.freeze([]) }),
-            };
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
           }
           const result = decodeProviderUsageCommandResult(handled);
           if (result === undefined) {

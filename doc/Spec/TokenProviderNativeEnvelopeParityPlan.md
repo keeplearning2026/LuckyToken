@@ -1,12 +1,17 @@
 # Token Provider Native 上行信封 Pi 对等计划
 
-Status: **计划（未实现）**
+Status: **离线信封认证通过且完整 integration 串行通过；“上游无法区分 Token 与 Pi”尚未证明**（2026-09-29：D1 通过、D5=B2′、D6 已执行；在线金丝雀按用户要求不运行）
 Owner: Provider Native lanes（`src/provider-native-responses/`、`src/provider-native-anthropic/`）
+
+阅读说明：§1 的“当前”差距与 §4.2–§4.5 的手工补头步骤是立项时的基线和路线 A 备选，不描述 D5 采纳 B2′ 后的当前实现；当前契约以 §3.4、§5 的已决定项、§7 和对应 Native Contract 为准。
+
+“上游无法区分”比本计划的信封认证更强：Provider 还能看到客户端 JSON 经 SDK 序列化后的 body、实际 HTTP 栈产生的头与编码、连接读取/取消时序和重试。Native 的 body 以 Client JSON 为权威，而 Pi 适配器从 `Context` 构造 body；两者对任意请求不保证相等。当前离线测试主要在注入的 `fetch` 边界比较请求，响应由 Native lane 自行缓冲而非交给 Pi 消费。因此本计划完成不能被表述为全链路不可区分。
 
 关联契约：
 
 - `doc/Spec/TokenProviderCredentialProfilesPRD.md` §29、§435、§476、§487、§507、§515、§890、§891
 - `doc/Protocols/OpenAI Responses Client Protocol.md` §1.2
+- `doc/Spec/TokenProviderNativeAnthropicContract.md`
 - `AGENTS.md`：Independent lanes / Semantic Conversion boundary
 
 > 本文档区分**已确认事实**（源码与实测 capture）与**推断**（标注为推断）。所有 header 结论来自本机探针，方法见附录 B。
@@ -56,9 +61,9 @@ Provider Native 只允许替换 body 中已认证的最小差异（顶层 `model
 
 ### 2.1 目标
 
-- **G1**：对每个已认证的 `(providerId, api, operation, authType)` 元组，Provider Native 上行信封与 pinned Pi 运行时逐字段一致：method、URL（含 query）、全部 header、内容编码。
+- **G1**：对每个已认证的 `(providerId, api, operation, authType)` 元组及可由 Client JSON 重建的请求事实，Provider Native 上行信封与 pinned Pi 运行时逐字段一致：method、URL（含 query）、全部 header、内容编码。§5 D2 的 Context 专属 beta 与 Cloudflare 仅有 `cf-aig-authorization` 时的 SDK 发前拒绝是两项显式例外；不能把它们记录为 Pi parity 通过。
 - **G2**：该一致性由自动化 parity 认证保证——Pi 运行时升级导致漂移时测试失败，而不是线上静默漂移。
-- **G3**：body 保真语义不变：客户端原文仍是权威，解码后与原文逐字节一致（除已认证的投影差异）。**若决策 D5 选择 B2′，本目标退化为 JSON 语义等价（deep-equal）**，并需同步修改 §3.4 列出的契约文本。
+- **G3**：客户端 JSON 的模型可见语义仍是权威。D5 已选择 B2′，因此保真定义为**经过 pinned SDK 的 parse/serialize 表示归一化后 JSON 值等价**，并额外禁止 SDK/Token 注入未请求字段；不再承诺 whitespace、property formatting、numeric lexical spelling 或 `-0` 之类表示细节。
 - **G4**：不引入 lane 之间的耦合，也不让 Provider Native 进入 Pi Provider 执行或 Pi IR。
 
 ### 2.2 非目标
@@ -219,13 +224,14 @@ B2′ 之所以"最像 Pi"，是因为请求侧完整走 Pi 的代码路径：�
 |---|---|
 | `index.ts` | lane 核心：`claims()`、凭证绑定、重试、profile 切换、观测 |
 | `contract.ts` | transport 接缝：输入 resolved Model/auth/body/session/timeout，输出原始 `Response` |
-| `transports/<provider-api>.ts` | 一个 provider API 一个模块（`openai-responses`、`openai-codex-responses`、`azure-openai-responses`、`anthropic-messages`），负责信封与派发 |
-| `certification.ts`（数据） | `(providerId, api, operation, authType) → transport` 的封闭表；routing 与 certification 测试都从它派生 |
+| transport 模块 | 一个 provider API 一个模块（`openai-responses`、`openai-codex-responses`、`azure-openai-responses`、`anthropic-messages`），只负责请求投影、SDK/信封与派发，并返回原始 `Response` |
+| response-processing 模块 | 原子缓冲、安全响应头过滤、响应 alias 投影与使用量观察；不得回流到 transport 信封构造 |
+| `certification.ts`（数据） | `(providerId, api, operation, authType) → transport` 的封闭数据；routing 与 certification 测试都从它派生 |
 
 边界要求：
 
 1. **封闭表，不做运行时注册口**。Pi 需要开放注册表是因为它服务任意第三方 Provider Package；Token 的 Provider Native 是已认证封闭集合，开放注册会绕过认证与凭证绑定。对应的禁止项写入文档：Provider Package 不得声明进入 native lane。
-2. 响应缓冲/头过滤的统一归位（对齐 Responses 侧现状：transport 返回原始 `Response`，协议侧负责缓冲与过滤）。
+2. 响应缓冲/头过滤统一归位到 response-processing 所有者：transport 返回原始 `Response`，不得读取 Provider response body。
 3. 不抽跨 lane 共享的"通用 transport"。两条 preservation lane 各自持有实现，允许受控的局部重复（`AGENTS.md` 的 lane 独立约束）。
 4. 先做纯结构调整（行为不变，用现有测试证明等价），再做信封补齐或 B2′，避免 parity diff 无法区分重构差异与新补差异。
 
@@ -235,12 +241,12 @@ B2′ 之所以"最像 Pi"，是因为请求侧完整走 Pi 的代码路径：�
 
 | 编号 | 问题 | 建议 |
 |---|---|---|
-| D1 | 是否接受"把 SDK identity 改成 Pi 身份"（含 `user-agent: pi (...)`、`originator`、`x-stainless-*`）的上游与合规影响 | 按 PRD §487/§890 执行；若产品不接受，应在 PRD 中显式豁免并同步修改 parity 用例，而不是留在现状 |
-| D2 | `mid-conversation-tool-changes` 这类需要 Pi `Context` 才能判定的 beta | 优先"不重建 + 文档记录"；不得为此把 Pi IR 引入 native lane |
-| D3 | effective timeout 的传递方式：新增 lane 输入事实，还是复用协议 handler 的 `requestTimeoutMs` | 新增显式输入事实（`requestTimeoutMs`），由 handler 传入，避免 lane 读全局配置 |
-| D4 | 版本常量与 Pi 升级的同步方式 | 常量留在各 lane；由 parity 测试失败驱动升级，不引入运行时共享模块 |
-| D5 | **是否放弃 body 逐字节保真以换取 B2′（SDK 生成信封）** | 若采纳：按 §3.4 的 6 条不变量实现 B2′，并同步修改 §3.4 列出的契约文本；若不采纳：执行 §4 手抄方案。两条路都必须先有 §7 T2 的全量 parity 认证。**当前状态：字节保真已口头接受放弃，实现路线（B2′ vs 手抄）待最终确认** |
-| D6 | 是否执行 §4.7 的模块化重构（每 API 一 transport、统一响应缓冲归位、封闭认证表） | 建议执行，且**先于**信封补齐或 B2′ 落地；纯结构调整，用现有测试证明行为等价 |
+| D1 | 是否接受"把 SDK identity 改成 Pi 身份"（含 `user-agent: pi (...)`、`originator`、`x-stainless-*`）的上游与合规影响 | **已决定：接受**，按 PRD §487/§890 执行 |
+| D2 | `mid-conversation-tool-changes` 这类需要 Pi `Context` 才能判定的 beta | **已决定：不重建**。Native 无 Pi `Context`，不得推测或引入 Pi IR；这是 G1 的显式例外，未来若公共契约提供可验证的事实再重审 |
+| D3 | effective timeout 的传递方式：新增 lane 输入事实，还是复用协议 handler 的 `requestTimeoutMs` | **已决定：显式传递 `requestTimeoutMs`**，由 handler 传入，lane 不读全局配置 |
+| D4 | 版本常量与 Pi 升级的同步方式 | **已决定：B2′ 使用与 pinned Pi 声明一致的厂商 SDK 依赖**，T7 校验版本；不引入跨 lane 运行时共享模块 |
+| D5 | **是否放弃 body 逐字节保真以换取 B2′（SDK 生成信封）** | **已决定：采纳 B2′**，按 §3.4 的 6 条不变量实现，并同步修改契约文本。body 保真定义为 pinned SDK parse/serialize 归一化后的 JSON 值等价 + 无未请求字段注入 |
+| D6 | 是否执行 §4.7 的模块化重构（每 API 一 transport、统一响应缓冲归位、封闭认证表） | **已决定：执行，且先于 B2′ 落地**；纯结构调整，用现有测试证明行为等价 |
 | D7 | 是否向 pi-ai 上游提出 native passthrough seam 提案（§3.5） | 建议提出（RFC/issue），但不得在本地 patch/fork Pi 加宽边界；上游接受前 §4 或 B2′ 是唯一实现路径 |
 
 ---
@@ -261,9 +267,9 @@ B2′ 之所以"最像 Pi"，是因为请求侧完整走 Pi 的代码路径：�
 ## 7. 测试与认证
 
 1. **T1 信封单元断言**：每个 sender 断言**完整** `Headers` 集合（既不多也不少），按 `(provider, api, authType, 平台, timeout 是否设置)` 参数化。
-2. **T2 Pi parity 认证（核心）**：扩展 `test/unit/responses-native-provider-pi-parity.test.ts`，对每个已认证元组用同一 capture fetch 驱动 Pi 适配器与 Token sender，diff method/URL/全量 header（`content-length` 之类由运行时生成的头按规则归一化）。Anthropic 侧新建同类测试，覆盖 `api_key`/`oauth`/`github_copilot`/`ambient` 分支。
+2. **T2 信封认证（核心）**：普通 Responses 与 Anthropic Messages 用同一 capture fetch 驱动 Pi 适配器与 Token sender，diff method/URL/全量 header。Pi 无 compact 资源方法；OpenAI/Azure compact 用 Pi 普通 Responses 比对 SDK 拥有的头，并独立锁定 compact endpoint/body；Codex compact 用 Pi SSE 身份头与独立 compact 契约。managed/ambient 若产出相同 `AuthResult`，sender 信封相同，绑定路径另由 integration 认证。Cloudflare header-only 和 D2 beta 必须作为显式例外测试，不能计入全量 Pi parity。
 3. **T3 负向注入**：客户端提供冲突的 `user-agent`、`x-stainless-*`、`anthropic-beta`、`x-session-affinity`、`session_id`，断言出站值等于重建值。
-4. **T4 body 保真**：保留字节保真时（D5 = 否），解码（含 zstd）后与客户端原始字节逐字节相等，除已认证投影；选择 B2′ 时（D5 = 是），改为 JSON 语义等价（deep-equal）并额外断言 SDK 未向 body 注入未请求字段。两种模式下都要断言"body 是唯一差异"：method、URL、全量 header 集合与上游响应转发方式不变。
+4. **T4 body 保真**：B2′ 下，把客户端 JSON 先经过与 pinned SDK 相同的 parse/serialize 表示归一化，再与出站 JSON deep-equal，并额外断言 SDK/Token 未注入未请求字段；允许 whitespace、property formatting、numeric lexical spelling 和 `-0 → 0` 等表示归一化。method、URL、全量 header 集合与上游响应转发方式由独立 parity 断言锁定。
 5. **T5 生命周期**：物理重试与 429 profile 切换后，头集合按同一规则重建（retry-count 保持 0，timeout/身份正确）。
 6. **T6 lane 隔离**：沿用现有 certification（`test/certification/semantic-conversion-isolation.test.mjs`、`provider-native-auth-coverage`），确认没有新增跨 lane import。
 7. **T7 升级门禁**：新增断言——pinned `@earendil-works/pi-ai` 声明的 `openai` / `@anthropic-ai/sdk` 版本与各 lane 常量一致，失败信息给出两侧版本。
@@ -271,7 +277,7 @@ B2′ 之所以"最像 Pi"，是因为请求侧完整走 Pi 的代码路径：�
 
 ### 7.1 认证矩阵（当前 tuple，来源为源码 allowlist）
 
-PRD §515 要求的矩阵必须逐 tuple 有 T2 用例。当前集合：
+PRD §515 要求的矩阵必须逐 tuple 有认证用例；同一信封的 managed/ambient 分支分别记录，compact 按上文的可用参考源认证。当前集合：
 
 | api | providerId 集合 | operation | authType |
 |---|---|---|---|
@@ -279,7 +285,7 @@ PRD §515 要求的矩阵必须逐 tuple 有 T2 用例。当前集合：
 | `openai-responses`（compact） | `openai`、`xai`、`opencode`、`opencode-go`、`cloudflare-ai-gateway`、`github-copilot` | `compact` | managed / ambient |
 | `openai-codex-responses` | `openai-codex` | `responses`、`compact`（SSE） | managed（OAuth） |
 | `azure-openai-responses` | `azure-openai-responses` | `responses`、`compact` | managed / ambient |
-| `anthropic-messages` | `anthropic`、`github-copilot`、`cloudflare-ai-gateway` | `responses` | `api_key` / `oauth` / `github_copilot` / `ambient` |
+| `anthropic-messages` | `anthropic`、`github-copilot`、`cloudflare-ai-gateway` | `messages` | `api_key` / `oauth` / `github_copilot` / `ambient` |
 
 注意两点：`commandcode-goat` 只被认证 Responses、未认证 compact；Anthropic 的四种 authType 对应不同的身份与 beta 分支，不能只取一条代表。
 
@@ -305,7 +311,7 @@ Native lane 对 Pi 的**类型耦合**只有 5 个公开类型（`FetchFunction`
 | OpenAI Responses envelope、URL、session affinity、copilot 动态头 | `src/provider-native-responses/openai.ts` | `pi-agent/packages/ai/src/api/openai-responses.ts`（`createClient` / `buildParams` / session affinity） | 每次 pi-ai 升级 |
 | Codex SSE envelope、account id 提取、zstd | `src/provider-native-responses/codex.ts` | `pi-agent/packages/ai/src/api/openai-codex-responses.ts`（`buildSSEHeaders` / `resolveCodexUrl` / `extractAccountId` / 压缩） | 每次 |
 | Azure endpoint、deployment、api-version | `src/provider-native-responses/azure.ts` | `pi-agent/packages/ai/src/api/azure-openai-responses.ts`（`resolveAzureConfig`） | 每次 |
-| Anthropic envelope、beta 列表、OAuth 身份、session affinity | `src/provider-native-anthropic/transport.ts` | `pi-agent/packages/ai/src/api/anthropic-messages.ts`（`mergeClientHeaders` / `getBetaFeatures` / `getAnthropicCompat`） | 每次 |
+| Anthropic envelope、beta 列表、OAuth 身份、session affinity | `src/provider-native-anthropic/envelope.ts` + `transport.ts` | `pi-agent/packages/ai/src/api/anthropic-messages.ts`（`mergeClientHeaders` / `getBetaFeatures` / `getAnthropicCompat`） | 每次 |
 | SDK identity 版本号 | 两个 lane 的常量 | `pi-agent/packages/ai/package.json` 的 `openai` / `@anthropic-ai/sdk` 声明 | 每次（由 T7 门禁自动发现） |
 | 模型投影与 Responses adjacency | `tool-call-adjacency.ts` / `body-projection.ts` | Token 自有契约（`doc/Spec/TokenProviderNativeResponsesToolCallAdjacencyNormalizationPlan.md`）；仅当 Pi 语义变化影响该契约时重验 | 按需 |
 | 响应侧三处有界重写（SSE 生命周期、function-call namespace、alias 投影） | `src/protocols/openai-responses/*` | Token 自有契约 + Pi Provider 行为参考 | 按需 |
@@ -325,15 +331,15 @@ Native lane 对 Pi 的**类型耦合**只有 5 个公开类型（`FetchFunction`
 
 在本计划范围内，满足以下全部条件才算完成：
 
-1. §7.1 矩阵中的每个 tuple 都有 T2 parity 用例并通过（全量 header 集合，不多不少；method/URL/内容编码一致）。
+1. §7.1 矩阵中的每个 tuple 都有与 §7 T2 的参考源相符的信封认证用例并通过；Cloudflare header-only 与 D2 beta 例外单独断言并记录，不计作全量 Pi parity。
 2. T3 负向注入用例通过：客户端提供的 `user-agent`、`x-stainless-*`、`anthropic-beta`、`x-session-affinity`、`session_id` 一律不能覆盖重建值。
-3. T4 按 D5 的结论通过：保留字节保真时为逐字节相等；选择 B2′ 时为 JSON 语义等价且无未请求字段注入。两种模式下"body 是唯一差异"都有断言。
+3. T4 按 D5/B2′ 的结论通过：pinned SDK parse/serialize 归一化后的 JSON 值等价，且无未请求字段注入；表示级 JSON 差异不作为失败。
 4. T7 升级门禁存在，且失败信息能直接指出两边的版本值。
 5. T5 生命周期用例通过：物理重试与 429 profile 切换后的头重建正确。
 6. §5 的 D1–D5 全部有明确结论并落到文档（未决项不得留在实现里）。
 7. §9 的镜像面表更新完毕，且下一次升级可以只依赖该表 + 测试红点完成。
-8. 相关契约文档已同步：PRD §515 矩阵、`doc/Protocols/OpenAI Responses Client Protocol.md` §1.2、Anthropic 侧协议文档；若选择 B2′，还包括 §3.4 列出的契约文本修改。
-9. 在线金丝雀通过：每个认证 provider 至少一条最小请求。
+8. 相关契约文档已同步：PRD §515 矩阵、`doc/Protocols/OpenAI Responses Client Protocol.md` §1.2、`TokenProviderNativeAnthropicContract.md`；B2′ 的 JSON 语义保真/SDK 序列化契约已替代旧逐字节措辞。
+9. 在线金丝雀通过：每个认证 provider 至少一条最小请求。**这是发布门禁；离线实现完成不等于该项已通过。**
 10. 若执行了 §4.7 结构调整，行为等价由现有测试证明，且未引入跨 lane import（T6）。
 
 ---

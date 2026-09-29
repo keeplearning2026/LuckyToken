@@ -139,7 +139,7 @@ function dependencies(
 }
 
 describe("passthrough routing", () => {
-  it("forwards anthropic-messages requests verbatim to the upstream baseUrl", async () => {
+  it("forwards anthropic-messages request semantics through the SDK endpoint", async () => {
     const model = anthropicModel();
     const upstreamRequests: Request[] = [];
     const models = {
@@ -176,7 +176,7 @@ describe("passthrough routing", () => {
     );
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0]?.url).toBe(
-      "https://gateway.example.com/v1/messages",
+      "https://gateway.example.com/v1/messages?beta=true",
     );
     expect(upstreamRequests[0]?.headers.get("x-api-key")).toBe("sk-gateway");
     const upstreamBody = await upstreamRequests[0]?.text();

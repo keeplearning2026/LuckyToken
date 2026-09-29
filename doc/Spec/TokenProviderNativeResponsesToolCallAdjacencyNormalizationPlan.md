@@ -4,6 +4,14 @@ Status: implemented v5.1（PRD 层授权已给出；离线实现与认证见下�
 Authority: 第 2 节的契约已按第 12 节授权落入仓库文档与实现。
 Scope: Provider Native Preservation，且仅 `operation === "responses"`（不含 compact）请求方向的窄结构归一化。
 
+> **B2′ 后的字节契约说明（2026-09-29）：** 本文所有“逐字节保持/逐字节等于”断言只描述
+> `tool-call-adjacency.ts` 投影器自身输出相对于输入文本的局部性质。最终 Provider wire
+> 已由 `TokenProviderNativeEnvelopeParityPlan.md` 的 B2′ 契约取代：投影后的 JSON 值交给
+> pinned OpenAI SDK 重新序列化，因此最终 outbound 不承诺 whitespace、numeric lexical
+> spelling、`-0` 等表示级字节一致；最终请求的权威认证是 JSON 语义等价 + 无未请求字段
+> 注入 + 完整 SDK envelope parity。本文既有投影算法证明仍然有效，但不再是最终 wire 的
+> byte-fidelity 契约。
+
 实施状态（2026-09-26）：
 
 | 计划步骤 | 状态 |
