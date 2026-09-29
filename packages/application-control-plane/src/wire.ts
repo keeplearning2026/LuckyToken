@@ -124,6 +124,14 @@ import {
   decodeProviderProfileAuthCommand,
   decodeProviderProfileAuthCommandResult,
 } from "./wire-credential-profiles.js";
+import type {
+  ProviderUsageCommand,
+  ProviderUsageCommandResult,
+} from "./provider-usage-contract.js";
+import {
+  decodeProviderUsageCommand,
+  decodeProviderUsageCommandResult,
+} from "./wire-provider-usage.js";
 import {
   type AuthInfoLink,
   type AuthInteractionEvent,
@@ -246,6 +254,11 @@ export type ClientRequest =
       readonly command: CatalogCommand;
     }
   | {
+      readonly type: "provider_usage_command";
+      readonly requestId: string;
+      readonly command: ProviderUsageCommand;
+    }
+  | {
       readonly type: "public_models_command";
       readonly requestId: string;
       readonly command: PublicModelsCommand;
@@ -361,6 +374,11 @@ export type ServerMessage =
       readonly type: "catalog_command_result";
       readonly requestId: string;
       readonly result: CatalogCommandResult;
+    }
+  | {
+      readonly type: "provider_usage_command_result";
+      readonly requestId: string;
+      readonly result: ProviderUsageCommandResult;
     }
   | {
       readonly type: "public_models_command_result";
@@ -2280,6 +2298,20 @@ export function decodeClientRequest(value: unknown): DecodedClientRequest {
       },
     };
   }
+  if (value.type === "provider_usage_command") {
+    const command = decodeProviderUsageCommand(value.command);
+    if (command === undefined) {
+      return { type: "invalid", requestId, code: "invalid_request" };
+    }
+    return {
+      type: "valid",
+      request: {
+        type: "provider_usage_command",
+        requestId,
+        command,
+      },
+    };
+  }
   if (value.type === "public_models_command") {
     const command = decodePublicModelsCommand(value.command);
     if (command === undefined) {
@@ -2797,6 +2829,12 @@ export function decodeServerMessage(value: unknown): ServerMessage | undefined {
     return result === undefined
       ? undefined
       : { type: "catalog_command_result", requestId, result };
+  }
+  if (value.type === "provider_usage_command_result") {
+    const result = decodeProviderUsageCommandResult(value.result);
+    return result === undefined
+      ? undefined
+      : { type: "provider_usage_command_result", requestId, result };
   }
   if (value.type === "public_models_command_result") {
     const result = decodePublicModelsCommandResult(value.result);

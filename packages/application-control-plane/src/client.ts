@@ -75,6 +75,11 @@ import {
   decodeCredentialProfilesCommandResult,
   decodeProviderProfileAuthCommandResult,
 } from "./wire-credential-profiles.js";
+import type {
+  ProviderUsageCommand,
+  ProviderUsageCommandResult,
+} from "./provider-usage-contract.js";
+import { decodeProviderUsageCommandResult } from "./wire-provider-usage.js";
 
 export interface ControlPlaneClientDependencies {
   readonly createRequestId: () => string;
@@ -539,6 +544,22 @@ export async function connectApplicationControlPlane(
       // Strictly validate the projection crossing the pipe: the catalog
       // snapshot must never carry malformed or unexpected state.
       const result = decodeCatalogCommandResult(response.result);
+      if (result === undefined) {
+        throw new Error("Control Plane response is malformed");
+      }
+      return result;
+    },
+    async executeProviderUsageCommand(
+      command: ProviderUsageCommand,
+    ): Promise<ProviderUsageCommandResult> {
+      const response = await request({
+        type: "provider_usage_command",
+        command,
+      });
+      if (response.type !== "provider_usage_command_result") {
+        throw new Error("Control Plane response is malformed");
+      }
+      const result = decodeProviderUsageCommandResult(response.result);
       if (result === undefined) {
         throw new Error("Control Plane response is malformed");
       }

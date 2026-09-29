@@ -217,7 +217,9 @@ async function render(options: {
   readonly executeProviderProfileAuth?: DesktopControlPlaneApi["executeProviderProfileAuth"];
   readonly respondAuth?: DesktopControlPlaneApi["respondAuth"];
   readonly executeCatalog?: DesktopControlPlaneApi["executeCatalog"];
+  readonly executeProviderUsage?: DesktopControlPlaneApi["executeProviderUsage"];
   readonly executePublicModels?: DesktopControlPlaneApi["executePublicModels"];
+  readonly onBackendState?: DesktopControlPlaneApi["onBackendState"];
   readonly onRequestJourneys?: DesktopControlPlaneApi["onRequestJourneys"];
 } = {}): Promise<void> {
   const initial = options.profiles ?? emptyProfiles();
@@ -234,8 +236,24 @@ async function render(options: {
         })),
       respondAuth: options.respondAuth ?? (async () => undefined),
       executeCatalog: options.executeCatalog ?? (async () => catalog()),
+      executeProviderUsage:
+        options.executeProviderUsage ??
+        (async () => ({
+          outcome: "ok" as const,
+          snapshot: {
+            providers: [
+              {
+                providerId: "aws-provider",
+                state: "unsupported" as const,
+                reason: "provider" as const,
+              },
+            ],
+          },
+        })),
       executePublicModels:
         options.executePublicModels ?? (async () => publicModels()),
+      onBackendState:
+        options.onBackendState ?? (() => () => undefined),
       onRequestJourneys:
         options.onRequestJourneys ?? (() => () => undefined),
     },
@@ -873,6 +891,274 @@ describe("Providers Profile product slice", () => {
     expect(enabledFallback.classList.contains("active")).toBe(true);
     expect(initialTitle).toBe("Enable HTTP 429 fallback");
     expect(enabledFallback.getAttribute("title")).toBe("Disable HTTP 429 fallback");
+  });
+
+  it("queries cached Provider usage on page load and refreshes only from the card action", async () => {
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      if (command.command === "query") {
+        return {
+          outcome: "ok",
+          snapshot: {
+            providers: [
+              {
+                providerId: "aws-provider",
+                state: "unobserved",
+              },
+            ],
+          },
+        };
+      }
+      return {
+        outcome: "ok",
+        snapshot: {
+          providers: [
+            {
+              providerId: "aws-provider",
+              state: "observed",
+              observedAt: 1,
+              refreshable: true,
+              windows: [{ kind: "weekly", usedPercent: 25 }],
+              budgets: [],
+            },
+          ],
+        },
+        refresh: {
+          providerId: "aws-provider",
+          outcome: "succeeded",
+        },
+      };
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage,
+    });
+
+    expect(executeProviderUsage).toHaveBeenCalledWith({ command: "query" });
+    expect(
+      executeProviderUsage.mock.calls.some(
+        ([command]) => command.command === "refresh",
+      ),
+    ).toBe(false);
+    expect(container.textContent).toContain("Usage not refreshed");
+
+    await clickAria("Refresh AWS Provider usage");
+
+    expect(executeProviderUsage).toHaveBeenCalledWith({
+      command: "refresh",
+      providerId: "aws-provider",
+    });
+    expect(container.textContent).toContain("Week 25%");
+  });
+
+  it("clears old usage on credential binding change and applies only the current cache query", async () => {
+    let backendListener:
+      | Parameters<DesktopControlPlaneApi["onBackendState"]>[0]
+      | undefined;
+    let releaseSecond!: (value: Awaited<
+      ReturnType<DesktopControlPlaneApi["executeProviderUsage"]>
+    >) => void;
+    const second = new Promise<
+      Awaited<ReturnType<DesktopControlPlaneApi["executeProviderUsage"]>>
+    >((resolve) => {
+      releaseSecond = resolve;
+    });
+    let queries = 0;
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      if (command.command === "refresh") {
+        throw new Error("refresh must not run on binding change");
+      }
+      queries += 1;
+      if (queries === 1) {
+        return {
+          outcome: "ok",
+          snapshot: {
+            providers: [
+              {
+                providerId: "aws-provider",
+                state: "observed",
+                observedAt: 1,
+                refreshable: true,
+                windows: [{ kind: "weekly", usedPercent: 90 }],
+                budgets: [],
+              },
+            ],
+          },
+        };
+      }
+      return second;
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage,
+      onBackendState: (listener) => {
+        backendListener = listener;
+        return () => undefined;
+      },
+    });
+    expect(container.textContent).toContain("Week 90%");
+
+    const nextProfiles = managedProfiles().state;
+    const switched = {
+      ...nextProfiles,
+      providers: nextProfiles.providers.map((provider) => ({
+        ...provider,
+        revision: "revision-b",
+        selectionGeneration: "selection-b",
+        activeCredentialId: "credential-b",
+      })),
+    };
+    await act(async () => {
+      backendListener?.({
+        kind: "ready",
+        status: {
+          modelDataPlane: "running",
+          provider: "ready",
+          credentialProfiles: switched,
+        },
+      } as never);
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).not.toContain("Week 90%");
+    expect(
+      executeProviderUsage.mock.calls.some(
+        ([command]) => command.command === "refresh",
+      ),
+    ).toBe(false);
+
+    await act(async () => {
+      releaseSecond({
+        outcome: "ok",
+        snapshot: {
+          providers: [
+            {
+              providerId: "aws-provider",
+              state: "observed",
+              observedAt: 2,
+              refreshable: true,
+              windows: [{ kind: "weekly", usedPercent: 12 }],
+              budgets: [],
+            },
+          ],
+        },
+      });
+      await second;
+    });
+    expect(container.textContent).toContain("Week 12%");
+  });
+
+  it("drops a stale usage refresh result after the credential binding changes", async () => {
+    let backendListener:
+      | Parameters<DesktopControlPlaneApi["onBackendState"]>[0]
+      | undefined;
+    let releaseRefresh!: (value: Awaited<
+      ReturnType<DesktopControlPlaneApi["executeProviderUsage"]>
+    >) => void;
+    const pendingRefresh = new Promise<
+      Awaited<ReturnType<DesktopControlPlaneApi["executeProviderUsage"]>>
+    >((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let queryCount = 0;
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      if (command.command === "refresh") return pendingRefresh;
+      queryCount += 1;
+      return queryCount === 1
+        ? {
+            outcome: "ok",
+            snapshot: {
+              providers: [
+                {
+                  providerId: "aws-provider",
+                  state: "unobserved",
+                },
+              ],
+            },
+          }
+        : {
+            outcome: "ok",
+            snapshot: {
+              providers: [
+                {
+                  providerId: "aws-provider",
+                  state: "observed",
+                  observedAt: 2,
+                  refreshable: true,
+                  windows: [{ kind: "weekly", usedPercent: 12 }],
+                  budgets: [],
+                },
+              ],
+            },
+          };
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage,
+      onBackendState: (listener) => {
+        backendListener = listener;
+        return () => undefined;
+      },
+    });
+
+    await act(async () => {
+      ariaButton("Refresh AWS Provider usage").click();
+      await Promise.resolve();
+    });
+
+    const current = managedProfiles().state;
+    await act(async () => {
+      backendListener?.({
+        kind: "ready",
+        status: {
+          modelDataPlane: "running",
+          provider: "ready",
+          credentialProfiles: {
+            providers: current.providers.map((provider) => ({
+              ...provider,
+              revision: "revision-b",
+              selectionGeneration: "selection-b",
+              activeCredentialId: "credential-b",
+            })),
+          },
+        },
+      } as never);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("Week 12%");
+
+    await act(async () => {
+      releaseRefresh({
+        outcome: "ok",
+        snapshot: {
+          providers: [
+            {
+              providerId: "aws-provider",
+              state: "observed",
+              observedAt: 3,
+              refreshable: true,
+              windows: [{ kind: "weekly", usedPercent: 90 }],
+              budgets: [],
+            },
+          ],
+        },
+        refresh: {
+          providerId: "aws-provider",
+          outcome: "succeeded",
+        },
+      });
+      await pendingRefresh;
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain("Week 12%");
+    expect(container.textContent).not.toContain("Week 90%");
   });
 
   it("keeps Provider icon tooltips generic", async () => {

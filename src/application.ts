@@ -78,6 +78,10 @@ import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 import { createProviderRuntime } from "./providers/runtime.js";
 import { providerReadiness } from "./providers/readiness.js";
+import { createProviderUsageAuthority } from "./provider-usage/authority.js";
+import { createProviderUsageControlPlaneHandler } from "./provider-usage/control-plane.js";
+import { createProviderUsageResponseObserver } from "./provider-usage/passive.js";
+import { createBuiltInProviderUsageProbes } from "./provider-usage/registry.js";
 import { createDataPlaneRuntimeSupervisor } from "./runtime-supervisor.js";
 import { createSettingsRegistry } from "./settings/catalog.js";
 import { createSettingsControlPlaneHandler } from "./settings/control-plane.js";
@@ -722,6 +726,14 @@ async function startNormalApplication(options: {
           return usage === undefined ? [] : [usage];
         }),
     });
+    const providerUsageAuthority = createProviderUsageAuthority({
+      models: providerRuntime.models,
+      binding: providerRuntime.providerAuthBindings,
+      probes: createBuiltInProviderUsageProbes(globalThis.fetch),
+      now: Date.now,
+    });
+    const providerUsageCommandHandler =
+      createProviderUsageControlPlaneHandler(providerUsageAuthority);
     const credentialManagement = providerRuntime.credentialManagement;
     reconcilePublicModelsNow = (
       snapshot: PublicModelCatalogSnapshot,
@@ -975,6 +987,8 @@ async function startNormalApplication(options: {
                 "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
               ])["protocols.openai-responses.responseRepair.functionCallNamespace.providerNative"]
                 ?.value !== false,
+            providerResponseObservation:
+              createProviderUsageResponseObserver(providerUsageAuthority),
           });
           const listener = await startRunningDataPlaneListener({
             dataPlane: composition,
@@ -1184,6 +1198,7 @@ async function startNormalApplication(options: {
           refresh,
         };
       },
+      providerUsageCommandHandler,
       catalogProjection: () => {
         const snapshot = catalogController.snapshot();
         return Object.freeze({

@@ -59,6 +59,14 @@ function reasoningDescriptions(
 
 type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
+interface CodexReasoningLevel {
+  readonly effort: string;
+  readonly description: string;
+}
+
+const FALLBACK_REASONING_EFFORT: CodexReasoningEffort = "max";
+const FALLBACK_REASONING_DESCRIPTION = "Maximum reasoning effort";
+
 function codexReasoningEffort(
   level: ModelThinkingLevel,
 ): CodexReasoningEffort | undefined {
@@ -74,22 +82,58 @@ function codexReasoningEffort(
   return undefined;
 }
 
-function supportedReasoningLevels(
+/**
+ * Enabled Pi levels projected into the five Codex slots, deduplicated and in
+ * ascending Pi order. An empty result means the target exposes no selectable
+ * reasoning level at all: either `reasoning` is false, or every enabled level
+ * is mapped to null.
+ */
+function projectedReasoningEfforts(
   model: Model<string>,
-  descriptions: ReadonlyMap<string, string>,
-): readonly Readonly<{ effort: string; description: string }>[] {
+): readonly CodexReasoningEffort[] {
   if (!model.reasoning) return Object.freeze([]);
   const emitted = new Set<CodexReasoningEffort>();
   return Object.freeze(
     getSupportedThinkingLevels(model).flatMap((level) => {
       const effort = codexReasoningEffort(level);
       if (effort === undefined || emitted.has(effort)) return [];
-      const description = descriptions.get(effort);
-      if (description === undefined) return [];
       emitted.add(effort);
-      return [Object.freeze({ effort, description })];
+      return [effort];
     }),
   );
+}
+
+function describedReasoningLevels(
+  efforts: readonly CodexReasoningEffort[],
+  descriptions: ReadonlyMap<string, string>,
+): readonly CodexReasoningLevel[] {
+  return Object.freeze(
+    efforts.flatMap((effort) => {
+      const description = descriptions.get(effort);
+      return description === undefined
+        ? []
+        : [Object.freeze({ effort, description })];
+    }),
+  );
+}
+
+/**
+ * A target without any selectable reasoning level still receives one Codex
+ * slot so the client keeps a stable reasoning control and a predictable
+ * default. Token conversion omits the unsupported preference and leaves the
+ * Pi/Provider default in force.
+ */
+function fallbackReasoningLevels(
+  descriptions: ReadonlyMap<string, string>,
+): readonly CodexReasoningLevel[] {
+  return Object.freeze([
+    Object.freeze({
+      effort: FALLBACK_REASONING_EFFORT,
+      description:
+        descriptions.get(FALLBACK_REASONING_EFFORT) ??
+        FALLBACK_REASONING_DESCRIPTION,
+    }),
+  ]);
 }
 
 function routedBaseInstructions(
@@ -133,10 +177,7 @@ function codexEntry(
   model: Model<string>,
   priority: number,
   baseInstructions: string,
-  reasoningLevels: readonly Readonly<{
-    effort: string;
-    description: string;
-  }>[],
+  reasoningLevels: readonly CodexReasoningLevel[],
   defaultReasoningLevel?: string,
 ): CodexCatalogEntry {
   const contextWindow = safeContextWindow(model);
@@ -213,6 +254,7 @@ export function buildCodexCatalog(
     a.alias < b.alias ? -1 : a.alias > b.alias ? 1 : 0,
   );
   let injectedModelCount = 0;
+  let fallbackReasoningModelCount = 0;
   for (const entry of aliases) {
     if (nativeIds.has(entry.alias)) {
       warnings.push(
@@ -235,8 +277,14 @@ export function buildCodexCatalog(
       );
       continue;
     }
-    const reasoningLevels = supportedReasoningLevels(target, descriptions);
-    if (target.reasoning && reasoningLevels.length === 0) {
+    const projectedEfforts = projectedReasoningEfforts(target);
+    const reasoningLevels =
+      projectedEfforts.length === 0
+        ? fallbackReasoningLevels(descriptions)
+        : describedReasoningLevels(projectedEfforts, descriptions);
+    if (projectedEfforts.length === 0) {
+      fallbackReasoningModelCount += 1;
+    } else if (reasoningLevels.length === 0) {
       warnings.push(
         `Alias "${entry.alias}" exposes no reasoning controls because its Pi capabilities and the installed Codex vocabulary do not overlap.`,
       );
@@ -257,6 +305,16 @@ export function buildCodexCatalog(
     );
     injectedModelCount += 1;
     nextRoutedPriority += 1;
+  }
+
+  if (fallbackReasoningModelCount > 0) {
+    const subject =
+      fallbackReasoningModelCount === 1
+        ? "1 routed model advertises"
+        : `${fallbackReasoningModelCount} routed models advertise`;
+    warnings.push(
+      `${subject} only the Codex reasoning level "${FALLBACK_REASONING_EFFORT}" because the Pi target exposes no selectable reasoning level; Token conversion omits the unsupported preference and leaves the Pi/Provider default in force.`,
+    );
   }
 
   return Object.freeze({

@@ -87,6 +87,7 @@ export function createFakeDesktopApi(options: {
     respondAuth: unavailable,
     executeModels: unavailable,
     executeCatalog: unavailable,
+    executeProviderUsage: unavailable,
     executePublicModels: legacyPublicModels,
     executeAgentIntegrations: unavailable,
     queryRequestJourneys: unavailable,

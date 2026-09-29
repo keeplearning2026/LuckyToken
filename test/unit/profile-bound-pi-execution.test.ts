@@ -115,6 +115,101 @@ describe("Profile-bound Pi execution", () => {
     });
   });
 
+  it("binds Provider response observation to the exact capture and preserves caller observation", async () => {
+    const current = capture("credential-primary", "Production", "selection-1");
+    const callerResponses: unknown[] = [];
+    const usageResponses: unknown[] = [];
+    const usageCaptures: ProviderAuthBindingCapture[] = [];
+    const underlying: ExecutionOperation = async (
+      _models,
+      _model,
+      _context,
+      _options,
+      _facts,
+      observation,
+    ) => {
+      await observation?.providerResponse?.({
+        status: 200,
+        headers: { "x-fixture": "1" },
+      });
+      return { role: "assistant", content: [], stopReason: "stop" } as never;
+    };
+    const execute = createProfileBoundPiExecution({
+      bindings: {
+        capture: async () => current,
+        runBound: async (_binding, operation) => operation(),
+        advanceAfterFinal429: async () => ({ outcome: "disabled" }),
+      },
+      execute: underlying,
+      resolveCredentialActivity: credentialActivityForExecutionFacts,
+      providerResponseObservation: ({ capture: boundCapture, response }) => {
+        usageCaptures.push(boundCapture);
+        usageResponses.push(response);
+      },
+    });
+
+    await execute(
+      {} as never,
+      { provider: "fixture-provider" } as never,
+      {} as never,
+      {} as never,
+      undefined,
+      {
+        providerResponse: (response) => {
+          callerResponses.push(response);
+        },
+      },
+    );
+
+    expect(callerResponses).toEqual([
+      { status: 200, headers: { "x-fixture": "1" } },
+    ]);
+    expect(usageResponses).toEqual(callerResponses);
+    expect(usageCaptures).toEqual([current]);
+  });
+
+  it("never blocks Provider completion on an asynchronous response observer", async () => {
+    const current = capture("credential-primary", "Production", "selection-1");
+    const underlying: ExecutionOperation = async (
+      _models,
+      _model,
+      _context,
+      _options,
+      _facts,
+      observation,
+    ) => {
+      await observation?.providerResponse?.({
+        status: 200,
+        headers: { "x-fixture": "1" },
+      });
+      return { role: "assistant", content: [], stopReason: "stop" } as never;
+    };
+    const execute = createProfileBoundPiExecution({
+      bindings: {
+        capture: async () => current,
+        runBound: async (_binding, operation) => operation(),
+        advanceAfterFinal429: async () => ({ outcome: "disabled" }),
+      },
+      execute: underlying,
+      resolveCredentialActivity: credentialActivityForExecutionFacts,
+      providerResponseObservation: () => new Promise<void>(() => undefined),
+    });
+
+    const result = await Promise.race([
+      execute(
+        {} as never,
+        { provider: "fixture-provider" } as never,
+        {} as never,
+        {} as never,
+      ).then(() => "completed" as const),
+      new Promise<"timed_out">((resolve) =>
+        setTimeout(() => resolve("timed_out"), 50),
+      ),
+    ]);
+
+    expect(result).toBe("completed");
+  });
+
   it("never enters the managed Profile transition for ambient auth", async () => {
     let transitions = 0;
     const execute = createProfileBoundPiExecution({

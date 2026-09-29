@@ -117,6 +117,26 @@ export {
   decodeProviderProfileAuthCommandResult,
 } from "./wire-credential-profiles.js";
 export type {
+  ProviderUsageBudgetProjection,
+  ProviderUsageCommand,
+  ProviderUsageCommandHandler,
+  ProviderUsageCommandResult,
+  ProviderUsageProviderProjection,
+  ProviderUsageRefreshProjection,
+  ProviderUsageSnapshotProjection,
+  ProviderUsageUnavailableReason,
+  ProviderUsageUnsupportedReason,
+  ProviderUsageWindowProjection,
+} from "./provider-usage-contract.js";
+export {
+  decodeProviderUsageBudgetProjection,
+  decodeProviderUsageCommand,
+  decodeProviderUsageCommandResult,
+  decodeProviderUsageProviderProjection,
+  decodeProviderUsageSnapshotProjection,
+  decodeProviderUsageWindowProjection,
+} from "./wire-provider-usage.js";
+export type {
   AttentionCategory,
   AttentionCondition,
   AttentionPage,

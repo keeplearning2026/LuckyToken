@@ -43,12 +43,18 @@ function createLane(
   auth: unknown = { auth: { apiKey: "provider-key" }, source: "fixture" },
   resolveRequestModel: (value: Model<string>) => Model<string> = (value) => value,
   bindings = ambientProfileBindings,
+  providerResponseObservation?: Parameters<
+    typeof createAnthropicProviderNativeLane
+  >[0]["providerResponseObservation"],
 ) {
   return createAnthropicProviderNativeLane({
     models: modelsWithAuth(auth),
     bindings,
     resolveRequestModel,
     fetch,
+    ...(providerResponseObservation === undefined
+      ? {}
+      : { providerResponseObservation }),
   });
 }
 
@@ -154,6 +160,53 @@ describe("Anthropic Provider Native lane", () => {
     expect(result.outcome).toBe("failed");
     expect(calls).toBe(3);
     expect(transitions).toBe(2);
+  });
+
+  it("publishes fail-open Provider response metadata with the exact Profile capture", async () => {
+    const observed: Array<{
+      readonly capture: ProviderAuthBindingCapture;
+      readonly response: unknown;
+    }> = [];
+    const lane = createLane(
+      async () =>
+        new Response(
+          '{"type":"message","model":"claude-test","content":[]}',
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "anthropic-ratelimit-unified-5h-utilization": "0.5",
+            },
+          },
+        ),
+      { auth: { apiKey: "provider-key" }, source: "fixture" },
+      (value) => value,
+      fixedManagedProfileBindings("api_key"),
+      ({ capture, response }) => {
+        observed.push({ capture, response });
+      },
+    );
+
+    const result = await lane.execute({
+      model: model("anthropic-messages", "https://api.anthropic.com"),
+      rawBody: '{"model":"anthropic/claude-test","messages":[]}',
+      request: request(),
+      requestId: "req_client",
+      onExecutionStart: () => undefined,
+    });
+
+    expect(result.outcome).toBe("success");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.capture.facts).toMatchObject({
+      kind: "managed",
+      authType: "api_key",
+    });
+    expect(observed[0]?.response).toMatchObject({
+      status: 200,
+      headers: {
+        "anthropic-ratelimit-unified-5h-utilization": "0.5",
+      },
+    });
   });
 
   it("keeps auth-resolution failures diagnostic-only", async () => {

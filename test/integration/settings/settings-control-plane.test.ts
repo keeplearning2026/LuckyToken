@@ -144,7 +144,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       createRequestId: () => `settings-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(5);
+    await client.hello(6);
     return { host, registry, client, endpoint };
   }
 

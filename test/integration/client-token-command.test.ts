@@ -28,7 +28,7 @@ describe("Control Plane client access contract", () => {
         pipeConnector: transport,
       });
       try {
-        await client.hello(5);
+        await client.hello(6);
         expect("executeClientTokenCommand" in client).toBe(false);
       } finally {
         await client.close();

@@ -1,0 +1,608 @@
+import type { AuthResult, FetchFunction } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+
+import type {
+  ProviderUsageEligibilityContext,
+  ProviderUsageProbe,
+} from "../../src/provider-usage/contract.js";
+import { createAnthropicUsageProbe } from "../../src/provider-usage/probes/anthropic.js";
+import { createCommandCodeGoatUsageProbe } from "../../src/provider-usage/probes/commandcode-goat.js";
+import { createCommandCodePrivateUsageProbe } from "../../src/provider-usage/probes/commandcode-private.js";
+import { createDeepSeekUsageProbe } from "../../src/provider-usage/probes/deepseek.js";
+import { createKimiCodingUsageProbe } from "../../src/provider-usage/probes/kimi-coding.js";
+import { createMiniMaxUsageProbe } from "../../src/provider-usage/probes/minimax.js";
+import { createMiniMaxCnUsageProbe } from "../../src/provider-usage/probes/minimax-cn.js";
+import { createMoonshotAiUsageProbe } from "../../src/provider-usage/probes/moonshotai.js";
+import { createMoonshotAiCnUsageProbe } from "../../src/provider-usage/probes/moonshotai-cn.js";
+import { createOpenAiCodexUsageProbe } from "../../src/provider-usage/probes/openai-codex.js";
+import { createOpenCodeGoUsageProbe } from "../../src/provider-usage/probes/opencode-go.js";
+import { createOpenRouterUsageProbe } from "../../src/provider-usage/probes/openrouter.js";
+import { createXaiUsageProbe } from "../../src/provider-usage/probes/xai.js";
+import { createZaiUsageProbe } from "../../src/provider-usage/probes/zai.js";
+import { createZaiCodingCnUsageProbe } from "../../src/provider-usage/probes/zai-coding-cn.js";
+
+const API_KEY_AUTH: AuthResult = Object.freeze({
+  auth: Object.freeze({ apiKey: "fixture-secret" }),
+  source: "fixture",
+});
+
+function context(
+  providerId: string,
+  effectiveBaseUrl: string,
+  authType: "api_key" | "oauth" = "api_key",
+): ProviderUsageEligibilityContext {
+  return Object.freeze({
+    providerId,
+    effectiveBaseUrl,
+    binding: Object.freeze({ kind: "managed" as const, authType }),
+  });
+}
+
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function createFetch(
+  handler: (url: string, init: RequestInit | undefined) => Response | Promise<Response>,
+): {
+  readonly fetch: FetchFunction;
+  readonly calls: Array<{ readonly url: string; readonly init?: RequestInit }>;
+} {
+  const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+  const fetch: FetchFunction = async (input, init) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    calls.push({ url, ...(init === undefined ? {} : { init }) });
+    return handler(url, init);
+  };
+  return { fetch, calls };
+}
+
+async function acquire(probe: ProviderUsageProbe, auth: AuthResult = API_KEY_AUTH) {
+  return probe.acquire({
+    auth,
+    signal: new AbortController().signal,
+  });
+}
+
+function jwt(payload: Record<string, unknown>): string {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  return `${encode({ alg: "none" })}.${encode(payload)}.`;
+}
+
+describe("Provider Usage probes", () => {
+  it("keeps CommandCode Goat and Private identities/destinations isolated", async () => {
+    const transport = createFetch((url) => {
+      if (url.endsWith("/alpha/whoami")) return json({ org: { id: "org-a" } });
+      if (url.includes("/alpha/billing/credits")) {
+        return json({
+          credits: { monthlyCredits: 40, purchasedCredits: 0, freeCredits: 5 },
+          windowLimits: {
+            fiveHour: { cap: 10, used: 5, resetAt: "2026-09-29T12:00:00Z" },
+            weekly: { cap: 20, used: 4, resetAt: "2026-10-01T00:00:00Z" },
+          },
+        });
+      }
+      if (url.includes("/alpha/billing/subscriptions")) {
+        return json({
+          currentPeriodStart: "2026-09-20T00:00:00Z",
+          currentPeriodEnd: "2026-10-20T00:00:00Z",
+        });
+      }
+      if (url.includes("/alpha/usage/summary")) return json({ totalCost: 15 });
+      return json({}, 404);
+    });
+    const goat = createCommandCodeGoatUsageProbe(transport.fetch);
+    const privateProbe = createCommandCodePrivateUsageProbe(transport.fetch);
+
+    expect(goat.providerId).toBe("commandcode-goat");
+    expect(privateProbe.providerId).toBe("commandcode-private");
+    expect(
+      goat.eligibility(context("commandcode-goat", "https://api.commandcode.ai/provider")),
+    ).toEqual({ state: "eligible" });
+    expect(
+      goat.eligibility(context("commandcode-goat", "https://api.commandcode.ai")),
+    ).toEqual({ state: "unsupported_destination" });
+    expect(
+      privateProbe.eligibility(
+        context("commandcode-private", "https://api.commandcode.ai"),
+      ),
+    ).toEqual({ state: "eligible" });
+    expect(
+      privateProbe.eligibility(
+        context("commandcode-private", "https://api.commandcode.ai/provider"),
+      ),
+    ).toEqual({ state: "unsupported_destination" });
+
+    const goatResult = await acquire(goat);
+    const privateResult = await acquire(privateProbe);
+    expect(goatResult).toMatchObject({
+      state: "observed",
+      facts: {
+        windows: [
+          { kind: "five_hour", usedPercent: 50 },
+          { kind: "weekly", usedPercent: 20 },
+        ],
+        budgets: [{ kind: "credits", remaining: 45, used: 15, limit: 60 }],
+      },
+    });
+    expect(privateResult).toMatchObject({
+      state: "observed",
+      facts: {
+        windows: [
+          { kind: "five_hour", usedPercent: 50 },
+          { kind: "weekly", usedPercent: 20 },
+        ],
+      },
+    });
+  });
+
+  it("normalizes OpenCode Go rolling, weekly and monthly windows", async () => {
+    const transport = createFetch(() =>
+      json({
+        usage: {
+          rolling: { percent: 12.5, resetsAt: "2026-09-29T12:00:00Z" },
+          weekly: { percent: 8 },
+          monthly: { percent: 3 },
+        },
+      }),
+    );
+    const probe = createOpenCodeGoUsageProbe(transport.fetch);
+    expect(
+      probe.eligibility(context("opencode-go", "https://opencode.ai/zen/go/v1")),
+    ).toEqual({ state: "eligible" });
+    expect(await acquire(probe)).toMatchObject({
+      state: "observed",
+      facts: {
+        windows: [
+          { kind: "five_hour", usedPercent: 12.5 },
+          { kind: "weekly", usedPercent: 8 },
+          { kind: "monthly", usedPercent: 3 },
+        ],
+      },
+    });
+  });
+
+  it("normalizes Kimi Code windows and total credits", async () => {
+    const transport = createFetch(() =>
+      json({
+        limits: [
+          {
+            name: "5h",
+            detail: {
+              limit: 100,
+              used: 25,
+              resetTime: "2026-09-29T12:00:00Z",
+            },
+          },
+          {
+            name: "weekly",
+            detail: { limit: 1000, used: 200 },
+          },
+        ],
+        totalQuota: { limit: 2000, used: 500, remaining: 1500 },
+      }),
+    );
+    const probe = createKimiCodingUsageProbe(transport.fetch);
+    expect(
+      probe.eligibility(context("kimi-coding", "https://api.kimi.com/coding", "oauth")),
+    ).toEqual({ state: "eligible" });
+    expect(await acquire(probe)).toMatchObject({
+      state: "observed",
+      facts: {
+        windows: [
+          { kind: "five_hour", usedPercent: 25 },
+          { kind: "weekly", usedPercent: 20 },
+        ],
+        budgets: [
+          { kind: "credits", remaining: 1500, used: 500, limit: 2000 },
+        ],
+      },
+    });
+  });
+
+  it("projects DeepSeek balance without fabricating a percentage", async () => {
+    const transport = createFetch(() =>
+      json({
+        balance_infos: [
+          {
+            currency: "CNY",
+            total_balance: "100.00",
+          },
+          {
+            currency: "USD",
+            total_balance: "42.50",
+            granted_balance: "10.00",
+            topped_up_balance: "32.50",
+          },
+        ],
+      }),
+    );
+    const probe = createDeepSeekUsageProbe(transport.fetch);
+    expect(await acquire(probe)).toEqual({
+      state: "observed",
+      facts: {
+        windows: [],
+        budgets: [{ kind: "balance", amount: 42.5, currency: "USD" }],
+      },
+    });
+  });
+
+  it("treats OpenRouter uncapped success as authoritative empty", async () => {
+    let capped = true;
+    const transport = createFetch(() =>
+      json({
+        data: capped
+          ? { limit: 100, limit_remaining: 73.5, usage: 1000 }
+          : { limit: null, usage: 26.5 },
+      }),
+    );
+    const probe = createOpenRouterUsageProbe(transport.fetch);
+    expect(await acquire(probe)).toEqual({
+      state: "observed",
+      facts: {
+        windows: [],
+        budgets: [
+          {
+            kind: "credits",
+            remaining: 73.5,
+            used: 26.5,
+            limit: 100,
+            currency: "USD",
+          },
+        ],
+      },
+    });
+    capped = false;
+    expect(await acquire(probe)).toEqual({
+      state: "observed",
+      facts: { windows: [], budgets: [] },
+    });
+    expect(
+      probe.eligibility(
+        context("openrouter", "https://openrouter.ai/api/v1", "oauth"),
+      ),
+    ).toEqual({ state: "unsupported_binding" });
+  });
+
+  for (const fixture of [
+    {
+      name: "MiniMax international",
+      probe: createMiniMaxUsageProbe,
+      baseUrl: "https://api.minimax.io/anthropic",
+    },
+    {
+      name: "MiniMax China",
+      probe: createMiniMaxCnUsageProbe,
+      baseUrl: "https://api.minimaxi.com/anthropic",
+    },
+  ] as const) {
+    it(`normalizes ${fixture.name} Coding Plan remaining percentages`, async () => {
+      const transport = createFetch(() =>
+        json({
+          base_resp: { status_code: 0 },
+          model_remains: [
+            {
+              model_name: "general",
+              current_interval_remaining_percent: 63.5,
+              end_time: "2026-09-29T12:00:00Z",
+              current_weekly_status: 1,
+              current_weekly_remaining_percent: 81.2,
+              weekly_end_time: "2026-10-01T00:00:00Z",
+            },
+          ],
+        }),
+      );
+      const probe = fixture.probe(transport.fetch);
+      expect(
+        probe.eligibility(context(probe.providerId, fixture.baseUrl)),
+      ).toEqual({ state: "eligible" });
+      const result = await acquire(probe);
+      expect(result).toMatchObject({
+        state: "observed",
+        facts: {
+          windows: [
+            { kind: "five_hour", usedPercent: 36.5 },
+            { kind: "weekly" },
+          ],
+        },
+      });
+      if (result.state !== "observed") {
+        throw new Error("Expected observed MiniMax usage");
+      }
+      expect(result.facts.windows[1]?.usedPercent).toBeCloseTo(18.8, 10);
+    });
+  }
+
+  for (const fixture of [
+    {
+      name: "Moonshot international",
+      probe: createMoonshotAiUsageProbe,
+      baseUrl: "https://api.moonshot.ai/v1",
+      currency: "USD",
+    },
+    {
+      name: "Moonshot China",
+      probe: createMoonshotAiCnUsageProbe,
+      baseUrl: "https://api.moonshot.cn/v1",
+      currency: "CNY",
+    },
+  ] as const) {
+    it(`normalizes ${fixture.name} balance`, async () => {
+      const transport = createFetch(() =>
+        json({
+          data: {
+            available_balance: 120.5,
+            voucher_balance: 20.5,
+            cash_balance: 100,
+          },
+        }),
+      );
+      const probe = fixture.probe(transport.fetch);
+      expect(
+        probe.eligibility(context(probe.providerId, fixture.baseUrl)),
+      ).toEqual({ state: "eligible" });
+      expect(await acquire(probe)).toEqual({
+        state: "observed",
+        facts: {
+          windows: [],
+          budgets: [
+            { kind: "balance", amount: 120.5, currency: fixture.currency },
+          ],
+        },
+      });
+    });
+  }
+
+  for (const fixture of [
+    {
+      name: "Z.AI international",
+      probe: createZaiUsageProbe,
+      baseUrl: "https://api.z.ai/api/coding/paas/v4",
+      authorization: "Bearer fixture-secret",
+    },
+    {
+      name: "Z.AI China",
+      probe: createZaiCodingCnUsageProbe,
+      baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+      authorization: "fixture-secret",
+    },
+  ] as const) {
+    it(`normalizes ${fixture.name} token windows and exact auth scheme`, async () => {
+      const transport = createFetch((_url, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          fixture.authorization,
+        );
+        return json({
+          success: true,
+          data: {
+            limits: [
+              {
+                type: "TOKENS_LIMIT",
+                unit: 3,
+                number: 5,
+                percentage: 31.5,
+                nextResetTime: 1_800_000_000_000,
+              },
+              {
+                type: "CREDIT_LIMIT",
+                unit: 6,
+                number: 1,
+                currentValue: 120,
+                usage: 1000,
+              },
+              {
+                type: "TIME_LIMIT",
+                unit: 5,
+                number: 1,
+                percentage: 99,
+              },
+            ],
+          },
+        });
+      });
+      const probe = fixture.probe(transport.fetch);
+      expect(
+        probe.eligibility(context(probe.providerId, fixture.baseUrl)),
+      ).toEqual({ state: "eligible" });
+      expect(await acquire(probe)).toMatchObject({
+        state: "observed",
+        facts: {
+          windows: [
+            { kind: "five_hour", usedPercent: 31.5 },
+            { kind: "weekly", usedPercent: 12 },
+          ],
+        },
+      });
+    });
+  }
+
+  it("treats Z.AI TIME_LIMIT-only payload as authoritative empty", async () => {
+    const transport = createFetch(() =>
+      json({
+        success: true,
+        data: {
+          limits: [{ type: "TIME_LIMIT", percentage: 100 }],
+        },
+      }),
+    );
+    expect(await acquire(createZaiUsageProbe(transport.fetch))).toEqual({
+      state: "observed",
+      facts: { windows: [], budgets: [] },
+    });
+  });
+
+  it("normalizes Anthropic OAuth usage and only recognized model scopes", async () => {
+    const transport = createFetch((_url, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer fixture-secret");
+      expect(headers.get("anthropic-beta")).toContain("oauth-2025-04-20");
+      return json({
+        five_hour: { utilization: 31.5, resets_at: "2026-09-29T12:00:00Z" },
+        seven_day: { utilization: 22 },
+        limits: [
+          {
+            kind: "weekly_scoped",
+            percent: 10,
+            scope: { model: { display_name: "Claude Opus" } },
+          },
+          {
+            kind: "weekly_scoped",
+            percent: 99,
+            scope: { model: { display_name: "attacker supplied arbitrary" } },
+          },
+        ],
+      });
+    });
+    const probe = createAnthropicUsageProbe(transport.fetch);
+    expect(
+      probe.eligibility(context("anthropic", "https://api.anthropic.com", "oauth")),
+    ).toEqual({ state: "eligible" });
+    expect(
+      probe.eligibility(context("anthropic", "https://api.anthropic.com", "api_key")),
+    ).toEqual({ state: "unsupported_binding" });
+    expect(await acquire(probe)).toMatchObject({
+      state: "observed",
+      facts: {
+        windows: [
+          { kind: "five_hour", usedPercent: 31.5 },
+          { kind: "weekly", usedPercent: 22 },
+          {
+            kind: "weekly",
+            usedPercent: 10,
+            scope: { kind: "model", modelLabel: "Opus" },
+          },
+        ],
+      },
+    });
+  });
+
+  it("derives xAI user id only from the resolved OAuth access token", async () => {
+    const access = jwt({ sub: "user-123" });
+    const transport = createFetch((_url, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-userid")).toBe("user-123");
+      return json({
+        config: {
+          creditUsagePercent: 12,
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            end: "2026-10-01T00:00:00Z",
+          },
+        },
+      });
+    });
+    const probe = createXaiUsageProbe(transport.fetch);
+    expect(
+      probe.eligibility(context("xai", "https://api.x.ai/v1", "oauth")),
+    ).toEqual({ state: "eligible" });
+    expect(
+      await acquire(probe, {
+        auth: { apiKey: access },
+        source: "oauth",
+      }),
+    ).toMatchObject({
+      state: "observed",
+      facts: { windows: [{ kind: "weekly", usedPercent: 12 }] },
+    });
+  });
+
+  it("derives Codex account id from JWT and normalizes WHAM windows", async () => {
+    const access = jwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-123" },
+    });
+    const transport = createFetch((_url, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("chatgpt-account-id")).toBe("acct-123");
+      return json({
+        plan_type: "plus",
+        rate_limit: {
+          primary_window: {
+            used_percent: 42,
+            reset_at: 1_800_000_000,
+            limit_window_seconds: 18_000,
+          },
+          secondary_window: {
+            used_percent: 17,
+            reset_at: 1_800_500_000,
+            limit_window_seconds: 604_800,
+          },
+          tertiary_window: {
+            used_percent: 4,
+            reset_at: 1_802_000_000,
+            limit_window_seconds: 2_592_000,
+          },
+        },
+        rate_limit_reset_credits: { available_count: 2 },
+      });
+    });
+    const probe = createOpenAiCodexUsageProbe(transport.fetch);
+    expect(
+      probe.eligibility(
+        context("openai-codex", "https://chatgpt.com/backend-api", "oauth"),
+      ),
+    ).toEqual({ state: "eligible" });
+    expect(
+      await acquire(probe, {
+        auth: { apiKey: access },
+        source: "oauth",
+      }),
+    ).toMatchObject({
+      state: "observed",
+      facts: {
+        windows: [
+          { kind: "five_hour", usedPercent: 42 },
+          { kind: "weekly", usedPercent: 17 },
+          { kind: "monthly", usedPercent: 4 },
+        ],
+        budgets: [{ kind: "reset_credits", available: 2 }],
+      },
+    });
+  });
+
+  it("rejects non-canonical effective destinations in every registered probe", () => {
+    const transport = createFetch(() => {
+      throw new Error("network must not be reached");
+    });
+    const probes = [
+      createCommandCodeGoatUsageProbe(transport.fetch),
+      createCommandCodePrivateUsageProbe(transport.fetch),
+      createOpenCodeGoUsageProbe(transport.fetch),
+      createKimiCodingUsageProbe(transport.fetch),
+      createDeepSeekUsageProbe(transport.fetch),
+      createOpenRouterUsageProbe(transport.fetch),
+      createMiniMaxUsageProbe(transport.fetch),
+      createMiniMaxCnUsageProbe(transport.fetch),
+      createMoonshotAiUsageProbe(transport.fetch),
+      createMoonshotAiCnUsageProbe(transport.fetch),
+      createZaiUsageProbe(transport.fetch),
+      createZaiCodingCnUsageProbe(transport.fetch),
+      createAnthropicUsageProbe(transport.fetch),
+      createXaiUsageProbe(transport.fetch),
+      createOpenAiCodexUsageProbe(transport.fetch),
+    ];
+    for (const probe of probes) {
+      const authType =
+        probe.providerId === "anthropic" ||
+        probe.providerId === "xai" ||
+        probe.providerId === "openai-codex"
+          ? "oauth"
+          : "api_key";
+      expect(
+        probe.eligibility(
+          context(probe.providerId, "https://credential-sink.invalid/v1", authType),
+        ),
+        probe.providerId,
+      ).toEqual({ state: "unsupported_destination" });
+    }
+    expect(transport.calls).toEqual([]);
+  });
+});

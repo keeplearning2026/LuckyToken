@@ -16,6 +16,7 @@ type InvokeResults = {
   [desktopIpcChannels.authRespond]: ReturnType<DesktopControlPlaneApi["respondAuth"]>;
   [desktopIpcChannels.models]: ReturnType<DesktopControlPlaneApi["executeModels"]>;
   [desktopIpcChannels.catalog]: ReturnType<DesktopControlPlaneApi["executeCatalog"]>;
+  [desktopIpcChannels.providerUsage]: ReturnType<DesktopControlPlaneApi["executeProviderUsage"]>;
   [desktopIpcChannels.publicModels]: ReturnType<DesktopControlPlaneApi["executePublicModels"]>;
   [desktopIpcChannels.agentIntegrations]: ReturnType<DesktopControlPlaneApi["executeAgentIntegrations"]>;
   [desktopIpcChannels.requestJourneysQuery]: ReturnType<DesktopControlPlaneApi["queryRequestJourneys"]>;
@@ -86,6 +87,8 @@ const control: DesktopControlPlaneApi = {
   respondAuth: (response) => invoke(desktopIpcChannels.authRespond, response),
   executeModels: (command) => invoke(desktopIpcChannels.models, command),
   executeCatalog: (command) => invoke(desktopIpcChannels.catalog, command),
+  executeProviderUsage: (command) =>
+    invoke(desktopIpcChannels.providerUsage, command),
   executePublicModels: (command) => invoke(desktopIpcChannels.publicModels, command),
   executeAgentIntegrations: (command) =>
     invoke(desktopIpcChannels.agentIntegrations, command),

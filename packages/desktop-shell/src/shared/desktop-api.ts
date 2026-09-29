@@ -23,6 +23,8 @@ import type {
   PublicModelsCommandResult,
   ProviderProfileAuthCommand,
   ProviderProfileAuthCommandResult,
+  ProviderUsageCommand,
+  ProviderUsageCommandResult,
   RequestJourneyDetailReadResult,
   RequestJourneyGetInput,
   RequestJourneyQuery,
@@ -132,6 +134,9 @@ export interface DesktopControlPlaneApi {
 
   executeModels(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalog(command: CatalogCommand): Promise<CatalogCommandResult>;
+  executeProviderUsage(
+    command: ProviderUsageCommand,
+  ): Promise<ProviderUsageCommandResult>;
   executePublicModels(command: PublicModelsCommand): Promise<PublicModelsCommandResult>;
   executeAgentIntegrations(
     command: AgentIntegrationsCommand,

@@ -248,7 +248,7 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .provider-publish-toggle { border: 0 !important; border-radius: 999px !important; background: var(--surface) !important; color: var(--text) !important; box-shadow: inset 0 0 0 1px var(--hairline); padding: 6px 9px !important; }
 .provider-publish-toggle:disabled { opacity: .45; cursor: default; }
 .provider-source { color: var(--text-tertiary) !important; font-size: 12px; }
-.provider-card.compact { position: relative; min-height: 218px; display: grid; grid-template-rows: auto minmax(58px, 1fr) auto; overflow: hidden; padding: 0; border: 1px solid var(--hairline); background: var(--surface-soft); }
+.provider-card.compact { position: relative; min-height: 252px; display: grid; grid-template-rows: auto minmax(58px, 1fr) auto auto; overflow: hidden; padding: 0; border: 1px solid var(--hairline); background: var(--surface-soft); }
 .provider-card.compact .provider-title { padding: 23px 22px 12px; }
 .provider-card.compact .provider-title h3 { margin: 0; font-size: 17px; line-height: 1.25; }
 .switch-control { position: relative; width: 38px; height: 22px; border: 0 !important; border-radius: 999px !important; background: var(--text-tertiary) !important; color: transparent !important; padding: 0 !important; transition: background 140ms ease; }
@@ -261,14 +261,18 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .provider-profile-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-model-ratio { color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .metric-separator { color: var(--text-tertiary); }
-.provider-metrics { grid-row: 2; align-self: center; display: flex; align-items: center; gap: 11px; padding: 10px 23px 24px; }
+.provider-metrics { grid-row: 2; align-self: center; display: flex; align-items: center; gap: 11px; padding: 10px 23px 16px; }
+.provider-usage { min-width: 0; grid-row: 3; display: grid; gap: 3px; min-height: 38px; padding: 0 23px 12px; }
+.provider-usage-primary, .provider-usage-secondary, .provider-usage-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.provider-usage-primary { color: var(--text); font-size: 12px; font-weight: 650; }
+.provider-usage-secondary, .provider-usage-status { color: var(--text-tertiary); font-size: 11px; }
 .status-dot { flex: 0 0 auto; width: 9px; height: 9px; display: inline-block; border-radius: 50%; background: var(--text-tertiary); }
 .status-dot.good { background: var(--green); }
 .status-dot.warning { background: var(--amber); }
 .status-dot.error { background: var(--danger); }
 .status-dot.neutral { background: var(--text-tertiary); }
-.provider-card-error { position: absolute; left: 22px; right: 22px; bottom: 61px; max-height: 32px; overflow: hidden; margin: 0 0 6px !important; color: var(--danger) !important; font-size: 12px; }
-.provider-card-actions { grid-row: 3; min-height: 60px; display: flex; align-items: center; gap: 7px; padding: 11px 16px; border-top: 1px solid var(--hairline); }
+.provider-card-error { position: absolute; left: 22px; right: 22px; bottom: 99px; max-height: 32px; overflow: hidden; margin: 0 0 6px !important; color: var(--danger) !important; font-size: 12px; }
+.provider-card-actions { grid-row: 4; min-height: 60px; display: flex; align-items: center; gap: 7px; padding: 11px 16px; border-top: 1px solid var(--hairline); }
 .card-icon-button { width: 38px; height: 38px; display: grid; place-items: center; border: 0 !important; border-radius: 10px !important; background: transparent !important; color: var(--text) !important; padding: 0 !important; }
 .card-icon-button:hover, .card-icon-button.active { background: var(--surface-muted) !important; }
 .card-icon-button.active { color: var(--green) !important; }

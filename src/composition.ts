@@ -12,9 +12,15 @@ import type {
   CodexDirectModelSource,
 } from "./codex-direct-seam.js";
 import type { RequestJourneyObservationAuthority } from "./diagnostics/contract.js";
-import { createExecutionOperation } from "./execution.js";
+import {
+  createExecutionOperation,
+  type ExecutionOperation,
+} from "./execution.js";
 import { createPiContextCompatibleExecution } from "./pi-context-compatibility-execution.js";
-import type { ProviderAuthBindingAuthority } from "./credentials/profile-contract.js";
+import type {
+  ProviderAuthBindingAuthority,
+  ProviderAuthBindingCapture,
+} from "./credentials/profile-contract.js";
 import { credentialActivityForExecutionFacts } from "./credentials/activity.js";
 import type { ClientProtocolHandler } from "./http.js";
 import { createCodexDirectCompactLane } from "./integrations/codex/direct-compact.js";
@@ -73,6 +79,11 @@ export interface ConfiguredTokenDataPlaneOptions {
   readonly codexSearchModel?: () => string;
   /** Settings-backed switch for Provider Native function-call namespace repair. */
   readonly functionCallNamespaceRepair?: () => boolean;
+  readonly providerResponseObservation?: (input: {
+    readonly model: Parameters<ExecutionOperation>[1];
+    readonly capture: ProviderAuthBindingCapture;
+    readonly response: unknown;
+  }) => void | Promise<void>;
   readonly createMessageId?: () => string;
   readonly createSessionId?: () => string;
   readonly now?: () => number;
@@ -125,6 +136,9 @@ export async function createConfiguredTokenDataPlane(
     bindings: options.providerAuthBindings,
     execute: createExecutionOperation(),
     resolveCredentialActivity: credentialActivityForExecutionFacts,
+    ...(options.providerResponseObservation === undefined
+      ? {}
+      : { providerResponseObservation: options.providerResponseObservation }),
   });
   const semanticExecution = createPiContextCompatibleExecution(
     profileBoundPiExecution,
@@ -134,6 +148,9 @@ export async function createConfiguredTokenDataPlane(
     bindings: options.providerAuthBindings,
     resolveRequestModel,
     fetch: options.fetch,
+    ...(options.providerResponseObservation === undefined
+      ? {}
+      : { providerResponseObservation: options.providerResponseObservation }),
   });
 
   const anthropic = createAnthropicMessagesHandler({

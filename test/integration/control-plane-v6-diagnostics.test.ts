@@ -48,8 +48,8 @@ let nextEndpointId = 0;
 function endpoint(): ControlPlaneEndpoint {
   nextEndpointId += 1;
   return {
-    address: `\\\\.\\pipe\\Token-v5-diagnostics-${process.pid}-${nextEndpointId}`,
-    capability: "v5-diagnostics-capability-012345678901234567890123456789",
+    address: `\\\\.\\pipe\\Token-v6-diagnostics-${process.pid}-${nextEndpointId}`,
+    capability: "v6-diagnostics-capability-012345678901234567890123456789",
   };
 }
 
@@ -251,7 +251,7 @@ function unavailableDiagnosticsAdapter(): UnifiedDiagnosticsManagement {
   });
 }
 
-describe("Application Control Plane v5 unified diagnostics", () => {
+describe("Application Control Plane v6 unified diagnostics", () => {
   const hosts: RunningControlPlane[] = [];
   const clients: Array<{ close(): Promise<void> }> = [];
   const transport = createNodePipeTransport();
@@ -261,8 +261,8 @@ describe("Application Control Plane v5 unified diagnostics", () => {
     await Promise.all(hosts.splice(0).map((host) => host.close()));
   });
 
-  it("negotiates only v5 and round-trips unified diagnostics reads with typed unavailability", async () => {
-    expect(controlPlaneVersion).toBe(5);
+  it("negotiates only v6 and round-trips unified diagnostics reads with typed unavailability", async () => {
+    expect(controlPlaneVersion).toBe(6);
     const fixture = createDiagnosticsFixture();
     const target = endpoint();
     const host = await startControlPlane({
@@ -283,11 +283,11 @@ describe("Application Control Plane v5 unified diagnostics", () => {
     await expect(connected.hello(2)).resolves.toEqual({
       type: "incompatible",
       requestedVersion: 2,
-      supportedVersions: [5],
+      supportedVersions: [6],
     });
-    await expect(connected.hello(5)).resolves.toMatchObject({
+    await expect(connected.hello(6)).resolves.toMatchObject({
       type: "compatible",
-      contractVersion: 5,
+      contractVersion: 6,
     });
     await expect(connected.queryRequestJourneys({ limit: 10 })).resolves.toEqual({
       outcome: "ok",
@@ -332,14 +332,14 @@ describe("Application Control Plane v5 unified diagnostics", () => {
     await raw.write(
       encodeRawFrame({
         type: "hello",
-        requestId: "v5-raw-hello",
-        contractVersion: 5,
+        requestId: "v6-raw-hello",
+        contractVersion: 6,
         capability: target.capability,
       }),
     );
     expect(await readRawFrame(raw)).toMatchObject({
       type: "hello_result",
-      result: { type: "compatible", contractVersion: 5 },
+      result: { type: "compatible", contractVersion: 6 },
     });
     for (const [type, requestId] of [
       ["get_diagnostics", "legacy-diagnostics"],
@@ -396,7 +396,7 @@ describe("Application Control Plane v5 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(unavailableClient);
-    await unavailableClient.hello(5);
+    await unavailableClient.hello(6);
     const typedUnavailable = {
       outcome: "unavailable",
       error: {
@@ -449,7 +449,7 @@ describe("Application Control Plane v5 unified diagnostics", () => {
   });
 
   it("round-trips both unified subscriptions and contains one client's listener failure", async () => {
-    expect(controlPlaneVersion).toBe(5);
+    expect(controlPlaneVersion).toBe(6);
     const fixture = createDiagnosticsFixture();
     const host = await startControlPlane({
       endpoint: endpoint(),
@@ -469,8 +469,8 @@ describe("Application Control Plane v5 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(first, second);
-    await first.hello(5);
-    await second.hello(5);
+    await first.hello(6);
+    await second.hello(6);
 
     const journeyDelivered = deferred<void>();
     const runtimeDelivered = deferred<void>();

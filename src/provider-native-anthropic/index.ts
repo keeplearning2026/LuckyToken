@@ -35,6 +35,11 @@ export interface AnthropicProviderNativeLaneOptions {
   >;
   readonly resolveRequestModel: RequestModelResolver;
   readonly fetch: FetchFunction;
+  readonly providerResponseObservation?: (input: {
+    readonly model: Model<string>;
+    readonly capture: ProviderAuthBindingCapture;
+    readonly response: unknown;
+  }) => void | Promise<void>;
 }
 
 function observeAnthropicProviderNative(
@@ -372,6 +377,21 @@ export function createAnthropicProviderNativeLane(
               }
 
               signal.throwIfAborted();
+              try {
+                const pending = options.providerResponseObservation?.({
+                  model: input.model,
+                  capture,
+                  response: {
+                    status: upstream.status,
+                    headers: { ...upstream.headers },
+                  },
+                });
+                if (pending !== undefined) {
+                  void Promise.resolve(pending).catch(() => undefined);
+                }
+              } catch {
+                // Provider Usage observation is fail-open and non-blocking.
+              }
               const upstreamRequestId = safeRequestId(upstream.headers);
               if (upstream.status >= 400) {
                 if (input.alias === undefined) {

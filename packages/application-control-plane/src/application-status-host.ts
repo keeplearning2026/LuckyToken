@@ -87,6 +87,11 @@ import {
 import { decodeHistoryCommandResult } from "./wire-history.js";
 import { decodeBackupManagementResult } from "./wire-backup.js";
 import type { HistoryCommand, HistoryCommandResult, HistoryRange } from "./history-contract.js";
+import type {
+  ProviderUsageCommandHandler,
+  ProviderUsageCommandResult,
+} from "./provider-usage-contract.js";
+import { decodeProviderUsageCommandResult } from "./wire-provider-usage.js";
 
 export interface StartControlPlaneOptions {
   readonly endpoint: ControlPlaneEndpoint;
@@ -121,6 +126,8 @@ export interface StartControlPlaneOptions {
    * catalog snapshot.
    */
   readonly catalogCommandHandler?: CatalogCommandHandler;
+  /** Independent Provider account usage/quota query and explicit refresh. */
+  readonly providerUsageCommandHandler?: ProviderUsageCommandHandler;
   /** The one live Public Model command seam used by desktop/CLI product
    * clients. The backing JSON file is never a Control Plane surface. */
   readonly publicModelsCommandHandler?: PublicModelsCommandHandler;
@@ -992,6 +999,38 @@ export async function startApplicationStatusHost(
           }
           await writeFrame(state.connection, {
             type: "catalog_command_result",
+            requestId: request.requestId,
+            result,
+          });
+        } else if (request.type === "provider_usage_command") {
+          if (options.providerUsageCommandHandler === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "unknown_command",
+            });
+            continue;
+          }
+          let handled: ProviderUsageCommandResult;
+          try {
+            handled = await options.providerUsageCommandHandler(request.command);
+          } catch {
+            handled = {
+              outcome: "unavailable",
+              snapshot: Object.freeze({ providers: Object.freeze([]) }),
+            };
+          }
+          const result = decodeProviderUsageCommandResult(handled);
+          if (result === undefined) {
+            await writeFrame(state.connection, {
+              type: "error",
+              requestId: request.requestId,
+              code: "invalid_request",
+            });
+            continue;
+          }
+          await writeFrame(state.connection, {
+            type: "provider_usage_command_result",
             requestId: request.requestId,
             result,
           });

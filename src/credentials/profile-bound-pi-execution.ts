@@ -3,6 +3,7 @@ import {
   isManagedProviderAuthBindingCapture,
   MAX_PROFILE_ATTEMPTS_PER_REQUEST,
   type ProviderAuthBindingAuthority,
+  type ProviderAuthBindingCapture,
 } from "./profile-contract.js";
 import type { CredentialActivitySink } from "./activity.js";
 
@@ -32,6 +33,11 @@ export function createProfileBoundPiExecution(options: {
   readonly resolveCredentialActivity: (
     facts: Parameters<ExecutionOperation>[4],
   ) => CredentialActivitySink | undefined;
+  readonly providerResponseObservation?: (input: {
+    readonly model: Parameters<ExecutionOperation>[1];
+    readonly capture: ProviderAuthBindingCapture;
+    readonly response: unknown;
+  }) => void | Promise<void>;
   readonly now?: () => number;
 }): ExecutionOperation {
   const now = options.now ?? Date.now;
@@ -41,6 +47,7 @@ export function createProfileBoundPiExecution(options: {
     context,
     streamOptions,
     factsSink,
+    observation,
   ) => {
     const credentialActivity = options.resolveCredentialActivity(factsSink);
     let capture = await options.bindings.capture(model.provider);
@@ -56,6 +63,41 @@ export function createProfileBoundPiExecution(options: {
     }
     for (;;) {
       try {
+        const attemptObservation =
+          observation === undefined &&
+          options.providerResponseObservation === undefined
+            ? undefined
+            : {
+                ...(observation?.providerRequest === undefined
+                  ? {}
+                  : { providerRequest: observation.providerRequest }),
+                ...(
+                  observation?.providerResponse === undefined &&
+                  options.providerResponseObservation === undefined
+                    ? {}
+                    : {
+                        providerResponse: (response: unknown) => {
+                          try {
+                            observation?.providerResponse?.(response);
+                          } catch {
+                            // Caller observation remains fail-open.
+                          }
+                          try {
+                            const pending = options.providerResponseObservation?.({
+                              model,
+                              capture,
+                              response,
+                            });
+                            if (pending !== undefined) {
+                              void Promise.resolve(pending).catch(() => undefined);
+                            }
+                          } catch {
+                            // Provider Usage observation remains fail-open/non-blocking.
+                          }
+                        },
+                      }
+                ),
+              };
         const result = await options.bindings.runBound(capture, () =>
           options.execute(
             models,
@@ -63,6 +105,7 @@ export function createProfileBoundPiExecution(options: {
             context,
             streamOptions,
             factsSink,
+            attemptObservation,
           ),
         );
         if (capture.facts.kind === "managed") {

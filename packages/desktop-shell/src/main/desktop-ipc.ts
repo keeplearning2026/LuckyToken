@@ -11,6 +11,7 @@ import type {
   ModelsCommand,
   PublicModelsCommand,
   ProviderProfileAuthCommand,
+  ProviderUsageCommand,
   RequestJourneyGetInput,
   RequestJourneyQuery,
   RequestJourneySummary,
@@ -198,6 +199,11 @@ export function registerDesktopIpcHandlers(options: {
   );
   register(desktopIpcChannels.catalog, (_event, ...args) =>
     session.client().executeCatalogCommand(first<CatalogCommand>(args)),
+  );
+  register(desktopIpcChannels.providerUsage, (_event, ...args) =>
+    session.client().executeProviderUsageCommand(
+      first<ProviderUsageCommand>(args),
+    ),
   );
   register(desktopIpcChannels.publicModels, (_event, ...args) =>
     session.client().executePublicModelsCommand(first<PublicModelsCommand>(args)),

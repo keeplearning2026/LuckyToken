@@ -139,7 +139,10 @@ describe("Codex catalog projection", () => {
       models: Array<Record<string, unknown>>;
     };
     expect(parsed.models[0]).toMatchObject({
-      supported_reasoning_levels: [],
+      supported_reasoning_levels: [
+        { effort: "max", description: "Maximum reasoning effort" },
+      ],
+      default_reasoning_level: "max",
       base_instructions: "You are Codex, a coding agent powered by the selected model.",
     });
   });
@@ -325,9 +328,59 @@ describe("Codex catalog projection", () => {
     ]) {
       expect(entry).toHaveProperty(required);
     }
-    expect(entry.supported_reasoning_levels).toEqual([]);
+    expect(entry.supported_reasoning_levels).toEqual([
+      { effort: "max", description: "Maximum reasoning effort" },
+    ]);
+    expect(entry.default_reasoning_level).toBe("max");
     expect(entry.supports_reasoning_summaries).toBe(false);
-    expect(entry).not.toHaveProperty("default_reasoning_level");
+  });
+
+  it("injects a single max level when a reasoning model exposes no selectable level", () => {
+    const routed = model({
+      provider: "commandcode-private",
+      id: "moonshotai/Kimi-K3",
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    });
+    const result = buildCodexCatalog({
+      nativeCatalogEntries: [
+        {
+          slug: "gpt-native",
+          supported_reasoning_levels: [
+            { effort: "low", description: "Light" },
+            { effort: "max", description: "Native max" },
+          ],
+        },
+      ],
+      models: { getModels: () => [routed] } as unknown as Models,
+      aliases: [
+        {
+          alias: "commandcode-private/kimi-k3",
+          target: {
+            providerId: "commandcode-private",
+            modelId: "moonshotai/Kimi-K3",
+          },
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(result.content) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(parsed.models[1]?.supported_reasoning_levels).toEqual([
+      { effort: "max", description: "Native max" },
+    ]);
+    expect(parsed.models[1]?.default_reasoning_level).toBe("max");
+    expect(parsed.models[1]?.supports_reasoning_summaries).toBe(true);
+    expect(result.warnings.join("\n")).toContain("no selectable reasoning level");
   });
 
   it("warns instead of inventing a reasoning level when Codex vocabulary is unavailable", () => {

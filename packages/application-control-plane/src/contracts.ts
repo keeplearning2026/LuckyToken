@@ -23,8 +23,12 @@ import type {
   ProviderProfileAuthCommand,
   ProviderProfileAuthCommandResult,
 } from "./credential-profiles-contract.js";
+import type {
+  ProviderUsageCommand,
+  ProviderUsageCommandResult,
+} from "./provider-usage-contract.js";
 
-export const controlPlaneVersion = 5 as const;
+export const controlPlaneVersion = 6 as const;
 
 export interface ApplicationIdentity {
   readonly id: "Token";
@@ -914,6 +918,9 @@ export interface ControlPlaneClient {
 
   executeModelsCommand(command: ModelsCommand): Promise<ModelsCommandResult>;
   executeCatalogCommand(command: CatalogCommand): Promise<CatalogCommandResult>;
+  executeProviderUsageCommand(
+    command: ProviderUsageCommand,
+  ): Promise<ProviderUsageCommandResult>;
   executePublicModelsCommand(
     command: PublicModelsCommand,
   ): Promise<PublicModelsCommandResult>;

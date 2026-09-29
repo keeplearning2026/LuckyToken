@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
+import { projectProviderCardUsage } from "./provider-usage-presentation.js";
 
 type ProfilesResult = Awaited<
   ReturnType<TokenDesktopApi["control"]["executeCredentialProfiles"]>
@@ -41,6 +42,10 @@ type ExternalAuthEvent = Extract<
 >;
 type InlineAuthEvent = Exclude<AuthEvent, ExternalAuthEvent>;
 type CatalogResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeCatalog"]>>;
+type ProviderUsageResult = Awaited<
+  ReturnType<TokenDesktopApi["control"]["executeProviderUsage"]>
+>;
+type ProviderUsageRow = ProviderUsageResult["snapshot"]["providers"][number];
 type AuthType = "oauth" | "api_key";
 
 export interface ProviderModelRow {
@@ -65,6 +70,15 @@ interface AuthOutcome {
   readonly message: string;
 }
 
+function providerUsageBindingKey(provider: ProviderProfiles): string {
+  return JSON.stringify([
+    provider.revision ?? "",
+    provider.selectionGeneration ?? "",
+    provider.activeCredentialId ?? "",
+    provider.profiles.length === 0 ? "ambient" : "managed",
+  ]);
+}
+
 function modelNameFromInternalAlias(
   providerId: string,
   internalAlias: string | undefined,
@@ -82,6 +96,12 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
     providers: [],
   });
   const [catalog, setCatalog] = useState<CatalogResult>();
+  const [providerUsageById, setProviderUsageById] = useState<
+    Readonly<Record<string, ProviderUsageRow>>
+  >({});
+  const [usageRefreshingProviders, setUsageRefreshingProviders] = useState<
+    ReadonlySet<string>
+  >(new Set());
   const [publicModels, setPublicModels] = useState<Awaited<
     ReturnType<TokenDesktopApi["control"]["executePublicModels"]>
   >>();
@@ -116,6 +136,8 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   const [modelNameBusy, setModelNameBusy] = useState(false);
   const [modelNameError, setModelNameError] = useState<string>();
   const seenCatalogVersion = useRef(-1);
+  const usageBindingKeyByProvider = useRef(new Map<string, string>());
+  const usageEpochByProvider = useRef(new Map<string, number>());
   const draggingModelId = useRef<string | undefined>(undefined);
   const draggingProfileId = useRef<string | undefined>(undefined);
 
@@ -222,6 +244,64 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
       stop();
     };
   }, [api]);
+
+  useEffect(() => {
+    const changed = new Map<string, number>();
+    const currentProviderIds = new Set<string>();
+
+    for (const provider of profileState.providers) {
+      currentProviderIds.add(provider.providerId);
+      const nextKey = providerUsageBindingKey(provider);
+      const previousKey = usageBindingKeyByProvider.current.get(provider.providerId);
+      if (previousKey === nextKey) continue;
+      usageBindingKeyByProvider.current.set(provider.providerId, nextKey);
+      const nextEpoch = (usageEpochByProvider.current.get(provider.providerId) ?? 0) + 1;
+      usageEpochByProvider.current.set(provider.providerId, nextEpoch);
+      changed.set(provider.providerId, nextEpoch);
+    }
+
+    for (const providerId of [...usageBindingKeyByProvider.current.keys()]) {
+      if (currentProviderIds.has(providerId)) continue;
+      usageBindingKeyByProvider.current.delete(providerId);
+      const nextEpoch = (usageEpochByProvider.current.get(providerId) ?? 0) + 1;
+      usageEpochByProvider.current.set(providerId, nextEpoch);
+      changed.set(providerId, nextEpoch);
+    }
+
+    if (changed.size === 0) return;
+
+    setProviderUsageById((current) => {
+      const next = { ...current };
+      for (const providerId of changed.keys()) delete next[providerId];
+      return next;
+    });
+
+    let active = true;
+    void api.control.executeProviderUsage({ command: "query" }).then(
+      (result) => {
+        if (!active) return;
+        setProviderUsageById((current) => {
+          const next = { ...current };
+          for (const row of result.snapshot.providers) {
+            const expectedEpoch = changed.get(row.providerId);
+            if (
+              expectedEpoch === undefined ||
+              (usageEpochByProvider.current.get(row.providerId) ?? 0) !== expectedEpoch
+            ) {
+              continue;
+            }
+            next[row.providerId] = row;
+          }
+          return next;
+        });
+      },
+      () => undefined,
+    );
+
+    return () => {
+      active = false;
+    };
+  }, [api, profileState]);
 
   useEffect(() => {
     let active = true;
@@ -483,6 +563,46 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
       );
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const refreshProviderUsage = async (providerId: string): Promise<void> => {
+    const expectedEpoch = usageEpochByProvider.current.get(providerId) ?? 0;
+    setUsageRefreshingProviders((current) => {
+      const next = new Set(current);
+      next.add(providerId);
+      return next;
+    });
+    try {
+      const result = await api.control.executeProviderUsage({
+        command: "refresh",
+        providerId,
+      });
+      if ((usageEpochByProvider.current.get(providerId) ?? 0) !== expectedEpoch) {
+        return;
+      }
+      const row = result.snapshot.providers.find(
+        (candidate) => candidate.providerId === providerId,
+      );
+      if (row !== undefined) {
+        setProviderUsageById((current) => ({
+          ...current,
+          [providerId]: row,
+        }));
+      }
+      if (result.refresh?.outcome === "unavailable") {
+        setNotice("Provider usage could not be refreshed.");
+      }
+    } catch {
+      if ((usageEpochByProvider.current.get(providerId) ?? 0) === expectedEpoch) {
+        setNotice("Provider usage could not be refreshed.");
+      }
+    } finally {
+      setUsageRefreshingProviders((current) => {
+        const next = new Set(current);
+        next.delete(providerId);
+        return next;
+      });
     }
   };
 
@@ -940,6 +1060,11 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
     const fallbackOn =
       (supportsApiKey && managed?.switchPolicy?.apiKeyOn429 === true) ||
       (supportsOauth && managed?.switchPolicy?.oauthOn429 === true);
+    const usagePresentation = projectProviderCardUsage(
+      providerUsageById[provider.providerId],
+      Date.now(),
+    );
+    const usageRefreshing = usageRefreshingProviders.has(provider.providerId);
 
     return (
       <article className="page-card provider-card compact" key={provider.providerId}>
@@ -1027,6 +1152,23 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
           </div>
         )}
 
+        <div className="provider-usage" aria-label={`${provider.name} usage`}>
+          {usagePresentation.primary.length > 0 ? (
+            <span className="provider-usage-primary">
+              {usagePresentation.primary.join(" · ")}
+            </span>
+          ) : (
+            <span className="provider-usage-status">
+              {usagePresentation.status ?? "Usage available"}
+            </span>
+          )}
+          {usagePresentation.secondary.length > 0 ? (
+            <span className="provider-usage-secondary">
+              {usagePresentation.secondary.join(" · ")}
+            </span>
+          ) : null}
+        </div>
+
         {hasError ? (
           <p className="provider-card-error" role="alert">
             {managed?.recordError?.message ??
@@ -1096,6 +1238,22 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
           >
             <Layers size={21} aria-hidden="true" />
           </button>
+          {usagePresentation.refreshable ? (
+            <button
+              type="button"
+              className="card-icon-button"
+              aria-label={`Refresh ${provider.name} usage`}
+              title="Refresh usage"
+              disabled={usageRefreshing}
+              onClick={() => void refreshProviderUsage(provider.providerId)}
+            >
+              <RefreshCw
+                size={20}
+                className={usageRefreshing ? "spinning" : undefined}
+                aria-hidden="true"
+              />
+            </button>
+          ) : null}
           {catalogFailed ? (
             <button
               type="button"

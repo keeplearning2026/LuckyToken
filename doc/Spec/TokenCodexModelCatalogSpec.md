@@ -170,11 +170,12 @@ PiToCodex = minimal→low, low→low, medium→medium, high→high, xhigh→xhig
 Projected = stable distinct map(PiSupported, PiToCodex)
 CodexVocabulary = efforts with valid descriptions in the installed bundled catalog
 Advertised = Projected intersect CodexVocabulary
+Fallback = if Projected is empty then [max] else Advertised
 ```
 
 Rules:
 
-1. If `model.reasoning === false`, emit `supported_reasoning_levels: []`.
+1. If `model.reasoning === false`, the Pi projection is empty and the fallback in rule 9 applies.
 2. If `model.reasoning === true`, use Pi's supported-level function as the capability authority, then project only the supported keys into the five Codex slots `low/medium/high/xhigh/max`.
 3. A `thinkingLevelMap` value of `null` removes that client effort.
 4. Pi `minimal` and `low` both project to Codex `low`; preserve Pi order and deduplicate, so a model supporting both advertises one `low` entry. A `minimal`-only model also advertises `low`; a later Codex `low` request clamps back to Pi `minimal` for that model.
@@ -182,8 +183,9 @@ Rules:
 6. A projected key absent from the installed Codex vocabulary is omitted because Token cannot provide a current Codex description for it.
 7. `off` is never advertised. Token currently degrades Responses `reasoning.effort: "none"` to omission, so it cannot promise an explicit-off control.
 8. Routed rows never advertise `minimal`, Provider wire values, or Codex `ultra`. Token's separate Responses input alias `ultra` still degrades to Pi `max`; it is not a sixth routed Codex slot.
-9. If the intersection is empty, emit `[]` and a generation warning. Do not invent a level.
-10. Emit `default_reasoning_level` as the highest advertised effort, which is the last entry of the emitted `supported_reasoning_levels` ladder (the emitted array preserves ascending Pi order). When the advertised ladder is empty, omit `default_reasoning_level`. This is a Token-owned routing default; it is not provider evidence and must not be read back as a provider default.
+9. If the Pi projection is empty — either `model.reasoning === false`, or every enabled Pi level is mapped to `null` — emit the single level `{ "effort": "max", "description": <installed Codex "max" description> }` and use `max` as `default_reasoning_level`, with one bounded generation warning per build. When the installed Codex vocabulary carries no `max` description, use the Token-owned literal `Maximum reasoning effort`. This is a Token-owned routing default, not provider capability evidence: it keeps the client reasoning control and default stable for targets that expose no selectable level at all. Token conversion still resolves the resulting `reasoning.effort: "max"` to `non-reasoning` or `no-selectable-level`, omits the preference, and emits its own bounded Client-owned warning, so no reasoning option reaches Pi or the Provider wire.
+10. If the Pi projection is non-empty but the Codex-vocabulary intersection is empty, emit `[]` and a generation warning. Do not invent a level in that case: the target does expose selectable levels and the missing fact is only the installed Codex description.
+11. Emit `default_reasoning_level` as the highest advertised effort, which is the last entry of the emitted `supported_reasoning_levels` ladder (the emitted array preserves ascending Pi order). It is therefore always emitted for routed rows except the rule 10 vocabulary gap, where no effort is advertised at all. This is a Token-owned routing default; it is not provider evidence and must not be read back as a provider default.
 
 Descriptions come from the installed Codex bundled catalog for the same effort. They are client vocabulary, not provider capability evidence.
 
@@ -212,7 +214,7 @@ In addition to the required fields, routed entries must explicitly emit these co
 | Field | Proposed policy |
 | --- | --- |
 | `apply_patch_tool_type` | `"freeform"` is allowed because Token currently converts and round-trips freeform custom/apply-patch calls; keep an online apply-patch gate |
-| `default_reasoning_level` | Emit the highest advertised effort when the routed ladder is non-empty (section 4 rule 10); omit when the ladder is empty |
+| `default_reasoning_level` | Emitted for every routed row with a non-empty ladder (section 4 rule 11): the highest advertised effort, which is `max` for the no-selectable-level fallback ladder |
 | `default_verbosity` | Omit while `support_verbosity` is false |
 | `default_reasoning_summary` | Omit while summary controls are unsupported |
 | `auto_compact_token_limit` | Omit unless Token intentionally owns a tested client compaction threshold |
@@ -333,7 +335,8 @@ All gates are required. Passing a lower gate does not waive a higher one.
 Tests must prove:
 
 - every routed row contains every required 0.149.0 field;
-- non-reasoning rows carry `supported_reasoning_levels: []`;
+- rows with an empty Pi projection (non-reasoning, or reasoning with every enabled level mapped to `null`) carry exactly the single `max` fallback level and `default_reasoning_level: "max"` (section 4 rule 9);
+- rows whose Pi projection is non-empty but whose Codex vocabulary is unavailable still carry `supported_reasoning_levels: []` and a warning (section 4 rule 10);
 - exact CommandCode ladders such as DeepSeek `high/max` are preserved;
 - Pi `minimal` and `low` both project to one Codex `low`, including a `minimal`-only model;
 - unsupported/null Pi levels are absent;
@@ -422,7 +425,7 @@ All gates were exercised with the installed `codex-cli 0.149.0`. Every run used 
 | Routed case | Observed catalog fact | Real CLI result |
 | --- | --- | --- |
 | DeepSeek V4 Flash basic | reasoning `high/max`, text input | passed |
-| MiniMax M2.5 basic | `supported_reasoning_levels: []`, text input | passed |
+| MiniMax M2.5 basic | `supported_reasoning_levels: []`, text input (recorded before section 4 rule 9 introduced the single `max` fallback level) | passed |
 | DeepSeek V4 Flash reasoning | selected `high`; captured request retained `reasoning.effort: high` | passed |
 | DeepSeek V4 Flash shell | `shell_type: shell_command` | passed |
 | DeepSeek V4 Flash apply patch | `apply_patch_tool_type: freeform` | passed |

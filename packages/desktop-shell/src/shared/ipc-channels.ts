@@ -9,6 +9,7 @@ export const desktopIpcChannels = Object.freeze({
   authRespond: "Token:control:auth:respond",
   models: "Token:control:models",
   catalog: "Token:control:catalog",
+  providerUsage: "Token:control:provider-usage",
   publicModels: "Token:control:public-models",
   agentIntegrations: "Token:control:agent-integrations",
   requestJourneysQuery: "Token:control:request-journeys:query",
