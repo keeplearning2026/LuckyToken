@@ -30,8 +30,8 @@ import {
 import { useOverviewReadModel } from "./overview-read-model.js";
 
 interface OverviewFilters {
-  readonly from: number;
-  readonly to: number;
+  readonly from: number | undefined;
+  readonly to: number | undefined;
   readonly provider: string;
   readonly profile: string;
   readonly model: string;
@@ -40,14 +40,12 @@ interface OverviewFilters {
   readonly outcome: string;
 }
 
+const REQUESTS_PER_PAGE = 100;
+
 function defaultFilters(): OverviewFilters {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
   return {
-    from: start.getTime(),
-    to: end.getTime(),
+    from: undefined,
+    to: undefined,
     provider: "",
     profile: "",
     model: "",
@@ -605,10 +603,14 @@ function SummaryCards({ summary }: { readonly summary: AnalyticsSummary | undefi
 export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDesktopApi; readonly backendAvailable: boolean }) {
   const [filters, setFilters] = useState<OverviewFilters>(defaultFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [requestPage, setRequestPage] = useState(1);
   const [details, setDetails] = useState<Readonly<Record<string, RequestJourneyRecord | "unavailable">>>({});
   const [expandedRequestId, setExpandedRequestId] = useState<string>();
   const [columnWidths] = useState(() => loadRequestColumnWidths(getRequestColumnStorage()));
-  const validRange = filters.from < filters.to;
+  const rangeFrom = filters.from ?? 0;
+  const rangeTo = filters.to ?? Number.MAX_SAFE_INTEGER;
+  const hasTimeRange = filters.from !== undefined || filters.to !== undefined;
+  const validRange = rangeFrom < rangeTo;
   const analyticsFilters = useMemo<AnalyticsFilter | undefined>(
     () => {
       const value: AnalyticsFilter = {
@@ -633,22 +635,45 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDes
     summary,
   } = useOverviewReadModel(api, {
     enabled: backendAvailable && validRange,
-    from: filters.from,
-    to: filters.to,
+    from: rangeFrom,
+    to: rangeTo,
     ...(analyticsFilters === undefined ? {} : { filters: analyticsFilters }),
   });
   const filteredRecords = useMemo(
     () => records.filter((record) =>
-      record.createdAt >= filters.from &&
-      record.createdAt < filters.to &&
+      record.createdAt >= rangeFrom &&
+      record.createdAt < rangeTo &&
       (filters.provider === "" || record.providerId === filters.provider) &&
       (filters.profile === "" || record.profileId === filters.profile) &&
       (filters.model === "" || record.realModelId === filters.model) &&
       (filters.protocol === "" || record.protocol === filters.protocol) &&
       (filters.session === "" || record.clientSessionId === filters.session) &&
       (filters.outcome === "" || record.outcome === filters.outcome)),
-    [filters.from, filters.model, filters.outcome, filters.profile, filters.protocol, filters.provider, filters.session, filters.to, records],
+    [filters.model, filters.outcome, filters.profile, filters.protocol, filters.provider, filters.session, rangeFrom, rangeTo, records],
   );
+  const requestPageCount = Math.max(1, Math.ceil(filteredRecords.length / REQUESTS_PER_PAGE));
+  const visibleRequestPage = Math.min(requestPage, requestPageCount);
+  const pageRecords = filteredRecords.slice(
+    (visibleRequestPage - 1) * REQUESTS_PER_PAGE,
+    visibleRequestPage * REQUESTS_PER_PAGE,
+  );
+
+  const showAllTime = (): void => {
+    setFilters((current) => ({ ...current, from: undefined, to: undefined }));
+    setRequestPage(1);
+  };
+
+  const changeTimeBound = (bound: "from" | "to", raw: string): void => {
+    const value = raw === "" ? undefined : parseInputDateTime(raw);
+    if (raw !== "" && value === undefined) return;
+    setFilters((current) => ({ ...current, [bound]: value }));
+    setRequestPage(1);
+  };
+
+  const changeFacet = (facet: "provider" | "profile" | "model" | "protocol" | "session" | "outcome", value: string): void => {
+    setFilters((current) => ({ ...current, [facet]: value }));
+    setRequestPage(1);
+  };
 
   const toggleDetails = async (requestId: string): Promise<void> => {
     if (expandedRequestId === requestId) { setExpandedRequestId(undefined); return; }
@@ -666,22 +691,23 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDes
     <SummaryCards summary={summary} />
     {analyticsUnavailable ? <p className="error-text">Request analytics are temporarily unavailable.</p> : null}
     <section className="overview-requests" aria-label="Requests">
-      <div className="overview-requests-toolbar"><h2>Requests</h2><div className="overview-toolbar-actions"><button type="button" className="overview-filter-toggle" aria-label="Refresh overview" title="Refresh overview" disabled={!backendAvailable || !validRange} onClick={refresh}><RefreshCw className={refreshing ? "rotating" : undefined} size={17} aria-hidden="true" /></button><button type="button" className={`overview-filter-toggle${filtersOpen ? " active" : ""}`} aria-label={filtersOpen ? "Hide overview filters" : "Show overview filters"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((current) => !current)}><SlidersHorizontal size={17} aria-hidden="true" /></button></div></div>
+      <div className="overview-requests-toolbar"><h2>Requests <span className="overview-range-label">{hasTimeRange ? "Custom time" : "All time"}</span></h2><div className="overview-toolbar-actions"><button type="button" className="overview-filter-toggle" aria-label="Refresh overview" title="Refresh overview" disabled={!backendAvailable || !validRange} onClick={refresh}><RefreshCw className={refreshing ? "rotating" : undefined} size={17} aria-hidden="true" /></button><button type="button" className={`overview-filter-toggle${filtersOpen ? " active" : ""}`} aria-label={filtersOpen ? "Hide overview filters" : "Show overview filters"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen((current) => !current)}><SlidersHorizontal size={17} aria-hidden="true" /></button></div></div>
       {historyUnavailable && records.length > 0 ? <p className="error-text" role="status">Request history is temporarily unavailable. Showing the last successful snapshot.</p> : null}
       {filtersOpen ? <div className="overview-filters" aria-label="Overview filters">
-        <label className="overview-filter-field overview-filter-time"><span>From</span><input type="datetime-local" aria-label="From time" value={inputDateTime(filters.from)} onChange={(event) => { const value = parseInputDateTime(event.currentTarget.value); if (value !== undefined) setFilters((current) => ({ ...current, from: value })); }} /></label>
-        <label className="overview-filter-field overview-filter-time"><span>To</span><input type="datetime-local" aria-label="To time" value={inputDateTime(filters.to)} onChange={(event) => { const value = parseInputDateTime(event.currentTarget.value); if (value !== undefined) setFilters((current) => ({ ...current, to: value })); }} /></label>
-        <label className="overview-filter-field"><span>Provider</span><select aria-label="Provider filter" value={filters.provider} onChange={(event) => { const value = event.currentTarget.value; setFilters((current) => ({ ...current, provider: value })); }}><option value="">All providers</option>{(options?.providers ?? []).map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label>
-        <label className="overview-filter-field"><span>Profile</span><select aria-label="Profile filter" value={filters.profile} onChange={(event) => { const value = event.currentTarget.value; setFilters((current) => ({ ...current, profile: value })); }}><option value="">All profiles</option>{(options?.profiles ?? []).map((profile) => <option key={profile.profileId} value={profile.profileId}>{profile.displayName}</option>)}</select></label>
-        <label className="overview-filter-field"><span>Model</span><select aria-label="Model filter" value={filters.model} onChange={(event) => { const value = event.currentTarget.value; setFilters((current) => ({ ...current, model: value })); }}><option value="">All models</option>{(options?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
-        <label className="overview-filter-field"><span>Protocol</span><select aria-label="Protocol filter" value={filters.protocol} onChange={(event) => { const value = event.currentTarget.value; setFilters((current) => ({ ...current, protocol: value })); }}><option value="">All protocols</option>{(options?.protocols ?? []).map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}</select></label>
-        <label className="overview-filter-field"><span>Session</span><select aria-label="Session filter" value={filters.session} onChange={(event) => { const value = event.currentTarget.value; setFilters((current) => ({ ...current, session: value })); }}><option value="">All sessions</option>{(options?.sessions ?? []).map((session) => <option key={session} value={session}>{session}</option>)}</select></label>
-        <label className="overview-filter-field"><span>Outcome</span><select aria-label="Outcome filter" value={filters.outcome} onChange={(event) => { const value = event.currentTarget.value; setFilters((current) => ({ ...current, outcome: value })); }}><option value="">All outcomes</option>{(options?.outcomes ?? []).map((outcome) => <option key={outcome} value={outcome}>{displayOutcome(outcome as RequestJourneySummary["outcome"])}</option>)}</select></label>
+        {hasTimeRange ? <button type="button" className="overview-time-all" onClick={showAllTime}>All time</button> : null}
+        <div className="overview-filter-field overview-filter-time"><span>From</span><div className="overview-time-input"><input type="datetime-local" aria-label="From time" value={filters.from === undefined ? "" : inputDateTime(filters.from)} onChange={(event) => changeTimeBound("from", event.currentTarget.value)} /><button type="button" aria-label="From earliest" aria-pressed={filters.from === undefined} title="Include requests from the beginning" onClick={() => changeTimeBound("from", "")}>Earliest</button></div></div>
+        <div className="overview-filter-field overview-filter-time"><span>To</span><div className="overview-time-input"><input type="datetime-local" aria-label="To time" value={filters.to === undefined ? "" : inputDateTime(filters.to)} onChange={(event) => changeTimeBound("to", event.currentTarget.value)} /><button type="button" aria-label="To latest" aria-pressed={filters.to === undefined} title="Keep including new requests" onClick={() => changeTimeBound("to", "")}>Latest</button></div></div>
+        <label className="overview-filter-field"><span>Provider</span><select aria-label="Provider filter" value={filters.provider} onChange={(event) => changeFacet("provider", event.currentTarget.value)}><option value="">All providers</option>{(options?.providers ?? []).map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select></label>
+        <label className="overview-filter-field"><span>Profile</span><select aria-label="Profile filter" value={filters.profile} onChange={(event) => changeFacet("profile", event.currentTarget.value)}><option value="">All profiles</option>{(options?.profiles ?? []).map((profile) => <option key={profile.profileId} value={profile.profileId}>{profile.displayName}</option>)}</select></label>
+        <label className="overview-filter-field"><span>Model</span><select aria-label="Model filter" value={filters.model} onChange={(event) => changeFacet("model", event.currentTarget.value)}><option value="">All models</option>{(options?.models ?? []).map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+        <label className="overview-filter-field"><span>Protocol</span><select aria-label="Protocol filter" value={filters.protocol} onChange={(event) => changeFacet("protocol", event.currentTarget.value)}><option value="">All protocols</option>{(options?.protocols ?? []).map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}</select></label>
+        <label className="overview-filter-field"><span>Session</span><select aria-label="Session filter" value={filters.session} onChange={(event) => changeFacet("session", event.currentTarget.value)}><option value="">All sessions</option>{(options?.sessions ?? []).map((session) => <option key={session} value={session}>{session}</option>)}</select></label>
+        <label className="overview-filter-field"><span>Outcome</span><select aria-label="Outcome filter" value={filters.outcome} onChange={(event) => changeFacet("outcome", event.currentTarget.value)}><option value="">All outcomes</option>{(options?.outcomes ?? []).map((outcome) => <option key={outcome} value={outcome}>{displayOutcome(outcome as RequestJourneySummary["outcome"])}</option>)}</select></label>
       </div> : null}
       <div className="overview-table-scroll"><table className="overview-request-table" style={{ width: totalRequestColumnWidth(columnWidths) }}>
         <colgroup>{REQUEST_COLUMN_DEFINITIONS.map((column) => <col key={column.id} data-request-column={column.id} style={{ width: columnWidths[column.id] }} />)}</colgroup>
         <thead><tr>{REQUEST_COLUMN_DEFINITIONS.map((column) => <th className={`request-column request-column-${column.id}`} key={column.id} data-request-column-header={column.id}>{column.label}</th>)}</tr></thead>
-        <tbody>{historyUnavailable && records.length === 0 ? <tr><td className="overview-empty" colSpan={12}>Request history is temporarily unavailable.</td></tr> : filteredRecords.length === 0 ? <tr><td className="overview-empty" colSpan={12}>No requests</td></tr> : filteredRecords.map((record) => {
+        <tbody>{historyUnavailable && records.length === 0 ? <tr><td className="overview-empty" colSpan={12}>Request history is temporarily unavailable.</td></tr> : filteredRecords.length === 0 ? <tr><td className="overview-empty" colSpan={12}>No requests</td></tr> : pageRecords.map((record) => {
           const expanded = expandedRequestId === record.requestId;
           const detail = details[record.requestId];
           const duration = record.closedAt === undefined ? "-" : `${Math.max(0, record.closedAt - record.createdAt)} ms`;
@@ -708,6 +734,10 @@ export function OverviewPage({ api, backendAvailable }: { readonly api: TokenDes
           </Fragment>;
         })}</tbody>
       </table></div>
+      <nav className="overview-pagination" aria-label="Request pages">
+        <span>{filteredRecords.length === 0 ? "0 requests" : `${(visibleRequestPage - 1) * REQUESTS_PER_PAGE + 1}–${Math.min(visibleRequestPage * REQUESTS_PER_PAGE, filteredRecords.length)} of ${filteredRecords.length} requests`}</span>
+        <div><button type="button" aria-label="Previous request page" disabled={visibleRequestPage <= 1} onClick={() => setRequestPage((current) => Math.max(1, current - 1))}>Previous</button><span>Page {visibleRequestPage} of {requestPageCount}</span><button type="button" aria-label="Next request page" disabled={visibleRequestPage >= requestPageCount} onClick={() => setRequestPage((current) => Math.min(requestPageCount, current + 1))}>Next</button></div>
+      </nav>
     </section>
   </div>;
 }

@@ -97,10 +97,13 @@ import {
   type CodexCatalogValidator,
 } from "./integrations/codex/catalog-validator.js";
 import { createClaudeIntegrationAdapter } from "./integrations/claude/adapter.js";
+import { createClaudeDesktopIntegrationAdapter } from "./integrations/claude-desktop/adapter.js";
+import { resolveClaudeDesktopPaths } from "./integrations/claude-desktop/paths.js";
 import { createCodexIntegrationAuthority } from "./integrations/codex/integration.js";
 import { createAgentInjectionSnapshot } from "./integrations/agents/snapshot.js";
 import { createAgentIntegrationCoordinator } from "./integrations/agents/coordinator.js";
 import { createPiIntegrationAdapter } from "./integrations/pi/adapter.js";
+import { createDshIntegrationAdapter } from "./integrations/dsh/adapter.js";
 import { TOKEN_RELEASE_VERSION } from "./version.js";
 
 export type ApplicationOwnerKind = "cli" | "desktop";
@@ -906,6 +909,10 @@ async function startNormalApplication(options: {
       isPublicModelAlias: (alias) =>
         publicModelAuthority.snapshot().resolve(alias) !== undefined,
     });
+    const claudeDesktopIntegrationAdapter = createClaudeDesktopIntegrationAdapter({
+      paths: resolveClaudeDesktopPaths(),
+      stateDirectory: join(dirname(options.configPath), "integrations", "claude-desktop"),
+    });
     const piAgentDirectoryOverride = process.env.PI_CODING_AGENT_DIR?.trim();
     const piIntegrationAdapter = createPiIntegrationAdapter({
       agentDirectory:
@@ -914,22 +921,32 @@ async function startNormalApplication(options: {
           : resolve(piAgentDirectoryOverride),
       stateDirectory: join(dirname(options.configPath), "integrations", "pi"),
     });
+    const dshHomeOverride = process.env.DSH_HOME?.trim();
+    const dshIntegrationAdapter = createDshIntegrationAdapter({
+      dshHome: dshHomeOverride ? resolve(dshHomeOverride) : join(homedir(), ".dsh"),
+      profile: "web",
+      stateDirectory: join(dirname(options.configPath), "integrations", "dsh"),
+    });
     const previousCodexState = await codexIntegrationAuthority.query();
     const agentIntegrations = createAgentIntegrationCoordinator({
       stateDirectory: join(dirname(options.configPath), "integrations"),
       snapshot: agentSnapshot,
       adapters: [
         claudeIntegrationAdapter,
+        claudeDesktopIntegrationAdapter,
         codexIntegrationAuthority,
         piIntegrationAdapter,
+        dshIntegrationAdapter,
       ],
       defaults: {
         claude: { enabled: false, scope: "favorite" },
+        "claude-desktop": { enabled: false, scope: "favorite" },
         codex: {
           enabled: previousCodexState.desiredEnabled,
           scope: previousCodexState.scope,
         },
         pi: { enabled: false, scope: "favorite" },
+        dsh: { enabled: false, scope: "favorite" },
       },
     });
     const restoreAgentsBeforeShutdown = async (): Promise<void> => {

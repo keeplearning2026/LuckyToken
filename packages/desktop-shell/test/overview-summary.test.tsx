@@ -80,6 +80,51 @@ afterEach(async () => {
 });
 
 describe("Overview analytics", () => {
+  it("uses the same time and Provider filters for statistics and Request rows", async () => {
+    const records = [
+      { id: 1, runtimeId: "runtime-1", requestId: "early", operation: "model_generation" as const, path: "/v1/messages", protocol: "anthropic-messages", lane: "provider_native" as const, outcome: "success" as const, completeness: "complete" as const, createdAt: new Date(2026, 7, 18, 10).getTime(), providerId: "provider-a" },
+      { id: 2, runtimeId: "runtime-1", requestId: "late", operation: "model_generation" as const, path: "/v1/messages", protocol: "anthropic-messages", lane: "provider_native" as const, outcome: "success" as const, completeness: "complete" as const, createdAt: new Date(2026, 7, 18, 12).getTime(), providerId: "provider-b" },
+    ];
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records, hasMore: false } }),
+      getAnalytics: async (query) => query.command === "options"
+        ? { ...emptyOptions, providers: ["provider-a", "provider-b"] }
+        : { version: 3, command: "summary", totals: totals(records.filter((record) =>
+            record.createdAt >= query.from && record.createdAt < query.to &&
+            (query.filters?.providers === undefined || query.filters.providers.includes(record.providerId)),
+          ).length) },
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("2");
+    expect(container.querySelectorAll('tr[data-request-id]')).toHaveLength(2);
+
+    await act(async () => {
+      (container.querySelector('button[aria-label="Show overview filters"]') as HTMLButtonElement).click();
+    });
+    const from = container.querySelector('input[aria-label="From time"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(from, "2026-08-18T11:00");
+      from.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("1");
+    expect(container.querySelector('tr[data-request-id="late"]')).not.toBeNull();
+    expect(container.querySelector('tr[data-request-id="early"]')).toBeNull();
+
+    const provider = container.querySelector('select[aria-label="Provider filter"]') as HTMLSelectElement;
+    await act(async () => {
+      provider.value = "provider-a";
+      provider.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(container.querySelector(".overview-stat-requests strong")?.textContent).toBe("0");
+    expect(container.querySelectorAll('tr[data-request-id]')).toHaveLength(0);
+  });
+
   it("shows compact units, t/s, and all analytics filters", async () => {
     const analyticsQueries: AnalyticsQuery[] = [];
     const api = createFakeDesktopApi({ control: {
@@ -121,6 +166,10 @@ describe("Overview analytics", () => {
     expect(container.querySelector(".overview-stat-cache-read strong")?.textContent).toBe("19.2M");
     expect(container.querySelector(".overview-stat-output strong")?.textContent).toBe("70.9K");
     expect(container.querySelector(".overview-stat-token-speed strong")?.textContent).toBe("37.1 t/s");
+    expect(analyticsQueries.find((query) => query.command === "summary")).toMatchObject({
+      from: 0,
+      to: Number.MAX_SAFE_INTEGER,
+    });
 
     await act(async () => {
       (container.querySelector('button[aria-label="Show overview filters"]') as HTMLButtonElement).click();

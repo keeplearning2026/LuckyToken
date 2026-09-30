@@ -107,12 +107,6 @@ export function projectProviderCardUsage(
     return Object.freeze({
       primary: Object.freeze([]),
       secondary: Object.freeze([]),
-      status:
-        provider.reason === "destination"
-          ? "Usage unavailable for this endpoint"
-          : provider.reason === "binding"
-            ? "Usage unavailable for this account type"
-            : "Usage unavailable",
       refreshable: false,
     });
   }
@@ -120,7 +114,6 @@ export function projectProviderCardUsage(
     return Object.freeze({
       primary: Object.freeze([]),
       secondary: Object.freeze([]),
-      status: "Usage refresh unavailable",
       refreshable: true,
     });
   }
@@ -160,9 +153,6 @@ export function projectProviderCardUsage(
   return Object.freeze({
     primary: Object.freeze(primary),
     secondary: Object.freeze(secondary),
-    ...(primary.length === 0 && secondary.length === 0
-      ? { status: "No current limit reported" }
-      : {}),
     refreshable: provider.refreshable,
   });
 }

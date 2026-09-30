@@ -71,22 +71,25 @@ export function ProviderUsageSettings({ api }: { readonly api: TokenDesktopApi }
           <h3>Automatic usage refresh <SettingHelp label="Automatic usage refresh">Refresh supported Provider usage in the background, even when the Providers page is closed. Default: every 15 minutes. Changes apply immediately.</SettingHelp></h3>
         </div>
       </header>
-      <label className="field-row">
-        <span>Refresh every (minutes)</span>
-        <input
-          aria-label="Usage refresh interval in minutes"
-          type="number"
-          min={1}
-          max={1440}
-          step={1}
-          value={draft}
-          onChange={(event) => setDraft(event.currentTarget.value)}
-        />
-      </label>
+      <div className="usage-interval-row">
+        <label className="field-row">
+          <span>Refresh every (minutes)</span>
+          <input
+            aria-label="Usage refresh interval in minutes"
+            type="number"
+            min={1}
+            max={1440}
+            step={1}
+            placeholder="15"
+            value={draft}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+          />
+        </label>
+        <button className="usage-interval-save" type="button" aria-label="Save usage interval" disabled={busy || interval === undefined} onClick={() => void save()}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
       {notice === undefined ? null : <p className="setting-state" role="status">{notice}</p>}
-      <button type="button" disabled={busy || interval === undefined} onClick={() => void save()}>
-        {busy ? "Saving…" : "Save usage interval"}
-      </button>
     </section>
   );
 }

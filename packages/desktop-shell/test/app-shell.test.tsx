@@ -26,6 +26,7 @@ const runningStatus: StatusSnapshot = {
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true;
+  window.localStorage.removeItem("token.desktop.theme");
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -57,6 +58,75 @@ async function openAgentSettings(): Promise<void> {
 }
 
 describe("desktop command-router shell", () => {
+  it("places Agent injection controls together left of the endpoint", async () => {
+    await act(async () => root.render(<App api={createFakeDesktopApi()} />));
+    const toolbar = container.querySelector(".runtime-header-status");
+    const integrations = toolbar?.firstElementChild;
+    expect(integrations?.getAttribute("aria-label")).toBe("Agent integrations");
+    expect(integrations?.children).toHaveLength(6);
+    expect(integrations?.children[0]?.getAttribute("aria-label")).toBe("Enable Claude Code integration");
+    expect(integrations?.children[1]?.getAttribute("aria-label")).toBe("Enable Claude Desktop integration");
+    expect(integrations?.children[2]?.getAttribute("aria-label")).toBe("Enable Codex integration");
+    expect(integrations?.children[3]?.getAttribute("aria-label")).toBe("Enable Pi integration");
+    expect(integrations?.children[4]?.getAttribute("aria-label")).toBe("Enable DeepSeek Harness integration");
+    expect(integrations?.children[5]?.getAttribute("aria-label")).toBe("Sync Agent integrations");
+    expect(toolbar?.children[1]?.classList.contains("favorite-models-toolbar")).toBe(true);
+    expect(toolbar?.children[2]?.classList.contains("endpoint-group")).toBe(true);
+  });
+
+  it("opens Favorite models as a dialog without leaving the current page", async () => {
+    const api = createFakeDesktopApi({
+      control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        executePublicModels: async () => ({
+          outcome: "ok",
+          state: {
+            revision: 1,
+            version: 1,
+            endpoint: { host: "127.0.0.1", port: 4317 },
+            providers: [{
+              providerId: "example",
+              on: true,
+              favorite: false,
+              models: [{ alias: "example/model-a", target: "model-a", on: true, favorite: true }],
+            }],
+          },
+        }),
+      },
+    });
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    const favorite = container.querySelector('button[aria-label="Favorite models (1)"]');
+    expect(favorite?.closest(".favorite-models-toolbar")).not.toBeNull();
+    await act(async () => { (favorite as HTMLButtonElement).click(); });
+    await flush();
+    expect(container.querySelector("h1")?.textContent).toBe("Overview");
+    expect(container.querySelector('[role="dialog"][aria-label="Favorite models"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Overview"]')?.getAttribute("aria-current")).toBe("page");
+    await act(async () => {
+      (container.querySelector('button[aria-label="Close favorite models"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector("h1")?.textContent).toBe("Overview");
+    expect(container.querySelector('[role="dialog"][aria-label="Favorite models"]')).toBeNull();
+  });
+
+  it("switches and restores the theme from the rightmost toolbar control", async () => {
+    const api = createFakeDesktopApi();
+    await act(async () => root.render(<App api={api} />));
+    const toolbar = container.querySelector(".runtime-header-status");
+    const toggle = toolbar?.lastElementChild;
+    expect(toggle?.getAttribute("aria-label")).toBe("Switch to dark theme");
+    await act(async () => { (toggle as HTMLButtonElement).click(); });
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem("token.desktop.theme")).toBe("dark");
+    expect(toggle?.getAttribute("aria-label")).toBe("Switch to light theme");
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<App api={api} />));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(container.querySelector(".runtime-header-status")?.lastElementChild?.getAttribute("aria-label")).toBe("Switch to light theme");
+  });
+
   it("switches the three color pages and keeps endpoint, runtime state, active count, and start/stop control in the header", async () => {
     const backendStateListeners = new Set<(state: DesktopBackendState) => void>();
     const executeRuntime = vi.fn(async (command: "start" | "stop" | "restart") => ({
@@ -297,7 +367,7 @@ describe("desktop command-router shell", () => {
     expect(container.querySelector(".runtime-state-dot.stopped")).not.toBeNull();
   });
 
-  it("edits only the port and provides two icon toggles, two scopes, and one shared sync", async () => {
+  it("edits only the port and provides Agent toggles, scopes, and one shared sync", async () => {
     let publicState = {
       outcome: "ok" as const,
       state: {
@@ -310,6 +380,20 @@ describe("desktop command-router shell", () => {
     let integrationsState = {
       agents: [
         {
+          agentId: "claude" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+        {
+          agentId: "claude-desktop" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+        {
           agentId: "codex" as const,
           enabled: true,
           scope: "favorite" as const,
@@ -318,6 +402,13 @@ describe("desktop command-router shell", () => {
         },
         {
           agentId: "pi" as const,
+          enabled: false,
+          scope: "favorite" as const,
+          modelCount: 0,
+          needsSync: false,
+        },
+        {
+          agentId: "dsh" as const,
           enabled: false,
           scope: "favorite" as const,
           modelCount: 0,
@@ -345,6 +436,13 @@ describe("desktop command-router shell", () => {
       return publicState;
     });
     const executeAgentIntegrations = vi.fn(async (command) => {
+      if (command.command === "set_enabled") {
+        integrationsState = {
+          agents: integrationsState.agents.map((agent) => agent.agentId === command.agentId
+            ? { ...agent, enabled: command.enabled }
+            : agent),
+        };
+      }
       if (command.command === "sync") {
         integrationsState = {
           agents: integrationsState.agents.map((agent) => ({
@@ -444,19 +542,30 @@ describe("desktop command-router shell", () => {
       port: 5000,
     });
 
+    expect(container.querySelector('.agent-integration-toolbar button[aria-label="Enable Claude Code integration"]')).not.toBeNull();
+    expect(container.querySelector('.agent-integration-toolbar button[aria-label="Disable Codex integration"]')).not.toBeNull();
     expect(container.querySelector('.settings-panel button[aria-label="Disable Codex integration"]')).toBeNull();
     expect(container.querySelector('select[aria-label="Codex injection scope"]')).toBeNull();
     await openAgentSettings();
+    const claudeToggle = container.querySelector('button[aria-label="Enable Claude Code integration"]');
+    const desktopToggle = container.querySelector('button[aria-label="Enable Claude Desktop integration"]');
     const codexToggle = container.querySelector('button[aria-label="Disable Codex integration"]');
     const piToggle = container.querySelector('button[aria-label="Enable Pi integration"]');
+    const dshToggle = container.querySelector('button[aria-label="Enable DeepSeek Harness integration"]');
     const sync = container.querySelector('button[aria-label="Sync Agent integrations"]');
+    expect(claudeToggle).toBeInstanceOf(HTMLButtonElement);
+    expect(desktopToggle).toBeInstanceOf(HTMLButtonElement);
     expect(codexToggle).toBeInstanceOf(HTMLButtonElement);
     expect(piToggle).toBeInstanceOf(HTMLButtonElement);
+    expect(dshToggle).toBeInstanceOf(HTMLButtonElement);
     expect(sync).toBeInstanceOf(HTMLButtonElement);
     expect(codexToggle?.getAttribute("aria-pressed")).toBe("true");
     expect(piToggle?.getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector('select[aria-label="Claude Code injection scope"]')).toBeNull();
+    expect(container.querySelector('select[aria-label="Claude Desktop injection scope"]')).toBeInstanceOf(HTMLSelectElement);
     expect(container.querySelector('select[aria-label="Codex injection scope"]')).toBeInstanceOf(HTMLSelectElement);
     expect(container.querySelector('select[aria-label="Pi injection scope"]')).toBeInstanceOf(HTMLSelectElement);
+    expect(container.querySelector('select[aria-label="DeepSeek Harness injection scope"]')).toBeInstanceOf(HTMLSelectElement);
     const codexScope = container.querySelector('select[aria-label="Codex injection scope"]') as HTMLSelectElement;
     await act(async () => {
       codexScope.value = "full";
@@ -464,6 +573,28 @@ describe("desktop command-router shell", () => {
       await Promise.resolve();
     });
     expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "set_scope", agentId: "codex", scope: "full" });
+    await act(async () => {
+      (claudeToggle as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "set_enabled", agentId: "claude", enabled: true });
+    await act(async () => {
+      (desktopToggle as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "set_enabled", agentId: "claude-desktop", enabled: true });
+    await act(async () => {
+      (piToggle as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "set_enabled", agentId: "pi", enabled: true });
+    await act(async () => {
+      (dshToggle as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+    expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "set_enabled", agentId: "dsh", enabled: true });
+    expect(piToggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector('.settings-panel button[aria-label="Disable Pi integration"]')).not.toBeNull();
     expect(sync?.classList.contains("dirty")).toBe(true);
     expect(sync?.querySelector("svg")).not.toBeNull();
 

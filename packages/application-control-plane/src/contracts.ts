@@ -477,7 +477,7 @@ export type PublicModelsCommandHandler = (
   command: PublicModelsCommand,
 ) => Promise<PublicModelsCommandResult>;
 
-export type AgentIntegrationId = "claude" | "codex" | "pi";
+export type AgentIntegrationId = "claude" | "claude-desktop" | "codex" | "pi" | "dsh";
 export type AgentScopedIntegrationId = Exclude<AgentIntegrationId, "claude">;
 export type AgentInjectionScope = "favorite" | "full";
 export type AgentIntegrationObservedState =

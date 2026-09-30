@@ -10,9 +10,9 @@ export function AgentIntegrationSettings({ controls }: { readonly controls: Agen
   const needsSync = state?.agents.some((agent) => agent.enabled && agent.needsSync) ?? false;
 
   return <section className="page-stack" aria-label="Agent integrations">
-    {(["claude", "codex", "pi"] as const).map((agentId) => {
+    {(["claude", "claude-desktop", "codex", "pi", "dsh"] as const).map((agentId) => {
       const agent = state?.agents.find((entry) => entry.agentId === agentId);
-      const label = agentId === "claude" ? "Claude Code" : agentId === "codex" ? "Codex" : "Pi";
+      const label = agentId === "claude" ? "Claude Code" : agentId === "claude-desktop" ? "Claude Desktop" : agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : "DeepSeek Harness";
       return <div className="page-card settings-section" key={agentId}>
         <header className="settings-section-header">
           <div className="settings-copy"><p className="eyebrow">AGENT INTEGRATION</p><h3>{label}</h3></div>

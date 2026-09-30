@@ -441,16 +441,16 @@ test(
       await waitForNoWindows(application);
       page = await openWindow(application);
       page.setDefaultTimeout(10_000);
-      await page.getByRole("button", { name: "Providers" }).click();
       await page
-        .getByRole("button", { name: "Show favorite models (1)" })
+        .getByRole("button", { name: "Favorite models (1)" })
         .click();
       const favoriteModels = page.getByRole("dialog", { name: "Favorite models" });
       await favoriteModels
         .locator("li[data-model-id]")
         .filter({ hasText: COMMANDCODE_CUSTOM_MODEL_NAME })
         .waitFor();
-      await favoriteModels.getByRole("button", { name: "Close models" }).click();
+      await favoriteModels.getByRole("button", { name: "Close favorite models" }).click();
+      await page.getByRole("button", { name: "Providers" }).click();
       const reopenedCommandCodeCard = page
         .locator("article.provider-card")
         .filter({

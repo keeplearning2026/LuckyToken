@@ -96,7 +96,7 @@ function defaultAgent(agentId: AgentIntegrationId): StoredAgentState {
 
 function parseAgent(value: unknown): StoredAgentState | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.agentId !== "claude" && value.agentId !== "codex" && value.agentId !== "pi") return undefined;
+  if (value.agentId !== "claude" && value.agentId !== "claude-desktop" && value.agentId !== "codex" && value.agentId !== "pi" && value.agentId !== "dsh") return undefined;
   if (typeof value.enabled !== "boolean") return undefined;
   if (value.scope !== "favorite" && value.scope !== "full") return undefined;
   if (!Number.isSafeInteger(value.modelCount) || (value.modelCount as number) < 0) {

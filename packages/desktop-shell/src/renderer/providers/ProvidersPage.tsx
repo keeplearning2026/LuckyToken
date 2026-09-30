@@ -5,7 +5,6 @@ import {
   GripVertical,
   KeyRound,
   Layers,
-  ListRestart,
   MoreHorizontal,
   Pencil,
   Power,
@@ -94,7 +93,13 @@ function modelNameFromInternalAlias(
     : undefined;
 }
 
-export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
+export function ProvidersPage({ api, view = "providers", showFavoriteModels = false, onCloseFavoriteModels, onPublicModelsChange }: {
+  readonly api: TokenDesktopApi;
+  readonly view?: "providers" | "favorites";
+  readonly showFavoriteModels?: boolean;
+  readonly onCloseFavoriteModels?: () => void;
+  readonly onPublicModelsChange?: (result: Awaited<ReturnType<TokenDesktopApi["control"]["executePublicModels"]>>) => void;
+}) {
   const [providers, setProviders] = useState<readonly ProviderOption[]>([]);
   const [profileState, setProfileState] = useState<ProfilesResult["state"]>({
     providers: [],
@@ -133,7 +138,8 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   const [profilesProviderId, setProfilesProviderId] = useState<string>();
   const [profileActionsId, setProfileActionsId] = useState<string>();
   const [modelsProviderId, setModelsProviderId] = useState<string>();
-  const [favoriteModelsOpen, setFavoriteModelsOpen] = useState(false);
+  const favoriteOnly = view === "favorites";
+  const favoriteModelsOpen = favoriteOnly || showFavoriteModels;
   const [modelSearch, setModelSearch] = useState("");
   const [editingRow, setEditingRow] = useState<ProviderModelRow>();
   const [modelNameValue, setModelNameValue] = useState("");
@@ -143,8 +149,13 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   const usageBindingKeyByProvider = useRef(new Map<string, string>());
   const usageEpochByProvider = useRef(new Map<string, number>());
   const usageRefreshVersion = useRef(0);
+  const usageRefreshInFlight = useRef(new Set<string>());
   const draggingModelId = useRef<string | undefined>(undefined);
   const draggingProfileId = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (publicModels !== undefined) onPublicModelsChange?.(publicModels);
+  }, [publicModels, onPublicModelsChange]);
 
   const queryPageFacts = (): void => {
     setLoading(true);
@@ -632,6 +643,8 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   };
 
   const refreshProviderUsage = async (providerId: string): Promise<void> => {
+    if (usageRefreshInFlight.current.has(providerId)) return;
+    usageRefreshInFlight.current.add(providerId);
     usageRefreshVersion.current += 1;
     const expectedEpoch = usageEpochByProvider.current.get(providerId) ?? 0;
     setUsageRefreshingProviders((current) => {
@@ -663,6 +676,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
         setNotice(providerUsageRefreshFailureNotice());
       }
     } finally {
+      usageRefreshInFlight.current.delete(providerId);
       setUsageRefreshingProviders((current) => {
         const next = new Set(current);
         next.delete(providerId);
@@ -1076,6 +1090,33 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
   const authMethod = authProvider?.authMethods.find(
     (method) => method.authType === authModal?.authType,
   );
+  const authProviderState = authModal === undefined
+    ? undefined
+    : profileByProvider.get(authModal.providerId);
+  const authSwitchPolicy = authProviderState?.switchPolicy;
+  const authFallbackOn = authModal?.authType === "api_key"
+    ? authSwitchPolicy?.apiKeyOn429
+    : authSwitchPolicy?.oauthOn429;
+
+  const toggleAuthFallback = (): void => {
+    if (
+      authModal === undefined ||
+      authProviderState?.revision === undefined ||
+      authSwitchPolicy === undefined ||
+      busyProvider !== undefined
+    ) return;
+    void executeProfileCommand({
+      command: "set_switch_policy",
+      providerId: authModal.providerId,
+      expectedRevision: authProviderState.revision,
+      apiKeyOn429: authModal.authType === "api_key"
+        ? !authSwitchPolicy.apiKeyOn429
+        : authSwitchPolicy.apiKeyOn429,
+      oauthOn429: authModal.authType === "oauth"
+        ? !authSwitchPolicy.oauthOn429
+        : authSwitchPolicy.oauthOn429,
+    });
+  };
 
   const renderCompactProviderCard = (
     provider: ProviderOption,
@@ -1116,20 +1157,18 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
           : (managed?.profiles.length ?? 0) > 0
             ? "Select or verify a Profile"
             : "Not connected";
-    const supportsApiKey = provider.authMethods.some(
-      (method) => method.authType === "api_key",
-    );
-    const supportsOauth = provider.authMethods.some(
-      (method) => method.authType === "oauth",
-    );
-    const fallbackOn =
-      (supportsApiKey && managed?.switchPolicy?.apiKeyOn429 === true) ||
-      (supportsOauth && managed?.switchPolicy?.oauthOn429 === true);
     const usagePresentation = projectProviderCardUsage(
       providerUsageById[provider.providerId],
       Date.now(),
     );
+    const usageText = [
+      ...usagePresentation.primary,
+      usagePresentation.status,
+      ...usagePresentation.secondary,
+    ].filter((part): part is string => part !== undefined).join(" · ");
     const usageRefreshing = usageRefreshingProviders.has(provider.providerId);
+    const showUsage = active?.health === "ready" &&
+      (usagePresentation.primary.length > 0 || usagePresentation.secondary.length > 0 || usagePresentation.status === "Usage not refreshed");
 
     return (
       <article className="page-card provider-card compact" key={provider.providerId}>
@@ -1174,6 +1213,10 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
             type="button"
             className="provider-profile-summary"
             aria-label={`Manage ${provider.name} profiles`}
+            aria-description={active === undefined
+              ? `Select an active Profile. ${statusLabel}`
+              : `Active Profile: ${active.displayName}. ${statusLabel}`}
+            title={active === undefined ? "Select an active Profile" : `Active Profile: ${active.displayName}`}
             onClick={() => {
               setProfileActionsId(undefined);
               setProfilesProviderId(provider.providerId);
@@ -1187,7 +1230,6 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
             />
             <span className="provider-profile-name">
               {active?.displayName ?? "Select a Profile"}
-              {active === undefined ? "" : " (active)"}
             </span>
             <span aria-hidden="true" className="metric-separator">·</span>
             <span
@@ -1217,7 +1259,26 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
           </div>
         )}
 
-        <div className="provider-usage" aria-label={`${provider.name} usage`}>
+        {showUsage ? <div
+          className={`provider-usage${usagePresentation.refreshable ? " refreshable" : ""}`}
+          role={usagePresentation.refreshable ? "button" : undefined}
+          tabIndex={usagePresentation.refreshable ? 0 : undefined}
+          aria-label={usagePresentation.refreshable
+            ? `${provider.name} usage: ${usageText}. Double-click or press Enter to refresh`
+            : `${provider.name} usage: ${usageText}`}
+          aria-disabled={usagePresentation.refreshable && usageRefreshing ? true : undefined}
+          title={usagePresentation.refreshable ? "Double-click to refresh usage; press Enter to refresh with the keyboard" : undefined}
+          onDoubleClick={usagePresentation.refreshable && !usageRefreshing
+            ? () => void refreshProviderUsage(provider.providerId)
+            : undefined}
+          onKeyDown={usagePresentation.refreshable && !usageRefreshing
+            ? (event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                void refreshProviderUsage(provider.providerId);
+              }
+            : undefined}
+        >
           {usagePresentation.primary.length > 0 ? (
             <span className="provider-usage-primary">
               {usagePresentation.primary.join(" · ")}
@@ -1232,7 +1293,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
               {usagePresentation.secondary.join(" · ")}
             </span>
           ) : null}
-        </div>
+        </div> : null}
 
         {hasError ? (
           <p className="provider-card-error" role="alert">
@@ -1243,33 +1304,6 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
         ) : null}
 
         <div className="provider-card-actions">
-          <button
-            type="button"
-            className={`card-icon-button${fallbackOn ? " active" : ""}`}
-            aria-label={`${fallbackOn ? "Disable" : "Enable"} HTTP 429 fallback for ${provider.name}`}
-            aria-pressed={fallbackOn}
-            disabled={managed?.switchPolicy === undefined || managed.revision === undefined}
-            title={`${fallbackOn ? "Disable" : "Enable"} HTTP 429 fallback`}
-            onClick={() => {
-              if (managed?.switchPolicy === undefined || managed.revision === undefined) {
-                return;
-              }
-              void executeProfileCommand({
-                command: "set_switch_policy",
-                providerId: provider.providerId,
-                expectedRevision: managed.revision,
-                apiKeyOn429: supportsApiKey
-                  ? !fallbackOn
-                  : managed.switchPolicy.apiKeyOn429,
-                oauthOn429: supportsOauth
-                  ? !fallbackOn
-                  : managed.switchPolicy.oauthOn429,
-              });
-            }}
-          >
-            <ListRestart size={21} aria-hidden="true" />
-          </button>
-          <span className="card-action-divider" aria-hidden="true" />
           {provider.authMethods
             .filter((method) => method.interactive)
             .map((method) => {
@@ -1297,28 +1331,11 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
             onClick={() => {
               setEditingRow(undefined);
               setModelSearch("");
-              setFavoriteModelsOpen(false);
               setModelsProviderId(provider.providerId);
             }}
           >
             <Layers size={21} aria-hidden="true" />
           </button>
-          {usagePresentation.refreshable ? (
-            <button
-              type="button"
-              className="card-icon-button"
-              aria-label={`Refresh ${provider.name} usage`}
-              title="Refresh usage"
-              disabled={usageRefreshing}
-              onClick={() => void refreshProviderUsage(provider.providerId)}
-            >
-              <RefreshCw
-                size={20}
-                className={usageRefreshing ? "spinning" : undefined}
-                aria-hidden="true"
-              />
-            </button>
-          ) : null}
           {catalogFailed ? (
             <button
               type="button"
@@ -1338,6 +1355,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
 
   return (
     <section className="page-stack">
+      {favoriteOnly ? null : (<>
       <div className="provider-page-heading">
         <h2>Providers</h2>
         <button
@@ -1374,30 +1392,6 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
               />
             </label>
             <div className="provider-toolbar-actions">
-              <button
-                type="button"
-                className={`card-icon-button provider-favorite-models-button${favoriteModelRows.length > 0 ? " active" : ""}`}
-                aria-label={`Show favorite models${favoriteModelRows.length === 0 ? "" : ` (${favoriteModelRows.length})`}`}
-                title="Favorite models"
-                disabled={publicModels === undefined}
-                onClick={() => {
-                  setEditingRow(undefined);
-                  setModelSearch("");
-                  setModelsProviderId(undefined);
-                  setFavoriteModelsOpen(true);
-                }}
-              >
-                <Star
-                  size={19}
-                  fill={favoriteModelRows.length > 0 ? "currentColor" : "none"}
-                  aria-hidden="true"
-                />
-                {favoriteModelRows.length === 0 ? null : (
-                  <span className="provider-favorite-model-count" aria-hidden="true">
-                    {favoriteModelRows.length}
-                  </span>
-                )}
-              </button>
               <button
                 type="button"
                 className="card-icon-button provider-refresh-button"
@@ -1877,6 +1871,26 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
               </button>
             </div>
 
+            <div className="settings-action-row">
+              <div className="settings-action-copy">
+                <strong>Switch Profiles after HTTP 429</strong>
+                <p>{authSwitchPolicy === undefined
+                  ? "Add a Profile to configure switching."
+                  : "Only within this Provider and sign-in method."}</p>
+              </div>
+              <button
+                type="button"
+                className={`switch-control${authFallbackOn ? " on" : ""}`}
+                aria-label={`${authFallbackOn ? "Disable" : "Enable"} HTTP 429 Profile switching for ${authProvider.name} ${authMethod?.authMethodLabel ?? authModal.authType}`}
+                aria-pressed={authFallbackOn ?? false}
+                disabled={busyProvider !== undefined || authSwitchPolicy === undefined}
+                onClick={toggleAuthFallback}
+                title={authFallbackOn ? "Disable HTTP 429 Profile switching" : "Enable HTTP 429 Profile switching"}
+              >
+                <span aria-hidden="true" />
+              </button>
+            </div>
+
             {authOutcome !== undefined ? (
               <div className={`auth-outcome ${authOutcome.kind}`}>
                 <strong>{authOutcome.kind === "success" ? "Connected" : authOutcome.kind === "cancelled" ? "Cancelled" : "Could not connect"}</strong>
@@ -1977,7 +1991,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
                       className="secondary"
                       onClick={() => void api.platform.openExternal(externalInteraction.url)}
                     >
-                      Open browser again
+                      Open browser
                     </button>
                   </div>
                 ) : null}
@@ -1991,7 +2005,7 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
                       className="secondary"
                       onClick={() => void api.platform.openExternal(externalInteraction.verificationUri)}
                     >
-                      Open browser again
+                      Open browser
                     </button>
                   </div>
                 ) : null}
@@ -2045,6 +2059,8 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
         </div>
       )}
 
+      </>)}
+
       {!modelsDialogOpen ? null : (
         <div className="modal-backdrop" role="presentation">
           <section
@@ -2065,12 +2081,12 @@ export function ProvidersPage({ api }: { readonly api: TokenDesktopApi }) {
               <button
                 type="button"
                 className="icon-button"
-                aria-label="Close models"
+                aria-label={favoriteModelsOpen ? "Close favorite models" : "Close models"}
                 onClick={() => {
                   setEditingRow(undefined);
                   setModelSearch("");
-                  setFavoriteModelsOpen(false);
                   setModelsProviderId(undefined);
+                  if (favoriteModelsOpen) onCloseFavoriteModels?.();
                 }}
               >
                 <X size={19} aria-hidden="true" />

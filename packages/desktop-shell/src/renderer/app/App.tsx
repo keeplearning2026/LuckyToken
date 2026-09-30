@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
   LoaderCircle,
+  Moon,
   Play,
   RefreshCw,
   Square,
+  Star,
+  Sun,
   Wifi,
 } from "lucide-react";
 
@@ -52,6 +55,14 @@ function runtimeAction(status: StatusSnapshot | undefined): RuntimeCommand | und
 
 export function App({ api }: AppProps) {
   const [page, setPage] = useState<ProductPage>("overview");
+  const [favoriteModelsOpen, setFavoriteModelsOpen] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try {
+      return window.localStorage.getItem("token.desktop.theme") === "dark" ? "dark" : "light";
+    } catch {
+      return "light";
+    }
+  });
   const [backendState, setBackendState] = useState<DesktopBackendState>();
   const [runtimePending, setRuntimePending] = useState(false);
   const [publicModels, setPublicModels] = useState<Awaited<
@@ -60,6 +71,17 @@ export function App({ api }: AppProps) {
   const [editingPort, setEditingPort] = useState(false);
   const [portDraft, setPortDraft] = useState("");
   const latestRevision = useRef(-1);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    return () => { delete document.documentElement.dataset.theme; };
+  }, [theme]);
+
+  const toggleTheme = (): void => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    try { window.localStorage.setItem("token.desktop.theme", next); } catch { /* Storage may be unavailable. */ }
+  };
 
   useEffect(() => {
     let active = true;
@@ -86,10 +108,18 @@ export function App({ api }: AppProps) {
   const status = backendState?.kind === "ready" ? backendState.status : undefined;
   const backendAvailable = backendState?.kind === "ready";
   const activeRequests = status?.activeRequests;
+  const favoriteModelCount = publicModels?.state.providers.reduce(
+    (count, provider) => count + provider.models.filter((model) =>
+      model.favorite && model.alias?.startsWith(`${provider.providerId}/`)
+    ).length,
+    0,
+  ) ?? 0;
   const agentIntegrations = useAgentIntegrations(api, backendAvailable, publicModels?.state.revision);
   const claudeIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "claude");
+  const claudeDesktopIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "claude-desktop");
   const codexIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "codex");
   const piIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "pi");
+  const dshIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "dsh");
   const anyAgentEnabled = agentIntegrations.state?.agents.some((agent) => agent.enabled) ?? false;
   const agentSyncNeeded = agentIntegrations.state?.agents.some((agent) => agent.enabled && agent.needsSync) ?? false;
 
@@ -141,7 +171,7 @@ export function App({ api }: AppProps) {
             aria-label={entry.label}
             aria-current={page === entry.id ? "page" : undefined}
             className={`color-nav-button ${entry.tone}${page === entry.id ? " active" : ""}`}
-            onClick={() => setPage(entry.id)}
+            onClick={() => { setFavoriteModelsOpen(false); setPage(entry.id); }}
             title={entry.label}
           >
             <span className="color-nav-line" aria-hidden="true" />
@@ -163,6 +193,15 @@ export function App({ api }: AppProps) {
               onClick={() => void agentIntegrations.toggle("claude")}>
               <img className="agent-claude-mark" src={claudeIcon} alt="" />
             </button>
+            <button type="button" className={`agent-toolbar-button agent-claude-desktop${claudeDesktopIntegration?.enabled ? " on" : ""}`}
+              aria-label={`${claudeDesktopIntegration?.enabled ? "Disable" : "Enable"} Claude Desktop integration`}
+              aria-pressed={claudeDesktopIntegration?.enabled ?? false}
+              aria-busy={agentIntegrations.busy}
+              title={`Claude Desktop: ${claudeDesktopIntegration === undefined ? "Unavailable" : claudeDesktopIntegration.enabled ? "On" : "Off"}`}
+              disabled={agentIntegrations.busy || claudeDesktopIntegration === undefined}
+              onClick={() => void agentIntegrations.toggle("claude-desktop")}>
+              <span aria-hidden="true">CD</span>
+            </button>
             <button type="button" className={`agent-toolbar-button${codexIntegration?.enabled ? " on" : ""}`}
               aria-label={`${codexIntegration?.enabled ? "Disable" : "Enable"} Codex integration`}
               aria-pressed={codexIntegration?.enabled ?? false}
@@ -181,11 +220,36 @@ export function App({ api }: AppProps) {
               onClick={() => void agentIntegrations.toggle("pi")}>
               <span aria-hidden="true">π</span>
             </button>
+            <button type="button" className={`agent-toolbar-button agent-dsh${dshIntegration?.enabled ? " on" : ""}`}
+              aria-label={`${dshIntegration?.enabled ? "Disable" : "Enable"} DeepSeek Harness integration`}
+              aria-pressed={dshIntegration?.enabled ?? false}
+              aria-busy={agentIntegrations.busy}
+              title={`DeepSeek Harness: ${dshIntegration === undefined ? "Unavailable" : dshIntegration.enabled ? "On" : "Off"}`}
+              disabled={agentIntegrations.busy || dshIntegration === undefined}
+              onClick={() => void agentIntegrations.toggle("dsh")}>
+              <span aria-hidden="true">DS</span>
+            </button>
             <button type="button" className={`agent-toolbar-button agent-toolbar-sync${agentSyncNeeded ? " dirty" : ""}`}
               aria-label="Sync Agent integrations" aria-busy={agentIntegrations.busy}
               title="Sync Agent integrations" disabled={agentIntegrations.busy || !anyAgentEnabled}
               onClick={() => void agentIntegrations.sync()}>
               <RefreshCw size={16} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="toolbar-group favorite-models-toolbar">
+            <button
+              type="button"
+              className={`favorite-models-toolbar-button${favoriteModelCount > 0 ? " has-favorites" : ""}${favoriteModelsOpen ? " active" : ""}`}
+              aria-label={`Favorite models${favoriteModelCount === 0 ? "" : ` (${favoriteModelCount})`}`}
+              title="Favorite models"
+              aria-haspopup="dialog"
+              aria-expanded={favoriteModelsOpen}
+              onClick={() => setFavoriteModelsOpen((current) => !current)}
+            >
+              <Star size={18} fill={favoriteModelCount > 0 ? "currentColor" : "none"} aria-hidden="true" />
+              {favoriteModelCount === 0 ? null : (
+                <span className="provider-favorite-model-count" aria-hidden="true">{favoriteModelCount}</span>
+              )}
             </button>
           </div>
           <div className="toolbar-group endpoint-group">
@@ -258,6 +322,15 @@ export function App({ api }: AppProps) {
               <Play size={19} fill="currentColor" strokeWidth={1.8} aria-hidden="true" />
             )}
           </button>
+          <button
+            className="toolbar-group theme-toggle"
+            type="button"
+            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
+            title={`${theme === "light" ? "Dark" : "Light"} theme`}
+            onClick={toggleTheme}
+          >
+            {theme === "light" ? <Moon size={17} strokeWidth={1.9} aria-hidden="true" /> : <Sun size={17} strokeWidth={1.9} aria-hidden="true" />}
+          </button>
         </div>
       </header>
 
@@ -267,10 +340,13 @@ export function App({ api }: AppProps) {
         {page === "overview" ? (
           <OverviewPage api={api} backendAvailable={backendAvailable} />
         ) : page === "providers" ? (
-          <ProvidersPage api={api} />
+          <ProvidersPage api={api} showFavoriteModels={favoriteModelsOpen} onCloseFavoriteModels={() => setFavoriteModelsOpen(false)} onPublicModelsChange={setPublicModels} />
         ) : (
           <SettingsPage api={api} agentIntegrations={agentIntegrations} />
         )}
+        {favoriteModelsOpen && page !== "providers" ? (
+          <ProvidersPage api={api} view="favorites" onCloseFavoriteModels={() => setFavoriteModelsOpen(false)} onPublicModelsChange={setPublicModels} />
+        ) : null}
       </main>
     </div>
   );

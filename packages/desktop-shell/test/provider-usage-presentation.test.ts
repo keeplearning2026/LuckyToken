@@ -52,23 +52,20 @@ describe("Provider usage presentation", () => {
     });
   });
 
-  it("distinguishes authoritative empty from unobserved", () => {
-    expect(
-      projectProviderCardUsage(
-        {
-          providerId: "openrouter",
-          state: "observed",
-          observedAt: 1,
-          refreshable: true,
-          windows: [],
-          budgets: [],
-        },
-        0,
-      ),
-    ).toMatchObject({
-      status: "No current limit reported",
-      refreshable: true,
-    });
+  it("keeps the initial refresh cue while leaving empty observations quiet", () => {
+    const emptyObservation = projectProviderCardUsage(
+      {
+        providerId: "openrouter",
+        state: "observed",
+        observedAt: 1,
+        refreshable: true,
+        windows: [],
+        budgets: [],
+      },
+      0,
+    );
+    expect(emptyObservation.refreshable).toBe(true);
+    expect(emptyObservation.status).toBeUndefined();
     expect(
       projectProviderCardUsage(
         {
@@ -100,31 +97,25 @@ describe("Provider usage presentation", () => {
       primary: ["Week 22%"],
       refreshable: false,
     });
-    expect(
-      projectProviderCardUsage(
-        {
-          providerId: "anthropic",
-          state: "unsupported",
-          reason: "binding",
-        },
-        0,
-      ),
-    ).toMatchObject({
-      status: "Usage unavailable for this account type",
-      refreshable: false,
-    });
-    expect(
-      projectProviderCardUsage(
-        {
-          providerId: "deepseek",
-          state: "unsupported",
-          reason: "destination",
-        },
-        0,
-      ),
-    ).toMatchObject({
-      status: "Usage unavailable for this endpoint",
-      refreshable: false,
-    });
+    const unsupportedBinding = projectProviderCardUsage(
+      {
+        providerId: "anthropic",
+        state: "unsupported",
+        reason: "binding",
+      },
+      0,
+    );
+    expect(unsupportedBinding).toMatchObject({ refreshable: false });
+    expect(unsupportedBinding.status).toBeUndefined();
+    const unsupportedDestination = projectProviderCardUsage(
+      {
+        providerId: "deepseek",
+        state: "unsupported",
+        reason: "destination",
+      },
+      0,
+    );
+    expect(unsupportedDestination).toMatchObject({ refreshable: false });
+    expect(unsupportedDestination.status).toBeUndefined();
   });
 });

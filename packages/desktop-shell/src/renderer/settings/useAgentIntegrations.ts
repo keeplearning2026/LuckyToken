@@ -57,7 +57,7 @@ export function useAgentIntegrations(api: TokenDesktopApi, backendAvailable: boo
     if (agent === undefined) return;
     await execute(
       { command: "set_enabled", agentId, enabled: !agent.enabled },
-      `${agentId === "claude" ? "Claude Code" : agentId === "codex" ? "Codex" : "Pi"} integration update failed. Existing Agent files were preserved.`,
+      `${agentId === "claude" ? "Claude Code" : agentId === "claude-desktop" ? "Claude Desktop" : agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : "DeepSeek Harness"} integration update failed. Existing Agent files were preserved.`,
     );
   };
 

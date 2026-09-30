@@ -3,6 +3,7 @@ import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { randomUUID } from "node:crypto";
 import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS } from "../../data-plane-limits.js";
+import { unmarkAnthropicModelId } from "./marked-model-id.js";
 
 import {
   resolveRequestIdentity,
@@ -644,11 +645,18 @@ async function handleAnthropicMessages(
     };
     enterJourneyStep(journey, "p2.resolve_public_model", resolutionLocation);
     const selector = extractAnthropicModelSelector(body);
-    let resolution = await resolveDataPlanePublicModel(
-      dependencies.models,
-      dependencies.publicModels,
-      selector,
-    );
+    const markedAlias = dependencies.publicModels === undefined
+      ? undefined : unmarkAnthropicModelId(selector);
+    let resolution = markedAlias === null
+      ? { kind: "unknown" as const }
+      : await resolveDataPlanePublicModel(
+          dependencies.models,
+          dependencies.publicModels,
+          markedAlias ?? selector,
+        );
+    if (resolution.kind === "model" && markedAlias !== undefined) {
+      resolution = Object.freeze({ ...resolution, alias: selector });
+    }
     if (
       resolution.kind === "unknown" &&
       dependencies.publicModels !== undefined &&
@@ -656,11 +664,14 @@ async function handleAnthropicMessages(
     ) {
       const baseSelector = selector.slice(0, -4);
       if (baseSelector.length > 0) {
-        const fallback = await resolveDataPlanePublicModel(
-          dependencies.models,
-          dependencies.publicModels,
-          baseSelector,
-        );
+        const baseMarkedAlias = unmarkAnthropicModelId(baseSelector);
+        const fallback = baseMarkedAlias === null
+          ? { kind: "unknown" as const }
+          : await resolveDataPlanePublicModel(
+              dependencies.models,
+              dependencies.publicModels,
+              baseMarkedAlias ?? baseSelector,
+            );
         if (fallback.kind === "model") {
           resolution = Object.freeze({ ...fallback, alias: selector });
         } else if (fallback.kind === "unavailable") {

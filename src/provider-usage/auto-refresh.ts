@@ -73,7 +73,10 @@ export function createProviderUsageAutoRefresh(options: {
     start() {
       if (started || closed) return;
       started = true;
-      schedule();
+      active = refreshEligible().finally(() => {
+        active = undefined;
+        schedule();
+      });
     },
     reschedule() {
       clearTimer();

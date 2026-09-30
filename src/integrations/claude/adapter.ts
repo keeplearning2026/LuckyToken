@@ -22,7 +22,7 @@ import type {
 } from "../agents/snapshot.js";
 
 const STATE_SCHEMA = "Token-claude-integration-v1" as const;
-const TOKEN_CLAUDE_AUTH_TOKEN = "luckytoken-local" as const;
+const TOKEN_CLAUDE_AUTH_TOKEN = "token-local" as const;
 const MODEL_ENV_KEYS = Object.freeze([
   "ANTHROPIC_MODEL",
   "ANTHROPIC_DEFAULT_OPUS_MODEL",

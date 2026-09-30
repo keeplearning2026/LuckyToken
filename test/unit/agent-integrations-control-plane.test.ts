@@ -43,4 +43,28 @@ describe("Agent integrations Control Plane contract", () => {
       results: [],
     });
   });
+
+  it("decodes DSH as a scoped Agent integration", () => {
+    expect(
+      decodeAgentIntegrationsCommandResult({
+        outcome: "ok",
+        state: { agents: [{
+          agentId: "dsh", enabled: true, scope: "favorite", modelCount: 1, needsSync: false,
+        }] },
+        results: [],
+      })?.state.agents[0]?.agentId,
+    ).toBe("dsh");
+  });
+
+  it("decodes Claude Desktop as an independent scoped integration", () => {
+    expect(
+      decodeAgentIntegrationsCommandResult({
+        outcome: "ok",
+        state: { agents: [{
+          agentId: "claude-desktop", enabled: true, scope: "full", modelCount: 2, needsSync: false,
+        }] },
+        results: [],
+      })?.state.agents[0],
+    ).toMatchObject({ agentId: "claude-desktop", scope: "full" });
+  });
 });

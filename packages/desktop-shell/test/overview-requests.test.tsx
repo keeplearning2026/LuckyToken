@@ -10,8 +10,7 @@ import { createFakeDesktopApi } from "./support/fake-desktop-api.js";
 let container: HTMLDivElement;
 let root: Root;
 const status: StatusSnapshot = { sequence: 1, modelDataPlane: "running", provider: "configured", dataPlane: { configuredOrigin: "http://127.0.0.1:4317", configuredPort: 4317 } };
-const today = new Date();
-today.setHours(12, 0, 0, 0);
+const recentRequestTime = Date.now() - 60_000;
 const failureLocation = {
   phase: "upstream_execution" as const,
   lane: "provider_native" as const,
@@ -26,7 +25,7 @@ function summary(
 ): RequestJourneySummary {
   const abnormal =
     outcome === "failed" || outcome === "aborted" || outcome === "interrupted";
-  return { id, runtimeId: "runtime-1", requestId: `request-${id}`, operation: "model_generation", path: "/v1/messages", protocol: "anthropic-messages", lane: "provider_native", outcome, completeness: "complete", createdAt: today.getTime() + id, ...(outcome === "running" ? {} : { closedAt: today.getTime() + 1_000 + id }), ...(abnormal ? { diagnosis: { evidence: "observed", classification: "provider_timeout", safeMessage: "The provider timed out", origin: "provider", originPrecision: "external_boundary", location: failureLocation } as const } : {}), ...(usage === undefined ? {} : { usage }) };
+  return { id, runtimeId: "runtime-1", requestId: `request-${id}`, operation: "model_generation", path: "/v1/messages", protocol: "anthropic-messages", lane: "provider_native", outcome, completeness: "complete", createdAt: recentRequestTime + id, ...(outcome === "running" ? {} : { closedAt: recentRequestTime + 1_000 + id }), ...(abnormal ? { diagnosis: { evidence: "observed", classification: "provider_timeout", safeMessage: "The provider timed out", origin: "provider", originPrecision: "external_boundary", location: failureLocation } as const } : {}), ...(usage === undefined ? {} : { usage }) };
 }
 
 function detail(base: RequestJourneySummary): RequestJourneyRecord {
@@ -62,6 +61,93 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 async function flush(): Promise<void> { await act(async () => { await Promise.resolve(); await Promise.resolve(); }); }
 
 describe("Overview Request Journeys", () => {
+  it("defaults to all time and clears each date bound independently", async () => {
+    vi.useFakeTimers();
+    const now = new Date(2026, 8, 30, 0, 5).getTime();
+    vi.setSystemTime(now);
+    try {
+      const request = {
+        ...summary(99, "success"),
+        createdAt: new Date(2026, 8, 29, 23, 55).getTime(),
+      };
+      const queryRequestJourneys = vi.fn(async () => ({
+        outcome: "ok" as const,
+        result: { records: [request], hasMore: false },
+      }));
+      const api = createFakeDesktopApi({ control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+        onBackendState: () => () => undefined,
+        queryRequestJourneys,
+      } });
+
+      await act(async () => root.render(<App api={api} />));
+      await flush();
+      expect(container.querySelector('tr[data-request-id="request-99"]')).not.toBeNull();
+      expect(container.querySelector(".overview-range-label")?.textContent).toBe("All time");
+      expect(queryRequestJourneys).toHaveBeenCalledWith(expect.objectContaining({
+        from: 0,
+        to: Number.MAX_SAFE_INTEGER,
+      }));
+
+      await act(async () => {
+        (container.querySelector('button[aria-label="Show overview filters"]') as HTMLButtonElement).click();
+      });
+      const from = container.querySelector('input[aria-label="From time"]') as HTMLInputElement;
+      const to = container.querySelector('input[aria-label="To time"]') as HTMLInputElement;
+      expect(from.value).toBe("");
+      expect(to.value).toBe("");
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      await act(async () => {
+        setter?.call(from, "2026-09-29T00:00");
+        from.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(container.querySelector(".overview-range-label")?.textContent).toBe("Custom time");
+      expect(to.value).toBe("");
+      await act(async () => {
+        (container.querySelector('button[aria-label="From earliest"]') as HTMLButtonElement).click();
+      });
+      expect(container.querySelector(".overview-range-label")?.textContent).toBe("All time");
+      await act(async () => {
+        setter?.call(to, "2026-09-30T00:00");
+        to.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(from.value).toBe("");
+      expect(container.querySelector(".overview-range-label")?.textContent).toBe("Custom time");
+      await act(async () => {
+        (container.querySelector('button[aria-label="To latest"]') as HTMLButtonElement).click();
+      });
+      expect(container.querySelector(".overview-range-label")?.textContent).toBe("All time");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the complete request history in pages of 100", async () => {
+    const records = Array.from({ length: 205 }, (_, index) => summary(index + 1, "success"));
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status }),
+      onBackendState: () => () => undefined,
+      queryRequestJourneys: async () => ({ outcome: "ok", result: { records, hasMore: false } }),
+    } });
+
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    expect(container.querySelectorAll('tr[data-request-id]')).toHaveLength(100);
+    expect(container.textContent).toContain("1–100 of 205 requests");
+    expect(container.querySelector('tr[data-request-id="request-205"]')).not.toBeNull();
+    await act(async () => {
+      (container.querySelector('button[aria-label="Next request page"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelectorAll('tr[data-request-id]')).toHaveLength(100);
+    expect(container.textContent).toContain("101–200 of 205 requests");
+    await act(async () => {
+      (container.querySelector('button[aria-label="Next request page"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelectorAll('tr[data-request-id]')).toHaveLength(5);
+    expect(container.textContent).toContain("201–205 of 205 requests");
+    expect(container.querySelector('tr[data-request-id="request-1"]')).not.toBeNull();
+  });
+
   it("shows concise Protocol labels for distinct admitted paths", async () => {
     const records: RequestJourneySummary[] = [
       { ...summary(21, "success"), path: "/v1/responses", protocol: "openai-responses" },

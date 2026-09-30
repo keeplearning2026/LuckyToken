@@ -55,7 +55,7 @@ export function SettingsPage({ api, agentIntegrations }: { readonly api: TokenDe
         ))}
       </div>
       <div
-        className="settings-panel"
+        className={`settings-panel${section === "general" ? " settings-general" : ""}`}
         id={`settings-panel-${section}`}
         role="tabpanel"
         aria-labelledby={`settings-tab-${section}`}

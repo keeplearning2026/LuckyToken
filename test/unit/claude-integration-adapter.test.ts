@@ -107,7 +107,7 @@ describe("Claude Code integration adapter", () => {
     expect(effect).toMatchObject({ observedState: "managed", modelCount: 5 });
     expect(root.theme).toBe("dark");
     expect(env.KEEP_ME).toBe("yes");
-    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("luckytoken-local");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("token-local");
     expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:3000");
     expect(env.ANTHROPIC_MODEL).toBe("main-model");
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("opus-model[1m]");
@@ -298,7 +298,7 @@ describe("Claude Code integration adapter", () => {
     const fx = await fixture(JSON.stringify({
       env: {
         ANTHROPIC_BASE_URL: "http://127.0.0.1:3000",
-        ANTHROPIC_AUTH_TOKEN: "luckytoken-local",
+        ANTHROPIC_AUTH_TOKEN: "token-local",
         ANTHROPIC_MODEL: "main-model",
       },
     }, null, 2));

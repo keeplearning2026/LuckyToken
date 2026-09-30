@@ -917,8 +917,8 @@ export function decodeCatalogCommandResult(
   });
 }
 
-const agentIntegrationIds: ReadonlySet<string> = new Set(["claude", "codex", "pi"]);
-const agentScopedIntegrationIds: ReadonlySet<string> = new Set(["codex", "pi"]);
+const agentIntegrationIds: ReadonlySet<string> = new Set(["claude", "claude-desktop", "codex", "pi", "dsh"]);
+const agentScopedIntegrationIds: ReadonlySet<string> = new Set(["claude-desktop", "codex", "pi", "dsh"]);
 const agentInjectionScopes: ReadonlySet<string> = new Set(["favorite", "full"]);
 const agentObservedStates: ReadonlySet<string> = new Set([
   "native",

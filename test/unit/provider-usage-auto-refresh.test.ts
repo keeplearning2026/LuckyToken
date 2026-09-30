@@ -32,22 +32,25 @@ afterEach(() => {
 });
 
 describe("Provider Usage automatic refresh", () => {
-  it("waits for the configured interval and refreshes only eligible Providers", async () => {
+  it("refreshes eligible Providers at startup and then at the configured interval", async () => {
     vi.useFakeTimers();
     const refresh = vi.fn(async (providerId: string) => { void providerId; });
     const query = vi.fn(async () => snapshot);
     const runner = createProviderUsageAutoRefresh({ authority: authority(refresh, query), intervalMinutes: () => 15 });
     runner.start();
 
-    await vi.advanceTimersByTimeAsync(14 * 60_000);
-    expect(query).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(0);
     expect(refresh.mock.calls.map(([id]) => id).sort()).toEqual(["goat", "private"]);
     expect(query).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    expect(query).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh.mock.calls.map(([id]) => id).sort()).toEqual(["goat", "goat", "private", "private"]);
+    expect(query).toHaveBeenCalledTimes(2);
 
     await runner.close();
     await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it("applies interval changes without waiting for the previous timer", async () => {
@@ -57,11 +60,12 @@ describe("Provider Usage automatic refresh", () => {
     const query = vi.fn(async () => snapshot);
     const runner = createProviderUsageAutoRefresh({ authority: authority(refresh, query), intervalMinutes: () => minutes });
     runner.start();
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     minutes = 2;
     runner.reschedule();
     await vi.advanceTimersByTimeAsync(2 * 60_000);
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
     await runner.close();
   });
 
@@ -76,7 +80,7 @@ describe("Provider Usage automatic refresh", () => {
     const query = vi.fn(async () => snapshot);
     const runner = createProviderUsageAutoRefresh({ authority: authority(refresh, query), intervalMinutes: () => 1 });
     runner.start();
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(3 * 60_000);
     expect(query).toHaveBeenCalledTimes(1);
     release?.();

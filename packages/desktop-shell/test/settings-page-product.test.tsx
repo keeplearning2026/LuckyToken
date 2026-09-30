@@ -408,7 +408,7 @@ describe("Settings product slice", () => {
       setter?.call(input, "5");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await click("Save");
+    await clickAria("Save usage interval");
     expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: settingKey, value: 5 });
     expect(input.value).toBe("5");
   });

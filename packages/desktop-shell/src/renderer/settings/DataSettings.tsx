@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { FolderOpen, Trash2 } from "lucide-react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { DiagnosticWarnings } from "./DiagnosticWarnings.js";
@@ -326,8 +326,8 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
             <strong>Sensitive diagnostic backup</strong>
             <p>The file contains the diagnostic index and may contain sensitive request details. Full-journey JSON files remain in the capture folder.</p>
           </div>
-          <button type="button" className="secondary" disabled={busy} onClick={() => void createFullBackup()}>
-            Choose location…
+          <button type="button" className="settings-icon-button backup" aria-label="Choose backup location" title="Choose backup location" disabled={busy} onClick={() => void createFullBackup()}>
+            <FolderOpen size={19} aria-hidden="true" />
           </button>
         </div>
         {backupGate?.outcome === "confirmation_required" ? (

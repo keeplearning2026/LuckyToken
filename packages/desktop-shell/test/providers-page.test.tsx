@@ -212,6 +212,8 @@ afterEach(async () => {
 });
 
 async function render(options: {
+  readonly view?: "providers" | "favorites";
+  readonly onCloseFavoriteModels?: () => void;
   readonly profiles?: ProfilesResult;
   readonly executeCredentialProfiles?: DesktopControlPlaneApi["executeCredentialProfiles"];
   readonly executeProviderProfileAuth?: DesktopControlPlaneApi["executeProviderProfileAuth"];
@@ -259,7 +261,7 @@ async function render(options: {
     },
   });
   await act(async () => {
-    root.render(<ProvidersPage api={api} />);
+    root.render(<ProvidersPage api={api} {...(options.view === undefined ? {} : { view: options.view })} {...(options.onCloseFavoriteModels === undefined ? {} : { onCloseFavoriteModels: options.onCloseFavoriteModels })} />);
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -293,6 +295,19 @@ async function click(name: string): Promise<void> {
 async function clickAria(name: string): Promise<void> {
   await act(async () => {
     ariaButton(name).click();
+    await Promise.resolve();
+  });
+}
+
+function usageRegion(): HTMLElement {
+  const found = container.querySelector('.provider-usage[role="button"]');
+  if (!(found instanceof HTMLElement)) throw new Error("Missing refreshable usage region");
+  return found;
+}
+
+async function doubleClickUsage(): Promise<void> {
+  await act(async () => {
+    usageRegion().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await Promise.resolve();
   });
 }
@@ -420,30 +435,21 @@ describe("Providers Profile product slice", () => {
     ).toBe("false");
   });
 
-  it("opens one cross-Provider list containing only favorite models", async () => {
-    await render({ profiles: managedProfiles() });
+  it("shows favorite models in a compact dialog", async () => {
+    const onCloseFavoriteModels = vi.fn();
+    await render({ profiles: managedProfiles(), view: "favorites", onCloseFavoriteModels });
 
-    const favorites = container.querySelector(
-      'button[aria-label="Show favorite models (1)"]',
-    );
-    expect(favorites).toBeInstanceOf(HTMLButtonElement);
-    expect(favorites?.querySelector(".provider-favorite-model-count")?.textContent).toBe("1");
-
-    await act(async () => {
-      (favorites as HTMLButtonElement).click();
-      await Promise.resolve();
-    });
-
-    const dialog = container.querySelector(
-      '[role="dialog"][aria-label="Favorite models"]',
-    );
+    const dialog = container.querySelector('[role="dialog"][aria-label="Favorite models"]');
     expect(dialog).not.toBeNull();
+    expect(dialog?.classList.contains("favorite-models-modal")).toBe(true);
     expect(dialog?.textContent).toContain("model-beta");
     expect(dialog?.textContent).toContain("Provider: AWS Provider");
     expect(dialog?.textContent).not.toContain("model-a");
     expect(
       dialog?.querySelector('[data-model-id="model-b"]')?.getAttribute("draggable"),
     ).toBe("false");
+    await clickAria("Close favorite models");
+    expect(onCloseFavoriteModels).toHaveBeenCalledOnce();
   });
 
   it("uses the shared secondary-card UI for model-specific controls", async () => {
@@ -856,7 +862,7 @@ describe("Providers Profile product slice", () => {
     });
   });
 
-  it("uses one visibly stateful icon toggle for the Provider HTTP 429 fallback policy", async () => {
+  it("places method-specific HTTP 429 switching in the sign-in dialog", async () => {
     const executeCredentialProfiles = vi.fn(async (command) => {
       const result = managedProfiles();
       if (command.command !== "set_switch_policy") return result;
@@ -874,26 +880,44 @@ describe("Providers Profile product slice", () => {
       };
     });
     await render({ profiles: managedProfiles(), executeCredentialProfiles });
-    const fallback = ariaButton("Enable HTTP 429 fallback for AWS Provider");
+    expect(container.querySelector('.provider-card [aria-label*="HTTP 429"]')).toBeNull();
+    await clickAria("Add AWS credentials or bearer token");
+    const fallback = ariaButton("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
     expect(fallback.getAttribute("aria-pressed")).toBe("false");
-    const initialTitle = fallback.getAttribute("title");
-    await clickAria("Enable HTTP 429 fallback for AWS Provider");
+    await clickAria("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
 
     expect(executeCredentialProfiles).toHaveBeenCalledWith({
       command: "set_switch_policy",
       providerId: "aws-provider",
       expectedRevision: "revision-a",
       apiKeyOn429: true,
+      oauthOn429: false,
+    });
+    const enabledFallback = ariaButton("Disable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
+    expect(enabledFallback.getAttribute("aria-pressed")).toBe("true");
+    expect(enabledFallback.classList.contains("on")).toBe(true);
+    expect(enabledFallback.getAttribute("title")).toBe("Disable HTTP 429 Profile switching");
+
+    await clickAria("Close sign in");
+    await clickAria("Add AWS organization sign-in");
+    await clickAria("Enable HTTP 429 Profile switching for AWS Provider AWS organization sign-in");
+    expect(executeCredentialProfiles).toHaveBeenLastCalledWith({
+      command: "set_switch_policy",
+      providerId: "aws-provider",
+      expectedRevision: "revision-a",
+      apiKeyOn429: true,
       oauthOn429: true,
     });
-    const enabledFallback = ariaButton("Disable HTTP 429 fallback for AWS Provider");
-    expect(enabledFallback.getAttribute("aria-pressed")).toBe("true");
-    expect(enabledFallback.classList.contains("active")).toBe(true);
-    expect(initialTitle).toBe("Enable HTTP 429 fallback");
-    expect(enabledFallback.getAttribute("title")).toBe("Disable HTTP 429 fallback");
   });
 
-  it("queries cached Provider usage on page load and refreshes only from the card action", async () => {
+  it("explains why HTTP 429 switching is unavailable before the first Profile", async () => {
+    await render();
+    await clickAria("Add AWS credentials or bearer token");
+    expect(container.textContent).toContain("Add a Profile to configure switching.");
+    expect(ariaButton("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token").disabled).toBe(true);
+  });
+
+  it("queries cached Provider usage on page load and refreshes on usage double-click", async () => {
     const executeProviderUsage = vi.fn<
       DesktopControlPlaneApi["executeProviderUsage"]
     >(async (command) => {
@@ -942,14 +966,63 @@ describe("Providers Profile product slice", () => {
       ),
     ).toBe(false);
     expect(container.textContent).toContain("Usage not refreshed");
+    expect(container.querySelector('button[title="Refresh usage"]')).toBeNull();
+    await act(async () => {
+      usageRegion().click();
+      await Promise.resolve();
+    });
+    expect(executeProviderUsage.mock.calls.some(([command]) => command.command === "refresh")).toBe(false);
 
-    await clickAria("Refresh AWS Provider usage");
+    await doubleClickUsage();
 
     expect(executeProviderUsage).toHaveBeenCalledWith({
       command: "refresh",
       providerId: "aws-provider",
     });
     expect(container.textContent).toContain("Week 25%");
+    expect(usageRegion().getAttribute("aria-label")).toContain("Week 25%");
+    await act(async () => {
+      usageRegion().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(executeProviderUsage.mock.calls.filter(([command]) => command.command === "refresh")).toHaveLength(2);
+  });
+
+  it("hides usage when a Provider has no connected Profile", async () => {
+    await render({
+      profiles: emptyProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: {
+          providers: [{
+            providerId: "aws-provider",
+            state: "observed",
+            observedAt: 1,
+            refreshable: true,
+            windows: [{ kind: "weekly", usedPercent: 25 }],
+            budgets: [],
+          }],
+        },
+      }),
+    });
+
+    expect(container.querySelector('[aria-label^="AWS Provider usage"]')).toBeNull();
+    expect(container.textContent).not.toContain("Week 25%");
+  });
+
+  it("hides unavailable usage for a connected account type", async () => {
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: {
+          providers: [{ providerId: "aws-provider", state: "unsupported", reason: "binding" }],
+        },
+      }),
+    });
+
+    expect(container.querySelector('[aria-label^="AWS Provider usage"]')).toBeNull();
+    expect(container.textContent).not.toContain("Usage unavailable");
   });
 
   it("shows an automatic refresh result from cache without issuing a quota refresh", async () => {
@@ -1011,7 +1084,7 @@ describe("Providers Profile product slice", () => {
 
     expect(calls).toBeGreaterThanOrEqual(1);
     expect(container.textContent).toContain("Usage not refreshed");
-    await clickAria("Refresh AWS Provider usage");
+    await doubleClickUsage();
 
     expect(executeProviderUsage).toHaveBeenCalledWith({
       command: "refresh",
@@ -1127,7 +1200,7 @@ describe("Providers Profile product slice", () => {
       executeProviderUsage,
     });
 
-    await clickAria("Refresh AWS Provider usage");
+    await doubleClickUsage();
 
     expect(container.textContent).toContain(
       "Provider usage cannot be refreshed for this endpoint.",
@@ -1158,7 +1231,7 @@ describe("Providers Profile product slice", () => {
       executeProviderUsage,
     });
 
-    await clickAria("Refresh AWS Provider usage");
+    await doubleClickUsage();
 
     expect(container.textContent).toContain(
       "Provider usage could not be refreshed.",
@@ -1222,6 +1295,11 @@ describe("Providers Profile product slice", () => {
         revision: "revision-b",
         selectionGeneration: "selection-b",
         activeCredentialId: "credential-b",
+        profiles: provider.profiles.map((profile) =>
+          profile.credentialId === "credential-b"
+            ? { ...profile, health: "ready" as const }
+            : profile,
+        ),
       })),
     };
     await act(async () => {
@@ -1320,7 +1398,7 @@ describe("Providers Profile product slice", () => {
     });
 
     await act(async () => {
-      ariaButton("Refresh AWS Provider usage").click();
+      usageRegion().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
       await Promise.resolve();
     });
 
@@ -1337,6 +1415,11 @@ describe("Providers Profile product slice", () => {
               revision: "revision-b",
               selectionGeneration: "selection-b",
               activeCredentialId: "credential-b",
+              profiles: provider.profiles.map((profile) =>
+                profile.credentialId === "credential-b"
+                  ? { ...profile, health: "ready" as const }
+                  : profile,
+              ),
             })),
           },
         },
@@ -1381,7 +1464,6 @@ describe("Providers Profile product slice", () => {
 
     expect(titledButtons.map((entry) => entry.getAttribute("title"))).toEqual(
       expect.arrayContaining([
-        "Enable HTTP 429 fallback",
         "Add API key",
         "Add OAuth account",
         "Manage models",

@@ -15,6 +15,7 @@ describe("Providers models modal layout", () => {
     expect(modalRule).toContain("grid-template-rows: auto minmax(0, 1fr)");
     expect(bodyRule).toContain("overflow-y: auto");
     expect(css).toMatch(/\.models-modal \.task-modal-header\s*\{[^}]*z-index:\s*2/u);
+    expect(css).toMatch(/\.favorite-models-modal\s*\{[^}]*width:\s*min\(600px, 100%\)/u);
   });
 
   it("renders Profile actions as a separate tall vertical tertiary card", async () => {
