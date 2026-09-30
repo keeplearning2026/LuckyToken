@@ -268,7 +268,7 @@ test(
       const second = await openWindow(application);
       second.setDefaultTimeout(10_000);
       await second.getByRole("button", { name: "Settings" }).click();
-      await second.getByRole("tab", { name: "Advanced" }).click();
+      await second.getByRole("tab", { name: "Diagnostics", exact: true }).click();
       await second.getByRole("heading", { name: "Recent warnings" }).waitFor();
       assert.equal(application.windows().length, 1);
 
@@ -278,7 +278,7 @@ test(
       const third = await openWindow(application);
       third.setDefaultTimeout(10_000);
       await third.getByRole("button", { name: "Settings" }).click();
-      await third.getByRole("tab", { name: "Advanced" }).click();
+      await third.getByRole("tab", { name: "Diagnostics", exact: true }).click();
       await third.getByRole("heading", { name: "Recent warnings" }).waitFor();
       assert.equal(application.windows().length, 1, "reopen must create exactly one fresh renderer");
       await third.close();

@@ -399,13 +399,7 @@ test(
       await commandCodeModels.waitFor();
       await commandCodeModels.getByRole("searchbox", { name: "Search models" }).waitFor();
       const modelRow = commandCodeModels
-        .locator("li[data-model-id]")
-        .filter({
-          has: page.getByText(
-            "Original model: deepseek/deepseek-v4.1-flash",
-            { exact: true },
-          ),
-        });
+        .locator('li[data-model-id="deepseek/deepseek-v4.1-flash"]');
       await modelRow.waitFor();
 
       // 5. Rename edits only the model-name suffix. The Provider namespace
