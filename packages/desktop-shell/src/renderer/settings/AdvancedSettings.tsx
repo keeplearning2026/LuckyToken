@@ -2,13 +2,15 @@ import { useState, type KeyboardEvent } from "react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AgentIntegrationSettings } from "./AgentIntegrationSettings.js";
+import { ClaudeSettings } from "./ClaudeSettings.js";
 import { CodexSettings } from "./CodexSettings.js";
 import { ProtocolSettings } from "./ProtocolSettings.js";
 import { ResponseRepairSettings } from "./ResponseRepairSettings.js";
+import type { AgentIntegrationControls } from "./useAgentIntegrations.js";
 
 type AdvancedGroup = "protocols" | "agents";
 
-export function AdvancedSettings({ api, modelRevision }: { readonly api: TokenDesktopApi; readonly modelRevision?: number | undefined }) {
+export function AdvancedSettings({ api, agentIntegrations }: { readonly api: TokenDesktopApi; readonly agentIntegrations: AgentIntegrationControls }) {
   const [group, setGroup] = useState<AdvancedGroup>("protocols");
   const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>, current: AdvancedGroup): void => {
     const next = event.key === "Home" ? "protocols"
@@ -32,7 +34,7 @@ export function AdvancedSettings({ api, modelRevision }: { readonly api: TokenDe
     </div>
     <div id={`advanced-panel-${group}`} role="tabpanel" aria-labelledby={`advanced-tab-${group}`} className="page-stack">
       {group === "protocols" ? <><ProtocolSettings api={api} protocol="responses" /><ResponseRepairSettings api={api} /><ProtocolSettings api={api} protocol="anthropic" /></>
-        : <><AgentIntegrationSettings api={api} modelRevision={modelRevision} /><CodexSettings api={api} /></>}
+        : <><AgentIntegrationSettings controls={agentIntegrations} /><ClaudeSettings api={api} agentIntegrations={agentIntegrations} /><CodexSettings api={api} /></>}
     </div>
   </section>;
 }

@@ -15,6 +15,7 @@ import {
   type AgentIntegrationObservedState,
   type AgentIntegrationOperationResult,
   type AgentIntegrationProjection,
+  type AgentScopedIntegrationId,
   type AgentIntegrationsCommand,
   type AgentIntegrationsCommandResult,
   type AgentIntegrationsState,
@@ -916,7 +917,8 @@ export function decodeCatalogCommandResult(
   });
 }
 
-const agentIntegrationIds: ReadonlySet<string> = new Set(["codex", "pi"]);
+const agentIntegrationIds: ReadonlySet<string> = new Set(["claude", "codex", "pi"]);
+const agentScopedIntegrationIds: ReadonlySet<string> = new Set(["codex", "pi"]);
 const agentInjectionScopes: ReadonlySet<string> = new Set(["favorite", "full"]);
 const agentObservedStates: ReadonlySet<string> = new Set([
   "native",
@@ -946,13 +948,13 @@ export function decodeAgentIntegrationsCommand(
   if (
     value.command === "set_scope" &&
     typeof value.agentId === "string" &&
-    agentIntegrationIds.has(value.agentId) &&
+    agentScopedIntegrationIds.has(value.agentId) &&
     typeof value.scope === "string" &&
     agentInjectionScopes.has(value.scope)
   ) {
     return {
       command: "set_scope",
-      agentId: value.agentId as AgentIntegrationId,
+      agentId: value.agentId as AgentScopedIntegrationId,
       scope: value.scope as "favorite" | "full",
     };
   }

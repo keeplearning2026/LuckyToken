@@ -276,8 +276,8 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
   ]);
 
 describe("unified request diagnostics Control Plane contract", () => {
-  it("publishes the unified diagnostics contract through Control Plane v6", () => {
-    expect(controlPlaneVersion).toBe(6);
+  it("publishes the unified diagnostics contract through Control Plane v7", () => {
+    expect(controlPlaneVersion).toBe(7);
   });
 
   it("strictly decodes the bounded Request Journey query", () => {

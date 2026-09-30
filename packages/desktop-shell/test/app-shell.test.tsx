@@ -444,7 +444,7 @@ describe("desktop command-router shell", () => {
       port: 5000,
     });
 
-    expect(container.querySelector('button[aria-label="Disable Codex integration"]')).toBeNull();
+    expect(container.querySelector('.settings-panel button[aria-label="Disable Codex integration"]')).toBeNull();
     expect(container.querySelector('select[aria-label="Codex injection scope"]')).toBeNull();
     await openAgentSettings();
     const codexToggle = container.querySelector('button[aria-label="Disable Codex integration"]');

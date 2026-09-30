@@ -1,6 +1,7 @@
 import type { AgentInjectionSnapshot } from "./snapshot.js";
 
-export type AgentIntegrationId = "codex" | "pi";
+export type AgentIntegrationId = "claude" | "codex" | "pi";
+export type AgentScopedIntegrationId = Exclude<AgentIntegrationId, "claude">;
 
 export type AgentInjectionScope = "favorite" | "full";
 

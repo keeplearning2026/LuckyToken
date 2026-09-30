@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 describe("Provider Usage Control Plane", () => {
-  it("round-trips query and refresh through Control Plane v6", async () => {
+  it("round-trips query and refresh through Control Plane v7", async () => {
     const transport = createNodePipeTransport();
     const server = await startControlPlane({
       endpoint: endpoint(),
@@ -82,7 +82,7 @@ describe("Provider Usage Control Plane", () => {
     clients.push(client);
     await expect(client.hello(controlPlaneVersion)).resolves.toMatchObject({
       type: "compatible",
-      contractVersion: 6,
+      contractVersion: 7,
     });
 
     await expect(

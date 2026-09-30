@@ -96,6 +96,7 @@ import {
   createCodexCatalogValidator,
   type CodexCatalogValidator,
 } from "./integrations/codex/catalog-validator.js";
+import { createClaudeIntegrationAdapter } from "./integrations/claude/adapter.js";
 import { createCodexIntegrationAuthority } from "./integrations/codex/integration.js";
 import { createAgentInjectionSnapshot } from "./integrations/agents/snapshot.js";
 import { createAgentIntegrationCoordinator } from "./integrations/agents/coordinator.js";
@@ -881,6 +882,30 @@ async function startNormalApplication(options: {
           .digest("hex");
       },
     });
+    const claudeConfigDirectoryOverride = process.env.CLAUDE_CONFIG_DIR?.trim();
+    const claudeSettingsPath = join(
+      claudeConfigDirectoryOverride === undefined || claudeConfigDirectoryOverride.length === 0
+        ? join(homedir(), ".claude")
+        : resolve(claudeConfigDirectoryOverride),
+      "settings.json",
+    );
+    const claudeSetting = (key: string): string | null => {
+      const value = settingsRegistry.query([key])[key]?.value;
+      return typeof value === "string" ? value : null;
+    };
+    const claudeIntegrationAdapter = createClaudeIntegrationAdapter({
+      settingsPath: claudeSettingsPath,
+      stateDirectory: join(dirname(options.configPath), "integrations", "claude"),
+      selectedModels: () => ({
+        main: claudeSetting("integrations.claude.model"),
+        opus: claudeSetting("integrations.claude.opusModel"),
+        sonnet: claudeSetting("integrations.claude.sonnetModel"),
+        haiku: claudeSetting("integrations.claude.haikuModel"),
+        subagent: claudeSetting("integrations.claude.subagentModel"),
+      }),
+      isPublicModelAlias: (alias) =>
+        publicModelAuthority.snapshot().resolve(alias) !== undefined,
+    });
     const piAgentDirectoryOverride = process.env.PI_CODING_AGENT_DIR?.trim();
     const piIntegrationAdapter = createPiIntegrationAdapter({
       agentDirectory:
@@ -893,8 +918,13 @@ async function startNormalApplication(options: {
     const agentIntegrations = createAgentIntegrationCoordinator({
       stateDirectory: join(dirname(options.configPath), "integrations"),
       snapshot: agentSnapshot,
-      adapters: [codexIntegrationAuthority, piIntegrationAdapter],
+      adapters: [
+        claudeIntegrationAdapter,
+        codexIntegrationAuthority,
+        piIntegrationAdapter,
+      ],
       defaults: {
+        claude: { enabled: false, scope: "favorite" },
         codex: {
           enabled: previousCodexState.desiredEnabled,
           scope: previousCodexState.scope,

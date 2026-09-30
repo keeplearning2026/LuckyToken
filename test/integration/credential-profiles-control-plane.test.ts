@@ -215,7 +215,7 @@ describe("Credential Profiles Control Plane", () => {
       createRequestId: () => `profile-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(6);
+    await client.hello(7);
 
     const before = await client.executeCredentialProfilesCommand({
       command: "query",

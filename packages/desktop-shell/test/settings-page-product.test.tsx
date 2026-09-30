@@ -143,6 +143,120 @@ describe("Settings product slice", () => {
     expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.searchModel"] });
   });
 
+  it("selects each Claude Code model slot independently from Favorite models", async () => {
+    const keys = [
+      "integrations.claude.model",
+      "integrations.claude.opusModel",
+      "integrations.claude.sonnetModel",
+      "integrations.claude.haikuModel",
+      "integrations.claude.subagentModel",
+    ] as const;
+    const values: Record<(typeof keys)[number], string | null> = {
+      "integrations.claude.model": "provider/favorite-one",
+      "integrations.claude.opusModel": "provider/favorite-one",
+      "integrations.claude.sonnetModel": "provider/favorite-one",
+      "integrations.claude.haikuModel": "provider/favorite-one",
+      "integrations.claude.subagentModel": "provider/favorite-one",
+    };
+    const executeSettings = vi.fn(async (
+      command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0],
+    ) => {
+      if (command.command === "set" && keys.includes(command.key as (typeof keys)[number])) {
+        values[command.key as (typeof keys)[number]] =
+          typeof command.value === "string" ? command.value : null;
+      }
+      return {
+        outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
+        settings: Object.fromEntries(keys.map((key) => [key, {
+          key,
+          type: "nullable-string" as const,
+          default: null,
+          validation: { type: "nullable-string" as const },
+          sensitivity: "public" as const,
+          applyMode: "hot-apply" as const,
+          value: values[key],
+        }])),
+      };
+    });
+    const executeAgentIntegrations = vi.fn(async () => ({
+      outcome: "ok" as const,
+      state: {
+        agents: [
+          { agentId: "claude" as const, enabled: true, scope: "favorite" as const, modelCount: 1, needsSync: true },
+          { agentId: "codex" as const, enabled: false, scope: "favorite" as const, modelCount: 0, needsSync: false },
+          { agentId: "pi" as const, enabled: false, scope: "favorite" as const, modelCount: 0, needsSync: false },
+        ],
+      },
+      results: [],
+    }));
+    const executePublicModels = vi.fn(async () => ({
+      outcome: "ok" as const,
+      state: {
+        revision: 1,
+        version: 1,
+        endpoint: { host: "127.0.0.1", port: 3000 },
+        providers: [{
+          providerId: "provider",
+          on: true,
+          favorite: false,
+          models: [
+            { alias: "provider/favorite-one", target: "one", on: true, favorite: true },
+            { alias: "provider/favorite-two", target: "two", on: true, favorite: true },
+            { alias: "provider/not-favorite", target: "three", on: true, favorite: false },
+          ],
+        }],
+      },
+    }));
+
+    await render(createFakeDesktopApi({
+      control: {
+        executeSettings,
+        executeAgentIntegrations,
+        executePublicModels,
+        getBackendState: async () => ({
+          revision: 1,
+          kind: "ready" as const,
+          status: {
+            sequence: 1,
+            modelDataPlane: "running" as const,
+            provider: "configured" as const,
+          },
+        }),
+        onBackendState: () => () => undefined,
+      },
+    }));
+    await click("Advanced");
+    await click("Agents");
+
+    const labels = [
+      "Claude main model",
+      "Claude Opus model",
+      "Claude Sonnet model",
+      "Claude Haiku model",
+      "Claude subagent model",
+    ];
+    for (const label of labels) {
+      const select = container.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement;
+      expect(select).toBeInstanceOf(HTMLSelectElement);
+      expect([...select.options].map((option) => option.value)).toContain("provider/favorite-two");
+      expect([...select.options].map((option) => option.value)).not.toContain("provider/not-favorite");
+    }
+
+    const main = container.querySelector('select[aria-label="Claude main model"]') as HTMLSelectElement;
+    await act(async () => {
+      main.value = "provider/favorite-two";
+      main.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(executeSettings).toHaveBeenCalledWith({
+      command: "set",
+      key: "integrations.claude.model",
+      value: "provider/favorite-two",
+    });
+    expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "query" });
+  });
+
   it("saves the configured Codex search model from Advanced settings", async () => {
     const executeSettings = vi.fn(async (command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0]) => ({
       outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),

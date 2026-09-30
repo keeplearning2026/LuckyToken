@@ -31,6 +31,7 @@ export {
   type AgentIntegrationObservedState,
   type AgentIntegrationOperationResult,
   type AgentIntegrationProjection,
+  type AgentScopedIntegrationId,
   type AgentInjectionScope,
   type AgentIntegrationsCommand,
   type AgentIntegrationsCommandHandler,

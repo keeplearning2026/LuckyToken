@@ -454,6 +454,47 @@ npm start -- logout commandcode-goat --config .Token/config.json
 `SIGINT` and `SIGTERM` stop new connections, abort active requests, and wait for
 the listener to close.
 
+## Claude Code integration
+
+Token manages Claude Code through the shared Agent integration authority. When
+enabled, it edits only these seven entries under `~/.claude/settings.json`
+(`CLAUDE_CONFIG_DIR/settings.json` when that override is set):
+
+```text
+env.ANTHROPIC_BASE_URL
+env.ANTHROPIC_AUTH_TOKEN
+env.ANTHROPIC_MODEL
+env.ANTHROPIC_DEFAULT_OPUS_MODEL
+env.ANTHROPIC_DEFAULT_SONNET_MODEL
+env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+env.CLAUDE_CODE_SUBAGENT_MODEL
+```
+
+`ANTHROPIC_BASE_URL` points at Token's loopback Anthropic endpoint.
+`ANTHROPIC_AUTH_TOKEN` is the fixed local value `luckytoken-local` so Claude Code has a non-empty auth token; Token's local Anthropic ingress does not treat it as a Provider credential. The five model slots are selected
+independently in Advanced → Agents, and each dropdown
+is populated from the current Favorite Models. Token stores the selected alias
+without modification; when the resolved model has a context window of at least
+1,000,000 tokens, the injected Claude Code value receives the `[1m]` suffix
+automatically.
+
+Token does not write `ANTHROPIC_API_KEY`,
+`ANTHROPIC_DEFAULT_FABLE_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, or the
+top-level Claude `model` field. While the integration is managed, the seven
+locations above are Token-owned and Sync may overwrite edits to them.
+
+Each injection inspects the current value before overwriting it. For the five
+model slots, a value (after removing an optional Claude Code `[1m]` suffix)
+that resolves as a Token Public Model alias is treated as an existing Token
+projection and does not replace the saved restore value. For
+`ANTHROPIC_BASE_URL`, equality with the current Token endpoint or the value
+recorded from Token's previous successful injection establishes ownership. For
+`ANTHROPIC_AUTH_TOKEN`, the exact fixed value `luckytoken-local` establishes ownership. Any other current
+string, or absence, becomes that field's latest restore
+preimage. Disable or Backend shutdown restores all seven recorded values;
+fields whose recorded preimage was absent are removed. Unrelated Claude
+settings and credentials remain untouched.
+
 ## Codex integration
 
 Token now manages Codex integration as a Backend-owned capability rather

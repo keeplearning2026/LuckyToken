@@ -28,7 +28,7 @@ import type {
   ProviderUsageCommandResult,
 } from "./provider-usage-contract.js";
 
-export const controlPlaneVersion = 6 as const;
+export const controlPlaneVersion = 7 as const;
 
 export interface ApplicationIdentity {
   readonly id: "Token";
@@ -477,7 +477,8 @@ export type PublicModelsCommandHandler = (
   command: PublicModelsCommand,
 ) => Promise<PublicModelsCommandResult>;
 
-export type AgentIntegrationId = "codex" | "pi";
+export type AgentIntegrationId = "claude" | "codex" | "pi";
+export type AgentScopedIntegrationId = Exclude<AgentIntegrationId, "claude">;
 export type AgentInjectionScope = "favorite" | "full";
 export type AgentIntegrationObservedState =
   | "native"
@@ -520,7 +521,7 @@ export type AgentIntegrationsCommand =
     }
   | {
       readonly command: "set_scope";
-      readonly agentId: AgentIntegrationId;
+      readonly agentId: AgentScopedIntegrationId;
       readonly scope: AgentInjectionScope;
     }
   | { readonly command: "sync" };

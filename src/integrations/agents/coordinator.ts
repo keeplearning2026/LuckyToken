@@ -7,6 +7,7 @@ import type {
   AgentIntegrationEffect,
   AgentIntegrationId,
   AgentInjectionScope,
+  AgentScopedIntegrationId,
 } from "./contract.js";
 import type { AgentInjectionSnapshot } from "./snapshot.js";
 
@@ -56,7 +57,7 @@ export interface AgentIntegrationCoordinator {
     enabled: boolean,
   ): Promise<AgentIntegrationsCommandResult>;
   setScope(
-    agentId: AgentIntegrationId,
+    agentId: AgentScopedIntegrationId,
     scope: AgentInjectionScope,
   ): Promise<AgentIntegrationsCommandResult>;
   sync(): Promise<AgentIntegrationsCommandResult>;
@@ -95,7 +96,7 @@ function defaultAgent(agentId: AgentIntegrationId): StoredAgentState {
 
 function parseAgent(value: unknown): StoredAgentState | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.agentId !== "codex" && value.agentId !== "pi") return undefined;
+  if (value.agentId !== "claude" && value.agentId !== "codex" && value.agentId !== "pi") return undefined;
   if (typeof value.enabled !== "boolean") return undefined;
   if (value.scope !== "favorite" && value.scope !== "full") return undefined;
   if (!Number.isSafeInteger(value.modelCount) || (value.modelCount as number) < 0) {
@@ -329,7 +330,7 @@ export function createAgentIntegrationCoordinator(
   };
 
   const performSetScope = async (
-    agentId: AgentIntegrationId,
+    agentId: AgentScopedIntegrationId,
     scope: AgentInjectionScope,
   ): Promise<AgentIntegrationsCommandResult> => {
     if (!adapterById.has(agentId)) {
@@ -524,7 +525,7 @@ export function createAgentIntegrationCoordinator(
       return project(await readState());
     },
     setEnabled,
-    setScope: (agentId: AgentIntegrationId, scope: AgentInjectionScope) =>
+    setScope: (agentId: AgentScopedIntegrationId, scope: AgentInjectionScope) =>
       enqueue(() => performSetScope(agentId, scope)),
     sync: () => enqueue(() => performApply("sync")),
     startup: () => enqueue(() => performApply("startup")),

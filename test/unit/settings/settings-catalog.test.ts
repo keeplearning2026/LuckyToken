@@ -28,6 +28,11 @@ describe("authoritative registered settings catalog", () => {
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
+      "integrations.claude.model",
+      "integrations.claude.opusModel",
+      "integrations.claude.sonnetModel",
+      "integrations.claude.haikuModel",
+      "integrations.claude.subagentModel",
       "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
     ]);
 
@@ -110,6 +115,25 @@ describe("authoritative registered settings catalog", () => {
     });
     expect(registry.validate("integrations.codex.searchModel", "gpt-5.6-sol")).toEqual({ valid: true });
     expect(registry.validate("integrations.codex.searchModel", "")).toMatchObject({ valid: false });
+
+    for (const key of [
+      "integrations.claude.model",
+      "integrations.claude.opusModel",
+      "integrations.claude.sonnetModel",
+      "integrations.claude.haikuModel",
+      "integrations.claude.subagentModel",
+    ]) {
+      expect(byKey.get(key)).toMatchObject({
+        type: "nullable-string",
+        default: null,
+        validation: { type: "nullable-string" },
+        applyMode: "hot-apply",
+        value: null,
+      });
+      expect(registry.validate(key, "provider/model with spaces")).toEqual({ valid: true });
+      expect(registry.validate(key, null)).toEqual({ valid: true });
+      expect(registry.validate(key, "")).toMatchObject({ valid: false });
+    }
 
     for (const key of [
       "integrations.codex.preimage.modelProvider",

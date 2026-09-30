@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   LoaderCircle,
   Play,
+  RefreshCw,
   Square,
   Wifi,
 } from "lucide-react";
@@ -15,7 +16,11 @@ import type {
 import { OverviewPage } from "../overview/OverviewPage.js";
 import { ProvidersPage } from "../providers/ProvidersPage.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
+import { useAgentIntegrations } from "../settings/useAgentIntegrations.js";
 import { productPages as pages, type ProductPage } from "./navigation.js";
+
+const claudeIcon = new URL("../assets/claude-code.svg", import.meta.url).href;
+const codexIcon = new URL("../assets/codex.png", import.meta.url).href;
 
 export interface AppProps {
   readonly api: TokenDesktopApi;
@@ -81,6 +86,12 @@ export function App({ api }: AppProps) {
   const status = backendState?.kind === "ready" ? backendState.status : undefined;
   const backendAvailable = backendState?.kind === "ready";
   const activeRequests = status?.activeRequests;
+  const agentIntegrations = useAgentIntegrations(api, backendAvailable, publicModels?.state.revision);
+  const claudeIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "claude");
+  const codexIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "codex");
+  const piIntegration = agentIntegrations.state?.agents.find((agent) => agent.agentId === "pi");
+  const anyAgentEnabled = agentIntegrations.state?.agents.some((agent) => agent.enabled) ?? false;
+  const agentSyncNeeded = agentIntegrations.state?.agents.some((agent) => agent.enabled && agent.needsSync) ?? false;
 
   const executeRuntime = async (): Promise<void> => {
     const command = runtimeAction(status);
@@ -142,6 +153,41 @@ export function App({ api }: AppProps) {
       <header className="product-header">
         <h1>{pageTitle}</h1>
         <div className="runtime-header-status" aria-label="Router status">
+          <div className="toolbar-group agent-integration-toolbar" role="group" aria-label="Agent integrations">
+            <button type="button" className={`agent-toolbar-button${claudeIntegration?.enabled ? " on" : ""}`}
+              aria-label={`${claudeIntegration?.enabled ? "Disable" : "Enable"} Claude Code integration`}
+              aria-pressed={claudeIntegration?.enabled ?? false}
+              aria-busy={agentIntegrations.busy}
+              title={`Claude Code: ${claudeIntegration === undefined ? "Unavailable" : claudeIntegration.enabled ? "On" : "Off"}`}
+              disabled={agentIntegrations.busy || claudeIntegration === undefined}
+              onClick={() => void agentIntegrations.toggle("claude")}>
+              <img className="agent-claude-mark" src={claudeIcon} alt="" />
+            </button>
+            <button type="button" className={`agent-toolbar-button${codexIntegration?.enabled ? " on" : ""}`}
+              aria-label={`${codexIntegration?.enabled ? "Disable" : "Enable"} Codex integration`}
+              aria-pressed={codexIntegration?.enabled ?? false}
+              aria-busy={agentIntegrations.busy}
+              title={`Codex: ${codexIntegration === undefined ? "Unavailable" : codexIntegration.enabled ? "On" : "Off"}`}
+              disabled={agentIntegrations.busy || codexIntegration === undefined}
+              onClick={() => void agentIntegrations.toggle("codex")}>
+              <img className="agent-codex-mark" src={codexIcon} alt="" />
+            </button>
+            <button type="button" className={`agent-toolbar-button agent-pi${piIntegration?.enabled ? " on" : ""}`}
+              aria-label={`${piIntegration?.enabled ? "Disable" : "Enable"} Pi integration`}
+              aria-pressed={piIntegration?.enabled ?? false}
+              aria-busy={agentIntegrations.busy}
+              title={`Pi: ${piIntegration === undefined ? "Unavailable" : piIntegration.enabled ? "On" : "Off"}`}
+              disabled={agentIntegrations.busy || piIntegration === undefined}
+              onClick={() => void agentIntegrations.toggle("pi")}>
+              <span aria-hidden="true">π</span>
+            </button>
+            <button type="button" className={`agent-toolbar-button agent-toolbar-sync${agentSyncNeeded ? " dirty" : ""}`}
+              aria-label="Sync Agent integrations" aria-busy={agentIntegrations.busy}
+              title="Sync Agent integrations" disabled={agentIntegrations.busy || !anyAgentEnabled}
+              onClick={() => void agentIntegrations.sync()}>
+              <RefreshCw size={16} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          </div>
           <div className="toolbar-group endpoint-group">
             {editingPort && endpoint !== undefined ? (
               <div className="runtime-endpoint-editor">
@@ -216,12 +262,14 @@ export function App({ api }: AppProps) {
       </header>
 
       <main className="product-content">
+        {agentIntegrations.notice === undefined ? null : <p className="agent-notice" role="status">{agentIntegrations.notice}</p>}
+        {agentIntegrations.warnings.length === 0 ? null : <ul className="agent-warnings" aria-label="Agent integration warnings">{agentIntegrations.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
         {page === "overview" ? (
           <OverviewPage api={api} backendAvailable={backendAvailable} />
         ) : page === "providers" ? (
           <ProvidersPage api={api} />
         ) : (
-          <SettingsPage api={api} modelRevision={publicModels?.state.revision} />
+          <SettingsPage api={api} agentIntegrations={agentIntegrations} />
         )}
       </main>
     </div>

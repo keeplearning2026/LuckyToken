@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -82,6 +82,67 @@ function recordingAdapter(id: AgentIntegrationId) {
 }
 
 describe("Agent integration coordinator", () => {
+  it("adds newly registered Claude defaults when an existing v1 state only contains Codex and Pi", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-upgrade-"));
+    await writeFile(
+      join(stateDirectory, "agent-integrations.json"),
+      JSON.stringify({
+        schemaVersion: "Token-agent-integrations-v1",
+        agents: [
+          {
+            agentId: "codex",
+            enabled: true,
+            scope: "full",
+            modelCount: 3,
+            appliedFingerprint: "codex-old",
+          },
+          {
+            agentId: "pi",
+            enabled: false,
+            scope: "favorite",
+            modelCount: 0,
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const claude = recordingAdapter("claude");
+    const codex = recordingAdapter("codex");
+    const pi = recordingAdapter("pi");
+    const coordinator = createAgentIntegrationCoordinator({
+      stateDirectory,
+      snapshot: async () => snapshot(),
+      adapters: [claude.adapter, codex.adapter, pi.adapter],
+      defaults: {
+        claude: { enabled: false, scope: "favorite" },
+      },
+    });
+
+    await expect(coordinator.query()).resolves.toMatchObject({
+      agents: [
+        {
+          agentId: "claude",
+          enabled: false,
+          scope: "favorite",
+          modelCount: 0,
+          needsSync: false,
+        },
+        {
+          agentId: "codex",
+          enabled: true,
+          scope: "full",
+          modelCount: 3,
+        },
+        {
+          agentId: "pi",
+          enabled: false,
+          scope: "favorite",
+          modelCount: 0,
+        },
+      ],
+    });
+  });
+
   it("uses one enable/disable rule for each adapter and persists only successful intent", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agents-"));
     const codex = recordingAdapter("codex");

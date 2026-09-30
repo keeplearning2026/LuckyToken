@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   connectControlPlane,
+  controlPlaneVersion,
   createNodePipeTransport,
   nodePipeFallbackAccess,
   startControlPlane,
@@ -144,7 +145,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       createRequestId: () => `settings-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(6);
+    await client.hello(controlPlaneVersion);
     return { host, registry, client, endpoint };
   }
 
@@ -162,6 +163,11 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
+      "integrations.claude.model",
+      "integrations.claude.opusModel",
+      "integrations.claude.sonnetModel",
+      "integrations.claude.haikuModel",
+      "integrations.claude.subagentModel",
       "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
     ]);
     expect(settings["protocols.anthropic-messages.enabled"]).toMatchObject({

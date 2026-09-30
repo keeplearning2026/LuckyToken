@@ -644,11 +644,30 @@ async function handleAnthropicMessages(
     };
     enterJourneyStep(journey, "p2.resolve_public_model", resolutionLocation);
     const selector = extractAnthropicModelSelector(body);
-    const resolution = await resolveDataPlanePublicModel(
+    let resolution = await resolveDataPlanePublicModel(
       dependencies.models,
       dependencies.publicModels,
       selector,
     );
+    if (
+      resolution.kind === "unknown" &&
+      dependencies.publicModels !== undefined &&
+      selector.endsWith("[1m]")
+    ) {
+      const baseSelector = selector.slice(0, -4);
+      if (baseSelector.length > 0) {
+        const fallback = await resolveDataPlanePublicModel(
+          dependencies.models,
+          dependencies.publicModels,
+          baseSelector,
+        );
+        if (fallback.kind === "model") {
+          resolution = Object.freeze({ ...fallback, alias: selector });
+        } else if (fallback.kind === "unavailable") {
+          resolution = fallback;
+        }
+      }
+    }
     if (resolution.kind === "unknown") {
       return observeAnthropicEarlyFailure(
         journey,

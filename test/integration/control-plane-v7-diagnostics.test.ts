@@ -251,7 +251,7 @@ function unavailableDiagnosticsAdapter(): UnifiedDiagnosticsManagement {
   });
 }
 
-describe("Application Control Plane v6 unified diagnostics", () => {
+describe("Application Control Plane v7 unified diagnostics", () => {
   const hosts: RunningControlPlane[] = [];
   const clients: Array<{ close(): Promise<void> }> = [];
   const transport = createNodePipeTransport();
@@ -261,8 +261,8 @@ describe("Application Control Plane v6 unified diagnostics", () => {
     await Promise.all(hosts.splice(0).map((host) => host.close()));
   });
 
-  it("negotiates only v6 and round-trips unified diagnostics reads with typed unavailability", async () => {
-    expect(controlPlaneVersion).toBe(6);
+  it("negotiates only v7 and round-trips unified diagnostics reads with typed unavailability", async () => {
+    expect(controlPlaneVersion).toBe(7);
     const fixture = createDiagnosticsFixture();
     const target = endpoint();
     const host = await startControlPlane({
@@ -283,11 +283,11 @@ describe("Application Control Plane v6 unified diagnostics", () => {
     await expect(connected.hello(2)).resolves.toEqual({
       type: "incompatible",
       requestedVersion: 2,
-      supportedVersions: [6],
+      supportedVersions: [7],
     });
-    await expect(connected.hello(6)).resolves.toMatchObject({
+    await expect(connected.hello(7)).resolves.toMatchObject({
       type: "compatible",
-      contractVersion: 6,
+      contractVersion: 7,
     });
     await expect(connected.queryRequestJourneys({ limit: 10 })).resolves.toEqual({
       outcome: "ok",
@@ -333,13 +333,13 @@ describe("Application Control Plane v6 unified diagnostics", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "v6-raw-hello",
-        contractVersion: 6,
+        contractVersion: 7,
         capability: target.capability,
       }),
     );
     expect(await readRawFrame(raw)).toMatchObject({
       type: "hello_result",
-      result: { type: "compatible", contractVersion: 6 },
+      result: { type: "compatible", contractVersion: 7 },
     });
     for (const [type, requestId] of [
       ["get_diagnostics", "legacy-diagnostics"],
@@ -396,7 +396,7 @@ describe("Application Control Plane v6 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(unavailableClient);
-    await unavailableClient.hello(6);
+    await unavailableClient.hello(7);
     const typedUnavailable = {
       outcome: "unavailable",
       error: {
@@ -449,7 +449,7 @@ describe("Application Control Plane v6 unified diagnostics", () => {
   });
 
   it("round-trips both unified subscriptions and contains one client's listener failure", async () => {
-    expect(controlPlaneVersion).toBe(6);
+    expect(controlPlaneVersion).toBe(7);
     const fixture = createDiagnosticsFixture();
     const host = await startControlPlane({
       endpoint: endpoint(),
@@ -469,8 +469,8 @@ describe("Application Control Plane v6 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(first, second);
-    await first.hello(6);
-    await second.hello(6);
+    await first.hello(7);
+    await second.hello(7);
 
     const journeyDelivered = deferred<void>();
     const runtimeDelivered = deferred<void>();

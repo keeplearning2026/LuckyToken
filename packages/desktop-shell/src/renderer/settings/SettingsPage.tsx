@@ -5,6 +5,7 @@ import { AdvancedSettings } from "./AdvancedSettings.js";
 import { DataSettings } from "./DataSettings.js";
 import { GeneralSettings } from "./GeneralSettings.js";
 import { ProviderUsageSettings } from "./ProviderUsageSettings.js";
+import type { AgentIntegrationControls } from "./useAgentIntegrations.js";
 
 type SettingsSection = "general" | "diagnostics" | "advanced";
 
@@ -17,7 +18,7 @@ const sections: ReadonlyArray<Readonly<{
   { id: "advanced", label: "Advanced" },
 ]);
 
-export function SettingsPage({ api, modelRevision }: { readonly api: TokenDesktopApi; readonly modelRevision?: number | undefined }) {
+export function SettingsPage({ api, agentIntegrations }: { readonly api: TokenDesktopApi; readonly agentIntegrations: AgentIntegrationControls }) {
   const [section, setSection] = useState<SettingsSection>("general");
 
   const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>, current: SettingsSection): void => {
@@ -67,7 +68,7 @@ export function SettingsPage({ api, modelRevision }: { readonly api: TokenDeskto
         ) : section === "diagnostics" ? (
           <DataSettings api={api} />
         ) : (
-          <AdvancedSettings api={api} modelRevision={modelRevision} />
+          <AdvancedSettings api={api} agentIntegrations={agentIntegrations} />
         )}
       </div>
     </section>

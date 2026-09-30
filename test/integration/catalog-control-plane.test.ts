@@ -217,7 +217,7 @@ async function createCatalogPlane(options?: {
       createRequestId: () => `catalog-plane-request-${++nextRequest}`,
       pipeConnector: createNodePipeTransport(),
     });
-    const hello = await client.hello(6);
+    const hello = await client.hello(7);
     if (hello.type !== "compatible") {
       throw new Error("Control Plane hello failed");
     }
@@ -275,7 +275,7 @@ async function createCatalogPlane(options?: {
     createRequestId: () => `catalog-plane-request-${++nextRequest}`,
     pipeConnector: createNodePipeTransport(),
   });
-  const hello = await client.hello(6);
+  const hello = await client.hello(7);
   if (hello.type !== "compatible") {
     throw new Error("Control Plane hello failed");
   }
@@ -430,7 +430,7 @@ describe("catalog commands through the Control Plane", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "raw-catalog-hello",
-        contractVersion: 6,
+        contractVersion: 7,
         capability: fixture.host.endpoint.capability,
       }),
     );

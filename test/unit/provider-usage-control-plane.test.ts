@@ -7,8 +7,8 @@ import {
 } from "@token/application-control-plane/control-plane";
 
 describe("Provider Usage Control Plane contract", () => {
-  it("ships on Control Plane v6", () => {
-    expect(controlPlaneVersion).toBe(6);
+  it("ships on Control Plane v7", () => {
+    expect(controlPlaneVersion).toBe(7);
   });
 
   it("strictly decodes query and refresh commands", () => {

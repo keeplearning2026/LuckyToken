@@ -47,6 +47,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .runtime-header-status { min-width: 0; display: flex; align-items: center; justify-content: flex-end; color: var(--text-secondary); font-size: 13px; }
 .toolbar-group { min-height: 32px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .toolbar-group + .toolbar-group { margin-left: 12px; padding-left: 13px; border-left: 1px solid var(--hairline); }
+.agent-integration-toolbar { gap: 3px; }
+.agent-toolbar-button { position: relative; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); padding: 0; opacity: .58; }
+.agent-toolbar-button.on { opacity: 1; }
+.agent-toolbar-sync:not(:disabled) { opacity: .82; }
+.agent-toolbar-button.on::after, .agent-toolbar-sync.dirty::after { content: ""; position: absolute; top: 2px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+.agent-toolbar-sync.dirty::after { background: var(--amber); }
+.agent-toolbar-button:hover:not(:disabled) { background: var(--surface-muted); color: var(--text); opacity: 1; }
+.agent-toolbar-button:disabled { cursor: default; }
+.agent-toolbar-button.agent-pi { font-size: 21px; font-weight: 600; line-height: 1; }
+.agent-claude-mark, .agent-codex-mark { display: block; width: 17px; height: 17px; }
+.agent-codex-mark { filter: brightness(0); }
 .runtime-endpoint { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; }
 .runtime-endpoint-button { min-height: 32px; display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 0; }
 .runtime-endpoint-button:disabled { cursor: default; }

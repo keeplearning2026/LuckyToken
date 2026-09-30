@@ -130,7 +130,10 @@ async function writeCommandCodeCatalog(
   );
 }
 
-async function writeInjectableModel(configPath: string): Promise<void> {
+async function writeInjectableModel(
+  configPath: string,
+  contextWindow = 128_000,
+): Promise<void> {
   await writeFile(
     join(dirname(configPath), "models.json"),
     `${JSON.stringify({
@@ -140,7 +143,12 @@ async function writeInjectableModel(configPath: string): Promise<void> {
           baseUrl: "http://127.0.0.1:65534",
           apiKey: "fixture-placeholder",
           api: "anthropic-messages",
-          models: [{ id: "fixture-model", reasoning: true }],
+          models: [{
+            id: "fixture-model",
+            reasoning: true,
+            contextWindow,
+            maxTokens: 64_000,
+          }],
         },
       },
     }, null, 2)}\n`,
@@ -228,6 +236,7 @@ describe("Backend Application public lifecycle seam", () => {
         ).resolves.toMatchObject({
           state: {
             agents: expect.arrayContaining([
+              expect.objectContaining({ agentId: "claude", enabled: false }),
               expect.objectContaining({ agentId: "pi", enabled: false }),
             ]),
           },
@@ -254,6 +263,146 @@ describe("Backend Application public lifecycle seam", () => {
       }
     }
   });
+
+  it("injects and restores Claude Code model slots through the real Backend seams", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    await writeInjectableModel(configPath, 1_000_000);
+    const root = dirname(configPath);
+    const claudeConfigDirectory = join(root, "claude-user");
+    const claudeSettingsPath = join(claudeConfigDirectory, "settings.json");
+    await mkdir(claudeConfigDirectory, { recursive: true });
+    await writeFile(
+      claudeSettingsPath,
+      JSON.stringify({
+        theme: "dark",
+        env: {
+          KEEP_ME: "yes",
+          ANTHROPIC_BASE_URL: "https://user.example",
+          ANTHROPIC_AUTH_TOKEN: "user-token",
+        },
+      }, null, 2),
+      "utf8",
+    );
+
+    const previousClaudeConfigDirectory = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = claudeConfigDirectory;
+    try {
+      const started = await startTokenApplication({
+        configPath,
+        descriptorOverride: descriptorPath,
+        ownerKind: "cli",
+      });
+      expect(started.kind).toBe("running");
+      if (started.kind !== "running") return;
+      applications.push(started.application);
+
+      const endpoint = await readControlPlaneDescriptor(descriptorPath);
+      const client = await connectControlPlane(endpoint, {
+        createRequestId: randomUUID,
+        pipeConnector: createNodePipeTransport(),
+      });
+      try {
+        await client.hello(controlPlaneVersion);
+        const queried = await client.executePublicModelsCommand({ command: "query" });
+        const fixtureProvider = queried.state.providers.find(
+          (provider) => provider.providerId === "fixture",
+        );
+        const fixtureModel = fixtureProvider?.models.find(
+          (model) => model.target === "fixture-model",
+        );
+        if (fixtureModel === undefined) throw new Error("fixture model missing");
+
+        const favorited = await client.executePublicModelsCommand({
+          command: "set_model_favorite",
+          revision: queried.state.revision,
+          providerId: "fixture",
+          modelId: "fixture-model",
+          favorite: true,
+        });
+        expect(favorited.outcome).toBe("ok");
+
+        for (const key of [
+          "integrations.claude.model",
+          "integrations.claude.opusModel",
+          "integrations.claude.sonnetModel",
+          "integrations.claude.haikuModel",
+          "integrations.claude.subagentModel",
+        ]) {
+          await expect(
+            client.executeSettingsCommand({
+              command: "set",
+              key,
+              value: fixtureModel.alias,
+            }),
+          ).resolves.toMatchObject({ outcome: "applied" });
+        }
+
+        const enabled = await client.executeAgentIntegrationsCommand({
+          command: "set_enabled",
+          agentId: "claude",
+          enabled: true,
+        });
+        expect(enabled).toMatchObject({
+          outcome: "ok",
+          state: {
+            agents: expect.arrayContaining([
+              expect.objectContaining({ agentId: "claude", enabled: true }),
+            ]),
+          },
+        });
+
+        const active = JSON.parse(await readFile(claudeSettingsPath, "utf8")) as {
+          theme?: string;
+          env?: Record<string, string>;
+        };
+        const publicEndpoint = favorited.state.endpoint;
+        expect(active.theme).toBe("dark");
+        expect(active.env).toMatchObject({
+          KEEP_ME: "yes",
+          ANTHROPIC_BASE_URL: `http://${publicEndpoint.host}:${publicEndpoint.port}`,
+          ANTHROPIC_MODEL: `${fixtureModel.alias}[1m]`,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: `${fixtureModel.alias}[1m]`,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: `${fixtureModel.alias}[1m]`,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: `${fixtureModel.alias}[1m]`,
+          CLAUDE_CODE_SUBAGENT_MODEL: `${fixtureModel.alias}[1m]`,
+        });
+        expect(active.env?.ANTHROPIC_AUTH_TOKEN).toBe("luckytoken-local");
+
+        const disabled = await client.executeAgentIntegrationsCommand({
+          command: "set_enabled",
+          agentId: "claude",
+          enabled: false,
+        });
+        expect(disabled).toMatchObject({
+          outcome: "ok",
+          state: {
+            agents: expect.arrayContaining([
+              expect.objectContaining({ agentId: "claude", enabled: false }),
+            ]),
+          },
+        });
+
+        const restored = JSON.parse(await readFile(claudeSettingsPath, "utf8")) as {
+          theme?: string;
+          env?: Record<string, string>;
+        };
+        expect(restored.theme).toBe("dark");
+        expect(restored.env).toEqual({
+          KEEP_ME: "yes",
+          ANTHROPIC_BASE_URL: "https://user.example",
+          ANTHROPIC_AUTH_TOKEN: "user-token",
+        });
+      } finally {
+        await client.close();
+      }
+    } finally {
+      if (previousClaudeConfigDirectory === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDirectory;
+      }
+    }
+  }, 30_000);
 
   it("reloads the CommandCode endpoint after a real Backend quit and restart", async () => {
     const { configPath, descriptorPath } = await fixture();
