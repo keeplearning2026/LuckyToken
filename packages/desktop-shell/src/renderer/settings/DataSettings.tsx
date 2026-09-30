@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Trash2 } from "lucide-react";
+import { FolderOpen, Trash2, X } from "lucide-react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { DiagnosticWarnings } from "./DiagnosticWarnings.js";
@@ -187,7 +187,12 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
 
   return (
     <section className="page-stack">
-      {notice === undefined ? null : <p className="product-notice" role="status">{notice}</p>}
+      {notice === undefined ? null : (
+        <div className="product-notice dismissible-notice" role="status">
+          <span>{notice}</span>
+          <button type="button" className="notice-dismiss" aria-label="Dismiss Diagnostics notification" title="Dismiss" onClick={() => setNotice(undefined)}><X size={16} aria-hidden="true" /></button>
+        </div>
+      )}
       <div className="page-card settings-section">
         <header className="settings-section-header">
           <div className="settings-copy">

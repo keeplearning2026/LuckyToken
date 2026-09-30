@@ -712,6 +712,7 @@ describe("desktop command-router shell", () => {
   });
 
   it.each(["rejected", "failed-result"] as const)("does not promise preserved files after a %s Agent toggle", async (failure) => {
+    let integrationCalls = 0;
     const state = {
       agents: [{ agentId: "claude" as const, enabled: false, scope: "favorite" as const, modelCount: 0, needsSync: false }],
     };
@@ -720,12 +721,13 @@ describe("desktop command-router shell", () => {
         getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
         onBackendState: () => () => undefined,
         executeAgentIntegrations: async (command) => {
+          integrationCalls += 1;
           if (command.command !== "set_enabled") return { outcome: "ok", state, results: [] };
           if (failure === "rejected") throw new Error("transport closed after partial update");
           return {
             outcome: "failed",
             state,
-            results: [{ agentId: "claude", outcome: "failed", effect: { observedState: "unavailable", modelCount: 0, warnings: [], changed: true } }],
+            results: [{ agentId: "claude", outcome: "failed", effect: { observedState: "unavailable", modelCount: 0, warnings: ["Current Agent warning"], changed: true } }],
           };
         },
       },
@@ -743,6 +745,25 @@ describe("desktop command-router shell", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toContain("integration update failed.");
     expect(container.textContent).not.toContain("Existing Agent files were preserved.");
     expect(toggle.disabled).toBe(false);
+    const callsBeforeDismiss = integrationCalls;
+    const dismiss = container.querySelector('button[aria-label="Dismiss Agent notification"]');
+    if (!(dismiss instanceof HTMLButtonElement)) throw new Error("notice dismiss button missing");
+    await act(async () => dismiss.click());
+    expect(container.textContent).not.toContain("integration update failed.");
+    if (failure === "failed-result") {
+      const dismissWarnings = container.querySelector('button[aria-label="Dismiss Agent warnings"]');
+      if (!(dismissWarnings instanceof HTMLButtonElement)) throw new Error("warning dismiss button missing");
+      await act(async () => dismissWarnings.click());
+      expect(container.textContent).not.toContain("Current Agent warning");
+    }
+    expect(integrationCalls).toBe(callsBeforeDismiss);
+    await act(async () => {
+      toggle.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("integration update failed.");
+    if (failure === "failed-result") expect(container.textContent).toContain("Current Agent warning");
   });
 
   it("shows the Agent adapter message returned by a failed icon toggle", async () => {

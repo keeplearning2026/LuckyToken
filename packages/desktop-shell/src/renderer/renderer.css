@@ -88,6 +88,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .agent-notice, .agent-warnings { max-width: 1680px; margin: 0 auto 12px; border-radius: 10px; background: #fff4df; color: #805718; padding: 10px 13px; font-size: 13px; line-height: 1.45; }
 .agent-warnings { list-style-position: inside; }
 .agent-warnings li + li { margin-top: 4px; }
+.dismissible-notice { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dismissible-notice > span, .dismissible-notice > ul { min-width: 0; overflow-wrap: anywhere; }
+.dismissible-notice > ul { margin: 0; padding-left: 18px; }
+.notice-dismiss { flex: 0 0 auto; display: grid; place-items: center; width: 28px; height: 28px; margin: -4px -4px -4px 0; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.notice-dismiss:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.notice-dismiss:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .eyebrow { margin: 0; color: var(--text-tertiary); font-size: 10px; font-weight: 750; letter-spacing: .13em; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 

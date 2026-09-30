@@ -548,6 +548,10 @@ Troubleshooting:
 
 ## Agent toolbar and DeepSeek Harness integration
 
+Use the close button on Agent notifications and the operation notices at the top
+of Providers and Diagnostics to dismiss the current message. Later notifications
+still appear normally.
+
 Settings → Advanced → Agents includes a **Show in toolbar** checkbox for each
 Agent. This desktop preference is saved locally. Each Agent's Settings card
 shows the same icon and enabled indicator as the toolbar, including when its

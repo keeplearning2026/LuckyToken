@@ -106,7 +106,11 @@ export function useAgentIntegrations(api: TokenDesktopApi, backendAvailable: boo
     }
   };
 
-  return { state, busy, notice, warnings, toggle, setScope, sync, refresh, isToolbarVisible, setToolbarVisible };
+  return {
+    state, busy, notice, warnings, toggle, setScope, sync, refresh, isToolbarVisible, setToolbarVisible,
+    dismissNotice: () => setNotice(undefined),
+    dismissWarnings: () => setWarnings([]),
+  };
 }
 
 export type AgentIntegrationControls = ReturnType<typeof useAgentIntegrations>;

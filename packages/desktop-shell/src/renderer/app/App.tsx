@@ -8,6 +8,7 @@ import {
   Star,
   Sun,
   Wifi,
+  X,
 } from "lucide-react";
 
 import type {
@@ -333,8 +334,18 @@ export function App({ api }: AppProps) {
       </header>
 
       <main className="product-content">
-        {agentIntegrations.notice === undefined ? null : <p className="agent-notice" role="status">{agentIntegrations.notice}</p>}
-        {agentIntegrations.warnings.length === 0 ? null : <ul className="agent-warnings" aria-label="Agent integration warnings">{agentIntegrations.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+        {agentIntegrations.notice === undefined ? null : (
+          <div className="agent-notice dismissible-notice" role="status">
+            <span>{agentIntegrations.notice}</span>
+            <button type="button" className="notice-dismiss" aria-label="Dismiss Agent notification" title="Dismiss" onClick={agentIntegrations.dismissNotice}><X size={16} aria-hidden="true" /></button>
+          </div>
+        )}
+        {agentIntegrations.warnings.length === 0 ? null : (
+          <div className="agent-warnings dismissible-notice">
+            <ul aria-label="Agent integration warnings">{agentIntegrations.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+            <button type="button" className="notice-dismiss" aria-label="Dismiss Agent warnings" title="Dismiss" onClick={agentIntegrations.dismissWarnings}><X size={16} aria-hidden="true" /></button>
+          </div>
+        )}
         {page === "overview" ? (
           <OverviewPage api={api} backendAvailable={backendAvailable} />
         ) : page === "providers" ? (

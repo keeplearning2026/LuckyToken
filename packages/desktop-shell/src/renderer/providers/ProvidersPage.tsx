@@ -1370,7 +1370,10 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       </div>
 
       {notice === undefined ? null : (
-        <p className="product-notice" role="status">{notice}</p>
+        <div className="product-notice dismissible-notice" role="status">
+          <span>{notice}</span>
+          <button type="button" className="notice-dismiss" aria-label="Dismiss Provider notification" title="Dismiss" onClick={() => setNotice(undefined)}><X size={16} aria-hidden="true" /></button>
+        </div>
       )}
 
       {authError ? (
