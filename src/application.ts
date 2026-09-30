@@ -78,7 +78,10 @@ import { createCatalogRefreshController } from "./providers/catalog-refresh.js";
 import { composeEffectiveCatalog } from "./providers/effective-composition.js";
 import { createProviderRuntime } from "./providers/runtime.js";
 import { providerReadiness } from "./providers/readiness.js";
-import { createProviderUsageAuthority } from "./provider-usage/authority.js";
+import {
+  createProviderUsageAuthority,
+  PROVIDER_USAGE_REFRESH_TIMEOUT_MS,
+} from "./provider-usage/authority.js";
 import { createProviderUsageAutoRefresh } from "./provider-usage/auto-refresh.js";
 import { createProviderUsageControlPlaneHandler } from "./provider-usage/control-plane.js";
 import { createProviderUsageResponseObserver } from "./provider-usage/passive.js";
@@ -738,6 +741,14 @@ async function startNormalApplication(options: {
       models: providerRuntime.models,
       binding: providerRuntime.providerAuthBindings,
       probes: createBuiltInProviderUsageProbes(globalThis.fetch),
+      refreshTimeoutMs: () => {
+        const seconds = settingsRegistry.query([
+          "providerUsage.refreshTimeoutSeconds",
+        ])["providerUsage.refreshTimeoutSeconds"]?.value;
+        return typeof seconds === "number"
+          ? seconds * 1000
+          : PROVIDER_USAGE_REFRESH_TIMEOUT_MS;
+      },
       now: Date.now,
     });
     const providerUsageCommandHandler =
@@ -924,7 +935,7 @@ async function startNormalApplication(options: {
     const dshHomeOverride = process.env.DSH_HOME?.trim();
     const dshIntegrationAdapter = createDshIntegrationAdapter({
       dshHome: dshHomeOverride ? resolve(dshHomeOverride) : join(homedir(), ".dsh"),
-      profile: "web",
+      profile: "desktop",
       stateDirectory: join(dirname(options.configPath), "integrations", "dsh"),
     });
     const previousCodexState = await codexIntegrationAuthority.query();

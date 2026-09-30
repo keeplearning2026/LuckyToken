@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentInjectionSnapshot } from "../../src/integrations/agents/snapshot.js";
 import { createClaudeDesktopIntegrationAdapter } from "../../src/integrations/claude-desktop/adapter.js";
 import { resolveClaudeDesktopPaths, CLAUDE_DESKTOP_PROFILE_ID } from "../../src/integrations/claude-desktop/paths.js";
-import { markAnthropicModelId, unmarkAnthropicModelId } from "../../src/protocols/anthropic/marked-model-id.js";
+import { markAnthropicModelId } from "../../src/protocols/anthropic/marked-model-id.js";
 
 const snapshot: AgentInjectionSnapshot = {
   endpoint: { origin: "http://127.0.0.1:4317", openaiBaseUrl: "http://127.0.0.1:4317/v1" },
@@ -61,7 +61,10 @@ describe("Claude Desktop integration adapter", () => {
         inferenceGatewayBaseUrl: snapshot.endpoint.origin,
         inferenceGatewayAuthScheme: "bearer",
         modelDiscoveryEnabled: false,
-        inferenceModels: [{ name: "anthropic/token-provider/favorite", labelOverride: "provider/favorite" }],
+        inferenceModels: [{
+          name: markAnthropicModelId("provider/favorite"),
+          labelOverride: "provider/favorite",
+        }],
       });
       expect((await readJson(paths.standardConfig)).deploymentMode).toBe("3p");
       expect((await readJson(paths.threePartyConfig)).deploymentMode).toBe("3p");
@@ -72,8 +75,8 @@ describe("Claude Desktop integration adapter", () => {
       expect((await adapter.inject(snapshot, "favorite")).changed).toBe(false);
       expect((await adapter.inject(snapshot, "full")).modelCount).toBe(2);
       expect((await readJson(paths.tokenProfile)).inferenceModels).toMatchObject([
-        { name: "anthropic/token-provider/favorite" },
-        { name: "anthropic/token-other/full" },
+        { name: markAnthropicModelId("provider/favorite") },
+        { name: markAnthropicModelId("other/full") },
       ]);
       expect((await adapter.restore()).observedState).toBe("native");
       for (const path of [paths.standardConfig, paths.threePartyConfig, paths.metadata, paths.tokenProfile]) {
@@ -282,7 +285,6 @@ describe("Claude Desktop integration adapter", () => {
     }
   });
 });
-
 it("resolves canonical Desktop roots for each supported platform", () => {
   expect(resolveClaudeDesktopPaths({ platform: "win32", home: "C:\\User", localAppData: "C:\\Local" }).libraryDirectory)
     .toContain("Claude-3p");
@@ -290,10 +292,4 @@ it("resolves canonical Desktop roots for each supported platform", () => {
     .toContain(join("Library", "Application Support", "Claude-3p", "configLibrary"));
   expect(resolveClaudeDesktopPaths({ platform: "linux", home: "/home/user", xdgConfigHome: "/custom/config" }).libraryDirectory)
     .toBe(join("/custom/config", "Claude-3p", "configLibrary"));
-});
-
-it("marks Anthropic model IDs without a mutable mapping table", () => {
-  expect(unmarkAnthropicModelId(markAnthropicModelId("openai/gpt-5.4"))).toBe("openai/gpt-5.4");
-  expect(unmarkAnthropicModelId("provider/model")).toBeUndefined();
-  expect(unmarkAnthropicModelId("anthropic/token-")).toBeNull();
 });

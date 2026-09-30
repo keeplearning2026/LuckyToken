@@ -19,7 +19,7 @@ import {
   type ProviderUsageState,
 } from "./contract.js";
 
-export const PROVIDER_USAGE_REFRESH_TIMEOUT_MS = 8_000 as const;
+export const PROVIDER_USAGE_REFRESH_TIMEOUT_MS = 45_000 as const;
 
 interface CacheSlot {
   readonly bindingIdentity: string;
@@ -35,7 +35,7 @@ export interface CreateProviderUsageAuthorityOptions {
   readonly binding: ProviderAuthBindingAuthority;
   readonly probes: readonly ProviderUsageProbe[];
   readonly now?: () => number;
-  readonly refreshTimeoutMs?: number;
+  readonly refreshTimeoutMs?: number | (() => number);
 }
 
 function bindingIdentity(capture: ProviderAuthBindingCapture): string {
@@ -77,7 +77,16 @@ export function createProviderUsageAuthority(
   const cache = new Map<string, CacheSlot>();
   const inflight = new Map<string, Promise<ProviderUsageRefreshResult>>();
   const now = options.now ?? Date.now;
-  const timeoutMs = options.refreshTimeoutMs ?? PROVIDER_USAGE_REFRESH_TIMEOUT_MS;
+  const resolveRefreshTimeoutMs = (): number => {
+    const configured = typeof options.refreshTimeoutMs === "function"
+      ? options.refreshTimeoutMs()
+      : options.refreshTimeoutMs;
+    return configured === undefined ||
+      !Number.isSafeInteger(configured) ||
+      configured <= 0
+      ? PROVIDER_USAGE_REFRESH_TIMEOUT_MS
+      : configured;
+  };
 
   const servedBaseUrls = (providerId: string): readonly string[] => {
     const modelBaseUrls = new Set(
@@ -239,7 +248,7 @@ export function createProviderUsageAuthority(
     if (existing !== undefined) return existing;
 
     const pending = (async (): Promise<ProviderUsageRefreshResult> => {
-      const signal = AbortSignal.timeout(timeoutMs);
+      const signal = AbortSignal.timeout(resolveRefreshTimeoutMs());
       let acquired:
         | ProviderUsageProbeResult
         | { readonly state: "unsupported_destination" };

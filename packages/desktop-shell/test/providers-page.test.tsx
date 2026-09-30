@@ -1010,6 +1010,24 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).not.toContain("Week 25%");
   });
 
+  it("shows refreshable usage for a connected Profile that is not yet verified", async () => {
+    await render({
+      profiles: notYetVerifiedProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: {
+          providers: [{
+            providerId: "aws-provider",
+            state: "unobserved",
+          }],
+        },
+      }),
+    });
+
+    expect(container.textContent).toContain("Usage not refreshed");
+    expect(usageRegion().getAttribute("aria-label")).toContain("Double-click or press Enter to refresh");
+  });
+
   it("hides unavailable usage for a connected account type", async () => {
     await render({
       profiles: managedProfiles(),

@@ -66,9 +66,12 @@ describe("desktop command-router shell", () => {
     expect(integrations?.children).toHaveLength(6);
     expect(integrations?.children[0]?.getAttribute("aria-label")).toBe("Enable Claude Code integration");
     expect(integrations?.children[1]?.getAttribute("aria-label")).toBe("Enable Claude Desktop integration");
+    expect(integrations?.children[1]?.querySelector("img.agent-claude-desktop-mark")).not.toBeNull();
     expect(integrations?.children[2]?.getAttribute("aria-label")).toBe("Enable Codex integration");
+    expect(integrations?.children[2]?.querySelector("img.agent-codex-mark")).not.toBeNull();
     expect(integrations?.children[3]?.getAttribute("aria-label")).toBe("Enable Pi integration");
     expect(integrations?.children[4]?.getAttribute("aria-label")).toBe("Enable DeepSeek Harness integration");
+    expect(integrations?.children[4]?.querySelector("img.agent-dsh-mark")).not.toBeNull();
     expect(integrations?.children[5]?.getAttribute("aria-label")).toBe("Sync Agent integrations");
     expect(toolbar?.children[1]?.classList.contains("favorite-models-toolbar")).toBe(true);
     expect(toolbar?.children[2]?.classList.contains("endpoint-group")).toBe(true);

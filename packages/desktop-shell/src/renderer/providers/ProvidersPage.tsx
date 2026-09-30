@@ -1167,7 +1167,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       ...usagePresentation.secondary,
     ].filter((part): part is string => part !== undefined).join(" · ");
     const usageRefreshing = usageRefreshingProviders.has(provider.providerId);
-    const showUsage = active?.health === "ready" &&
+    const showUsage = (managed?.profiles.length ?? 0) > 0 &&
       (usagePresentation.primary.length > 0 || usagePresentation.secondary.length > 0 || usagePresentation.status === "Usage not refreshed");
 
     return (

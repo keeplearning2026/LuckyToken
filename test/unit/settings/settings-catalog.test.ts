@@ -25,6 +25,7 @@ describe("authoritative registered settings catalog", () => {
       "protocols.openai-responses.enabled",
       "application.quitDrainTimeoutMs",
       "providerUsage.refreshIntervalMinutes",
+      "providerUsage.refreshTimeoutSeconds",
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
@@ -76,6 +77,17 @@ describe("authoritative registered settings catalog", () => {
     expect(registry.validate("providerUsage.refreshIntervalMinutes", 1)).toEqual({ valid: true });
     expect(registry.validate("providerUsage.refreshIntervalMinutes", 0)).toMatchObject({ valid: false });
     expect(registry.validate("providerUsage.refreshIntervalMinutes", 1441)).toMatchObject({ valid: false });
+
+    expect(byKey.get("providerUsage.refreshTimeoutSeconds")).toMatchObject({
+      type: "number",
+      default: 45,
+      validation: { type: "integer", minimum: 5, maximum: 600 },
+      applyMode: "hot-apply",
+      value: 45,
+    });
+    expect(registry.validate("providerUsage.refreshTimeoutSeconds", 5)).toEqual({ valid: true });
+    expect(registry.validate("providerUsage.refreshTimeoutSeconds", 4)).toMatchObject({ valid: false });
+    expect(registry.validate("providerUsage.refreshTimeoutSeconds", 601)).toMatchObject({ valid: false });
 
     const fullJourneyCapture = byKey.get(
       "diagnostics.fullJourneyCapture.enabled",
@@ -184,5 +196,54 @@ describe("authoritative registered settings catalog", () => {
     expect(registry.validate("protocols.anthropic-messages.enabled", true)).toMatchObject({
       valid: true,
     });
+  });
+
+  it("keeps the Provider Usage refresh timeout below the automatic refresh interval", async () => {
+    const registry = createSettingsRegistry(emptyStore());
+    await registry.load();
+
+    expect(
+      await registry.set(
+        "providerUsage.refreshTimeoutSeconds",
+        120,
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "applied" });
+    expect(
+      await registry.set(
+        "providerUsage.refreshIntervalMinutes",
+        3,
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "applied" });
+    expect(
+      registry.validate("providerUsage.refreshTimeoutSeconds", 180),
+    ).toMatchObject({ valid: false });
+    expect(
+      await registry.set(
+        "providerUsage.refreshIntervalMinutes",
+        2,
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "invalid_value" });
+  });
+
+  it("drops an invalid persisted Provider Usage timeout to its default", async () => {
+    const registry = createSettingsRegistry({
+      async load() {
+        return {
+          "providerUsage.refreshIntervalMinutes": 1,
+          "providerUsage.refreshTimeoutSeconds": 60,
+        };
+      },
+      async save() {},
+    });
+    await registry.load();
+
+    expect(
+      registry.query(["providerUsage.refreshTimeoutSeconds"])[
+        "providerUsage.refreshTimeoutSeconds"
+      ]?.value,
+    ).toBe(45);
   });
 });

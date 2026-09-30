@@ -160,6 +160,7 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "protocols.openai-responses.enabled",
       "application.quitDrainTimeoutMs",
       "providerUsage.refreshIntervalMinutes",
+      "providerUsage.refreshTimeoutSeconds",
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",

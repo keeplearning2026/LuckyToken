@@ -23,7 +23,9 @@ import { useAgentIntegrations } from "../settings/useAgentIntegrations.js";
 import { productPages as pages, type ProductPage } from "./navigation.js";
 
 const claudeIcon = new URL("../assets/claude-code.svg", import.meta.url).href;
-const codexIcon = new URL("../assets/codex.png", import.meta.url).href;
+const claudeDesktopIcon = new URL("../assets/claude-desktop.svg", import.meta.url).href;
+const codexIcon = new URL("../assets/codex.svg", import.meta.url).href;
+const deepseekHarnessIcon = new URL("../assets/deepseek-harness.svg", import.meta.url).href;
 
 export interface AppProps {
   readonly api: TokenDesktopApi;
@@ -200,7 +202,7 @@ export function App({ api }: AppProps) {
               title={`Claude Desktop: ${claudeDesktopIntegration === undefined ? "Unavailable" : claudeDesktopIntegration.enabled ? "On" : "Off"}`}
               disabled={agentIntegrations.busy || claudeDesktopIntegration === undefined}
               onClick={() => void agentIntegrations.toggle("claude-desktop")}>
-              <span aria-hidden="true">CD</span>
+              <img className="agent-claude-desktop-mark" src={claudeDesktopIcon} alt="" />
             </button>
             <button type="button" className={`agent-toolbar-button${codexIntegration?.enabled ? " on" : ""}`}
               aria-label={`${codexIntegration?.enabled ? "Disable" : "Enable"} Codex integration`}
@@ -227,7 +229,7 @@ export function App({ api }: AppProps) {
               title={`DeepSeek Harness: ${dshIntegration === undefined ? "Unavailable" : dshIntegration.enabled ? "On" : "Off"}`}
               disabled={agentIntegrations.busy || dshIntegration === undefined}
               onClick={() => void agentIntegrations.toggle("dsh")}>
-              <span aria-hidden="true">DS</span>
+              <img className="agent-dsh-mark" src={deepseekHarnessIcon} alt="" />
             </button>
             <button type="button" className={`agent-toolbar-button agent-toolbar-sync${agentSyncNeeded ? " dirty" : ""}`}
               aria-label="Sync Agent integrations" aria-busy={agentIntegrations.busy}

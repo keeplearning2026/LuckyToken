@@ -214,6 +214,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     applyMode: "hot-apply",
   }),
   Object.freeze({
+    key: "providerUsage.refreshTimeoutSeconds",
+    type: "number",
+    default: 45,
+    validation: Object.freeze({ type: "integer", minimum: 5, maximum: 600 }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
+  Object.freeze({
     key: "diagnostics.fullJourneyCapture.enabled",
     type: "boolean",
     default: false,
@@ -288,6 +296,40 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
 ]);
 
 const allKeys = Object.freeze(definitions.map((definition) => definition.key));
+const PROVIDER_USAGE_REFRESH_INTERVAL_KEY =
+  "providerUsage.refreshIntervalMinutes" as const;
+const PROVIDER_USAGE_REFRESH_TIMEOUT_KEY =
+  "providerUsage.refreshTimeoutSeconds" as const;
+
+function validateProviderUsageRefreshPair(
+  key: string,
+  value: SettingScalar,
+  current: (candidateKey: string) => SettingScalar | undefined,
+): { readonly valid: boolean; readonly error?: string } {
+  if (
+    key !== PROVIDER_USAGE_REFRESH_INTERVAL_KEY &&
+    key !== PROVIDER_USAGE_REFRESH_TIMEOUT_KEY
+  ) {
+    return { valid: true };
+  }
+  const interval = key === PROVIDER_USAGE_REFRESH_INTERVAL_KEY
+    ? value
+    : current(PROVIDER_USAGE_REFRESH_INTERVAL_KEY);
+  const timeout = key === PROVIDER_USAGE_REFRESH_TIMEOUT_KEY
+    ? value
+    : current(PROVIDER_USAGE_REFRESH_TIMEOUT_KEY);
+  if (
+    typeof interval === "number" &&
+    typeof timeout === "number" &&
+    timeout >= interval * 60
+  ) {
+    return {
+      valid: false,
+      error: `${PROVIDER_USAGE_REFRESH_TIMEOUT_KEY} must be less than ${PROVIDER_USAGE_REFRESH_INTERVAL_KEY} * 60`,
+    };
+  }
+  return { valid: true };
+}
 
 export function createSettingsRegistry(
   store: SettingsStore,
@@ -361,6 +403,20 @@ export function createSettingsRegistry(
         effective.set(key, value as SettingScalar);
         persisted.set(key, value as SettingScalar);
       }
+      if (
+        !validateProviderUsageRefreshPair(
+          PROVIDER_USAGE_REFRESH_TIMEOUT_KEY,
+          effective.get(PROVIDER_USAGE_REFRESH_TIMEOUT_KEY) as SettingScalar,
+          (key) => effective.get(key),
+        ).valid
+      ) {
+        persisted.delete(PROVIDER_USAGE_REFRESH_TIMEOUT_KEY);
+        pending.delete(PROVIDER_USAGE_REFRESH_TIMEOUT_KEY);
+        effective.set(
+          PROVIDER_USAGE_REFRESH_TIMEOUT_KEY,
+          definitionsByKey.get(PROVIDER_USAGE_REFRESH_TIMEOUT_KEY)?.default ?? 45,
+        );
+      }
       loaded = true;
     })().catch((error: unknown) => {
       loadPromise = undefined;
@@ -405,7 +461,16 @@ export function createSettingsRegistry(
       if (definition === undefined) {
         return { valid: false, error: `${key} is not a registered setting` };
       }
-      return validateValue(definition, value);
+      const validated = validateValue(definition, value);
+      if (!validated.valid) return validated;
+      return validateProviderUsageRefreshPair(
+        key,
+        value as SettingScalar,
+        (candidateKey) =>
+          pending.has(candidateKey)
+            ? pending.get(candidateKey)
+            : effective.get(candidateKey),
+      );
     },
     set(
       key: string,
@@ -433,6 +498,23 @@ export function createSettingsRegistry(
           };
         }
         const typed = value as SettingScalar;
+        const pairValidated = validateProviderUsageRefreshPair(
+          key,
+          typed,
+          (candidateKey) =>
+            pending.has(candidateKey)
+              ? pending.get(candidateKey)
+              : effective.get(candidateKey),
+        );
+        if (!pairValidated.valid) {
+          return {
+            outcome: "invalid_value",
+            ...(pairValidated.error === undefined
+              ? {}
+              : { error: pairValidated.error }),
+            settings: currentSettings(allKeys),
+          };
+        }
         try {
           await store.save(persistedDocument([key, typed]));
         } catch {

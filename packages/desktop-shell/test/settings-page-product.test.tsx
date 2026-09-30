@@ -378,18 +378,23 @@ describe("Settings product slice", () => {
     expect(container.querySelector('.settings-status')?.textContent).toBe("On");
   });
 
-  it("shows the default usage interval and saves a changed interval", async () => {
-    const settingKey = "providerUsage.refreshIntervalMinutes";
+  it("shows default usage settings and saves changed interval and timeout", async () => {
+    const intervalKey = "providerUsage.refreshIntervalMinutes";
+    const timeoutKey = "providerUsage.refreshTimeoutSeconds";
     let minutes = 15;
+    let timeoutSeconds = 45;
     const executeSettings = vi.fn(async (command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0]) => {
-      if (command.command === "set" && command.key === settingKey) {
+      if (command.command === "set" && command.key === intervalKey) {
         minutes = command.value as number;
+      }
+      if (command.command === "set" && command.key === timeoutKey) {
+        timeoutSeconds = command.value as number;
       }
       return {
         outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
         settings: {
-          [settingKey]: {
-            key: settingKey,
+          [intervalKey]: {
+            key: intervalKey,
             type: "number" as const,
             default: 15,
             validation: { type: "integer" as const, minimum: 1, maximum: 1440 },
@@ -397,19 +402,77 @@ describe("Settings product slice", () => {
             applyMode: "hot-apply" as const,
             value: minutes,
           },
+          [timeoutKey]: {
+            key: timeoutKey,
+            type: "number" as const,
+            default: 45,
+            validation: { type: "integer" as const, minimum: 5, maximum: 600 },
+            sensitivity: "public" as const,
+            applyMode: "hot-apply" as const,
+            value: timeoutSeconds,
+          },
         },
       };
     });
     await render(createFakeDesktopApi({ control: { executeSettings } }));
     const input = container.querySelector('input[aria-label="Usage refresh interval in minutes"]') as HTMLInputElement;
+    const timeoutInput = container.querySelector('input[aria-label="Usage refresh timeout in seconds"]') as HTMLInputElement;
     expect(input.value).toBe("15");
+    expect(timeoutInput.value).toBe("45");
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       setter?.call(input, "5");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await clickAria("Save usage interval");
-    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: settingKey, value: 5 });
+    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: intervalKey, value: 5 });
     expect(input.value).toBe("5");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(timeoutInput, "90");
+      timeoutInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickAria("Save usage timeout");
+    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: timeoutKey, value: 90 });
+    expect(timeoutInput.value).toBe("90");
+  });
+
+  it("rejects a usage timeout that is not shorter than the refresh interval", async () => {
+    const intervalKey = "providerUsage.refreshIntervalMinutes";
+    const timeoutKey = "providerUsage.refreshTimeoutSeconds";
+    const executeSettings = vi.fn(async () => ({
+      outcome: "ok" as const,
+      settings: {
+        [intervalKey]: {
+          key: intervalKey,
+          type: "number" as const,
+          default: 15,
+          validation: { type: "integer" as const, minimum: 1, maximum: 1440 },
+          sensitivity: "public" as const,
+          applyMode: "hot-apply" as const,
+          value: 1,
+        },
+        [timeoutKey]: {
+          key: timeoutKey,
+          type: "number" as const,
+          default: 45,
+          validation: { type: "integer" as const, minimum: 5, maximum: 600 },
+          sensitivity: "public" as const,
+          applyMode: "hot-apply" as const,
+          value: 45,
+        },
+      },
+    }));
+    await render(createFakeDesktopApi({ control: { executeSettings } }));
+    const timeoutInput = container.querySelector('input[aria-label="Usage refresh timeout in seconds"]') as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(timeoutInput, "60");
+      timeoutInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickAria("Save usage timeout");
+
+    expect(executeSettings).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Timeout must be less than 60 seconds.");
   });
 });
