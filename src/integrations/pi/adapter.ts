@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import {
   applyEdits,
@@ -23,7 +23,6 @@ import type {
 } from "../agents/snapshot.js";
 
 const PROVIDER_ID = "Token" as const;
-const STATE_SCHEMA = "Token-pi-integration-v1" as const;
 const THINKING_LEVELS = [
   "off",
   "minimal",
@@ -43,11 +42,6 @@ export interface PiIntegrationAdapter extends AgentIntegrationAdapter {
 export interface CreatePiIntegrationAdapterOptions {
   readonly agentDirectory: string;
   readonly stateDirectory: string;
-}
-
-interface PiIntegrationState {
-  readonly schemaVersion: typeof STATE_SCHEMA;
-  readonly providerHash: string;
 }
 
 interface ParsedDocument {
@@ -185,39 +179,6 @@ function buildProvider(
   });
 }
 
-async function atomicWrite(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporaryPath, content, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-    await rename(temporaryPath, path);
-  } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
-async function readState(path: string): Promise<PiIntegrationState | undefined> {
-  const raw = await readOptional(path);
-  if (raw === undefined) return undefined;
-  const parsed = JSON.parse(raw) as unknown;
-  if (
-    !isRecord(parsed) ||
-    parsed.schemaVersion !== STATE_SCHEMA ||
-    typeof parsed.providerHash !== "string"
-  ) {
-    throw new Error("Token Pi integration state is invalid.");
-  }
-  return Object.freeze({
-    schemaVersion: STATE_SCHEMA,
-    providerHash: parsed.providerHash,
-  });
-}
-
 function result(
   observedState: AgentIntegrationEffect["observedState"],
   modelCount: number,
@@ -238,7 +199,6 @@ export function createPiIntegrationAdapter(
   options: CreatePiIntegrationAdapterOptions,
 ): PiIntegrationAdapter {
   const modelsPath = join(options.agentDirectory, "models.json");
-  const statePath = join(options.stateDirectory, "pi-integration-state.json");
   const lockTarget = join(options.stateDirectory, "pi-integration.lock");
   let operationQueue = Promise.resolve();
 
@@ -271,21 +231,7 @@ export function createPiIntegrationAdapter(
     try {
       const originalRaw = await readOptional(modelsPath);
       const document = parseDocument(originalRaw);
-      const state = await readState(statePath);
       const current = document.providers[PROVIDER_ID];
-      if (
-        current !== undefined &&
-        (state === undefined || hashProvider(current) !== state.providerHash)
-      ) {
-        return result(
-          "conflict",
-          0,
-          snapshot.warnings,
-          false,
-          'Pi provider "Token" exists but is not the last value injected by Token.',
-        );
-      }
-
       const providerHash = hashProvider(provider);
       if (current !== undefined && providerHash === hashProvider(current)) {
         return result("managed", models.length, snapshot.warnings, false);
@@ -328,10 +274,6 @@ export function createPiIntegrationAdapter(
             "Pi models.json changed while Token was preparing the injection.",
           );
         }
-        await atomicWrite(
-          statePath,
-          `${JSON.stringify({ schemaVersion: STATE_SCHEMA, providerHash }, null, 2)}\n`,
-        );
         await rename(temporaryPath, modelsPath);
       } finally {
         await rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -369,25 +311,13 @@ export function createPiIntegrationAdapter(
     });
     try {
       const originalRaw = await readOptional(modelsPath);
-      const state = await readState(statePath);
       if (originalRaw === undefined) {
-        await rm(statePath, { force: true });
         return result("native", 0, [], false);
       }
       const document = parseDocument(originalRaw);
       const current = document.providers[PROVIDER_ID];
       if (current === undefined) {
-        await rm(statePath, { force: true });
         return result("native", 0, [], false);
-      }
-      if (state === undefined || hashProvider(current) !== state.providerHash) {
-        return result(
-          "conflict",
-          0,
-          [],
-          false,
-          'Pi provider "Token" no longer matches the last value injected by Token.',
-        );
       }
 
       const edits = modify(
@@ -431,7 +361,6 @@ export function createPiIntegrationAdapter(
       } finally {
         await rm(temporaryPath, { force: true }).catch(() => undefined);
       }
-      await rm(statePath, { force: true });
       const verified = parseDocument(await readOptional(modelsPath));
       if (verified.providers[PROVIDER_ID] !== undefined) {
         throw new Error("Pi models.json retained the Token provider after restore.");

@@ -185,7 +185,7 @@ describe("Backend Application public lifecycle seam", () => {
     }
   });
 
-  it("quits even when a disabled Pi integration sees a user-owned Token provider", async () => {
+  it("removes the reserved Token provider while preserving other Pi providers", async () => {
     const { configPath, descriptorPath } = await fixture();
     const root = dirname(configPath);
     const piAgentDirectory = join(root, "pi-agent-user-owned");
@@ -195,6 +195,9 @@ describe("Backend Application public lifecycle seam", () => {
     "Token": {
       "apiKey": "user-owned",
       "models": []
+    },
+    "other": {
+      "apiKey": "preserve-me"
     }
   }
 }\n`;
@@ -235,7 +238,11 @@ describe("Backend Application public lifecycle seam", () => {
           acknowledged: true,
         });
         expect(quit.outcome).toBe("drained");
-        expect(await readFile(modelsPath, "utf8")).toBe(userModels);
+        const restored = JSON.parse(await readFile(modelsPath, "utf8")) as {
+          providers: Record<string, Record<string, unknown>>;
+        };
+        expect(restored.providers.Token).toBeUndefined();
+        expect(restored.providers.other?.apiKey).toBe("preserve-me");
       } finally {
         await client.close();
       }

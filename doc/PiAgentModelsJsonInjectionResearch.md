@@ -148,11 +148,11 @@ Token 有两份完全不同的文件：
 
 Pi 的 `models.json` 是用户所有、且本机已经有内容。最小安全合同应是“管理一个 Provider 子树”，而不是“管理一份文件”：
 
-1. **独占一个明确 Provider ID。** 若第一次启用时 `providers.Token` 已存在且不是 Token 已知的上次写入，返回冲突，不覆盖。
+1. **独占一个明确 Provider ID。** `providers.Token` 是 Token 保留并完全拥有的子树。注入时无条件创建或整体覆盖；用户对该子树的手工修改没有保留承诺。
 2. **每次操作重新读取。** 解析当前 JSONC，保留所有非 Token Provider、未知字段和用户内容。Pi 支持注释和尾逗号，整份 `JSON.stringify` 会破坏注释；实现应使用定点 JSONC 编辑，或至少把格式/注释损失作为显式产品限制。
 3. **比较并交换。** 保存读取时的字节摘要；获得文件锁后再次读取，若内容不同则返回冲突。Token 现有 `ModelsJsonAuthority` 已实现“重读、锁、字节比较、临时文件原子替换”的成熟模式（`src/models-config/authority.ts:19-31`、`:539-608`），Pi 集成应复用原则而不是共享内部 Provider 运行状态。
 4. **写前完整验证。** 合并后用固定的 Pi 0.84.2 schema 验证整份文档；写到同目录临时文件、落盘后 rename，再重读验证。
-5. **子树级 preimage/期望值。** Token 集成状态记录该 Provider 原先“不存在/存在及其值”和上次注入子树的摘要。关闭集成时，只在当前子树仍等于上次注入值时删除或恢复该子树；若用户改过它，返回 drift/conflict，绝不回滚整份文件或覆盖其他 Provider 的后续修改。
+5. **恢复只删除独占子树。** 不保存 `providers.Token` 的 preimage、ownership hash 或用户修改。恢复时若该子树存在就删除，不存在则成功 no-op；绝不删除整份 `models.json`，也不修改其他 Provider。
 6. **凭据边界独立。** 注入的是 Token 客户端令牌，不是任何上游 Provider 凭据。令牌落入 `models.json`、Pi `auth.json` 或环境变量的选择必须作为单独的安全/生命周期合同；Pi 文档支持 literal、环境插值、命令和 `/login`/`auth.json`（`pi-agent/packages/coding-agent/docs/models.md:134-176`）。
 7. **原子同步多个收藏。** 一次同步在内存生成完整的收藏模型数组并一次提交；不要逐模型多次改写，以免 Pi 刷新时看到半完成集合。
 

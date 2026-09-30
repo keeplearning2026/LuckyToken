@@ -200,8 +200,8 @@ describe("Pi integration adapter", () => {
     expect(parsed.providers).toEqual({ other: { apiKey: "after" } });
   });
 
-  it("does not delete a Token provider that no longer matches the last injection", async () => {
-    const root = await mkdtemp(join(tmpdir(), "Token-pi-conflict-"));
+  it("deletes the Token provider even when it changed after injection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-pi-restore-owned-"));
     const agentDirectory = join(root, "pi-agent");
     const stateDirectory = join(root, "state");
     const modelsPath = join(agentDirectory, "models.json");
@@ -214,13 +214,16 @@ describe("Pi integration adapter", () => {
     const restored = await adapter.restore();
 
     expect(restored).toMatchObject({
-      observedState: "conflict",
-      changed: false,
+      observedState: "native",
+      changed: true,
     });
-    expect(await readFile(modelsPath, "utf8")).toBe(changed);
+    const parsed = JSON.parse(stripJsonComments(await readFile(modelsPath, "utf8"))) as {
+      providers: Record<string, unknown>;
+    };
+    expect(parsed.providers.Token).toBeUndefined();
   });
 
-  it("does not claim or delete a pre-existing Token provider", async () => {
+  it("overwrites a pre-existing Token provider and later deletes it", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-pi-preexisting-"));
     const agentDirectory = join(root, "pi-agent");
     const stateDirectory = join(root, "state");
@@ -230,6 +233,9 @@ describe("Pi integration adapter", () => {
     "Token": {
       "apiKey": "user-owned",
       "models": []
+    },
+    "other": {
+      "apiKey": "preserve-me"
     }
   }
 }\n`;
@@ -238,14 +244,24 @@ describe("Pi integration adapter", () => {
     const adapter = createPiIntegrationAdapter({ agentDirectory, stateDirectory });
 
     await expect(adapter.inject(snapshot(), "favorite")).resolves.toMatchObject({
-      observedState: "conflict",
-      changed: false,
+      observedState: "managed",
+      changed: true,
     });
+    const injected = JSON.parse(stripJsonComments(await readFile(modelsPath, "utf8"))) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+    expect(injected.providers.Token?.apiKey).toBe("Token-local");
+    expect(injected.providers.other?.apiKey).toBe("preserve-me");
+
     await expect(adapter.restore()).resolves.toMatchObject({
-      observedState: "conflict",
-      changed: false,
+      observedState: "native",
+      changed: true,
     });
-    expect(await readFile(modelsPath, "utf8")).toBe(original);
+    const restored = JSON.parse(stripJsonComments(await readFile(modelsPath, "utf8"))) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+    expect(restored.providers.Token).toBeUndefined();
+    expect(restored.providers.other?.apiKey).toBe("preserve-me");
   });
 
   it("does not create models.json for an empty scope and removes an older injection", async () => {
