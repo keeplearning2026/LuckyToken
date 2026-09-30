@@ -22,7 +22,6 @@ import {
   type ExecutionOperation,
 } from "../../src/execution.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
-import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { createTokenRuntime } from "../../src/runtime.js";
 import {
   startTokenHttpServer,
@@ -158,7 +157,6 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
       } as unknown as Models;
       const handler = createAnthropicMessagesHandler({
         models,
-        modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         maxRequestBytes: 1_000_000,
         requestTimeoutMs: 345_678,
         routerDefaults: {},
@@ -317,7 +315,6 @@ describe("Anthropic Messages Semantic Conversion full Journey", () => {
       const handler = createAnthropicMessagesHandler({
         models,
         executeOperation: semanticExecution,
-        modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         maxRequestBytes: 1_000_000,
         routerDefaults: {},
         createMessageId: () => "msg_semantic_failure",

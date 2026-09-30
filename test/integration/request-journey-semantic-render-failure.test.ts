@@ -22,7 +22,6 @@ import {
 import {
   createAnthropicMessagesHandler,
 } from "../../src/protocols/anthropic/handler.js";
-import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { createTokenRuntime } from "../../src/runtime.js";
 import {
   startTokenHttpServer,
@@ -169,7 +168,6 @@ describe("Request Journey semantic response degradation", () => {
     const createMessageId = vi.fn(() => "msg_client");
     const anthropic = createAnthropicMessagesHandler({
       models,
-      modelValidityPolicy: defaultAnthropicModelValidityPolicy,
       createMessageId,
       maxRequestBytes: 1_000_000,
       routerDefaults: {},

@@ -1,7 +1,6 @@
 import type { FetchFunction } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 
-import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { createCommandCodeTestRuntime as createTokenRuntime } from "../support/commandcode-serving.js";
 
 it("preserves accepted conversation semantics on the CommandCode wire", async () => {
@@ -21,10 +20,6 @@ it("preserves accepted conversation semantics on the CommandCode wire", async ()
       ].join("\n"),
     );
   };
-  const modelValidityPolicy: AnthropicModelValidityPolicy = {
-    revision: "fixture-image-v1",
-    hasCertifiedImageFidelity: () => true,
-  };
   const runtime = createTokenRuntime({
     clientApiKey: "client-key",
     commandCodeApiKey: "upstream-key",
@@ -32,7 +27,6 @@ it("preserves accepted conversation semantics on the CommandCode wire", async ()
     fetch,
     modelId: "model",
     modelInput: ["text", "image"],
-    anthropicModelValidityPolicy: modelValidityPolicy,
     createSessionId: () => "00000000-0000-4000-8000-000000000040",
   });
 

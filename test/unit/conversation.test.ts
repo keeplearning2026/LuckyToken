@@ -238,28 +238,23 @@ describe("Anthropic conversation conversion", () => {
       ],
     });
 
-    const remote = convertValidatedAnthropicRequest(
-      validateAnthropicSourceRequest({
-        model: "client-model",
-        max_tokens: 32,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "image", source: { type: "url", url: "https://example.test/a.png" } },
-            ],
-          },
-        ],
-      }),
-      100,
-    );
-    expect(remote.invocation).not.toHaveProperty("supplement");
-    expect(remote.client.notices).toContainEqual(
-      expect.objectContaining({
-        code: "anthropic_unrepresentable_content_omitted",
-        action: "ignore",
-      }),
-    );
+    expect(() =>
+      convertValidatedAnthropicRequest(
+        validateAnthropicSourceRequest({
+          model: "client-model",
+          max_tokens: 32,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "image", source: { type: "url", url: "https://example.test/a.png" } },
+              ],
+            },
+          ],
+        }),
+        100,
+      ),
+    ).toThrow(/URL image sources are not representable in Pi Context/u);
     expect(() =>
       validateAnthropicSourceRequest({
         model: "client-model",

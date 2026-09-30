@@ -263,6 +263,88 @@ describe("configured serving composition", () => {
     });
   });
 
+  it("admits a declared base64 image through the production semantic composition", async () => {
+    let upstream: Request | undefined;
+    const fetch: FetchFunction = async (input, init) => {
+      if (String(input).includes("/provider/v1/models")) {
+        return new Response(JSON.stringify({ object: "list", data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      upstream = new Request(input, init);
+      return commandCodeText("image accepted");
+    };
+    const { configPath } = await writeConfiguration();
+    const credentialRecordStore = await createSeededCredentialRecordStore([{
+      providerId: "commandcode-private",
+      credential: { type: "api_key", key: "provider-secret" },
+    }]);
+    const composition = await createConfiguredTokenDataPlane({
+      config: await loadTokenCliConfig(configPath),
+      credentialRecordStore,
+      fetch,
+      importModule: commandCodeProviderImportModule(),
+      createMessageId: () => "msg_image",
+      createSessionId: () => "00000000-0000-4000-8000-000000000252",
+      now: () => 1_786_400_000_000,
+    });
+    compositions.push(composition);
+
+    const response = await composition.runtime.handle(
+      new Request("http://Token.test/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "commandcode-private/deepseek/deepseek-v4.1-flash",
+          max_tokens: 32,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "describe" },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: "AA==",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      content: [{ type: "text", text: "image accepted" }],
+    });
+    expect(upstream).toBeDefined();
+    await expect(upstream?.json()).resolves.toMatchObject({
+      params: {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "describe" },
+              {
+                type: "image",
+                image: "data:image/png;base64,AA==",
+                mimeType: "image/png",
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it("serves every packaged CommandCode model through the route", async () => {
     const fetch: FetchFunction = async () =>
       commandCodeText("served through Pi");

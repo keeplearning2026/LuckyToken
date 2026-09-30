@@ -117,3 +117,27 @@ certified:
 The fix must be decided before lane commitment. A post-failure fallback from
 Provider Native to Semantic Conversion would violate the independent-lane
 contract and is not an acceptable removal path.
+
+## URL image input in Anthropic semantic conversion
+
+Affected combination:
+
+- Client: Anthropic Messages request with `image.source.type: "url"`
+- Lane: Semantic Conversion
+
+### Trigger
+
+A request contains a URL image source instead of a base64 image source.
+
+### Observed behavior
+
+Token rejects the request before dispatch with a 400 `invalid_request_error`:
+
+```text
+URL image sources are not representable in Pi Context
+```
+
+Pi `Context` images carry only base64 `data` plus `mimeType`; there is no URL
+representation. Token does not fetch remote image URLs for semantic conversion,
+so a URL image cannot become model-visible Pi content. Use a base64 image source,
+or a Provider Native lane whose own wire preserves the URL.

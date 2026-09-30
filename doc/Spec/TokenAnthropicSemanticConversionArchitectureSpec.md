@@ -60,7 +60,7 @@ converter.
 | --- | --- | --- |
 | top-level system text | `pi-context` | initial system prompt |
 | legal message-level system text | `pi-context` | validate Anthropic placement, then preserve as same-position Pi `SystemMessage`; target compatibility handled after model resolution |
-| ordinary messages and supported images | `pi-context` | preserve model-visible content |
+| ordinary messages and supported base64 images | `pi-context` | preserve model-visible content; the resolved model must declare `input: image` |
 | tools, tool-use IDs, tool results | `pi-context` | invalid identity/relationship fails |
 | `max_tokens` | `pi-common-option` | map to Pi `maxTokens`; Pi owns downstream output/reasoning budgeting |
 | `temperature` | `pi-common-option` | direct neutral Pi semantic |
@@ -73,7 +73,8 @@ converter.
 | `disable_parallel_tool_use` | `client-warning-omit` | omit unsupported parallelism constraint with a bounded warning |
 | ordinary tool definitions | `pi-context` | source-only extensions omitted with warning |
 | typed server tools | `provider-private-omit-warning` | never misrepresented as Client-executable tools |
-| URL image or unresolved binary document | `provider-private-omit-warning` when optional, otherwise `critical-failure` | never fabricate fetched content |
+| URL image | `critical-failure` | Pi `Context` has no URL image representation; fail in conversion and never fabricate fetched content |
+| unresolved binary document | `provider-private-omit-warning` when optional, otherwise `critical-failure` | never fabricate fetched content |
 | document/search visible text | `named-degradation` | preserve visible text; omit metadata/citations with warning |
 | final assistant prefill | `pi-context` visible history | retain as history; warn when prefill constraint is unavailable |
 | `tool_reference` / mid-conversation tool update | `critical-failure` | Pi public Context cannot express it safely at this boundary |

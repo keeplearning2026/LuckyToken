@@ -4,7 +4,7 @@ import type { RouterOptionDefaults } from "../../src/protocols/anthropic/options
 import type { CommandCodeCompatibilityPolicy } from "../../packages/provider-commandcode-private/src/provider.js";
 
 export const SERVING_CONFORMANCE_REVISION =
-  "sha256:ea4e5bdc22b8cdef256ba891c4642d39fd212b9a2ec3a63e3b68d145696ef828";
+  "sha256:8f75a891f381085f429195901c34d422ed3353ffc46e51f96ffd8a25879eba41";
 
 const CERTIFIED_PROVIDER_ID = "commandcode-private";
 const CERTIFIED_API_ID = "commandcode-private";
@@ -37,7 +37,6 @@ const VERIFICATION_COMMANDS = [
 
 export interface ServingCertificationFacts {
   readonly model: Model<string>;
-  readonly modelValidityPolicyRevision: string;
   readonly compatibility: CommandCodeCompatibilityPolicy;
   readonly fetchBound: boolean;
   readonly routerDefaults: RouterOptionDefaults;
@@ -78,7 +77,6 @@ export interface ServingCertificationManifest {
       readonly version: "2023-06-01";
       readonly betas: readonly string[];
     };
-    readonly modelValidity: { readonly revision: string };
     readonly inboundBoundary: Readonly<Record<string, string>>;
     readonly authEndpoint: Readonly<Record<string, string>>;
     readonly toolId: string;
@@ -239,9 +237,6 @@ export function certifyServingComposition(
   const endpoint = resolveCertifiedEndpoint(facts.model.baseUrl, failures);
   const compatibility = snapshotCompatibility(facts.compatibility, failures);
 
-  if (facts.modelValidityPolicyRevision.trim().length === 0) {
-    failures.push("Anthropic model-validity policy revision is not immutable");
-  }
   if (!facts.fetchBound) {
     failures.push("A bound fetch implementation is required; ambient fetch is prohibited");
   }
@@ -336,7 +331,6 @@ export function certifyServingComposition(
     },
     policies: {
       sourceProfile: { version: "2023-06-01", betas: [] },
-      modelValidity: { revision: facts.modelValidityPolicyRevision },
       inboundBoundary: {
         runtime: "whatwg-request-response-v1",
         listener: "node-http-adapter-v1",

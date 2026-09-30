@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertAnthropicModelAwareValidity,
-  defaultAnthropicModelValidityPolicy,
 } from "../../src/protocols/anthropic/representability.js";
 import { validateAnthropicSourceRequest } from "../../src/protocols/anthropic/request.js";
 
@@ -29,7 +28,6 @@ function assertValidForTarget(request: Record<string, unknown>): void {
       ...request,
     }),
     target,
-    defaultAnthropicModelValidityPolicy,
   );
 }
 
@@ -69,7 +67,6 @@ describe("Anthropic main-call validity", () => {
     expect(() => assertAnthropicModelAwareValidity(
       request,
       target,
-      defaultAnthropicModelValidityPolicy,
     )).not.toThrow();
   });
 });

@@ -21,8 +21,6 @@ import {
   type CommandCodeCompatibilityPolicy,
 } from "../../packages/provider-commandcode-private/src/provider.js";
 import type { CommandCodeConfiguration } from "../../packages/provider-commandcode-private/src/configuration.js";
-import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
-import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { createAnthropicMessagesHandler } from "../../src/protocols/anthropic/handler.js";
 import {
   SYNTHETIC_CLIENT_HISTORY_API,
@@ -50,7 +48,6 @@ export interface CommandCodeServingTestOptions {
   requestTimeoutMs?: number;
   shutdownSignal?: AbortSignal;
   routerDefaults?: RouterOptionDefaults;
-  anthropicModelValidityPolicy?: AnthropicModelValidityPolicy;
   now?: () => number;
   /** Public Model data-plane seam (handler-level test stub). */
   publicModels?: PublicModelSource;
@@ -92,9 +89,6 @@ export function createCommandCodeServingTestComposition(
   const maxRequestBytes = options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
   const certification = certifyServingComposition({
     model,
-    modelValidityPolicyRevision:
-      options.anthropicModelValidityPolicy?.revision ??
-      defaultAnthropicModelValidityPolicy.revision,
     compatibility: compatibilitySource,
     fetchBound: typeof options.fetch === "function",
     routerDefaults,
@@ -141,9 +135,6 @@ export function createCommandCodeServingTestComposition(
   const anthropic = createAnthropicMessagesHandler({
     models,
     createSessionId,
-    ...(options.anthropicModelValidityPolicy === undefined
-      ? {}
-      : { modelValidityPolicy: options.anthropicModelValidityPolicy }),
     ...(options.createMessageId === undefined
       ? {}
       : { createMessageId: options.createMessageId }),

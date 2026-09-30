@@ -741,7 +741,6 @@ interface AnthropicMessagesHandlerOptions {
   createSessionId?: () => string;
   configuration?: AnthropicConfiguration;
   providerNativeLane?: AnthropicProviderNativeLane;
-  modelValidityPolicy?: AnthropicModelValidityPolicy;
   createMessageId?: () => string;
   publicModels?: PublicModelSource;
   requestTimeoutMs?: number;
@@ -859,8 +858,9 @@ interface AnthropicConversionResult {
 
 当前 accepted deterministic surface 包括 text、system prompt、历史 ordinary thinking、
 base64 image shape、client tool definition、tool use/result、temperature、
-`output_config.effort` 和 stream flag；但 image 还必须通过 model-aware fidelity
-policy，production 默认 policy 当前不认证 image path，因此不会仅凭 JSON shape 放行。
+`output_config.effort` 和 stream flag；image 在 model resolution 后只要求 Pi model
+声明 `input: image`，Provider wire 的图片表示属于 Pi Provider/API adapter。
+URL image 因 Pi `Context` 没有 URL 表示，在转换层直接失败而不是降级丢弃。
 
 **只转换消费清单声明的字段。** 本模块维护 `ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS`
 （spec 声明的 positive-consumer union，用于派生 bounded omission warning，不是
@@ -956,26 +956,21 @@ string 数组）仍是 `InvalidRequest`。
 > 填写“发送图片”，但某个模型未必可靠支持图片。这里就是开工前的能力复核；无法
 > 确认时宁可明确拒绝，也不假装支持。
 
-```ts
-interface AnthropicModelValidityPolicy {
-  revision: string;
-  hasCertifiedImageFidelity(model): boolean;
-}
-```
+当前检查：
 
-此 policy 只补足 Pi `Model` 没有表达的 Anthropic source-validity facts，不能演变成
-通用 capability registry。当前检查：
-
-- 对非 `anthropic-messages` 目标：URL image source、URL/文档 content、嵌套
-  `tool_result` 等 native-only content 拒绝（`UnsupportedFeature`）；
-- image 同时要求 Pi model 声明 `input: image` 和 policy 认证 fidelity；
+- 对非 `anthropic-messages` 目标：URL/base64 document、嵌套 `tool_result` 等
+  native-only content 拒绝（`UnsupportedFeature`）；
+- image 只要求 resolved Pi model 声明 `input: image`；Provider wire 的图片转换
+  由 Pi Provider/API adapter 负责，Token 不维护独立的 image fidelity policy；
+- URL image 在 Pi `Context` 无表示，因此在 semantic converter 中直接抛出
+  `UnsupportedFeature`，不会降级为 notice 丢弃；
 - final-assistant prefill 不检查（转换时仅作 ordinary assistant history 表示）；
 - historical thinking 不在 representability 拒绝——真正处理在
   `semantic/reasoning/request.ts`：resolved model 无 reasoning 能力时降级为文本/
   省略并发布 `degraded`，而不是拒绝。
 
-谁使用：handler 在 model resolution 后调用。它使用：validated Anthropic facts、
-Pi `Model` 和 source profile。Provider 不参与这一步。
+谁使用：handler 在 model resolution 后调用。它使用 validated Anthropic facts 和
+Pi `Model`。Provider 不参与这一步。
 
 ## 5.6 Pi options composition — `options.ts`
 
@@ -2165,8 +2160,6 @@ Subpath `Token/protocols/anthropic`：
 ```text
 createAnthropicMessagesHandler
 AnthropicMessagesHandlerOptions
-defaultAnthropicModelValidityPolicy
-AnthropicModelValidityPolicy
 ```
 
 私有包 `@token/provider-commandcode-private` 与

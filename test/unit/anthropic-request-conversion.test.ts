@@ -760,8 +760,9 @@ describe("08: Anthropic known content and tools", () => {
     );
   });
 
-  it("omits URL images and fails an unsupported image media type precisely", () => {
-    const converted = parseAnthropicTextInvocation(
+  it("fails URL images and an unsupported image media type precisely", () => {
+    expect(() =>
+      parseAnthropicTextInvocation(
         body([
           {
             role: "user",
@@ -774,14 +775,8 @@ describe("08: Anthropic known content and tools", () => {
           },
         ]),
         1,
-      );
-    expect(converted.invocation.pi.context.messages).toEqual([]);
-    expect(converted.client.notices).toContainEqual(
-      expect.objectContaining({
-        code: "anthropic_unrepresentable_content_omitted",
-        action: "ignore",
-      }),
-    );
+      ),
+    ).toThrow(/URL image sources are not representable in Pi Context/u);
     expect(() =>
       parseAnthropicTextInvocation(
         body([

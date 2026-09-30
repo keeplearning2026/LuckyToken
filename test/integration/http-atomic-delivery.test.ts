@@ -19,8 +19,6 @@ import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
 } from "../../src/protocols/anthropic/handler.js";
-import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
-
 const model: Model<string> = {
   id: "model",
   name: "model",
@@ -123,7 +121,6 @@ function dependencies(
   } as unknown as Models;
   const anthropic = createAnthropicMessagesHandler({
     models,
-    modelValidityPolicy: defaultAnthropicModelValidityPolicy,
     createMessageId: () => "msg_client",
     maxRequestBytes: 1_000_000,
     routerDefaults: {},
@@ -283,7 +280,6 @@ describe("atomic HTTP failure delivery", () => {
           resolveRequestModel: (value) => value,
           fetch: globalThis.fetch,
         }),
-        modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         createMessageId: () => "msg_client",
         maxRequestBytes: 1_000_000,
         routerDefaults: {},

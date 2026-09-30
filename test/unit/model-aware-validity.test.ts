@@ -2,10 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { UnsupportedFeature } from "../../src/protocols/anthropic/failures.js";
-import {
-  assertAnthropicModelAwareValidity,
-  type AnthropicModelValidityPolicy,
-} from "../../src/protocols/anthropic/representability.js";
+import { assertAnthropicModelAwareValidity } from "../../src/protocols/anthropic/representability.js";
 import { validateAnthropicSourceRequest } from "../../src/protocols/anthropic/request.js";
 
 function fixtureModel(
@@ -26,12 +23,15 @@ function fixtureModel(
   };
 }
 
-function policy(imageFidelity: boolean): AnthropicModelValidityPolicy {
-  return {
-    revision: "test-policy-v1",
-    hasCertifiedImageFidelity: () => imageFidelity,
-  };
-}
+const base64ImageMessage = {
+  role: "user",
+  content: [
+    {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AA==" },
+    },
+  ],
+};
 
 describe("Anthropic model-aware validity", () => {
   it("allows historical thinking to fall back visibly on a non-reasoning model", () => {
@@ -55,56 +55,35 @@ describe("Anthropic model-aware validity", () => {
       assertAnthropicModelAwareValidity(
         request,
         fixtureModel(["text"], false),
-        policy(false),
       ),
     ).not.toThrow();
     expect(() =>
       assertAnthropicModelAwareValidity(
         request,
         fixtureModel(["text"], true),
-        policy(false),
       ),
     ).not.toThrow();
   });
 
-  it("requires both model image input capability and a certified fidelity path", () => {
+  it("accepts image input when and only when the resolved model declares it", () => {
     const request = validateAnthropicSourceRequest({
       model: "model",
       max_tokens: 32,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: "image/png", data: "AA==" },
-            },
-          ],
-        },
-      ],
+      messages: [base64ImageMessage],
     });
 
     expect(() =>
       assertAnthropicModelAwareValidity(
         request,
-        fixtureModel(["text"]),
-        policy(true),
-      ),
-    ).toThrow(UnsupportedFeature);
-    expect(() =>
-      assertAnthropicModelAwareValidity(
-        request,
         fixtureModel(["text", "image"]),
-        policy(false),
-      ),
-    ).toThrow(UnsupportedFeature);
-    expect(() =>
-      assertAnthropicModelAwareValidity(
-        request,
-        fixtureModel(["text", "image"]),
-        policy(true),
       ),
     ).not.toThrow();
+    expect(() =>
+      assertAnthropicModelAwareValidity(request, fixtureModel(["text"])),
+    ).toThrow(UnsupportedFeature);
+    expect(() =>
+      assertAnthropicModelAwareValidity(request, fixtureModel(["text"])),
+    ).toThrow(/does not declare image input/u);
   });
 
   it("allows final assistant content to be sent as ordinary history", () => {
@@ -116,14 +95,9 @@ describe("Anthropic model-aware validity", () => {
         { role: "assistant", content: "answer: " },
       ],
     });
-    const resolvedModel = fixtureModel();
 
     expect(() =>
-      assertAnthropicModelAwareValidity(
-        request,
-        resolvedModel,
-        policy(false),
-      ),
+      assertAnthropicModelAwareValidity(request, fixtureModel()),
     ).not.toThrow();
   });
 });

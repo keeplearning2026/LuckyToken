@@ -186,6 +186,122 @@ describe("CommandCode Goat Provider Package", () => {
     });
   });
 
+  it("carries declared user images onto both OpenAI-shaped provider wires", async () => {
+    const responsesBodies: Array<Record<string, unknown>> = [];
+    const responsesProvider = providerPackage.createProvider({
+      configuration: packageConfiguration(),
+      configurationPath:
+        'providerPackages["@token/provider-commandcode-goat"]',
+      host: {
+        fetch: async (input, init) => {
+          responsesBodies.push(
+            (await new Request(input, init).json()) as Record<string, unknown>,
+          );
+          return new Response('{"error":{"message":"captured"}}', {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        },
+        now: () => 1,
+        createUuid: () => "00000000-0000-4000-8000-000000000109",
+      },
+    });
+    const responsesModel = responsesProvider
+      .getModels()
+      .find((entry) => entry.id === "deepseek/deepseek-v4.1-flash");
+    expect(responsesModel).toMatchObject({ api: "openai-responses" });
+
+    for await (const event of responsesProvider.streamSimple(
+      responsesModel!,
+      normalizeContext({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "describe" },
+              { type: "image", mimeType: "image/png", data: "AA==" },
+            ],
+            timestamp: 1,
+          },
+        ],
+      }),
+      { apiKey: "goat-secret", maxTokens: 32 },
+    )) {
+      void event;
+    }
+
+    expect(responsesBodies).toHaveLength(1);
+    expect(responsesBodies[0]?.input).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "input_image",
+              detail: "auto",
+              image_url: "data:image/png;base64,AA==",
+            }),
+          ]),
+        }),
+      ]),
+    );
+
+    const completionBodies: Array<Record<string, unknown>> = [];
+    const completionsProvider = providerPackage.createProvider({
+      configuration: packageConfiguration(),
+      configurationPath:
+        'providerPackages["@token/provider-commandcode-goat"]',
+      host: {
+        fetch: async (input, init) => {
+          completionBodies.push(
+            (await new Request(input, init).json()) as Record<string, unknown>,
+          );
+          return openAICompletion("image accepted");
+        },
+        now: () => 1,
+        createUuid: () => "00000000-0000-4000-8000-000000000110",
+      },
+    });
+    const completionsModel = completionsProvider
+      .getModels()
+      .find((entry) => entry.id === "google/gemini-3.7-flash");
+    expect(completionsModel).toMatchObject({ api: "openai-completions" });
+
+    await completionsProvider
+      .streamSimple(
+        completionsModel!,
+        normalizeContext({
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "describe" },
+                { type: "image", mimeType: "image/png", data: "AA==" },
+              ],
+              timestamp: 1,
+            },
+          ],
+        }),
+        { apiKey: "goat-secret", maxTokens: 32 },
+      )
+      .result();
+
+    expect(completionBodies).toHaveLength(1);
+    expect(completionBodies[0]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "image_url",
+              image_url: { url: "data:image/png;base64,AA==" },
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
   it("dispatches a catalog-only Anthropic model without rebuilding the Provider", async () => {
     const requests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {

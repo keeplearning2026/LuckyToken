@@ -43,7 +43,6 @@ function facts(
 ): ServingCertificationFacts {
   return {
     model: model(),
-    modelValidityPolicyRevision: "fixture-model-validity-v1",
     compatibility: {},
     fetchBound: true,
     routerDefaults: {},
@@ -131,7 +130,6 @@ describe("serving composition certification", () => {
       },
       policies: {
         sourceProfile: { version: "2023-06-01", betas: [] },
-        modelValidity: { revision: "fixture-model-validity-v1" },
         inboundBoundary: {
           runtime: "whatwg-request-response-v1",
           listener: "node-http-adapter-v1",

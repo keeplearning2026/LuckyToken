@@ -2,7 +2,6 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import { ServingCertificationFailure } from "../support/commandcode-serving-certification.js";
-import type { AnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import {
   createCommandCodeServingTestComposition,
   createCommandCodeTestRuntime,
@@ -91,10 +90,6 @@ describe("certified serving composition", () => {
     });
     const compatibility = { cliEnvironment: "prod" };
     const modelInput: Array<"text" | "image"> = ["text", "image"];
-    const validityPolicy = {
-      revision: "image-policy-v1",
-      hasCertifiedImageFidelity: (): boolean => true,
-    } satisfies AnthropicModelValidityPolicy;
     const upstreamRequests: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
       upstreamRequests.push(new Request(input, init));
@@ -112,11 +107,10 @@ describe("certified serving composition", () => {
       modelId: "model",
       modelInput,
       commandCodeCompatibility: compatibility,
-      anthropicModelValidityPolicy: validityPolicy,
       createSessionId: () => "00000000-0000-4000-8000-000000000121",
     };
     const composition = createCommandCodeServingTestComposition(runtimeOptions);
-    const { runtime, certification } = composition;
+    const { runtime } = composition;
 
     const handling = runtime.handle(
       anthropicRequest({
@@ -139,13 +133,10 @@ describe("certified serving composition", () => {
 
     compatibility.cliEnvironment = "staging";
     modelInput.splice(0, modelInput.length, "text");
-    validityPolicy.revision = "mutated-policy";
-    validityPolicy.hasCertifiedImageFidelity = () => false;
     releaseFetch?.();
 
     const response = await handling;
     expect(response.status).toBe(200);
-    expect(certification.policies.modelValidity.revision).toBe("image-policy-v1");
     expect(upstreamRequests[0]?.headers.get("x-cli-environment")).toBe(
       "production",
     );

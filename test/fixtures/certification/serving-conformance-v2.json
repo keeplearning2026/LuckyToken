@@ -11,7 +11,7 @@
     {
       "id": "anthropic-pi-conversion",
       "path": "doc/Protocols/Anthropic-Pi AI IR Conversion Method.md",
-      "sha256": "sha256:f50a27b90b637fc4a3b689512605ddd52447f9317b93d6b10da960a2c88fc741"
+      "sha256": "sha256:cb9ffe430f7fdb36198ef05d6188c185ab065b594a8da49ab8937c051cc40c85"
     },
     {
       "id": "responses-pi-conversion",
@@ -40,6 +40,7 @@
         "test/unit/anthropic-rendering.test.ts",
         "test/unit/anthropic-sse.test.ts",
         "test/integration/anthropic-ingress-order.test.ts",
+        "test/integration/anthropic-image-admission.test.ts",
         "test/integration/anthropic-atomic-sse.test.ts",
         "test/integration/anthropic-thinking-round-trip.test.ts",
         "test/integration/request-journey-tracer.test.ts"

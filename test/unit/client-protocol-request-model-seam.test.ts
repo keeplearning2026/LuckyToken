@@ -8,7 +8,6 @@ import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
 } from "../../src/protocols/anthropic/handler.js";
-import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import {
   identityRequestModelResolver,
   type RequestModelResolver,
@@ -115,7 +114,6 @@ describe("Client Protocol request-model seam", () => {
     ): HttpBoundaryDependencies {
       const options: AnthropicMessagesHandlerOptions = {
         models,
-        modelValidityPolicy: defaultAnthropicModelValidityPolicy,
         createMessageId: () => "msg_client",
         maxRequestBytes: 1_000_000,
         routerDefaults: {},

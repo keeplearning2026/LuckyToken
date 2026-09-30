@@ -952,12 +952,9 @@ function convertBlock(
     case "image": {
       const source = block.source as Record<string, unknown>;
       if (source.type !== "base64") {
-        notices.push(requestNotice(
-          UNREPRESENTABLE_CONTENT_OMITTED_NOTICE_CODE,
-          "ignore",
-          jsonPath,
-        ));
-        return undefined;
+        throw new UnsupportedFeature(
+          "URL image sources are not representable in Pi Context",
+        );
       }
       if (block.cache_control !== undefined) {
         notices.push(requestNotice(

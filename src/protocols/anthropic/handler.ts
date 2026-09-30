@@ -55,8 +55,6 @@ import {
 } from "./request.js";
 import {
   assertAnthropicModelAwareValidity,
-  defaultAnthropicModelValidityPolicy,
-  type AnthropicModelValidityPolicy,
 } from "./representability.js";
 import { convertAssistantMessageToAnthropicResponse } from "./response.js";
 import { renderAnthropicAtomicSse } from "./sse.js";
@@ -342,7 +340,6 @@ export interface AnthropicMessagesHandlerOptions {
   readonly createSessionId?: () => string;
   readonly configuration?: AnthropicConfiguration;
   readonly providerNativeLane?: AnthropicProviderNativeLane;
-  readonly modelValidityPolicy?: AnthropicModelValidityPolicy;
   readonly createMessageId?: () => string;
   /** Backend-lifetime Public Model source. When absent, direct handler tests
    * use the canonical provider/model selector seam. */
@@ -364,7 +361,6 @@ interface AnthropicMessagesDependencies {
   readonly createSessionId: () => string;
   readonly configuration: AnthropicConfiguration;
   readonly providerNativeLane: AnthropicProviderNativeLane | undefined;
-  readonly modelValidityPolicy: AnthropicModelValidityPolicy;
   readonly createMessageId: () => string;
   readonly publicModels: PublicModelSource | undefined;
   readonly maxRequestBytes: number;
@@ -847,11 +843,7 @@ async function handleAnthropicMessages(
       requestConversionLocation,
     );
     const validatedRequest = validateAnthropicSourceRequest(body);
-    assertAnthropicModelAwareValidity(
-      validatedRequest,
-      model,
-      dependencies.modelValidityPolicy,
-    );
+    assertAnthropicModelAwareValidity(validatedRequest, model);
     completeJourneyStep(
       journey,
       "p3.validate_client_semantics",
@@ -1582,16 +1574,6 @@ async function handleAnthropicMessagesWithJourney(
 export function createAnthropicMessagesHandler(
   options: AnthropicMessagesHandlerOptions,
 ): ClientProtocolHandler {
-  const policy = options.modelValidityPolicy ?? defaultAnthropicModelValidityPolicy;
-  const hasCertifiedImageFidelity = policy.hasCertifiedImageFidelity;
-  const modelValidityPolicy: AnthropicModelValidityPolicy = Object.freeze({
-    revision: policy.revision,
-    hasCertifiedImageFidelity: (
-      model: Parameters<
-        AnthropicModelValidityPolicy["hasCertifiedImageFidelity"]
-      >[0],
-    ) => hasCertifiedImageFidelity(model),
-  });
   const dependencies: AnthropicMessagesDependencies = Object.freeze({
     models: options.models,
     createSessionId: options.createSessionId ?? randomUUID,
@@ -1600,7 +1582,6 @@ export function createAnthropicMessagesHandler(
         ? parseAnthropicConfiguration()
         : bindAnthropicConfiguration(options.configuration),
     providerNativeLane: options.providerNativeLane,
-    modelValidityPolicy,
     createMessageId: options.createMessageId ?? (() => `msg_${randomUUID()}`),
     publicModels: options.publicModels,
     maxRequestBytes: options.maxRequestBytes,

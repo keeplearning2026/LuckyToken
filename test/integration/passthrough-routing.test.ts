@@ -14,7 +14,6 @@ import {
   createAnthropicMessagesHandler,
   type AnthropicMessagesHandlerOptions,
 } from "../../src/protocols/anthropic/handler.js";
-import { defaultAnthropicModelValidityPolicy } from "../../src/protocols/anthropic/representability.js";
 import { identityRequestModelResolver } from "../../src/protocols/anthropic/options.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
 import { ambientProfileBindings } from "../support/profile-binding-fixture.js";
@@ -114,7 +113,6 @@ function dependencies(
 ): HttpBoundaryDependencies {
   const options: AnthropicMessagesHandlerOptions = {
     models,
-    modelValidityPolicy: defaultAnthropicModelValidityPolicy,
     createMessageId: () => "msg_client",
     maxRequestBytes: 1_000_000,
     routerDefaults: {},

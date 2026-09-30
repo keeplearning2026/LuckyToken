@@ -158,7 +158,8 @@ After reasoning preparation and model resolution, one shared Pi Context compatib
 | Anthropic block | Pi content/message | Action |
 |---|---|---|
 | string / `text` | TextContent | Preserve text exactly. Drop citations/cache marker metadata with no target slot. |
-| base64 `image` | ImageContent | Decode bytes and preserve MIME. Invalid base64 is invalid request; unsupported MIME/capability is a conversion failure only when Pi/selected route cannot accept the image. |
+| base64 `image` | ImageContent | Decode bytes and preserve MIME. Invalid base64 is invalid request. After model resolution, the resolved Pi `Model.input` must include `image`; otherwise the request fails before dispatch. Provider wire representation belongs to the Pi Provider/API adapter. |
+| URL `image` | none | Critical failure: Pi Context has no URL image representation; never fetch or fabricate fetched content. |
 | `tool_result` | ToolResultMessage | Use §6. |
 | `document` with directly readable text | TextContent | Preserve text in source order; drop source/citation presentation metadata. Resolver-dependent PDF/URL/file sources follow the adapter's trusted resolver boundary. |
 | `search_result` | deterministic text/content | Preserve representable result text and ordering; do not invent a client ToolCall. |
