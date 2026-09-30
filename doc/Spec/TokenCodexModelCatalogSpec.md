@@ -53,7 +53,7 @@ Use the narrowest authority that owns each fact:
 | Routable reasoning controls | Pi `getSupportedThinkingLevels(model)` and `Model.thinkingLevelMap`, projected into Token's five Codex slots and intersected with the installed Codex vocabulary |
 | Tool/search/verbosity/summary behavior | Token's OpenAI Responses request/response implementation and end-to-end tests |
 | Official OpenAI model capabilities | Official OpenAI model documentation; this is model evidence, not the external catalog parser schema |
-| Restore result | User-configured `integrations.codex.preimage.*` values |
+| Restore result | Codex native defaults: managed routing/search keys absent from `config.toml` |
 
 No reference project is authoritative for Token. Reference implementations provide failure evidence and useful strategies only.
 
@@ -292,39 +292,30 @@ Generation is deterministic and the Token-owned file is atomically rewritten on 
 3. Run the parser and prompt-input gates in section 8 against the candidate.
 4. If either gate fails, report failure and leave `config.toml` and the published catalog unchanged.
 5. Atomically publish `<CODEX_HOME>/token-model-catalog.json`.
-6. Converge the three root fields and `[features].standalone_web_search = true` to the active target, preserving other feature entries.
-7. Atomically publish `config.toml` and read it back.
+6. Parse the current TOML and converge the three root fields and `[features].standalone_web_search = true` with a formatting-preserving TOML patch, preserving unrelated keys, tables, comments, and line endings.
+7. Publish `config.toml` with compare-before-rename: immediately before rename, re-read the file and refuse with `conflict` if its bytes no longer match the admitted input; then read the committed file back.
 8. Report `restartRequired: true`; never claim that an already-running Codex process reloaded the catalog.
 
 The catalog path stored in TOML must resolve exactly to the Token-owned file inside the resolved Codex home. An absolute path is used so behavior does not depend on the launching process's working directory.
 
-If root fields contain a malformed string assignment or the final readback does not match the target, fail with a visible conflict. Unrelated root fields, tables, comments, authentication files, and caches remain untouched.
+If `config.toml` is invalid TOML, a managed path has an incompatible container/type, or final readback does not match the target, fail with a visible conflict rather than guessing a repair. Unrelated root fields, tables, comments, authentication files, and caches remain untouched.
 
 ### 7.2 Disable/shutdown
 
-Restore is target-driven, not history-driven. The user configures:
+Restore is fixed and history-free. Token owns the following four configuration locations only while the Codex integration is managed:
 
 ```text
-integrations.codex.preimage.modelProvider
-integrations.codex.preimage.openaiBaseUrl
-integrations.codex.preimage.modelCatalogJson
-integrations.codex.preimage.standaloneWebSearch
+model_provider
+openai_base_url
+model_catalog_json
+[features].standalone_web_search
 ```
 
-Each setting is independently interpreted:
+Disable or Backend shutdown removes all four managed settings from `config.toml`. Absence delegates behavior to Codex's native defaults: the built-in `openai` provider is selected when no model provider is required by a higher-precedence layer, no custom OpenAI base URL is applied, no external model catalog is loaded, and standalone web search uses Codex's own default feature state.
 
-| Setting value | Restore action |
-| --- | --- |
-| string | Set the corresponding root field to exactly that string |
-| `null` / blank UI value | Remove the corresponding root field |
+Token does not save a preimage and does not preserve edits to these four settings while the integration is managed. Sync/startup convergence may overwrite such edits with the active Token target. Restore removes the four settings regardless of their current managed values. Unrelated root fields, tables, comments, and other `[features]` entries remain untouched.
 
-The standalone search restore value is independently `true`, `false`, or `null`. A boolean sets `[features].standalone_web_search`; `null` removes that key. If Token created an otherwise empty `[features]` table, restore removes that table as well. Existing unrelated entries remain.
-
-Defaults are all `null`: [settings catalog](../../src/settings/catalog.ts#L189). The UI intentionally maps an empty field to `null`: [Advanced settings](../../packages/desktop-shell/src/renderer/settings/AdvancedSettings.tsx#L91).
-
-Token does not guess what was previously present and does not continuously update these restore targets from `config.toml`. Changing the configured preimage while the integration is enabled changes the next restore result by user choice.
-
-After restore, read back all three root values and the standalone search feature before clearing managed state. The Token catalog file may remain on disk because the restored `model_catalog_json` no longer references it; it is Token-owned and will be overwritten by the next injection.
+Restore owns only `features.standalone_web_search`, not the `features` container. Therefore an empty `[features]` table may remain after the managed key is removed; this is semantically native and avoids deleting a table that is outside Token's ownership. After restore, read back all four managed locations and verify they are absent before clearing managed state. The Token catalog file may remain on disk because `model_catalog_json` no longer references it; it is Token-owned and will be overwritten by the next injection.
 
 ## 8. Validation gates
 
@@ -346,7 +337,7 @@ Tests must prove:
 - neutral base instructions contain no false native GPT identity;
 - catalog generation is deterministic;
 - failure before commit leaves both Codex files unchanged;
-- enable produces the three root fields and standalone search feature; disable applies the configured restore values for all four settings.
+- enable produces the three root fields and standalone search feature; disable removes all four managed settings while preserving unrelated config.
 
 ### Gate B: installed CLI parser
 
@@ -413,7 +404,7 @@ The existing real-client harness is reusable evidence for wire behavior: [online
 After the online gate:
 
 1. disable the integration;
-2. verify the three root fields and standalone search feature equal the configured restore targets exactly;
+2. verify the three root fields and standalone search feature are absent, returning Codex to native defaults;
 3. launch a fresh `codex debug models` or harmless Codex command to prove the restored config parses;
 4. confirm the Token catalog file is no longer referenced;
 5. confirm no `models_cache.json`, native catalog, or auth file was changed by Token.
@@ -431,7 +422,7 @@ All gates were exercised with the installed `codex-cli 0.149.0`. Every run used 
 | DeepSeek V4 Flash apply patch | `apply_patch_tool_type: freeform` | passed |
 | Qwen 3.8 Max image | reasoning `low/medium/xhigh`, text/image input | passed |
 
-In this 2026-08-21 record, each enable first passed the installed-CLI parser and prompt preflight against the complete candidate catalog. Each disable restored the then-managed three nullable preimage values to `null` by removing those root fields while preserving unrelated fixture configuration. Codex itself appended a project trust table during some runs; restore deliberately preserved that unrelated Codex-owned change.
+In this 2026-08-21 record, each enable first passed the installed-CLI parser and prompt preflight against the complete candidate catalog. Each disable removed the managed routing fields while preserving unrelated fixture configuration. Codex itself appended a project trust table during some runs; restore deliberately preserved that unrelated Codex-owned change.
 
 ### Search validation record: 2026-09-28
 
@@ -461,7 +452,7 @@ The Codex synchronization feature is complete only when:
 - preflight failure changes no active Codex routing state;
 - the three root fields and standalone search feature converge and read back exactly;
 - a new real CLI process completes the online scenarios through Token;
-- disabling restores the user-configured nullable preimage exactly; and
+- disabling removes the managed routing/search settings so Codex uses native defaults; and
 - evidence shows Token did not modify Codex native catalogs, caches, or authentication state.
 
 Gates A through F passed on `codex-cli 0.149.0` using the validation record above. A different installed Codex version must be re-certified under section 9; parser preflight remains mandatory before every publish.

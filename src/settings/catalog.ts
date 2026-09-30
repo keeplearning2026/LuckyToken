@@ -245,28 +245,6 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     sensitivity: "public",
     applyMode: "hot-apply",
   }),
-  ...[
-    "modelProvider",
-    "openaiBaseUrl",
-    "modelCatalogJson",
-  ].map((field) =>
-    Object.freeze({
-      key: `integrations.codex.preimage.${field}`,
-      type: "nullable-string" as const,
-      default: null,
-      validation: Object.freeze({ type: "nullable-string" as const }),
-      sensitivity: "public" as const,
-      applyMode: "hot-apply" as const,
-    }),
-  ),
-  Object.freeze({
-    key: "integrations.codex.preimage.standaloneWebSearch",
-    type: "nullable-boolean" as const,
-    default: null,
-    validation: Object.freeze({ type: "nullable-boolean" as const }),
-    sensitivity: "public" as const,
-    applyMode: "hot-apply" as const,
-  }),
 ]);
 
 const allKeys = Object.freeze(definitions.map((definition) => definition.key));

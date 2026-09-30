@@ -29,10 +29,6 @@ describe("authoritative registered settings catalog", () => {
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
       "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
-      "integrations.codex.preimage.modelProvider",
-      "integrations.codex.preimage.openaiBaseUrl",
-      "integrations.codex.preimage.modelCatalogJson",
-      "integrations.codex.preimage.standaloneWebSearch",
     ]);
 
     const anthropic = byKey.get("protocols.anthropic-messages.enabled");
@@ -119,31 +115,14 @@ describe("authoritative registered settings catalog", () => {
       "integrations.codex.preimage.modelProvider",
       "integrations.codex.preimage.openaiBaseUrl",
       "integrations.codex.preimage.modelCatalogJson",
+      "integrations.codex.preimage.standaloneWebSearch",
     ]) {
-      expect(byKey.get(key)).toMatchObject({
-        key,
-        type: "nullable-string",
-        default: null,
-        validation: { type: "nullable-string" },
-        sensitivity: "public",
-        applyMode: "hot-apply",
-        value: null,
+      expect(byKey.has(key)).toBe(false);
+      expect(registry.validate(key, null)).toMatchObject({
+        valid: false,
+        error: `${key} is not a registered setting`,
       });
-      expect(registry.validate(key, null)).toMatchObject({ valid: true });
-      expect(registry.validate(key, "configured-value")).toMatchObject({ valid: true });
-      expect(registry.validate(key, "")).toMatchObject({ valid: false });
     }
-    const featureKey = "integrations.codex.preimage.standaloneWebSearch";
-    expect(byKey.get(featureKey)).toMatchObject({
-      type: "nullable-boolean",
-      default: null,
-      validation: { type: "nullable-boolean" },
-      value: null,
-    });
-    expect(registry.validate(featureKey, null)).toEqual({ valid: true });
-    expect(registry.validate(featureKey, true)).toEqual({ valid: true });
-    expect(registry.validate(featureKey, false)).toEqual({ valid: true });
-    expect(registry.validate(featureKey, "false")).toMatchObject({ valid: false });
   });
 
   it("never exposes unregistered fields or ambient internal variables", () => {

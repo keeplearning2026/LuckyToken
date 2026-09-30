@@ -525,7 +525,7 @@ describe("Backend Application public lifecycle seam", () => {
     }
   });
 
-  it("restores Codex from persisted desktop settings across application restarts", async () => {
+  it("restores Codex to native defaults across application restarts", async () => {
     const { configPath, descriptorPath } = await fixture();
     await writeInjectableModel(configPath);
     const codexHome = join(dirname(configPath), "codex-home");
@@ -564,16 +564,6 @@ describe("Backend Application public lifecycle seam", () => {
       });
       try {
         await client.hello(controlPlaneVersion);
-        await client.executeSettingsCommand({
-          command: "set",
-          key: "integrations.codex.preimage.openaiBaseUrl",
-          value: "https://restore.example/v1",
-        });
-        await client.executeSettingsCommand({
-          command: "set",
-          key: "integrations.codex.preimage.modelCatalogJson",
-          value: "C:/restore/catalog.json",
-        });
         await client.executeAgentIntegrationsCommand({
           command: "set_scope",
           agentId: "codex",
@@ -605,8 +595,8 @@ describe("Backend Application public lifecycle seam", () => {
       await first.application.close();
       const firstRestore = await readFile(join(codexHome, "config.toml"), "utf8");
       expect(firstRestore).not.toContain("model_provider");
-      expect(firstRestore).toContain('openai_base_url = "https://restore.example/v1"');
-      expect(firstRestore).toContain('model_catalog_json = "C:/restore/catalog.json"');
+      expect(firstRestore).not.toContain("openai_base_url");
+      expect(firstRestore).not.toContain("model_catalog_json");
       expect(firstRestore).toContain('model = "before-model"');
 
       const second = await startTokenApplication({
@@ -626,8 +616,8 @@ describe("Backend Application public lifecycle seam", () => {
       await second.application.close();
       const secondRestore = await readFile(join(codexHome, "config.toml"), "utf8");
       expect(secondRestore).not.toContain("model_provider");
-      expect(secondRestore).toContain('openai_base_url = "https://restore.example/v1"');
-      expect(secondRestore).toContain('model_catalog_json = "C:/restore/catalog.json"');
+      expect(secondRestore).not.toContain("openai_base_url");
+      expect(secondRestore).not.toContain("model_catalog_json");
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -670,11 +660,6 @@ describe("Backend Application public lifecycle seam", () => {
       });
       try {
         await client.hello(controlPlaneVersion);
-        await client.executeSettingsCommand({
-          command: "set",
-          key: "integrations.codex.preimage.openaiBaseUrl",
-          value: "https://before.example/v1",
-        });
         await client.executeAgentIntegrationsCommand({
           command: "set_scope",
           agentId: "codex",
@@ -701,7 +686,7 @@ describe("Backend Application public lifecycle seam", () => {
 
       await writeFile(join(codexHome, "config.toml"), "", "utf8");
       await started.application.close();
-      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe(originalCodexConfig);
+      expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe("");
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -825,8 +810,9 @@ describe("Backend Application public lifecycle seam", () => {
     await writeFile(
       join(stateDirectory, "integration-state.json"),
       `${JSON.stringify({
-        schemaVersion: "Token-codex-integration-v3",
+        schemaVersion: "Token-codex-integration-v4",
         desiredEnabled: true,
+        scope: "favorite",
         managed: false,
       })}\n`,
       "utf8",
@@ -907,10 +893,12 @@ describe("Backend Application public lifecycle seam", () => {
     await writeFile(
       join(stateDirectory, "integration-state.json"),
       `${JSON.stringify({
-        schemaVersion: "Token-codex-integration-v3",
+        schemaVersion: "Token-codex-integration-v4",
         desiredEnabled: true,
+        scope: "favorite",
         managed: true,
         appliedGeneration: 0,
+        appliedScope: "favorite",
       })}\n`,
       "utf8",
     );

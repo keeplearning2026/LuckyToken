@@ -475,10 +475,10 @@ The active target uses Codex's built-in `openai` Responses provider, points
 `openai_base_url` at Token's loopback `/v1` endpoint, and writes a generated
 model catalog under Codex home. The standalone web-search feature lets Codex
 execute `web.run` and send `/v1/alpha/search` to Token's Direct Mode endpoint.
-Token applies the user-configured restore targets on disable or Backend
-shutdown; each target defaults to removing the managed key. If those keys drift while integration is enabled, the
-state is reported as drift/conflict instead of guessing or overwriting
-silently.
+On disable or Backend shutdown, Token removes those four managed settings so
+Codex returns to its native defaults. Token does not preserve user edits to
+those managed settings while the integration is active; Sync converges them
+back to the active Token target. Unrelated Codex settings remain untouched.
 
 The generated catalog combines Codex-native models with the currently published
 Token Public Models. Codex-native requests use Direct Mode and preserve the

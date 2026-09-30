@@ -323,7 +323,7 @@ openai_base_url = "http://127.0.0.1:<public-model-port>/v1"
 model_catalog_json = "<Token-managed catalog>"
 ```
 
-同时保留 preimage，因此 disable/shutdown 可以恢复原值。Public Model snapshot generation 用于判断是否需要重新同步 catalog。
+Token 不保存这些配置项的 preimage。Codex integration 处于 managed 状态时，Token 独占 `model_provider`、`openai_base_url`、`model_catalog_json` 和 `features.standalone_web_search`；disable/shutdown 删除这四个 managed 值，让 Codex 回到原生默认行为。Public Model snapshot generation 用于判断是否需要重新同步 catalog。
 
 ---
 

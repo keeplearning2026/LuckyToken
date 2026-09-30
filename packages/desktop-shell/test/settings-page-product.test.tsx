@@ -14,7 +14,20 @@ async function click(name: string): Promise<void> { await act(async () => { cons
 async function clickAria(name: string): Promise<void> { await act(async () => { const button = container.querySelector(`button[aria-label="${name}"]`); if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing button: ${name}`); button.click(); }); }
 async function render(api: ReturnType<typeof createFakeDesktopApi>): Promise<void> { await act(async () => root.render(<App api={api} />)); await act(async () => { (container.querySelector('button[aria-label="Settings"]') as HTMLButtonElement).click(); }); }
 
-const settingsResult = () => ({ outcome: "ok" as const, settings: Object.fromEntries(["modelProvider", "openaiBaseUrl", "modelCatalogJson"].map((field) => { const key = `integrations.codex.preimage.${field}`; return [key, { key, type: "nullable-string" as const, default: null, validation: { type: "nullable-string" }, sensitivity: "public" as const, applyMode: "hot-apply" as const, value: null }]; })) });
+const settingsResult = () => ({
+  outcome: "ok" as const,
+  settings: {
+    "integrations.codex.searchModel": {
+      key: "integrations.codex.searchModel",
+      type: "string" as const,
+      default: "gpt-6-luna",
+      validation: { type: "model-name" },
+      sensitivity: "public" as const,
+      applyMode: "hot-apply" as const,
+      value: "gpt-6-luna",
+    },
+  },
+});
 
 describe("Settings product slice", () => {
   it("shows one unified history total", async () => {
@@ -122,13 +135,12 @@ describe("Settings product slice", () => {
     expect(container.textContent).toContain("provider_attention");
     await click("Advanced");
     await click("Agents");
-    expect(container.textContent).toContain("Model provider");
-    expect(container.textContent).toContain("model_provider");
+    expect(container.textContent).toContain("Search request model");
+    expect(container.textContent).not.toContain("Restore values");
+    expect(container.textContent).not.toContain("model_provider");
     expect(container.textContent).not.toContain("deep diagnostics");
-    const saveButton = container.querySelector('button[aria-label="Save restore values"]');
-    expect(saveButton?.textContent).toBe("");
-    expect(saveButton?.querySelector(".lucide-save")).not.toBeNull();
-    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.preimage.modelProvider", "integrations.codex.preimage.openaiBaseUrl", "integrations.codex.preimage.modelCatalogJson", "integrations.codex.preimage.standaloneWebSearch", "integrations.codex.searchModel"] });
+    expect(container.querySelector('button[aria-label="Save restore values"]')).toBeNull();
+    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.searchModel"] });
   });
 
   it("saves the configured Codex search model from Advanced settings", async () => {
@@ -282,7 +294,7 @@ describe("Settings product slice", () => {
       setter?.call(input, "5");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await click("Save usage interval");
+    await click("Save");
     expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: settingKey, value: 5 });
     expect(input.value).toBe("5");
   });

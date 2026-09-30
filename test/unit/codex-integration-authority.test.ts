@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { inspectCodexManagedConfig } from "../../src/integrations/codex/config-toml.js";
 import {
   createCodexIntegrationAuthority,
   type CodexCatalogBuildResult,
@@ -43,12 +44,6 @@ async function fixture(options: {
   routedSlug?: string;
   validateCatalog?: (content: string) => Promise<void>;
   injectedModelCount?: number;
-  restoreTarget?: {
-    readonly modelProvider: string | null;
-    readonly openaiBaseUrl: string | null;
-    readonly modelCatalogJson: string | null;
-    readonly standaloneWebSearch?: boolean | null;
-  };
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "Token-codex-integration-"));
   roots.push(root);
@@ -84,13 +79,6 @@ async function fixture(options: {
     ),
     buildCatalog,
     validateCatalog: options.validateCatalog ?? (async () => undefined),
-    restoreTarget: () => ({
-        modelProvider: null,
-        openaiBaseUrl: null,
-        modelCatalogJson: null,
-        standaloneWebSearch: null,
-        ...options.restoreTarget,
-      }),
   });
   return { root, codexHome, stateDirectory, authority, buildScopes };
 }
@@ -113,83 +101,20 @@ function injectionSnapshot(): AgentInjectionSnapshot {
 }
 
 describe("Codex integration authority", () => {
-  it("migrates v2 Enable intent while discarding its obsolete preimage", async () => {
-    const root = await mkdtemp(join(tmpdir(), "Token-codex-invalid-state-"));
-    roots.push(root);
-    const codexHome = join(root, "codex");
-    const stateDirectory = join(root, "state");
-    await mkdir(codexHome, { recursive: true });
-    await mkdir(stateDirectory, { recursive: true });
-    const original = 'openai_base_url = "https://before.example/v1"\n';
-    await writeFile(join(codexHome, "config.toml"), original, "utf8");
-    await writeFile(
-      join(stateDirectory, "integration-state.json"),
-      `${JSON.stringify({
-        schemaVersion: "Token-codex-integration-v2",
-        desiredEnabled: true,
-        preimage: {
-          modelProvider: 42,
-          openaiBaseUrl: null,
-          modelCatalogJson: null,
-        },
-      })}\n`,
-      "utf8",
-    );
-    const authority = createCodexIntegrationAuthority({
-      codexHome,
-      stateDirectory,
-      endpoint: () => "http://127.0.0.1:3000/v1",
-      nativeCatalog: nativeSource([{ slug: "gpt-native" }]),
-      buildCatalog: async (native) => ({
-        content: `${JSON.stringify({ models: native })}\n`,
-        modelCount: native.length,
-        injectedModelCount: 1,
-        warnings: [],
-      }),
-      validateCatalog: async () => undefined,
-    });
-
-    const started = await authority.reconcile("startup");
-    expect(started).toMatchObject({ desiredEnabled: true, observedState: "managed" });
-    expect(await readFile(join(codexHome, "config.toml"), "utf8")).toContain(
-      'openai_base_url = "http://127.0.0.1:3000/v1"',
-    );
-    expect(authority.directModels.has("gpt-native")).toBe(true);
-
-    await authority.reconcile("shutdown");
-    expect(await readFile(join(codexHome, "config.toml"), "utf8")).toBe("");
-  });
-
-  it("migrates the v2 managed fact but restores only the configured target", async () => {
-    const fx = await fixture({
-      config: [
-        'model_provider = "openai"',
-        'openai_base_url = "http://127.0.0.1:3000/v1"',
-        `model_catalog_json = "${join("ignored", "old-catalog.json").replaceAll("\\", "\\\\")}"`,
-        'model = "keep-me"',
-        "",
-      ].join("\n"),
-    });
+  it("rejects obsolete integration-state schemas instead of migrating them", async () => {
+    const fx = await fixture();
     await mkdir(fx.stateDirectory, { recursive: true });
     await writeFile(
       join(fx.stateDirectory, "integration-state.json"),
       `${JSON.stringify({
         schemaVersion: "Token-codex-integration-v2",
-        desiredEnabled: false,
-        preimage: {
-          modelProvider: "obsolete-provider",
-          openaiBaseUrl: "https://obsolete.example/v1",
-          modelCatalogJson: "C:/obsolete/catalog.json",
-        },
+        desiredEnabled: true,
       })}\n`,
       "utf8",
     );
 
-    const restored = await fx.authority.reconcile("startup");
-
-    expect(restored).toMatchObject({ desiredEnabled: false, observedState: "native" });
-    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(
-      'model = "keep-me"\n',
+    await expect(fx.authority.query()).rejects.toThrow(
+      "Codex integration state is invalid",
     );
   });
 
@@ -327,12 +252,6 @@ describe("Codex integration authority", () => {
   it("manages standalone search without changing other feature entries", async () => {
     const fx = await fixture({
       config: 'model = "m"\r\n[features]\r\nfoo = true\r\nstandalone_web_search = false\r\n',
-      restoreTarget: {
-        modelProvider: null,
-        openaiBaseUrl: null,
-        modelCatalogJson: null,
-        standaloneWebSearch: false,
-      },
     });
     await fx.authority.reconcile("enable");
     await fx.authority.reconcile("sync");
@@ -341,7 +260,8 @@ describe("Codex integration authority", () => {
     expect((active.match(/standalone_web_search\s*=/gu) ?? [])).toHaveLength(1);
     await fx.authority.reconcile("disable");
     const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
-    expect(restored).toContain("foo = true\r\nstandalone_web_search = false\r\n");
+    expect(restored).toContain("foo = true\r\n");
+    expect(restored).not.toContain("standalone_web_search");
   });
 
   it("reports conflicting standalone search assignments without changing config", async () => {
@@ -356,11 +276,16 @@ describe("Codex integration authority", () => {
     'features = { standalone_web_search = false }\n',
     '"features"."standalone_web_search" = false\n',
     '[features.extra]\nvalue = true\n',
-  ])("does not append a table over another TOML features form: %s", async (config) => {
+  ])("converges valid alternate TOML features forms: %s", async (config) => {
     const fx = await fixture({ config });
     const result = await fx.authority.reconcile("enable");
-    expect(result.observedState).toBe("conflict");
-    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(config);
+    const active = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+
+    expect(result.observedState).toBe("managed");
+    expect(inspectCodexManagedConfig(active)).toMatchObject({
+      ok: true,
+      values: { standaloneWebSearch: true },
+    });
   });
 
   it("rejects a malformed quoted standalone feature key", async () => {
@@ -370,7 +295,7 @@ describe("Codex integration authority", () => {
     expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(config);
   });
 
-  it("repeated active convergence never duplicates root keys and blank restore targets delete them", async () => {
+  it("repeated active convergence never duplicates root keys and native restore deletes them", async () => {
     const original = 'openai_base_url = "https://before.example/v1"\nmodel = "gpt-x"\n';
     const fx = await fixture({ config: original });
     await fx.authority.reconcile("enable");
@@ -384,10 +309,15 @@ describe("Codex integration authority", () => {
     expect(countRootKey(active, "model_catalog_json")).toBe(1);
 
     await fx.authority.reconcile("disable");
-    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe('model = "gpt-x"\n');
+    const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+    expect(restored).toContain('model = "gpt-x"');
+    expect(restored).not.toContain("model_provider");
+    expect(restored).not.toContain("openai_base_url");
+    expect(restored).not.toContain("model_catalog_json");
+    expect(restored).not.toContain("standalone_web_search");
   });
 
-  it("disable applies the default all-null restore target and clears Direct Mode", async () => {
+  it("disable restores native defaults and clears Direct Mode", async () => {
     const original = [
       'model_provider = "custom"',
       'model_catalog_json = "C:/user/catalog.json"',
@@ -400,7 +330,6 @@ describe("Codex integration authority", () => {
     const result = await fx.authority.reconcile("disable");
     const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
 
-    expect(restored).toBe('model = "old-model"\n');
     expect(result.desiredEnabled).toBe(false);
     expect(result.message).toBeUndefined();
     expect(result.observedState).toBe("native");
@@ -426,7 +355,7 @@ describe("Codex integration authority", () => {
     expect(await readFile(enabled.catalogPath, "utf8")).toBe(published);
   });
 
-  it("disable restores the three root keys from the configured target", async () => {
+  it("disable removes the managed root keys and preserves unrelated config", async () => {
     const fx = await fixture({
       config: [
         'model_provider = "before"',
@@ -435,11 +364,6 @@ describe("Codex integration authority", () => {
         'model = "keep-me"',
         "",
       ].join("\n"),
-      restoreTarget: {
-        modelProvider: null,
-        openaiBaseUrl: "https://restore.example/v1",
-        modelCatalogJson: "C:/restore/catalog.json",
-      },
     });
     await fx.authority.reconcile("enable");
 
@@ -447,12 +371,12 @@ describe("Codex integration authority", () => {
     const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
 
     expect(restored).not.toContain("model_provider");
-    expect(restored).toContain('openai_base_url = "https://restore.example/v1"');
-    expect(restored).toContain('model_catalog_json = "C:/restore/catalog.json"');
+    expect(restored).not.toContain("openai_base_url");
+    expect(restored).not.toContain("model_catalog_json");
     expect(restored).toContain('model = "keep-me"');
   });
 
-  it("active convergence repairs duplicate or malformed managed keys", async () => {
+  it("refuses invalid TOML during active convergence without rewriting it", async () => {
     const fx = await fixture({ config: 'openai_base_url = "https://before.example/v1"\n' });
     await fx.authority.reconcile("enable");
     await writeFile(
@@ -467,26 +391,16 @@ describe("Codex integration authority", () => {
       "utf8",
     );
 
+    const invalid = await readFile(join(fx.codexHome, "config.toml"), "utf8");
     const synced = await fx.authority.reconcile("sync");
-    const active = await readFile(join(fx.codexHome, "config.toml"), "utf8");
 
-    expect(synced.observedState).toBe("managed");
-    expect(countRootKey(active, "model_provider")).toBe(1);
-    expect(countRootKey(active, "openai_base_url")).toBe(1);
-    expect(countRootKey(active, "model_catalog_json")).toBe(1);
-    expect(active).toContain('model_provider = "openai"');
-    expect(active).toContain('openai_base_url = "http://127.0.0.1:3000/v1"');
+    expect(synced.observedState).toBe("conflict");
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(invalid);
   });
 
-  it("restore converges to the configured target even when managed keys drifted or duplicated", async () => {
-    const original = 'openai_base_url = "https://before.example/v1"\n';
+  it("refuses restore when config.toml became invalid", async () => {
     const fx = await fixture({
-      config: original,
-      restoreTarget: {
-        modelProvider: null,
-        openaiBaseUrl: "https://before.example/v1",
-        modelCatalogJson: null,
-      },
+      config: 'openai_base_url = "https://before.example/v1"\n',
     });
     await fx.authority.reconcile("enable");
     await writeFile(
@@ -501,23 +415,18 @@ describe("Codex integration authority", () => {
       "utf8",
     );
 
+    const invalid = await readFile(join(fx.codexHome, "config.toml"), "utf8");
     const disabled = await fx.authority.reconcile("disable");
-    const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
 
-    expect(disabled.observedState).toBe("native");
-    expect(restored).toBe(original);
-    expect(fx.authority.directModels.has("gpt-native")).toBe(false);
+    expect(disabled.observedState).toBe("conflict");
+    expect(disabled.desiredEnabled).toBe(true);
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(invalid);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(true);
   });
 
-  it("shutdown applies the configured restore target without changing durable Enable intent", async () => {
-    const original = 'openai_base_url = "https://before.example/v1"\n';
+  it("shutdown restores native defaults without changing durable Enable intent", async () => {
     const fx = await fixture({
-      config: original,
-      restoreTarget: {
-        modelProvider: null,
-        openaiBaseUrl: "https://before.example/v1",
-        modelCatalogJson: null,
-      },
+      config: 'openai_base_url = "https://before.example/v1"\n',
     });
     await fx.authority.reconcile("enable");
 
@@ -525,11 +434,15 @@ describe("Codex integration authority", () => {
 
     expect(shutdown.desiredEnabled).toBe(true);
     expect(shutdown.needsSync).toBe(true);
-    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(original);
+    const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+    expect(restored).not.toContain("model_provider");
+    expect(restored).not.toContain("openai_base_url");
+    expect(restored).not.toContain("model_catalog_json");
+    expect(restored).not.toContain("standalone_web_search");
     expect(fx.authority.directModels.has("gpt-native")).toBe(false);
   });
 
-  it("shutdown fails instead of claiming success when the configured target cannot be restored", async () => {
+  it("shutdown fails instead of claiming success when native defaults cannot be restored", async () => {
     const fx = await fixture({ config: 'openai_base_url = "https://before.example/v1"\n' });
     await fx.authority.reconcile("enable");
     await rm(join(fx.codexHome, "config.toml"), { force: true });
@@ -540,7 +453,7 @@ describe("Codex integration authority", () => {
     expect(fx.authority.directModels.has("gpt-native")).toBe(true);
   });
 
-  it("keeps Enable ON when the configured restore target cannot be applied", async () => {
+  it("keeps Enable ON when native defaults cannot be restored", async () => {
     const fx = await fixture();
     await fx.authority.reconcile("enable");
     await rm(join(fx.codexHome, "config.toml"), { force: true });
@@ -555,7 +468,7 @@ describe("Codex integration authority", () => {
     expect(fx.authority.directModels.has("gpt-native")).toBe(true);
   });
 
-  it("changes made while Token is closed do not replace the configured restore target", async () => {
+  it("discards managed-key changes made while Token is closed after the next managed lifecycle", async () => {
     const fx = await fixture({ config: 'openai_base_url = "https://before.example/v1"\n' });
     await fx.authority.reconcile("enable");
     await fx.authority.reconcile("shutdown");
@@ -570,7 +483,11 @@ describe("Codex integration authority", () => {
     expect(fx.authority.directModels.has("gpt-native")).toBe(true);
     await fx.authority.reconcile("shutdown");
 
-    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe("");
+    const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
+    expect(restored).not.toContain("model_provider");
+    expect(restored).not.toContain("openai_base_url");
+    expect(restored).not.toContain("model_catalog_json");
+    expect(restored).not.toContain("standalone_web_search");
   });
 
   it("sync republishes native identity into the Token catalog under CODEX_HOME", async () => {
@@ -677,20 +594,13 @@ describe("Codex integration authority", () => {
     expect(await readFile(catalogPath, "utf8")).toBe(originalCatalog);
   });
 
-  it("preserves hash characters in configured TOML restore values", async () => {
+  it("handles hash characters in managed TOML values before restoring defaults", async () => {
     const original = [
       'openai_base_url = "https://before.example/v1#fragment" # user comment',
       'model_catalog_json = "C:/catalogs/#native.json"',
       "",
     ].join("\n");
-    const fx = await fixture({
-      config: original,
-      restoreTarget: {
-        modelProvider: null,
-        openaiBaseUrl: "https://before.example/v1#fragment",
-        modelCatalogJson: "C:/catalogs/#native.json",
-      },
-    });
+    const fx = await fixture({ config: original });
 
     const enabled = await fx.authority.reconcile("enable");
     expect(enabled.observedState).toBe("managed");
@@ -698,8 +608,8 @@ describe("Codex integration authority", () => {
     await fx.authority.reconcile("disable");
     const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
 
-    expect(restored).toContain('openai_base_url = "https://before.example/v1#fragment"');
-    expect(restored).toContain('model_catalog_json = "C:/catalogs/#native.json"');
+    expect(restored).not.toContain("openai_base_url");
+    expect(restored).not.toContain("model_catalog_json");
   });
 
   it("recognizes quoted TOML root keys as the same managed fields instead of adding duplicates", async () => {
@@ -709,14 +619,7 @@ describe("Codex integration authority", () => {
       '\"model_catalog_json\" = "C:/quoted/catalog.json"',
       "",
     ].join("\n");
-    const fx = await fixture({
-      config: original,
-      restoreTarget: {
-        modelProvider: "custom",
-        openaiBaseUrl: "https://quoted.example/v1",
-        modelCatalogJson: "C:/quoted/catalog.json",
-      },
-    });
+    const fx = await fixture({ config: original });
 
     const enabled = await fx.authority.reconcile("enable");
     const active = await readFile(join(fx.codexHome, "config.toml"), "utf8");
@@ -728,12 +631,12 @@ describe("Codex integration authority", () => {
 
     await fx.authority.reconcile("disable");
     const restored = await readFile(join(fx.codexHome, "config.toml"), "utf8");
-    expect(restored).toContain('model_provider = "custom"');
-    expect(restored).toContain('openai_base_url = "https://quoted.example/v1"');
-    expect(restored).toContain('model_catalog_json = "C:/quoted/catalog.json"');
+    expect(restored).not.toContain("model_provider");
+    expect(restored).not.toContain("openai_base_url");
+    expect(restored).not.toContain("model_catalog_json");
   });
 
-  it("injects one authoritative target when managed root keys were duplicated", async () => {
+  it("refuses an initially invalid config with duplicate managed root keys", async () => {
     const original = [
       'openai_base_url = "https://one.example/v1"',
       'openai_base_url = "https://two.example/v1"',
@@ -742,15 +645,10 @@ describe("Codex integration authority", () => {
     const fx = await fixture({ config: original });
 
     const result = await fx.authority.reconcile("enable");
-    const active = await readFile(join(fx.codexHome, "config.toml"), "utf8");
 
-    expect(result.desiredEnabled).toBe(true);
-    expect(result.observedState).toBe("managed");
-    expect(countRootKey(active, "model_provider")).toBe(1);
-    expect(countRootKey(active, "openai_base_url")).toBe(1);
-    expect(countRootKey(active, "model_catalog_json")).toBe(1);
-    expect(active).toContain('model_provider = "openai"');
-    expect(active).toContain('openai_base_url = "http://127.0.0.1:3000/v1"');
-    expect(fx.authority.directModels.has("gpt-native")).toBe(true);
+    expect(result.desiredEnabled).toBe(false);
+    expect(result.observedState).toBe("conflict");
+    expect(await readFile(join(fx.codexHome, "config.toml"), "utf8")).toBe(original);
+    expect(fx.authority.directModels.has("gpt-native")).toBe(false);
   });
 });

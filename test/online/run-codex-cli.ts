@@ -492,12 +492,6 @@ async function prepareIsolatedCodexHome(
             },
           ],
         }),
-      restoreTarget: () => ({
-        modelProvider: null,
-        openaiBaseUrl: null,
-        modelCatalogJson: null,
-        standaloneWebSearch: null,
-      }),
     });
     const enabled = await authority.reconcile("enable");
     if (enabled.observedState !== "managed") {
