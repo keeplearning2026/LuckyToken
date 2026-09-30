@@ -41,6 +41,14 @@ await run(require.resolve("@electron-forge/cli/dist/electron-forge.js"), ["packa
 const added = [...await directories()].filter((name) => !before.has(name));
 if (added.length !== 1) throw new Error(`Expected one packaged output, found ${added.length}`);
 const releaseRoot = join(outputRoot, added[0]);
+await run(join(repositoryRoot, "scripts", "run-with-codex-test-sandbox.mjs"), [
+  "--", process.execPath, "--test",
+  "--test-name-pattern=destroys and reconstructs",
+  join(desktopRoot, "test", "electron-window-lifecycle.e2e.test.mjs"),
+], {
+  ...process.env,
+  TOKEN_PACKAGED_EXECUTABLE: join(releaseRoot, "token-win32-x64", "Token.exe"),
+});
 await run(require.resolve("electron-builder/cli.js"), [
   "--win", "nsis", "--x64",
   "--prepackaged", join(releaseRoot, "token-win32-x64"),

@@ -41,6 +41,11 @@ Each install or reinstall replaces the user's `commandcode-models.json` with
 the current bundled catalog. Normal Backend startup never overwrites that file.
 The portable ZIP is not a Windows release artifact.
 
+On Windows, `npm run build` writes `installer/Token-Setup.exe` only after the
+packaged EXE passes an isolated startup, window reopen, and Backend lifecycle
+test. A failed test stops installer creation. Full release certification still
+uses `npm run release:candidate` or `npm run release:windows`.
+
 Before building a new release version, change only the root `package.json`
 `version` field, then synchronize every shipped workspace and lockfile:
 
