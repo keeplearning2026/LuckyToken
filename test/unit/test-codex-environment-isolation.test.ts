@@ -16,6 +16,14 @@ describe("test Codex environment isolation", () => {
     expect(process.env.TOKEN_TEST_CODEX_SANDBOX).toBe("1");
     expect(resolved).not.toBe(realDefault);
     expect(relativeToTemp.startsWith("..")).toBe(false);
+    for (const [variable, directory] of [
+      ["PI_CODING_AGENT_DIR", "pi-agent"],
+      ["DSH_HOME", "dsh-home"],
+      ["CLAUDE_CONFIG_DIR", "claude-config"],
+    ] as const) {
+      expect(process.env[variable]).toBe(join(process.env.TOKEN_TEST_CODEX_SANDBOX_ROOT!, directory));
+      expect(existsSync(process.env[variable]!)).toBe(true);
+    }
     if (existsSync(configPath)) {
       const config = readFileSync(configPath, "utf8");
       if (/^\s*model_catalog_json\s*=/mu.test(config)) {
@@ -27,7 +35,12 @@ describe("test Codex environment isolation", () => {
 
     const reportPath = process.env.TOKEN_CHILD_REPORT;
     if (reportPath !== undefined) {
-      writeFileSync(reportPath, JSON.stringify({ codexHome: resolved }));
+      writeFileSync(reportPath, JSON.stringify({
+        codexHome: resolved,
+        dshHome: process.env.DSH_HOME,
+        piAgentDirectory: process.env.PI_CODING_AGENT_DIR,
+        claudeConfigDirectory: process.env.CLAUDE_CONFIG_DIR,
+      }));
     }
     if (process.env.TOKEN_TEST_HOLD_OPEN === "1") {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 30_000));

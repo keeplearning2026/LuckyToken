@@ -12,6 +12,7 @@ import type {
 import type { AgentInjectionSnapshot } from "./snapshot.js";
 
 const STATE_SCHEMA = "Token-agent-integrations-v1" as const;
+type AgentRestoreReason = "application-exit" | "gateway-startup-failure";
 
 interface StoredAgentState {
   readonly agentId: AgentIntegrationId;
@@ -62,7 +63,7 @@ export interface AgentIntegrationCoordinator {
   ): Promise<AgentIntegrationsCommandResult>;
   sync(): Promise<AgentIntegrationsCommandResult>;
   startup(): Promise<AgentIntegrationsCommandResult>;
-  shutdown(): Promise<AgentIntegrationsCommandResult>;
+  shutdown(reason?: AgentRestoreReason): Promise<AgentIntegrationsCommandResult>;
 }
 
 export interface CreateAgentIntegrationCoordinatorOptions {
@@ -262,7 +263,7 @@ export function createAgentIntegrationCoordinator(
     const state = await readState();
     const current = state.agents.find((agent) => agent.agentId === agentId);
     if (current === undefined) throw new Error(`Missing Agent state: ${agentId}`);
-    if (current.enabled === enabled) {
+    if (current.enabled === enabled && (enabled || agentId !== "dsh")) {
       return Object.freeze({
         outcome: "ok",
         state: await project(state),
@@ -369,7 +370,8 @@ export function createAgentIntegrationCoordinator(
     const currentSnapshot = await options.snapshot();
     const targets = mode === "sync"
       ? state.agents.filter((agent) => agent.enabled)
-      : state.agents;
+      // DSH keeps its configuration until an explicit disable or application exit.
+      : state.agents.filter((agent) => agent.enabled || agent.agentId !== "dsh");
     const nextById = new Map<AgentIntegrationId, StoredAgentState>();
     const results = await Promise.all(
       targets.map(async (agent): Promise<AgentIntegrationOperationResult> => {
@@ -449,12 +451,14 @@ export function createAgentIntegrationCoordinator(
     });
   };
 
-  const performShutdown = async (): Promise<AgentIntegrationsCommandResult> => {
+  const performShutdown = async (
+    reason: AgentRestoreReason,
+  ): Promise<AgentIntegrationsCommandResult> => {
     const state = await readState();
     const nextById = new Map<AgentIntegrationId, StoredAgentState>();
     const results = await Promise.all(
       state.agents
-        .filter((agent) => agent.enabled)
+        .filter((agent) => agent.enabled && (reason === "application-exit" || agent.agentId !== "dsh"))
         .map(async (agent): Promise<AgentIntegrationOperationResult> => {
         const adapter = adapterById.get(agent.agentId);
         if (adapter === undefined) throw new Error(`Missing adapter: ${agent.agentId}`);
@@ -529,6 +533,6 @@ export function createAgentIntegrationCoordinator(
       enqueue(() => performSetScope(agentId, scope)),
     sync: () => enqueue(() => performApply("sync")),
     startup: () => enqueue(() => performApply("startup")),
-    shutdown: () => enqueue(performShutdown),
+    shutdown: (reason: AgentRestoreReason = "application-exit") => enqueue(() => performShutdown(reason)),
   });
 }

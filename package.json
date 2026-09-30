@@ -1,6 +1,6 @@
 {
   "name": "token",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -105,8 +105,8 @@
     "@earendil-works/pi-ai": "0.87.0",
     "@anthropic-ai/sdk": "0.124.0",
     "@decimalturn/toml-patch": "3.3.0",
-    "@token/provider-contract": "1.4.0",
-    "@token/application-control-plane": "1.4.0",
+    "@token/provider-contract": "1.4.1",
+    "@token/application-control-plane": "1.4.1",
     "jsonc-parser": "3.3.1",
     "openai": "6.40.0",
     "proper-lockfile": "4.1.2",
@@ -115,8 +115,8 @@
     "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@token/provider-commandcode-private": "1.4.0",
-    "@token/provider-commandcode-goat": "1.4.0",
+    "@token/provider-commandcode-private": "1.4.1",
+    "@token/provider-commandcode-goat": "1.4.1",
     "@types/node": "24.12.4",
     "@types/proper-lockfile": "4.1.4",
     "@types/ws": "8.18.1",

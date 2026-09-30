@@ -16,6 +16,7 @@ temp/
 # Integration-test byproduct: a scratch Pi directory written at the repo root.
 .unused-in-memory-pi/
 .task/
+/.codex-tmp-probe/
 reference/
 onlinetest/*/.runs/
 onlinetest/claude/.claude/settings.json

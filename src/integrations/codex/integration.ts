@@ -460,12 +460,21 @@ export function createCodexIntegrationAuthority(
             : "Codex config.toml could not be patched safely.",
       });
     }
-    const configWrite = await replaceTextFileIfUnchanged(
-      configPath,
-      currentConfig,
-      nextConfig,
-    );
+    // Record recovery ownership before config.toml can point at Token.
+    await writeState({ ...committedBeforeApply, managed: true });
+    let configWrite: Awaited<ReturnType<typeof replaceTextFileIfUnchanged>>;
+    try {
+      configWrite = await replaceTextFileIfUnchanged(
+        configPath,
+        currentConfig,
+        nextConfig,
+      );
+    } catch (error) {
+      await writeState(committedBeforeApply);
+      throw error;
+    }
     if (configWrite === "conflict") {
+      await writeState(committedBeforeApply);
       return project(state, {
         observedState: "conflict",
         message:

@@ -19,13 +19,9 @@ import type {
 import { OverviewPage } from "../overview/OverviewPage.js";
 import { ProvidersPage } from "../providers/ProvidersPage.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
+import { AgentIntegrationIcon } from "../settings/AgentIntegrationIcon.js";
 import { useAgentIntegrations } from "../settings/useAgentIntegrations.js";
 import { productPages as pages, type ProductPage } from "./navigation.js";
-
-const claudeIcon = new URL("../assets/claude-code.svg", import.meta.url).href;
-const claudeDesktopIcon = new URL("../assets/claude-desktop.svg", import.meta.url).href;
-const codexIcon = new URL("../assets/codex.svg", import.meta.url).href;
-const deepseekHarnessIcon = new URL("../assets/deepseek-harness.svg", import.meta.url).href;
 
 export interface AppProps {
   readonly api: TokenDesktopApi;
@@ -186,51 +182,51 @@ export function App({ api }: AppProps) {
         <h1>{pageTitle}</h1>
         <div className="runtime-header-status" aria-label="Router status">
           <div className="toolbar-group agent-integration-toolbar" role="group" aria-label="Agent integrations">
-            <button type="button" className={`agent-toolbar-button${claudeIntegration?.enabled ? " on" : ""}`}
+            {agentIntegrations.isToolbarVisible("claude") ? <button type="button" className={`agent-toolbar-button${claudeIntegration?.enabled ? " on" : ""}`}
               aria-label={`${claudeIntegration?.enabled ? "Disable" : "Enable"} Claude Code integration`}
               aria-pressed={claudeIntegration?.enabled ?? false}
               aria-busy={agentIntegrations.busy}
               title={`Claude Code: ${claudeIntegration === undefined ? "Unavailable" : claudeIntegration.enabled ? "On" : "Off"}`}
               disabled={agentIntegrations.busy || claudeIntegration === undefined}
               onClick={() => void agentIntegrations.toggle("claude")}>
-              <img className="agent-claude-mark" src={claudeIcon} alt="" />
-            </button>
-            <button type="button" className={`agent-toolbar-button agent-claude-desktop${claudeDesktopIntegration?.enabled ? " on" : ""}`}
+              <AgentIntegrationIcon agentId="claude" />
+            </button> : null}
+            {agentIntegrations.isToolbarVisible("claude-desktop") ? <button type="button" className={`agent-toolbar-button agent-claude-desktop${claudeDesktopIntegration?.enabled ? " on" : ""}`}
               aria-label={`${claudeDesktopIntegration?.enabled ? "Disable" : "Enable"} Claude Desktop integration`}
               aria-pressed={claudeDesktopIntegration?.enabled ?? false}
               aria-busy={agentIntegrations.busy}
               title={`Claude Desktop: ${claudeDesktopIntegration === undefined ? "Unavailable" : claudeDesktopIntegration.enabled ? "On" : "Off"}`}
               disabled={agentIntegrations.busy || claudeDesktopIntegration === undefined}
               onClick={() => void agentIntegrations.toggle("claude-desktop")}>
-              <img className="agent-claude-desktop-mark" src={claudeDesktopIcon} alt="" />
-            </button>
-            <button type="button" className={`agent-toolbar-button${codexIntegration?.enabled ? " on" : ""}`}
+              <AgentIntegrationIcon agentId="claude-desktop" />
+            </button> : null}
+            {agentIntegrations.isToolbarVisible("codex") ? <button type="button" className={`agent-toolbar-button${codexIntegration?.enabled ? " on" : ""}`}
               aria-label={`${codexIntegration?.enabled ? "Disable" : "Enable"} Codex integration`}
               aria-pressed={codexIntegration?.enabled ?? false}
               aria-busy={agentIntegrations.busy}
               title={`Codex: ${codexIntegration === undefined ? "Unavailable" : codexIntegration.enabled ? "On" : "Off"}`}
               disabled={agentIntegrations.busy || codexIntegration === undefined}
               onClick={() => void agentIntegrations.toggle("codex")}>
-              <img className="agent-codex-mark" src={codexIcon} alt="" />
-            </button>
-            <button type="button" className={`agent-toolbar-button agent-pi${piIntegration?.enabled ? " on" : ""}`}
+              <AgentIntegrationIcon agentId="codex" />
+            </button> : null}
+            {agentIntegrations.isToolbarVisible("pi") ? <button type="button" className={`agent-toolbar-button agent-pi${piIntegration?.enabled ? " on" : ""}`}
               aria-label={`${piIntegration?.enabled ? "Disable" : "Enable"} Pi integration`}
               aria-pressed={piIntegration?.enabled ?? false}
               aria-busy={agentIntegrations.busy}
               title={`Pi: ${piIntegration === undefined ? "Unavailable" : piIntegration.enabled ? "On" : "Off"}`}
               disabled={agentIntegrations.busy || piIntegration === undefined}
               onClick={() => void agentIntegrations.toggle("pi")}>
-              <span aria-hidden="true">π</span>
-            </button>
-            <button type="button" className={`agent-toolbar-button agent-dsh${dshIntegration?.enabled ? " on" : ""}`}
+              <AgentIntegrationIcon agentId="pi" />
+            </button> : null}
+            {agentIntegrations.isToolbarVisible("dsh") ? <button type="button" className={`agent-toolbar-button agent-dsh${dshIntegration?.enabled ? " on" : ""}`}
               aria-label={`${dshIntegration?.enabled ? "Disable" : "Enable"} DeepSeek Harness integration`}
               aria-pressed={dshIntegration?.enabled ?? false}
               aria-busy={agentIntegrations.busy}
               title={`DeepSeek Harness: ${dshIntegration === undefined ? "Unavailable" : dshIntegration.enabled ? "On" : "Off"}`}
               disabled={agentIntegrations.busy || dshIntegration === undefined}
               onClick={() => void agentIntegrations.toggle("dsh")}>
-              <img className="agent-dsh-mark" src={deepseekHarnessIcon} alt="" />
-            </button>
+              <AgentIntegrationIcon agentId="dsh" />
+            </button> : null}
             <button type="button" className={`agent-toolbar-button agent-toolbar-sync${agentSyncNeeded ? " dirty" : ""}`}
               aria-label="Sync Agent integrations" aria-busy={agentIntegrations.busy}
               title="Sync Agent integrations" disabled={agentIntegrations.busy || !anyAgentEnabled}

@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -82,6 +82,21 @@ function recordingAdapter(id: AgentIntegrationId) {
 }
 
 describe("Agent integration coordinator", () => {
+  it("leaves disabled DSH untouched at startup and sync, but explicitly disables it", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "Token-dsh-lifecycle-"));
+    try {
+      const dsh = recordingAdapter("dsh");
+      const coordinator = createAgentIntegrationCoordinator({ stateDirectory, snapshot: async () => snapshot(), adapters: [dsh.adapter] });
+      await coordinator.startup();
+      await coordinator.sync();
+      expect(dsh.restoreCalls()).toBe(0);
+      await coordinator.setEnabled("dsh", false);
+      expect(dsh.restoreCalls()).toBe(1);
+    } finally {
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("adds newly registered Claude defaults when an existing v1 state only contains Codex and Pi", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "Token-agent-upgrade-"));
     await writeFile(

@@ -1,15 +1,24 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import type * as FsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createClaudeIntegrationAdapter } from "../../src/integrations/claude/adapter.js";
 import type { AgentInjectionModel, AgentInjectionSnapshot } from "../../src/integrations/agents/snapshot.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return { ...actual, readFile: vi.fn(actual.readFile), rename: vi.fn(actual.rename) };
+});
+
+const actualFs = await vi.importActual<typeof FsPromises>("node:fs/promises");
 const roots: string[] = [];
 
 afterEach(async () => {
+  vi.mocked(readFile).mockReset();
+  vi.mocked(rename).mockReset();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -63,15 +72,17 @@ async function fixture(settings?: string) {
     subagent: "subagent-model",
   } as const;
   const aliases = new Set(snapshot().full.map((entry) => entry.alias));
-  const adapter = createClaudeIntegrationAdapter({
+  const createAdapter = () => createClaudeIntegrationAdapter({
     settingsPath,
     stateDirectory,
     selectedModels: () => selections,
     isPublicModelAlias: (alias) => aliases.has(alias),
   });
   return {
-    adapter,
+    adapter: createAdapter(),
+    createAdapter,
     settingsPath,
+    statePath: join(stateDirectory, "claude-integration.json"),
     setSelections(value: {
       readonly main: string | null;
       readonly opus: string | null;
@@ -89,6 +100,68 @@ function parsed(raw: string): Record<string, unknown> {
 }
 
 describe("Claude Code integration adapter", () => {
+  it("does not change Claude settings when ownership persistence fails", async () => {
+    const original = '{"env":{"ANTHROPIC_AUTH_TOKEN":"user-token"}}\n';
+    const fx = await fixture(original);
+    vi.mocked(rename).mockImplementation(async (from, to) => {
+      if (to === fx.statePath) throw Object.assign(new Error("state storage full"), { code: "ENOSPC" });
+      await actualFs.rename(from, to);
+    });
+
+    await expect(fx.adapter.inject(snapshot(), "favorite")).rejects.toThrow("state storage full");
+    expect(await readFile(fx.settingsPath, "utf8")).toBe(original);
+    await expect(readFile(fx.statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("retains restore ownership across recreation after post-write verification fails", async () => {
+    const original = {
+      env: { KEEP_ME: "yes", ANTHROPIC_AUTH_TOKEN: "user-token", ANTHROPIC_BASE_URL: "https://user.example" },
+    };
+    const fx = await fixture(JSON.stringify(original));
+    vi.mocked(rename).mockImplementation(async (from, to) => {
+      await actualFs.rename(from, to);
+      if (to === fx.settingsPath) vi.mocked(readFile).mockRejectedValueOnce(new Error("verification read failed"));
+    });
+
+    await expect(fx.adapter.inject(snapshot(), "favorite")).rejects.toThrow("verification read failed");
+    expect(parsed(await readFile(fx.settingsPath, "utf8")).env).toMatchObject({ ANTHROPIC_AUTH_TOKEN: "token-local" });
+    vi.mocked(rename).mockReset();
+
+    expect(await fx.createAdapter().restore()).toMatchObject({ observedState: "native", changed: true });
+    expect(parsed(await readFile(fx.settingsPath, "utf8"))).toEqual(original);
+  });
+
+  it("releases new ownership when the settings replacement fails before committing", async () => {
+    const original = '{"env":{"ANTHROPIC_AUTH_TOKEN":"user-token"}}\n';
+    const fx = await fixture(original);
+    vi.mocked(rename).mockImplementation(async (from, to) => {
+      if (to === fx.settingsPath) throw Object.assign(new Error("settings file occupied"), { code: "EPERM" });
+      await actualFs.rename(from, to);
+    });
+
+    await expect(fx.adapter.inject(snapshot(), "favorite")).rejects.toThrow("settings file occupied");
+    vi.mocked(rename).mockReset();
+    const external = '{"env":{"ANTHROPIC_AUTH_TOKEN":"later-user-token"}}\n';
+    await writeFile(fx.settingsPath, external, "utf8");
+
+    expect(await fx.createAdapter().restore()).toMatchObject({ observedState: "native", changed: false });
+    expect(await readFile(fx.settingsPath, "utf8")).toBe(external);
+  });
+
+  it("does not retain new ownership after refusing a concurrent settings edit", async () => {
+    const fx = await fixture('{"env":{"ANTHROPIC_AUTH_TOKEN":"user-token"}}\n');
+    const external = '{"env":{"ANTHROPIC_AUTH_TOKEN":"later-user-token"}}\n';
+    vi.mocked(rename).mockImplementation(async (from, to) => {
+      await actualFs.rename(from, to);
+      if (to === fx.statePath) await writeFile(fx.settingsPath, external, "utf8");
+    });
+
+    expect(await fx.adapter.inject(snapshot(), "favorite")).toMatchObject({ observedState: "conflict", changed: false });
+    vi.mocked(rename).mockReset();
+    expect(await fx.createAdapter().restore()).toMatchObject({ observedState: "native", changed: false });
+    expect(await readFile(fx.settingsPath, "utf8")).toBe(external);
+  });
+
   it("overwrites only the seven managed env values using independently selected Favorite models", async () => {
     const fx = await fixture(JSON.stringify({
       theme: "dark",

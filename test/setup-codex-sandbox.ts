@@ -111,6 +111,17 @@ function assertInheritedSandbox(): void {
       "P0 test isolation breach: inherited Codex sandbox lease is invalid",
     );
   }
+  for (const [variable, directory] of [
+    ["PI_CODING_AGENT_DIR", "pi-agent"],
+    ["DSH_HOME", "dsh-home"],
+    ["CLAUDE_CONFIG_DIR", "claude-config"],
+  ] as const) {
+    const value = process.env[variable]?.trim();
+    if (!value || resolve(value) !== resolve(join(root, directory)) ||
+      lstatSync(value).isSymbolicLink() || realpathSync(value) !== resolve(join(root, directory))) {
+      throw new Error(`P0 test isolation breach: inherited ${variable} sandbox path is invalid`);
+    }
+  }
 }
 
 function createDirectVitestSandbox(
@@ -121,6 +132,9 @@ function createDirectVitestSandbox(
   try {
     const nonce = randomUUID();
     mkdirSync(codexHome, { recursive: true });
+    for (const directory of ["pi-agent", "dsh-home", "claude-config"]) {
+      mkdirSync(join(root, directory), { recursive: true });
+    }
     writeFileSync(join(root, SANDBOX_LEASE_FILE), nonce, "utf8");
 
     const sourceCatalogPath = join(
@@ -199,6 +213,9 @@ export default function setupCodexSandbox(): (() => void) | undefined {
 
   const previous = Object.freeze({
     CODEX_HOME: process.env.CODEX_HOME,
+    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+    DSH_HOME: process.env.DSH_HOME,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     [SANDBOX_MARKER]: process.env[SANDBOX_MARKER],
     [SANDBOX_ROOT]: process.env[SANDBOX_ROOT],
     [SANDBOX_NONCE]: process.env[SANDBOX_NONCE],
@@ -208,6 +225,9 @@ export default function setupCodexSandbox(): (() => void) | undefined {
     : resolve(join(homedir(), ".codex"));
   const sandbox = createDirectVitestSandbox(sourceCodexHome);
   process.env.CODEX_HOME = sandbox.codexHome;
+  process.env.PI_CODING_AGENT_DIR = join(sandbox.root, "pi-agent");
+  process.env.DSH_HOME = join(sandbox.root, "dsh-home");
+  process.env.CLAUDE_CONFIG_DIR = join(sandbox.root, "claude-config");
   process.env[SANDBOX_MARKER] = "1";
   process.env[SANDBOX_ROOT] = sandbox.root;
   process.env[SANDBOX_NONCE] = sandbox.nonce;

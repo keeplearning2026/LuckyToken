@@ -298,6 +298,7 @@ test("the test guard removes an external catalog path when no catalog was copied
 test("direct Vitest rewrites copied Codex paths and removes its sandbox", async () => {
   const root = await mkdtemp(join(tmpdir(), "Token-direct-vitest-certification-"));
   const originalCodexHome = join(root, "source-codex-home");
+  const originalDshHome = join(root, "source-dsh-home");
   const configPath = join(originalCodexHome, "config.toml");
   const catalogPath = join(originalCodexHome, "token-model-catalog.json");
   const reportPath = join(root, "child-report.json");
@@ -310,11 +311,14 @@ test("direct Vitest rewrites copied Codex paths and removes its sandbox", async 
 
   try {
     await mkdir(originalCodexHome, { recursive: true });
+    await mkdir(originalDshHome, { recursive: true });
+    await writeFile(join(originalDshHome, ".env"), "TOKEN_API_KEY=user-test-fixture\n", "utf8");
     await writeFile(configPath, originalConfig, "utf8");
     await writeFile(catalogPath, originalCatalog, "utf8");
     const environment = {
       ...process.env,
       CODEX_HOME: originalCodexHome,
+      DSH_HOME: originalDshHome,
       TOKEN_CHILD_REPORT: reportPath,
     };
     delete environment.TOKEN_TEST_CODEX_SANDBOX;
@@ -338,9 +342,62 @@ test("direct Vitest rewrites copied Codex paths and removes its sandbox", async 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const report = JSON.parse(await readFile(reportPath, "utf8"));
     assert.notEqual(resolve(report.codexHome), resolve(originalCodexHome));
+    assert.notEqual(resolve(report.dshHome), resolve(originalDshHome));
+    assert.equal(await readFile(join(originalDshHome, ".env"), "utf8"), "TOKEN_API_KEY=user-test-fixture\n");
+    await assert.rejects(access(report.dshHome), { code: "ENOENT" });
     assert.equal(await readFile(configPath, "utf8"), originalConfig);
     assert.equal(await readFile(catalogPath, "utf8"), originalCatalog);
     await assert.rejects(access(report.codexHome), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the test guard keeps Agent configuration writes inside its sandbox", async () => {
+  const root = await mkdtemp(join(tmpdir(), "Token-agent-guard-"));
+  const sourceCodexHome = join(root, "source-codex-home");
+  const sourceDshHome = join(root, "source-dsh-home");
+  const sourcePiDirectory = join(root, "source-pi-agent");
+  const sourceClaudeDirectory = join(root, "source-claude-config");
+  const reportPath = join(root, "report.json");
+  try {
+    for (const directory of [sourceCodexHome, sourceDshHome, sourcePiDirectory, sourceClaudeDirectory]) {
+      await mkdir(directory);
+    }
+    await writeFile(join(sourceDshHome, ".env"), "TOKEN_API_KEY=user-test-fixture\n");
+    const environment = {
+      ...process.env,
+      CODEX_HOME: sourceCodexHome,
+      DSH_HOME: sourceDshHome,
+      PI_CODING_AGENT_DIR: sourcePiDirectory,
+      CLAUDE_CONFIG_DIR: sourceClaudeDirectory,
+      TOKEN_CHILD_REPORT: reportPath,
+    };
+    delete environment.TOKEN_TEST_CODEX_SANDBOX;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_ROOT;
+    delete environment.TOKEN_TEST_CODEX_SANDBOX_NONCE;
+    const program = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const directories = ['DSH_HOME', 'PI_CODING_AGENT_DIR', 'CLAUDE_CONFIG_DIR'].map(name => process.env[name]);
+      for (const directory of directories) {
+        if (fs.readdirSync(directory).length !== 0) throw new Error('Sandbox must start empty');
+        fs.writeFileSync(path.join(directory, '.env'), 'test-only');
+      }
+      fs.writeFileSync(process.env.TOKEN_CHILD_REPORT, JSON.stringify(directories));
+    `;
+    const result = spawnSync(process.execPath, [guardPath, "--", process.execPath, "-e", program], {
+      cwd: repositoryRoot, env: environment, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const directories = JSON.parse(await readFile(reportPath, "utf8"));
+    for (const directory of directories) {
+      assert.ok(![sourceDshHome, sourcePiDirectory, sourceClaudeDirectory].includes(directory));
+      await assert.rejects(access(directory), { code: "ENOENT" });
+    }
+    assert.equal(await readFile(join(sourceDshHome, ".env"), "utf8"), "TOKEN_API_KEY=user-test-fixture\n");
+    assert.deepEqual(await readdir(sourcePiDirectory), []);
+    assert.deepEqual(await readdir(sourceClaudeDirectory), []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

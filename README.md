@@ -546,6 +546,20 @@ Troubleshooting:
 | state is `conflict` | invalid managed routing or standalone search keys prevent safe management | fix `config.toml`, then retry |
 | published model missing | Public Model/Provider state is not currently publishable | authenticate/enable it in Providers and Sync Codex |
 
+## Agent toolbar and DeepSeek Harness integration
+
+Settings → Advanced → Agents includes a **Show in toolbar** checkbox for each
+Agent. This desktop preference is saved locally. Each Agent's Settings card
+shows the same icon and enabled indicator as the toolbar, including when its
+toolbar button is hidden.
+
+DeepSeek Harness integration targets `$DSH_HOME/profiles/desktop/cordis.patch.yml`
+and writes Token's exclusive `TOKEN_API_KEY` to `$DSH_HOME/.env`. Fully quit and
+reopen DSH after enabling the integration so it reads the credential.
+An explicit disable or application exit removes Token's injected configuration.
+A failed injection, disabled-integration startup, or Data Plane startup failure
+does not remove DSH's Token credential while the Backend remains running.
+
 ## Explicit online verification
 
 The authorized online suite is deliberately excluded from `npm test`. It reads

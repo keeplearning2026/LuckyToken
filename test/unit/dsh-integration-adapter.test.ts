@@ -33,6 +33,40 @@ function provider(raw: string): unknown {
 }
 
 describe("DeepSeek Harness integration adapter", () => {
+  it("keeps Token credentials when a running integration fails to update its YAML patch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-dsh-failed-sync-"));
+    try {
+      const dshHome = join(root, "dsh");
+      const profileDir = join(dshHome, "profiles", "desktop");
+      const patchPath = join(profileDir, "cordis.patch.yml");
+      const envPath = join(dshHome, ".env");
+      await mkdir(profileDir, { recursive: true });
+      await writeFile(patchPath, "[]\n", "utf8");
+      const adapter = createDshIntegrationAdapter({ dshHome, profile: "desktop" });
+      expect((await adapter.inject(snapshot, "favorite")).observedState).toBe("managed");
+
+      // A rewritten .env without the comment still contains Token's exclusive key.
+      await writeFile(envPath, "OTHER_KEY=user-value\nTOKEN_API_KEY=token-local\n", "utf8");
+      const invalidPatch = "not-a-YAML-list: true\n";
+      await writeFile(patchPath, invalidPatch, "utf8");
+
+      expect(await adapter.inject(snapshot, "favorite")).toMatchObject({
+        observedState: "conflict", changed: true,
+        message: "DSH cordis.patch.yml must be a valid YAML list.",
+      });
+      expect(await readFile(envPath, "utf8")).toContain("TOKEN_API_KEY=token-local");
+      expect(await readFile(envPath, "utf8")).toContain("OTHER_KEY=user-value");
+      expect(await readFile(patchPath, "utf8")).toBe(invalidPatch);
+
+      await writeFile(patchPath, "[]\n", "utf8");
+      expect((await adapter.restore()).observedState).toBe("native");
+      expect(await readFile(envPath, "utf8")).not.toContain("TOKEN_API_KEY");
+      expect(await readFile(envPath, "utf8")).toContain("OTHER_KEY=user-value");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("owns only its provider and .env entry while preserving other config and comments", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-dsh-"));
     try {

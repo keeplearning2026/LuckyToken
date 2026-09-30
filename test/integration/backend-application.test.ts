@@ -1016,6 +1016,50 @@ describe("Backend Application public lifecycle seam", () => {
     }
   });
 
+  it("keeps a previously enabled DSH injection when only Data Plane startup fails", async () => {
+    const { configPath, descriptorPath, port } = await fixture();
+    const root = dirname(configPath);
+    const dshHome = join(root, "dsh");
+    const profileDir = join(dshHome, "profiles", "desktop");
+    const envPath = join(dshHome, ".env");
+    const patchPath = join(profileDir, "cordis.patch.yml");
+    const originalEnv = "# Token managed\nTOKEN_API_KEY=token-local\n";
+    const originalPatch = "- id: llm-pi-ai\n  config:\n    providers:\n      Token:\n        apiKeyEnv: TOKEN_API_KEY\n";
+    await mkdir(profileDir, { recursive: true });
+    await mkdir(join(root, "integrations"), { recursive: true });
+    await writeFile(envPath, originalEnv, "utf8");
+    await writeFile(patchPath, originalPatch, "utf8");
+    await writeFile(join(root, "integrations", "agent-integrations.json"), JSON.stringify({
+      schemaVersion: "Token-agent-integrations-v1",
+      agents: [{ agentId: "dsh", enabled: true, scope: "favorite", modelCount: 1, appliedFingerprint: "previous-injection" }],
+    }), "utf8");
+    const previousDshHome = process.env.DSH_HOME;
+    process.env.DSH_HOME = dshHome;
+    const blocker = createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        blocker.once("error", reject);
+        blocker.listen(port, "127.0.0.1", resolve);
+      });
+      const started = await startTokenApplication({ configPath, descriptorOverride: descriptorPath, ownerKind: "cli" });
+      expect(started.kind).toBe("running");
+      if (started.kind !== "running") return;
+      applications.push(started.application);
+      expect(await readControlPlaneDescriptor(descriptorPath)).toBeDefined();
+      expect(await readFile(envPath, "utf8")).toBe(originalEnv);
+      expect(await readFile(patchPath, "utf8")).toBe(originalPatch);
+
+      await started.application.close();
+      expect(await readFile(envPath, "utf8")).not.toContain("TOKEN_API_KEY");
+    } finally {
+      if (blocker.listening) await new Promise<void>((resolve, reject) => {
+        blocker.close((error) => error === undefined ? resolve() : reject(error));
+      });
+      if (previousDshHome === undefined) delete process.env.DSH_HOME;
+      else process.env.DSH_HOME = previousDshHome;
+    }
+  }, 15_000);
+
   it("restores managed Codex residue when Data Plane startup fails", async () => {
     const { configPath, descriptorPath, port } = await fixture();
     const root = dirname(configPath);

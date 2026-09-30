@@ -171,6 +171,13 @@ async function assertInheritedSandbox(env) {
       "P0 test isolation breach: inherited Codex sandbox lease is invalid",
     );
   }
+  for (const [variable, directory] of [["DSH_HOME", "dsh-home"], ["CLAUDE_CONFIG_DIR", "claude-config"]]) {
+    const value = env[variable]?.trim();
+    if (!value || resolve(value) !== resolve(join(root, directory)) ||
+      (await lstat(value)).isSymbolicLink() || await realpath(value) !== resolve(join(root, directory))) {
+      throw new Error(`P0 test isolation breach: inherited ${variable} sandbox path is invalid`);
+    }
+  }
 }
 
 function startCleanupWatchdog(root, nonce) {
@@ -260,11 +267,15 @@ async function main() {
   const guardRoot = await mkdtemp(join(tmpdir(), "Token-test-codex-"));
   const sandboxCodexHome = join(guardRoot, "codex-home");
   const sandboxPiAgentDirectory = join(guardRoot, "pi-agent");
+  const sandboxDshHome = join(guardRoot, "dsh-home");
+  const sandboxClaudeConfigDirectory = join(guardRoot, "claude-config");
   const sandboxNonce = randomUUID();
 
   try {
     await mkdir(sandboxCodexHome, { recursive: true });
     await mkdir(sandboxPiAgentDirectory, { recursive: true });
+    await mkdir(sandboxDshHome, { recursive: true });
+    await mkdir(sandboxClaudeConfigDirectory, { recursive: true });
     await writeFile(
       join(guardRoot, SANDBOX_LEASE_FILE),
       sandboxNonce,
@@ -276,6 +287,8 @@ async function main() {
       ...process.env,
       CODEX_HOME: sandboxCodexHome,
       PI_CODING_AGENT_DIR: sandboxPiAgentDirectory,
+      DSH_HOME: sandboxDshHome,
+      CLAUDE_CONFIG_DIR: sandboxClaudeConfigDirectory,
       [SANDBOX_MARKER]: "1",
       [SANDBOX_ROOT]: guardRoot,
       [SANDBOX_NONCE]: sandboxNonce,

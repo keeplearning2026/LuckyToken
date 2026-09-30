@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import type * as FsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inspectCodexManagedConfig } from "../../src/integrations/codex/config-toml.js";
 import {
@@ -16,8 +17,15 @@ import type {
 import type { AgentInjectionSnapshot } from "../../src/integrations/agents/snapshot.js";
 
 const roots: string[] = [];
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return { ...actual, readFile: vi.fn(actual.readFile), rename: vi.fn(actual.rename) };
+});
+const actualFs = await vi.importActual<typeof FsPromises>("node:fs/promises");
 
 afterEach(async () => {
+  vi.mocked(readFile).mockReset();
+  vi.mocked(rename).mockReset();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -69,7 +77,7 @@ async function fixture(options: {
     injectedModelCount: options.injectedModelCount ?? 1,
     warnings: [],
   });
-  const authority = createCodexIntegrationAuthority({
+  const createAuthority = () => createCodexIntegrationAuthority({
     codexHome,
     stateDirectory,
     endpoint: () => "http://127.0.0.1:3000/v1",
@@ -80,7 +88,7 @@ async function fixture(options: {
     buildCatalog,
     validateCatalog: options.validateCatalog ?? (async () => undefined),
   });
-  return { root, codexHome, stateDirectory, authority, buildScopes };
+  return { root, codexHome, stateDirectory, authority: createAuthority(), createAuthority, buildScopes };
 }
 
 function countRootKey(content: string, key: string): number {
@@ -101,6 +109,59 @@ function injectionSnapshot(): AgentInjectionSnapshot {
 }
 
 describe("Codex integration authority", () => {
+  it("retains recovery ownership if verification fails after writing config.toml", async () => {
+    const fx = await fixture();
+    const configPath = join(fx.codexHome, "config.toml");
+    let configCommitted = false;
+    vi.mocked(rename).mockImplementation(async (...args) => {
+      await actualFs.rename(...args);
+      if (args[1] === configPath) configCommitted = true;
+    });
+    vi.mocked(readFile).mockImplementation(async (...args) => {
+      if (configCommitted && args[0] === configPath) {
+        configCommitted = false;
+        throw new Error("probe verification read failed");
+      }
+      return actualFs.readFile(...args);
+    });
+    await expect(fx.authority.reconcile("enable")).rejects.toThrow("probe verification read failed");
+    expect(await readFile(configPath, "utf8")).toContain("openai_base_url");
+    vi.mocked(readFile).mockReset();
+    vi.mocked(rename).mockReset();
+    await expect(fx.createAuthority().restore()).resolves.toMatchObject({ observedState: "native" });
+    expect(await readFile(configPath, "utf8")).not.toContain("openai_base_url");
+  });
+
+  it("leaves config.toml unchanged when recovery ownership cannot be persisted", async () => {
+    const fx = await fixture();
+    const configPath = join(fx.codexHome, "config.toml");
+    const before = await readFile(configPath, "utf8");
+    const statePath = join(fx.stateDirectory, "integration-state.json");
+    vi.mocked(rename).mockImplementation(async (...args) => {
+      if (args[1] === statePath) {
+        const state = JSON.parse(await actualFs.readFile(args[0], "utf8")) as { managed: boolean };
+        if (state.managed) throw new Error("probe ownership write failed");
+      }
+      await actualFs.rename(...args);
+    });
+    await expect(fx.authority.reconcile("enable")).rejects.toThrow("probe ownership write failed");
+    expect(await readFile(configPath, "utf8")).toBe(before);
+  });
+
+  it("releases newly recorded ownership when config replacement fails before commit", async () => {
+    const fx = await fixture();
+    const configPath = join(fx.codexHome, "config.toml");
+    vi.mocked(rename).mockImplementation(async (...args) => {
+      if (args[1] === configPath) throw new Error("probe config rename failed");
+      await actualFs.rename(...args);
+    });
+    await expect(fx.authority.reconcile("enable")).rejects.toThrow("probe config rename failed");
+    vi.mocked(rename).mockReset();
+    const external = 'model = "user-model"\nopenai_base_url = "https://user.example/v1"\n';
+    await writeFile(configPath, external, "utf8");
+    await fx.createAuthority().restore();
+    expect(await readFile(configPath, "utf8")).toBe(external);
+  });
   it("rejects obsolete integration-state schemas instead of migrating them", async () => {
     const fx = await fixture();
     await mkdir(fx.stateDirectory, { recursive: true });

@@ -223,12 +223,12 @@ export function createClaudeIntegrationAdapter(
   const writeState = async (state: ClaudeState): Promise<void> => {
     await mkdir(options.stateDirectory, { recursive: true });
     const temporary = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(
-      temporary,
-      `${JSON.stringify(state, null, 2)}\n`,
-      { encoding: "utf8", flag: "wx", mode: 0o600 },
-    );
     try {
+      await writeFile(
+        temporary,
+        `${JSON.stringify(state, null, 2)}\n`,
+        { encoding: "utf8", flag: "wx", mode: 0o600 },
+      );
       await rename(temporary, statePath);
     } finally {
       await rm(temporary, { force: true }).catch(() => undefined);
@@ -258,8 +258,8 @@ export function createClaudeIntegrationAdapter(
     if ((expected ?? "{}\n") === next && expected !== undefined) return "unchanged";
     await mkdir(dirname(options.settingsPath), { recursive: true });
     const temporary = `${options.settingsPath}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, next, { encoding: "utf8", flag: "wx", mode: 0o600 });
     try {
+      await writeFile(temporary, next, { encoding: "utf8", flag: "wx", mode: 0o600 });
       if ((await readOptional(options.settingsPath)) !== actualExpected) return "conflict";
       await rename(temporary, options.settingsPath);
       return "written";
@@ -385,8 +385,25 @@ export function createClaudeIntegrationAdapter(
         );
       }
 
-      const write = await replaceIfUnchanged(original, next);
+      // Persist recovery before changing Claude's file, including the first injection.
+      await writeState(
+        Object.freeze({
+          schemaVersion: STATE_SCHEMA,
+          managed: true,
+          restoreEnv: Object.freeze(nextRestoreEnv),
+          lastInjectedBaseUrl: desired.ANTHROPIC_BASE_URL,
+        }),
+      );
+      let write: Awaited<ReturnType<typeof replaceIfUnchanged>>;
+      try {
+        write = await replaceIfUnchanged(original, next);
+      } catch (error) {
+        // Replacement did not commit; restore the previous ownership record.
+        await writeState(state);
+        throw error;
+      }
       if (write === "conflict") {
+        await writeState(state);
         return result(
           "conflict",
           0,
@@ -402,14 +419,6 @@ export function createClaudeIntegrationAdapter(
         throw new Error("Claude settings.json did not retain the Token-managed environment.");
       }
 
-      await writeState(
-        Object.freeze({
-          schemaVersion: STATE_SCHEMA,
-          managed: true,
-          restoreEnv: Object.freeze(nextRestoreEnv),
-          lastInjectedBaseUrl: desired.ANTHROPIC_BASE_URL,
-        }),
-      );
       return result(
         "managed",
         uniqueModelCount,

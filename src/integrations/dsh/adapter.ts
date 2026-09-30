@@ -66,8 +66,8 @@ async function replaceIfUnchanged(
   if (original === next) return false;
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, next, { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
+    await writeFile(temporary, next, { encoding: "utf8", flag: "wx", mode: 0o600 });
     if ((await readOptional(path)) !== original) {
       throw new Error(`${path} changed while Token was preparing the update.`);
     }
@@ -287,8 +287,8 @@ export function createDshIntegrationAdapter(options: CreateDshIntegrationAdapter
         return doc.toString({ lineWidth: 0 });
       });
     } catch (error) {
-      if (credentialsChanged) await applyCredentials(false).catch(() => undefined);
-      throw error;
+      return effect("conflict", 0, snapshot.warnings, credentialsChanged,
+        error instanceof Error ? error.message : String(error));
     }
     return effect("managed", models.length, snapshot.warnings, credentialsChanged || patchChanged);
   };

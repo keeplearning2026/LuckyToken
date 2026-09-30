@@ -4,12 +4,37 @@ import type { AgentIntegrationId, AgentInjectionScope, TokenDesktopApi } from ".
 
 type IntegrationResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeAgentIntegrations"]>>;
 
+export const AGENT_INTEGRATION_IDS = ["claude", "claude-desktop", "codex", "pi", "dsh"] as const;
+const HIDDEN_TOOLBAR_AGENTS_KEY = "token.desktop.hiddenToolbarAgents";
+
 export function useAgentIntegrations(api: TokenDesktopApi, backendAvailable: boolean, modelRevision?: number) {
   const [state, setState] = useState<IntegrationResult["state"]>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [warnings, setWarnings] = useState<readonly string[]>([]);
+  const [hiddenToolbarAgents, setHiddenToolbarAgents] = useState<readonly AgentIntegrationId[]>(() => {
+    try {
+      const stored: unknown = JSON.parse(window.localStorage.getItem(HIDDEN_TOOLBAR_AGENTS_KEY) ?? "[]");
+      return Array.isArray(stored) ? AGENT_INTEGRATION_IDS.filter((agentId) => stored.includes(agentId)) : [];
+    } catch {
+      return [];
+    }
+  });
   const busyRef = useRef(false);
+
+  const isToolbarVisible = (agentId: AgentIntegrationId): boolean => !hiddenToolbarAgents.includes(agentId);
+  const setToolbarVisible = (agentId: AgentIntegrationId, visible: boolean): void => {
+    const next = visible
+      ? hiddenToolbarAgents.filter((entry) => entry !== agentId)
+      : hiddenToolbarAgents.includes(agentId) ? hiddenToolbarAgents : [...hiddenToolbarAgents, agentId];
+    try {
+      window.localStorage.setItem(HIDDEN_TOOLBAR_AGENTS_KEY, JSON.stringify(next));
+    } catch {
+      setNotice("The Agent toolbar preference could not be saved.");
+      return;
+    }
+    setHiddenToolbarAgents(next);
+  };
 
   useEffect(() => {
     if (!backendAvailable) {
@@ -34,7 +59,7 @@ export function useAgentIntegrations(api: TokenDesktopApi, backendAvailable: boo
       : result.outcome === "partial"
         ? "Some Agent integrations could not be synchronized. Successful Agents were kept."
         : result.outcome === "failed"
-          ? "Agent integration update failed. Existing Agent files were preserved."
+          ? "Agent integration update failed."
           : undefined);
   };
 
@@ -57,7 +82,7 @@ export function useAgentIntegrations(api: TokenDesktopApi, backendAvailable: boo
     if (agent === undefined) return;
     await execute(
       { command: "set_enabled", agentId, enabled: !agent.enabled },
-      `${agentId === "claude" ? "Claude Code" : agentId === "claude-desktop" ? "Claude Desktop" : agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : "DeepSeek Harness"} integration update failed. Existing Agent files were preserved.`,
+      `${agentId === "claude" ? "Claude Code" : agentId === "claude-desktop" ? "Claude Desktop" : agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : "DeepSeek Harness"} integration update failed.`,
     );
   };
 
@@ -69,7 +94,7 @@ export function useAgentIntegrations(api: TokenDesktopApi, backendAvailable: boo
   };
 
   const sync = async (): Promise<void> => {
-    await execute({ command: "sync" }, "Agent synchronization failed. Existing Agent files were preserved.");
+    await execute({ command: "sync" }, "Agent synchronization failed.");
   };
 
   const refresh = async (): Promise<void> => {
@@ -81,7 +106,7 @@ export function useAgentIntegrations(api: TokenDesktopApi, backendAvailable: boo
     }
   };
 
-  return { state, busy, notice, warnings, toggle, setScope, sync, refresh };
+  return { state, busy, notice, warnings, toggle, setScope, sync, refresh, isToolbarVisible, setToolbarVisible };
 }
 
 export type AgentIntegrationControls = ReturnType<typeof useAgentIntegrations>;

@@ -1089,7 +1089,7 @@ async function startNormalApplication(options: {
           }
           if (!dataPlaneStartedOnce) {
             try {
-              await restoreAgentsBeforeShutdown();
+              await agentIntegrations.shutdown("gateway-startup-failure");
             } catch (restoreError) {
               throw new AggregateError(
                 [startupError, restoreError],

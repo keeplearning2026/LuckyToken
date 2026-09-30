@@ -27,6 +27,7 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true;
   window.localStorage.removeItem("token.desktop.theme");
+  window.localStorage.removeItem("token.desktop.hiddenToolbarAgents");
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -58,6 +59,46 @@ async function openAgentSettings(): Promise<void> {
 }
 
 describe("desktop command-router shell", () => {
+  it("selects toolbar Agents in Settings and restores the saved selection on reopen", async () => {
+    const executeAgentIntegrations = vi.fn(async () => ({
+      outcome: "ok" as const,
+      state: { agents: [{ agentId: "codex" as const, enabled: true, scope: "favorite" as const, modelCount: 1, needsSync: false }] },
+      results: [],
+    }));
+    const api = createFakeDesktopApi({ control: {
+      getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+      onBackendState: () => () => undefined,
+      executeAgentIntegrations,
+    } });
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    await openAgentSettings();
+    const toolbar = () => container.querySelector('.agent-integration-toolbar');
+    const checkbox = () => container.querySelector('input[aria-label="Show Codex in toolbar"]') as HTMLInputElement;
+    expect(checkbox().checked).toBe(true);
+    expect(toolbar()?.querySelector('button[aria-label="Disable Codex integration"]')).not.toBeNull();
+    executeAgentIntegrations.mockClear();
+
+    await act(async () => checkbox().click());
+    expect(checkbox().checked).toBe(false);
+    expect(toolbar()?.querySelector('button[aria-label="Disable Codex integration"]')).toBeNull();
+    expect(container.querySelector('.settings-panel button[aria-label="Disable Codex integration"]')).not.toBeNull();
+    expect(container.querySelector('[role="img"][aria-label="Codex integration: On"]')?.classList.contains("on")).toBe(true);
+    expect(container.querySelector('[role="img"][aria-label="Codex integration: On"] .agent-codex-mark')).not.toBeNull();
+    expect(executeAgentIntegrations).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    expect(toolbar()?.querySelector('button[aria-label="Disable Codex integration"]')).toBeNull();
+    expect(toolbar()?.querySelector('button[aria-label="Enable Claude Code integration"]')).not.toBeNull();
+    await openAgentSettings();
+    expect(checkbox().checked).toBe(false);
+    await act(async () => checkbox().click());
+    expect(toolbar()?.querySelector('button[aria-label="Disable Codex integration"]')).not.toBeNull();
+  });
+
   it("places Agent injection controls together left of the endpoint", async () => {
     await act(async () => root.render(<App api={createFakeDesktopApi()} />));
     const toolbar = container.querySelector(".runtime-header-status");
@@ -664,9 +705,44 @@ describe("desktop command-router shell", () => {
     });
 
     expect(container.textContent).toContain(
-      "Agent synchronization failed. Existing Agent files were preserved.",
+      "Agent synchronization failed.",
     );
+    expect(container.textContent).not.toContain("Existing Agent files were preserved.");
     expect(sync.disabled).toBe(false);
+  });
+
+  it.each(["rejected", "failed-result"] as const)("does not promise preserved files after a %s Agent toggle", async (failure) => {
+    const state = {
+      agents: [{ agentId: "claude" as const, enabled: false, scope: "favorite" as const, modelCount: 0, needsSync: false }],
+    };
+    const api = createFakeDesktopApi({
+      control: {
+        getBackendState: async () => ({ revision: 1, kind: "ready", status: runningStatus }),
+        onBackendState: () => () => undefined,
+        executeAgentIntegrations: async (command) => {
+          if (command.command !== "set_enabled") return { outcome: "ok", state, results: [] };
+          if (failure === "rejected") throw new Error("transport closed after partial update");
+          return {
+            outcome: "failed",
+            state,
+            results: [{ agentId: "claude", outcome: "failed", effect: { observedState: "unavailable", modelCount: 0, warnings: [], changed: true } }],
+          };
+        },
+      },
+    });
+    await act(async () => root.render(<App api={api} />));
+    await flush();
+    const toggle = container.querySelector('button[aria-label="Enable Claude Code integration"]');
+    if (!(toggle instanceof HTMLButtonElement)) throw new Error("Claude toggle missing");
+    await act(async () => {
+      toggle.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("integration update failed.");
+    expect(container.textContent).not.toContain("Existing Agent files were preserved.");
+    expect(toggle.disabled).toBe(false);
   });
 
   it("shows the Agent adapter message returned by a failed icon toggle", async () => {

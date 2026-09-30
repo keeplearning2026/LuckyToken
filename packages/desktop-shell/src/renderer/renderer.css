@@ -48,14 +48,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .toolbar-group { min-height: 32px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .toolbar-group + .toolbar-group { margin-left: 12px; padding-left: 13px; border-left: 1px solid var(--hairline); }
 .agent-integration-toolbar { gap: 3px; }
-.agent-toolbar-button { position: relative; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); padding: 0; opacity: .58; }
-.agent-toolbar-button.on { opacity: 1; }
+.agent-toolbar-button, .agent-integration-indicator { position: relative; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); padding: 0; opacity: .58; }
+.agent-toolbar-button.on, .agent-integration-indicator.on { opacity: 1; }
 .agent-toolbar-sync:not(:disabled) { opacity: .82; }
-.agent-toolbar-button.on::after, .agent-toolbar-sync.dirty::after { content: ""; position: absolute; top: 2px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+.agent-toolbar-button.on::after, .agent-integration-indicator.on::after, .agent-toolbar-sync.dirty::after { content: ""; position: absolute; top: 2px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
 .agent-toolbar-sync.dirty::after { background: var(--amber); }
 .agent-toolbar-button:hover:not(:disabled) { background: var(--surface-muted); color: var(--text); opacity: 1; }
 .agent-toolbar-button:disabled { cursor: default; }
-.agent-toolbar-button.agent-pi { font-size: 21px; font-weight: 600; line-height: 1; }
+.agent-toolbar-button.agent-pi, .agent-integration-indicator.agent-pi { font-size: 21px; font-weight: 600; line-height: 1; }
 .agent-claude-mark, .agent-claude-desktop-mark, .agent-codex-mark, .agent-dsh-mark { display: block; width: 17px; height: 17px; object-fit: contain; }
 .agent-claude-desktop-mark { border-radius: 3.7px; }
 .agent-dsh-mark { width: 18px; height: 18px; }
@@ -331,6 +331,8 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .settings-general > .settings-section { min-height: 272px; }
 .settings-section h3 { margin: 8px 0 0; font-size: 19px; line-height: 1.3; }
 .settings-section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.settings-agent-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.settings-agent-heading .agent-integration-indicator { flex-shrink: 0; }
 .settings-general .settings-section-header { padding-bottom: 18px; border-bottom: 1px solid var(--hairline); }
 .settings-general .settings-action-row { border-top: 0; padding-top: 0; }
 .settings-general .setting-state { color: var(--text-secondary); }
