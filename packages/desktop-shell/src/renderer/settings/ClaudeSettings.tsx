@@ -84,13 +84,8 @@ export function ClaudeSettings({
   };
 
   return (
-    <div className="page-card settings-section">
-      <header className="settings-section-header">
-        <div className="settings-copy">
-          <p className="eyebrow">CLAUDE CODE</p>
-          <h3>Model slots</h3>
-        </div>
-      </header>
+    <section className="page-stack" aria-label="Claude Code model slots">
+      <h4 className="settings-subsection-title">Model slots</h4>
       <p className="setting-state">
         Each slot uses a Favorite model. Models with at least 1M context are injected with the Claude Code <code>[1m]</code> suffix automatically.
       </p>
@@ -115,6 +110,6 @@ export function ClaudeSettings({
         );
       })}
       {notice === undefined ? null : <p className="error-text" role="status">{notice}</p>}
-    </div>
+    </section>
   );
 }

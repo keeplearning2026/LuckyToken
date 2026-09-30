@@ -1,10 +1,12 @@
 import { RefreshCw } from "lucide-react";
 
-import type { AgentInjectionScope } from "../../shared/desktop-api.js";
+import type { AgentInjectionScope, TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AgentIntegrationIcon } from "./AgentIntegrationIcon.js";
+import { ClaudeSettings } from "./ClaudeSettings.js";
+import { CodexSettings } from "./CodexSettings.js";
 import { AGENT_INTEGRATION_IDS, type AgentIntegrationControls } from "./useAgentIntegrations.js";
 
-export function AgentIntegrationSettings({ controls }: { readonly controls: AgentIntegrationControls }) {
+export function AgentIntegrationSettings({ api, controls }: { readonly api: TokenDesktopApi; readonly controls: AgentIntegrationControls }) {
   const { state, busy, toggle, setScope, sync, isToolbarVisible, setToolbarVisible } = controls;
 
   const anyEnabled = state?.agents.some((agent) => agent.enabled) ?? false;
@@ -40,7 +42,7 @@ export function AgentIntegrationSettings({ controls }: { readonly controls: Agen
             onClick={() => void toggle(agentId)}><span aria-hidden="true" /></button>
         </div>
         {agentId === "claude" ? (
-          <p className="setting-state">Claude Code model slots are selected from Favorite models below.</p>
+          <ClaudeSettings api={api} agentIntegrations={controls} />
         ) : (
           <label className="field-row">
             <span>Models to inject</span>
@@ -52,6 +54,7 @@ export function AgentIntegrationSettings({ controls }: { readonly controls: Agen
             </select>
           </label>
         )}
+        {agentId === "codex" ? <CodexSettings api={api} /> : null}
         {agent?.needsSync ? <p className="setting-state">Changes need to be synchronized.</p> : null}
       </div>;
     })}

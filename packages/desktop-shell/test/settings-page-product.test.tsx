@@ -238,6 +238,7 @@ describe("Settings product slice", () => {
     for (const label of labels) {
       const select = container.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement;
       expect(select).toBeInstanceOf(HTMLSelectElement);
+      expect(select.closest(".page-card")?.querySelector("h3")?.textContent).toBe("Claude Code");
       expect([...select.options].map((option) => option.value)).toContain("provider/favorite-two");
       expect([...select.options].map((option) => option.value)).not.toContain("provider/not-favorite");
     }
@@ -276,6 +277,9 @@ describe("Settings product slice", () => {
     await click("Advanced");
     await click("Agents");
     expect((container.querySelector('input[aria-label="Codex search model"]') as HTMLInputElement).value).toBe("gpt-5.6-sol");
+    const codexCard = container.querySelector('input[aria-label="Codex search model"]')?.closest(".page-card");
+    expect(codexCard?.querySelector("h3")?.textContent).toBe("Codex");
+    expect(codexCard?.querySelector('select[aria-label="Codex injection scope"]')).not.toBeNull();
     await clickAria("Save Codex search model");
     expect(executeSettings).toHaveBeenCalledWith({
       command: "set",

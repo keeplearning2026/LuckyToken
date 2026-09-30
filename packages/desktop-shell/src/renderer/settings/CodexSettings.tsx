@@ -53,24 +53,17 @@ export function CodexSettings({ api }: { readonly api: TokenDesktopApi }) {
     }
   };
 
-  return <section className="page-stack">
-    <div className="page-card settings-section">
-      <header className="settings-section-header">
-        <div className="settings-copy">
-          <p className="eyebrow">CODEX SEARCH</p>
-          <h3>Search request model <SettingHelp label="Search request model">Token sends /v1/alpha/search directly to Codex and replaces only the request model. Default: gpt-6-luna.</SettingHelp></h3>
-        </div>
-      </header>
-      <label className="field-row">
-        <span>Upstream model</span>
-        <input type="text" aria-label="Codex search model" value={searchModelDraft} onChange={(event) => setSearchModelDraft(event.currentTarget.value)} />
-      </label>
-      {searchModelNotice === undefined ? null : <p className={searchModelError ? "error-text" : "setting-state"} role="status">{searchModelNotice}</p>}
-      <div className="settings-form-actions">
-        <button type="button" className="settings-icon-button save" aria-label="Save Codex search model" aria-busy={searchModelBusy} title={searchModelBusy ? "Saving search model" : "Save search model"} disabled={searchModelBusy || !searchModelLoaded} onClick={() => void saveSearchModel()}>
-          <Save size={18} aria-hidden="true" />
-        </button>
-      </div>
+  return <section className="page-stack" aria-label="Codex search settings">
+    <h4 className="settings-subsection-title">Search request model <SettingHelp label="Search request model">Token sends /v1/alpha/search directly to Codex and replaces only the request model. Default: gpt-6-luna.</SettingHelp></h4>
+    <label className="field-row">
+      <span>Upstream model</span>
+      <input type="text" aria-label="Codex search model" value={searchModelDraft} onChange={(event) => setSearchModelDraft(event.currentTarget.value)} />
+    </label>
+    {searchModelNotice === undefined ? null : <p className={searchModelError ? "error-text" : "setting-state"} role="status">{searchModelNotice}</p>}
+    <div className="settings-form-actions">
+      <button type="button" className="settings-icon-button save" aria-label="Save Codex search model" aria-busy={searchModelBusy} title={searchModelBusy ? "Saving search model" : "Save search model"} disabled={searchModelBusy || !searchModelLoaded} onClick={() => void saveSearchModel()}>
+        <Save size={18} aria-hidden="true" />
+      </button>
     </div>
   </section>;
 }

@@ -2,8 +2,6 @@ import { useState, type KeyboardEvent } from "react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AgentIntegrationSettings } from "./AgentIntegrationSettings.js";
-import { ClaudeSettings } from "./ClaudeSettings.js";
-import { CodexSettings } from "./CodexSettings.js";
 import { ProtocolSettings } from "./ProtocolSettings.js";
 import { ResponseRepairSettings } from "./ResponseRepairSettings.js";
 import type { AgentIntegrationControls } from "./useAgentIntegrations.js";
@@ -34,7 +32,7 @@ export function AdvancedSettings({ api, agentIntegrations }: { readonly api: Tok
     </div>
     <div id={`advanced-panel-${group}`} role="tabpanel" aria-labelledby={`advanced-tab-${group}`} className="page-stack">
       {group === "protocols" ? <><ProtocolSettings api={api} protocol="responses" /><ResponseRepairSettings api={api} /><ProtocolSettings api={api} protocol="anthropic" /></>
-        : <><AgentIntegrationSettings controls={agentIntegrations} /><ClaudeSettings api={api} agentIntegrations={agentIntegrations} /><CodexSettings api={api} /></>}
+        : <AgentIntegrationSettings api={api} controls={agentIntegrations} />}
     </div>
   </section>;
 }
