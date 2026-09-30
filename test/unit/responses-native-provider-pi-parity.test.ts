@@ -149,7 +149,7 @@ async function requestJson(request: Request): Promise<Record<string, unknown>> {
 }
 
 describe("Provider Native Responses Pi HTTP parity", () => {
-  it.each(GOAT_AUTH_TYPES)("matches pinned Pi for real CommandCode Goat Responses with %s auth", async (_authType) => {
+  it.each(GOAT_AUTH_TYPES)("matches pinned Pi for real CommandCode Goat Responses with %s auth", async () => {
     const selectedModel = COMMANDCODE_GOAT_MODELS.find(
       (entry) => entry.id === "deepseek/deepseek-v4.1-flash",
     );
@@ -265,7 +265,7 @@ describe("Provider Native Responses Pi HTTP parity", () => {
     },
   );
 
-  it.each(AZURE_AUTH_TYPES)("matches Pi's Azure SDK URL, auth, API version, and body shape with %s auth", async (_authType) => {
+  it.each(AZURE_AUTH_TYPES)("matches Pi's Azure SDK URL, auth, API version, and body shape with %s auth", async () => {
     const selectedModel = model(
       "azure-openai-responses",
       "azure-openai-responses",
@@ -294,7 +294,7 @@ describe("Provider Native Responses Pi HTTP parity", () => {
     await expect(requestJson(lucky)).resolves.toEqual(await requestJson(pi));
   });
 
-  it.each(AZURE_AUTH_TYPES)("matches the pinned Azure SDK-owned header envelope for compact with %s auth", async (_authType) => {
+  it.each(AZURE_AUTH_TYPES)("matches the pinned Azure SDK-owned header envelope for compact with %s auth", async () => {
     const selectedModel = model(
       "azure-openai-responses",
       "azure-openai-responses",

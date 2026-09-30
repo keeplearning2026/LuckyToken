@@ -329,9 +329,9 @@ CLAUDE_CODE_SUBAGENT_MODEL
 
 五个模型槽位分别由 registered settings 保存，并且只能选择 Favorite Model alias。Adapter 根据当前 Pi model 的 `contextWindow` 投影 Claude Code model string：`contextWindow >= 1_000_000` 时追加 `[1m]`。
 
-七个 managed env 字段都维护最小 preimage。五个模型槽位在每次注入前，如果当前值（允许去掉尾部 `[1m]` 后判断）仍能由 PublicModelAuthority 解析为 Token Public Model alias，则视为 Token 自己的现有 projection，不更新 preimage；否则记录当前 string 或 absence。`ANTHROPIC_BASE_URL` 通过“等于当前 Token endpoint 或上一次成功注入 URL”判定 ownership；`ANTHROPIC_AUTH_TOKEN` 仅通过是否等于固定值 `luckytoken-local` 判定 ownership；不属于 Token 的值则记录当前 string 或 absence。disable/shutdown 时七个字段全部恢复各自记录值，记录为 absence 的删除。
+七个 managed env 字段都维护最小 preimage。五个模型槽位在每次注入前，如果当前值（允许去掉尾部 `[1m]` 后判断）仍能由 PublicModelAuthority 解析为 Token Public Model alias，则视为 Token 自己的现有 projection，不更新 preimage；否则记录当前 string 或 absence。`ANTHROPIC_BASE_URL` 通过“等于当前 Token endpoint 或上一次成功注入 URL”判定 ownership；`ANTHROPIC_AUTH_TOKEN` 仅通过是否等于固定值 `token-local` 判定 ownership；不属于 Token 的值则记录当前 string 或 absence。disable/shutdown 时七个字段全部恢复各自记录值，记录为 absence 的删除。
 
-`ANTHROPIC_AUTH_TOKEN` 固定写为 `luckytoken-local`，只用于满足 Claude Code 的非空 auth-token 输入并提供精确 ownership 判断；当前 Token Anthropic ingress 不把它当 Provider credential。Token 不写 `ANTHROPIC_API_KEY`、Fable/Small Fast 或 top-level `model`。
+`ANTHROPIC_AUTH_TOKEN` 固定写为 `token-local`，只用于满足 Claude Code 的非空 auth-token 输入并提供精确 ownership 判断；当前 Token Anthropic ingress 不把它当 Provider credential。Token 不写 `ANTHROPIC_API_KEY`、Fable/Small Fast 或 top-level `model`。
 
 ---
 

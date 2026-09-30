@@ -150,7 +150,7 @@ export type ProviderUsageRefreshResult =
 
 export interface ProviderUsageAuthority {
   query(): Promise<ProviderUsageSnapshot>;
-  refresh(providerId: string): Promise<{
+  refresh(providerId: string, signal?: AbortSignal): Promise<{
     readonly snapshot: ProviderUsageSnapshot;
     readonly refresh: ProviderUsageRefreshResult;
   }>;
@@ -160,6 +160,7 @@ export interface ProviderUsageAuthority {
     effectiveBaseUrl: string,
     facts: ProviderUsageFacts,
   ): Promise<boolean>;
+  close(): Promise<void>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

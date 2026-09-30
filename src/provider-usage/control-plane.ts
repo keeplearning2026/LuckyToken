@@ -42,7 +42,7 @@ function projectState(state: ProviderUsageState): ProviderUsageProviderProjectio
 export function createProviderUsageControlPlaneHandler(
   authority: ProviderUsageAuthority,
 ): ProviderUsageCommandHandler {
-  return async (command) => {
+  return async (command, signal) => {
     if (command.command === "query") {
       const snapshot = await authority.query();
       return Object.freeze({
@@ -52,7 +52,7 @@ export function createProviderUsageControlPlaneHandler(
         }),
       });
     }
-    const result = await authority.refresh(command.providerId);
+    const result = await authority.refresh(command.providerId, signal);
     return Object.freeze({
       outcome: "ok" as const,
       snapshot: Object.freeze({

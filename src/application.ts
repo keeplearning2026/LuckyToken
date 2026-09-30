@@ -461,6 +461,9 @@ async function startNormalApplication(options: {
     | { readonly unsubscribe: () => void }
     | undefined;
   let attentionRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  let providerUsageAuthorityForCleanup:
+    | ReturnType<typeof createProviderUsageAuthority>
+    | undefined;
   let providerUsageAutoRefresh: ReturnType<typeof createProviderUsageAutoRefresh> | undefined;
   let cleanupPromise: Promise<void> | undefined;
   let lifecycle: ControlledTokenApplication | undefined;
@@ -483,6 +486,10 @@ async function startNormalApplication(options: {
 
   const closeOwnedResources = async (): Promise<readonly unknown[]> => {
     const failures: unknown[] = [];
+    await providerUsageAuthorityForCleanup
+      ?.close()
+      .catch((error: unknown) => failures.push(error));
+    providerUsageAuthorityForCleanup = undefined;
     await providerUsageAutoRefresh?.close().catch((error: unknown) => failures.push(error));
     providerUsageAutoRefresh = undefined;
     if (attentionRefreshTimer !== undefined) {
@@ -751,6 +758,7 @@ async function startNormalApplication(options: {
       },
       now: Date.now,
     });
+    providerUsageAuthorityForCleanup = providerUsageAuthority;
     const providerUsageCommandHandler =
       createProviderUsageControlPlaneHandler(providerUsageAuthority);
     providerUsageAutoRefresh = createProviderUsageAutoRefresh({
@@ -936,7 +944,6 @@ async function startNormalApplication(options: {
     const dshIntegrationAdapter = createDshIntegrationAdapter({
       dshHome: dshHomeOverride ? resolve(dshHomeOverride) : join(homedir(), ".dsh"),
       profile: "desktop",
-      stateDirectory: join(dirname(options.configPath), "integrations", "dsh"),
     });
     const previousCodexState = await codexIntegrationAuthority.query();
     const agentIntegrations = createAgentIntegrationCoordinator({

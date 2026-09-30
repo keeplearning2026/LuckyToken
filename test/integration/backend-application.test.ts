@@ -366,7 +366,7 @@ describe("Backend Application public lifecycle seam", () => {
           ANTHROPIC_DEFAULT_HAIKU_MODEL: `${fixtureModel.alias}[1m]`,
           CLAUDE_CODE_SUBAGENT_MODEL: `${fixtureModel.alias}[1m]`,
         });
-        expect(active.env?.ANTHROPIC_AUTH_TOKEN).toBe("luckytoken-local");
+        expect(active.env?.ANTHROPIC_AUTH_TOKEN).toBe("token-local");
 
         const disabled = await client.executeAgentIntegrationsCommand({
           command: "set_enabled",

@@ -471,7 +471,7 @@ env.CLAUDE_CODE_SUBAGENT_MODEL
 ```
 
 `ANTHROPIC_BASE_URL` points at Token's loopback Anthropic endpoint.
-`ANTHROPIC_AUTH_TOKEN` is the fixed local value `luckytoken-local` so Claude Code has a non-empty auth token; Token's local Anthropic ingress does not treat it as a Provider credential. The five model slots are selected
+`ANTHROPIC_AUTH_TOKEN` is the fixed local value `token-local` so Claude Code has a non-empty auth token; Token's local Anthropic ingress does not treat it as a Provider credential. The five model slots are selected
 independently in Advanced → Agents, and each dropdown
 is populated from the current Favorite Models. Token stores the selected alias
 without modification; when the resolved model has a context window of at least
@@ -489,7 +489,7 @@ that resolves as a Token Public Model alias is treated as an existing Token
 projection and does not replace the saved restore value. For
 `ANTHROPIC_BASE_URL`, equality with the current Token endpoint or the value
 recorded from Token's previous successful injection establishes ownership. For
-`ANTHROPIC_AUTH_TOKEN`, the exact fixed value `luckytoken-local` establishes ownership. Any other current
+`ANTHROPIC_AUTH_TOKEN`, the exact fixed value `token-local` establishes ownership. Any other current
 string, or absence, becomes that field's latest restore
 preimage. Disable or Backend shutdown restores all seven recorded values;
 fields whose recorded preimage was absent are removed. Unrelated Claude

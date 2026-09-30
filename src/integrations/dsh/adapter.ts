@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import lockfile from "proper-lockfile";
 import { isMap, isScalar, isSeq, parseDocument, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 
 import type {
@@ -10,23 +9,19 @@ import type {
   AgentIntegrationEffect,
   AgentInjectionScope,
 } from "../agents/contract.js";
-import type { AgentInjectionSnapshot } from "../agents/snapshot.js";
+import type { AgentInjectionModel, AgentInjectionSnapshot } from "../agents/snapshot.js";
 
 const PROVIDER_ID = "Token";
 const MANAGED_COMMENT = " Token managed";
 const ROW_COMMENT = " Token managed row";
-const CREDENTIALS_FILENAME = ".credentials.yaml";
-const CREDENTIALS_VERSION = 1;
-const CREDENTIAL_REF = "TOKEN_API_KEY";
-const CREDENTIAL_VALUE = "token-local";
-const DSH_FILE_LOCK_WAIT_MS = 30_000;
-const LOCK_RETRY_INITIAL_MS = 20;
-const LOCK_RETRY_MAX_MS = 200;
+const ENV_MARKER = "# Token managed";
+const ENV_KEY = "TOKEN_API_KEY";
+const LOCAL_KEY = "token-local";
+const DSH_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export interface CreateDshIntegrationAdapterOptions {
   readonly dshHome: string;
   readonly profile: string;
-  readonly stateDirectory: string;
 }
 
 export interface DshIntegrationAdapter extends AgentIntegrationAdapter {
@@ -83,98 +78,6 @@ async function replaceIfUnchanged(
   return true;
 }
 
-function lockHolderExited(record: string): boolean {
-  if (!/^\d+\n$/u.test(record)) return false;
-  const pid = Number(record.trim());
-  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2_147_483_647) return false;
-  if (pid === process.pid) return false;
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    return errorCode(error) === "ESRCH";
-  }
-}
-
-async function readLockRecord(path: string): Promise<string | undefined> {
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-async function takeOverExitedLock(lockPath: string): Promise<boolean> {
-  const record = await readLockRecord(lockPath);
-  if (record === undefined || !lockHolderExited(record)) return false;
-  const claim = `${lockPath}.takeover-${createHash("sha256").update(record).digest("hex").slice(0, 16)}`;
-  try {
-    await writeFile(claim, `${process.pid}\n`, { mode: 0o600, flag: "wx" });
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === "EEXIST" || code === "EPERM") return false;
-    throw error;
-  }
-  try {
-    if ((await readLockRecord(lockPath)) !== record || !lockHolderExited(record)) return false;
-    try {
-      await rm(lockPath, { force: true });
-    } catch {
-      return false;
-    }
-    return true;
-  } finally {
-    await rm(claim, { force: true }).catch(() => undefined);
-  }
-}
-
-async function withDshFileLock<T>(path: string, work: () => Promise<T>): Promise<T> {
-  const lockPath = `${path}.lock`;
-  await mkdir(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + DSH_FILE_LOCK_WAIT_MS;
-  let delay = LOCK_RETRY_INITIAL_MS;
-  let retriedUnconfirmedPermissionError = false;
-  for (;;) {
-    try {
-      await writeFile(lockPath, `${process.pid}\n`, { mode: 0o600, flag: "wx" });
-      break;
-    } catch (error) {
-      const code = errorCode(error);
-      if (code === "EEXIST") {
-        if (await takeOverExitedLock(lockPath)) continue;
-      } else if (code === "EPERM") {
-        let exists = false;
-        try {
-          await stat(lockPath);
-          exists = true;
-        } catch {
-          exists = false;
-        }
-        if (exists) {
-          if (await takeOverExitedLock(lockPath)) continue;
-        } else if (!retriedUnconfirmedPermissionError) {
-          retriedUnconfirmedPermissionError = true;
-          continue;
-        } else {
-          throw error;
-        }
-      } else {
-        throw error;
-      }
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(`DSH writer lock timed out at ${lockPath}.`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    delay = Math.min(delay * 2, LOCK_RETRY_MAX_MS);
-  }
-  try {
-    return await work();
-  } finally {
-    await rm(lockPath, { force: true }).catch(() => undefined);
-  }
-}
-
 function parsePatch(raw: string | undefined): { doc: Document; rows: YAMLSeq } {
   const doc = parseDocument(raw?.trim() ? raw : "[]\n", { uniqueKeys: true, keepSourceTokens: true });
   if (doc.errors.length > 0 || !isSeq(doc.contents)) {
@@ -189,10 +92,14 @@ function targetRow(rows: YAMLSeq): YAMLMap | undefined {
   return matches[0] as YAMLMap | undefined;
 }
 
+function hasOwnedMarker(value: unknown): boolean {
+  return typeof value === "string" && value.trim() === ROW_COMMENT.trim();
+}
+
 function ownedRow(row: YAMLMap): boolean {
-  const id = row.items.find((item) => item.key === "id" ||
-    (isScalar(item.key) && item.key.value === "id"));
-  return id !== undefined && isScalar(id.key) && id.key.commentBefore?.trim() === ROW_COMMENT.trim();
+  if (hasOwnedMarker(row.commentBefore)) return true;
+  const id = row.items.find((item) => isScalar(item.key) && item.key.value === "id");
+  return id !== undefined && isScalar(id.key) && hasOwnedMarker(id.key.commentBefore);
 }
 
 function providerMap(row: YAMLMap): YAMLMap | undefined {
@@ -205,80 +112,60 @@ function providerMap(row: YAMLMap): YAMLMap | undefined {
   return providers;
 }
 
+/**
+ * Pi canonical levels only, mapped to the same-named DSH selectable level.
+ * A level Pi does not offer is never invented, defaulted, or downgraded, and
+ * Provider-private wire spellings stay behind the Pi model/adapter.
+ */
+function dshReasoningEfforts(model: AgentInjectionModel): Record<string, string> | undefined {
+  if (!model.reasoning) return undefined;
+  const offered = new Set(model.thinkingLevels);
+  const levels = DSH_THINKING_LEVELS.filter((level) => offered.has(level));
+  if (levels.length === 0) return undefined;
+  return Object.fromEntries(levels.map((level) => [level, level]));
+}
+
 function desiredProvider(snapshot: AgentInjectionSnapshot, scope: AgentInjectionScope) {
   return {
     displayName: "Token",
-    apiKeyEnv: CREDENTIAL_REF,
+    apiKeyEnv: ENV_KEY,
     api: "openai-responses",
     baseURL: snapshot.endpoint.openaiBaseUrl,
-    models: [...snapshot[scope]].sort((a, b) => a.alias.localeCompare(b.alias)).map((model) => ({
-      id: model.alias,
-      name: model.alias,
-      contextWindow: model.contextWindow,
-      maxTokens: model.maxTokens,
-      input: [...model.input],
-    })),
+    models: [...snapshot[scope]].sort((a, b) => a.alias.localeCompare(b.alias)).map((model) => {
+      const efforts = dshReasoningEfforts(model);
+      return {
+        id: model.alias,
+        name: model.alias,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        input: [...model.input],
+        ...(efforts === undefined ? {} : { reasoningEfforts: efforts }),
+      };
+    }),
   };
 }
 
-function parseCredentials(raw: string | undefined): { doc: Document; versionMissing: boolean } {
-  const doc: Document = parseDocument(raw?.trim() ? raw : "version: 1\n", {
-    uniqueKeys: true,
-    keepSourceTokens: true,
-  });
-  if (doc.errors.length > 0 || !isMap(doc.contents)) {
-    throw new Error("DSH .credentials.yaml must be a valid YAML map.");
-  }
-  const contents = doc.contents;
-  for (const item of contents.items) {
-    const key = isScalar(item.key) ? item.key.value : undefined;
-    if (key !== "version" && key !== "refs" && key !== "records") {
-      throw new Error("DSH .credentials.yaml has an unsupported top-level key.");
+function patchEnv(raw: string | undefined, insert: boolean): string | undefined {
+  const source = raw ?? "";
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(/\r?\n/u);
+  const indices = lines.flatMap((line, index) => /^\s*TOKEN_API_KEY\s*=/u.test(line) ? [index] : []);
+  if (indices.length > 1) throw new Error("DSH .env defines TOKEN_API_KEY more than once.");
+  const keyIndex = indices[0] ?? -1;
+  if (insert) {
+    if (keyIndex >= 0 && lines[keyIndex - 1] === ENV_MARKER && lines[keyIndex] === `${ENV_KEY}=${LOCAL_KEY}`) {
+      return source;
     }
-  }
-  const version = contents.get("version");
-  if (version !== undefined && version !== CREDENTIALS_VERSION) {
-    throw new Error(`DSH .credentials.yaml version must be ${CREDENTIALS_VERSION}.`);
-  }
-  const refs = contents.get("refs", true);
-  if (refs !== undefined && !isMap(refs)) {
-    throw new Error("DSH .credentials.yaml refs must be a YAML map.");
-  }
-  const records = contents.get("records", true);
-  if (records !== undefined && !isMap(records)) {
-    throw new Error("DSH .credentials.yaml records must be a YAML map.");
-  }
-  return { doc, versionMissing: version === undefined };
-}
-
-function patchCredentials(raw: string | undefined, insert: boolean): string | undefined {
-  const { doc, versionMissing } = parseCredentials(raw);
-  const contents = doc.contents;
-  if (!isMap(contents)) throw new Error("DSH .credentials.yaml must be a YAML map.");
-  if (versionMissing) contents.set("version", CREDENTIALS_VERSION);
-  let refs: YAMLMap | undefined;
-  const existingRefs = contents.get("refs", true);
-  if (existingRefs !== undefined) {
-    if (!isMap(existingRefs)) throw new Error("DSH .credentials.yaml refs must be a YAML map.");
-    refs = existingRefs;
-  } else if (insert) {
-    const created = doc.createNode({});
-    if (!isMap(created)) throw new Error("DSH .credentials.yaml refs map could not be created.");
-    contents.set("refs", created);
-    refs = created;
-  } else {
+  } else if (keyIndex < 0) {
     return undefined;
   }
-  const current = refs.get(CREDENTIAL_REF);
-  if (insert) {
-    if (current === CREDENTIAL_VALUE && raw !== undefined && !versionMissing) return raw;
-    refs.set(CREDENTIAL_REF, CREDENTIAL_VALUE);
-  } else {
-    if (current === undefined) return undefined;
-    refs.delete(CREDENTIAL_REF);
-    if (refs.items.length === 0) contents.delete("refs");
+  if (keyIndex >= 0) {
+    lines.splice(keyIndex, 1);
+    if (lines[keyIndex - 1] === ENV_MARKER) lines.splice(keyIndex - 1, 1);
   }
-  return doc.toString({ lineWidth: 0 });
+  const remaining = keyIndex < 0 ? source : lines.join(eol);
+  if (!insert) return remaining;
+  return `${remaining}${remaining.length > 0 && !remaining.endsWith("\n") ? eol : ""}${ENV_MARKER}${eol}${ENV_KEY}=${LOCAL_KEY}${eol}`;
 }
 
 export function createDshIntegrationAdapter(options: CreateDshIntegrationAdapterOptions): DshIntegrationAdapter {
@@ -287,47 +174,25 @@ export function createDshIntegrationAdapter(options: CreateDshIntegrationAdapter
   }
   const profileDirectory = join(options.dshHome, "profiles", options.profile);
   const patchPath = join(profileDirectory, "cordis.patch.yml");
-  const patchLockTarget = join(profileDirectory, "package.json");
-  const credentialsPath = join(options.dshHome, CREDENTIALS_FILENAME);
-  const lockTarget = join(options.stateDirectory, "dsh-integration.lock");
+  const envPath = join(options.dshHome, ".env");
   let operationQueue = Promise.resolve();
 
-  const withLock = async <T>(work: () => Promise<T>): Promise<T> => {
-    await mkdir(options.stateDirectory, { recursive: true });
-    await writeFile(lockTarget, "", { flag: "a", encoding: "utf8", mode: 0o600 });
-    const release = await lockfile.lock(lockTarget, {
-      realpath: false,
-      retries: { retries: 20, minTimeout: 20, maxTimeout: 250 },
-      stale: 30_000,
-    });
-    try {
-      return await work();
-    } finally {
-      await release().catch(() => undefined);
-    }
-  };
-
   const applyCredentials = async (insert: boolean): Promise<boolean> => {
-    if (!insert && (await readOptional(credentialsPath)) === undefined) return false;
-    return withDshFileLock(credentialsPath, async () => {
-      const original = await readOptional(credentialsPath);
-      const next = patchCredentials(original, insert);
-      if (next === undefined) return false;
-      return replaceIfUnchanged(credentialsPath, original, next);
-    });
+    const original = await readOptional(envPath);
+    const next = patchEnv(original, insert);
+    if (next === undefined) return false;
+    return replaceIfUnchanged(envPath, original, next);
   };
 
   const updatePatch = async (
     create: boolean,
     mutate: (originalPatch: string | undefined) => string | undefined,
   ): Promise<boolean> => {
-    if (!create && (await readOptional(patchPath)) === undefined) return false;
-    return withDshFileLock(patchLockTarget, async () => {
-      const original = await readOptional(patchPath);
-      const next = mutate(original);
-      if (next === undefined) return false;
-      return replaceIfUnchanged(patchPath, original, next);
-    });
+    const original = await readOptional(patchPath);
+    if (!create && original === undefined) return false;
+    const next = mutate(original);
+    if (next === undefined) return false;
+    return replaceIfUnchanged(patchPath, original, next);
   };
 
   const restoreLocked = async (): Promise<AgentIntegrationEffect> => {
@@ -371,9 +236,9 @@ export function createDshIntegrationAdapter(options: CreateDshIntegrationAdapter
     }
     const models = snapshot[scope];
     if (models.length === 0) {
-      const restored = await restoreLocked();
-      return effect(restored.observedState, 0, snapshot.warnings, restored.changed,
-        restored.message ?? `DSH ${scope === "favorite" ? "Favorite" : "All"} scope has no injectable models.`);
+      return effect("unavailable", 0, snapshot.warnings, false,
+        `DSH ${scope === "favorite" ? "Favorite" : "All"} scope has no injectable models; ` +
+        "existing DSH configuration was left unchanged.");
     }
     let credentialsChanged: boolean;
     try {
@@ -429,7 +294,7 @@ export function createDshIntegrationAdapter(options: CreateDshIntegrationAdapter
   };
 
   const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
-    const operation = operationQueue.then(() => withLock(work));
+    const operation = operationQueue.then(work);
     operationQueue = operation.then(() => undefined, () => undefined);
     return operation;
   };

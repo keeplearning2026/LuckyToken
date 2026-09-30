@@ -76,6 +76,8 @@ export function createProviderUsageAuthority(
 
   const cache = new Map<string, CacheSlot>();
   const inflight = new Map<string, Promise<ProviderUsageRefreshResult>>();
+  const lifecycleAbort = new AbortController();
+  let closed = false;
   const now = options.now ?? Date.now;
   const resolveRefreshTimeoutMs = (): number => {
     const configured = typeof options.refreshTimeoutMs === "function"
@@ -204,42 +206,54 @@ export function createProviderUsageAuthority(
     return Object.freeze({ providers: Object.freeze(states) });
   };
 
-  const refreshCurrent = async (
+  const unavailableRefresh = (
+    providerId: string,
+  ): ProviderUsageRefreshResult =>
+    Object.freeze({
+      providerId,
+      outcome: "unavailable",
+      reason: "network",
+    });
+
+  const startRefresh = (
     providerId: string,
     probe: ProviderUsageProbe,
     capture: ProviderAuthBindingCapture,
   ): Promise<ProviderUsageRefreshResult> => {
+    if (closed || lifecycleAbort.signal.aborted) {
+      return Promise.resolve(unavailableRefresh(providerId));
+    }
     const baseUrls = servedBaseUrls(providerId);
     if (baseUrls.length === 0) {
-      return Object.freeze({
+      return Promise.resolve(Object.freeze({
         providerId,
         outcome: "unsupported",
         reason: "destination",
-      });
+      }));
     }
     let eligibility: ProviderUsageEligibility;
     try {
       eligibility = eligibilityFor(providerId, probe, capture, baseUrls);
     } catch {
-      return Object.freeze({
+      return Promise.resolve(Object.freeze({
         providerId,
         outcome: "unavailable",
         reason: "upstream",
-      });
+      }));
     }
     if (eligibility.state === "unsupported_binding") {
-      return Object.freeze({
+      return Promise.resolve(Object.freeze({
         providerId,
         outcome: "unsupported",
         reason: "binding",
-      });
+      }));
     }
     if (eligibility.state === "unsupported_destination") {
-      return Object.freeze({
+      return Promise.resolve(Object.freeze({
         providerId,
         outcome: "unsupported",
         reason: "destination",
-      });
+      }));
     }
 
     const destination = destinationKey(baseUrls);
@@ -248,7 +262,10 @@ export function createProviderUsageAuthority(
     if (existing !== undefined) return existing;
 
     const pending = (async (): Promise<ProviderUsageRefreshResult> => {
-      const signal = AbortSignal.timeout(resolveRefreshTimeoutMs());
+      const signal = AbortSignal.any([
+        AbortSignal.timeout(resolveRefreshTimeoutMs()),
+        lifecycleAbort.signal,
+      ]);
       let acquired:
         | ProviderUsageProbeResult
         | { readonly state: "unsupported_destination" };
@@ -347,12 +364,39 @@ export function createProviderUsageAuthority(
     return pending;
   };
 
+  const waitForRefresh = (
+    pending: Promise<ProviderUsageRefreshResult>,
+    providerId: string,
+    signal: AbortSignal | undefined,
+  ): Promise<ProviderUsageRefreshResult> => {
+    if (signal === undefined) return pending;
+    if (signal.aborted) {
+      return Promise.resolve(unavailableRefresh(providerId));
+    }
+    return new Promise<ProviderUsageRefreshResult>((resolve) => {
+      let settled = false;
+      const finish = (value: ProviderUsageRefreshResult): void => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      };
+      const onAbort = (): void => finish(unavailableRefresh(providerId));
+      signal.addEventListener("abort", onAbort, { once: true });
+      void pending.then(
+        (value) => finish(value),
+        () => finish(unavailableRefresh(providerId)),
+      );
+    });
+  };
+
   const observePassive = async (
     providerId: string,
     capture: ProviderAuthBindingCapture,
     observedBaseUrl: string,
     rawFacts: Parameters<ProviderUsageAuthority["observePassive"]>[3],
   ): Promise<boolean> => {
+    if (closed) return false;
     if (
       capture.facts.providerId !== providerId ||
       !probes.has(providerId)
@@ -372,6 +416,7 @@ export function createProviderUsageAuthority(
     });
     let committed = false;
     const current = await options.binding.publishIfCurrent(capture, () => {
+      if (closed) return;
       if (destinationKey(servedBaseUrls(providerId)) !== destination) return;
       cache.set(
         providerId,
@@ -386,7 +431,13 @@ export function createProviderUsageAuthority(
     return current && committed;
   };
 
-  const refresh = async (providerId: string) => {
+  const refresh = async (providerId: string, signal?: AbortSignal) => {
+    if (closed) {
+      return Object.freeze({
+        snapshot: await query(),
+        refresh: unavailableRefresh(providerId),
+      });
+    }
     const probe = probes.get(providerId);
     let refreshResult: ProviderUsageRefreshResult;
     if (probe === undefined) {
@@ -407,7 +458,11 @@ export function createProviderUsageAuthority(
         });
       }
       if (capture !== undefined) {
-        refreshResult = await refreshCurrent(providerId, probe, capture);
+        refreshResult = await waitForRefresh(
+          startRefresh(providerId, probe, capture),
+          providerId,
+          signal,
+        );
       }
     }
     return Object.freeze({
@@ -416,5 +471,16 @@ export function createProviderUsageAuthority(
     });
   };
 
-  return Object.freeze({ query, refresh, observePassive });
+  let closePromise: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    if (closePromise !== undefined) return closePromise;
+    closed = true;
+    lifecycleAbort.abort();
+    closePromise = Promise.allSettled([...inflight.values()]).then(
+      () => undefined,
+    );
+    return closePromise;
+  };
+
+  return Object.freeze({ query, refresh, observePassive, close });
 }

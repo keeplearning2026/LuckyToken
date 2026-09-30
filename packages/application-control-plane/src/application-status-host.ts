@@ -269,6 +269,7 @@ export async function startApplicationStatusHost(
   };
   let current: StatusSnapshot = { ...mergedStatus(initialStatus), sequence: 0 };
   let closed = false;
+  const lifecycleAbort = new AbortController();
   let publishQueue = Promise.resolve();
   const states = new Set<ConnectionState>();
   const tasks = new Set<Promise<void>>();
@@ -1003,39 +1004,47 @@ export async function startApplicationStatusHost(
             result,
           });
         } else if (request.type === "provider_usage_command") {
-          if (options.providerUsageCommandHandler === undefined) {
+          // Usage refresh may wait on slow upstream accounting endpoints.
+          // Keep the connection read loop free for owner-lease renewal and
+          // the other management command families.
+          trackTask((async () => {
+            if (options.providerUsageCommandHandler === undefined) {
+              await writeFrame(state.connection, {
+                type: "error",
+                requestId: request.requestId,
+                code: "unknown_command",
+              });
+              return;
+            }
+            let handled: ProviderUsageCommandResult;
+            try {
+              handled = await options.providerUsageCommandHandler(
+                request.command,
+                lifecycleAbort.signal,
+              );
+            } catch {
+              await writeFrame(state.connection, {
+                type: "error",
+                requestId: request.requestId,
+                code: "invalid_request",
+              });
+              return;
+            }
+            const result = decodeProviderUsageCommandResult(handled);
+            if (result === undefined) {
+              await writeFrame(state.connection, {
+                type: "error",
+                requestId: request.requestId,
+                code: "invalid_request",
+              });
+              return;
+            }
             await writeFrame(state.connection, {
-              type: "error",
+              type: "provider_usage_command_result",
               requestId: request.requestId,
-              code: "unknown_command",
+              result,
             });
-            continue;
-          }
-          let handled: ProviderUsageCommandResult;
-          try {
-            handled = await options.providerUsageCommandHandler(request.command);
-          } catch {
-            await writeFrame(state.connection, {
-              type: "error",
-              requestId: request.requestId,
-              code: "invalid_request",
-            });
-            continue;
-          }
-          const result = decodeProviderUsageCommandResult(handled);
-          if (result === undefined) {
-            await writeFrame(state.connection, {
-              type: "error",
-              requestId: request.requestId,
-              code: "invalid_request",
-            });
-            continue;
-          }
-          await writeFrame(state.connection, {
-            type: "provider_usage_command_result",
-            requestId: request.requestId,
-            result,
-          });
+          })().catch(() => undefined));
         } else if (request.type === "public_models_command") {
           if (options.publicModelsCommandHandler === undefined) {
             await writeFrame(state.connection, {
@@ -1327,6 +1336,11 @@ export async function startApplicationStatusHost(
     }
   };
 
+  const trackTask = (task: Promise<void>): void => {
+    tasks.add(task);
+    void task.finally(() => tasks.delete(task));
+  };
+
   const acceptTask = (async () => {
     while (!closed) {
       let connection: PipeConnection | null;
@@ -1351,9 +1365,7 @@ export async function startApplicationStatusHost(
         backupAbort: new AbortController(),
       };
       states.add(state);
-      const task = serveConnection(state).catch(() => undefined);
-      tasks.add(task);
-      void task.finally(() => tasks.delete(task));
+      trackTask(serveConnection(state).catch(() => undefined));
     }
   })();
 
@@ -1397,6 +1409,7 @@ export async function startApplicationStatusHost(
     async close() {
       if (closed) return;
       closed = true;
+      lifecycleAbort.abort();
       await publishQueue.catch(() => undefined);
       await Promise.all(
         [...states].map((state) =>

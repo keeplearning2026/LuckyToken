@@ -113,4 +113,5 @@ export interface ProviderUsageCommandResult {
 
 export type ProviderUsageCommandHandler = (
   command: ProviderUsageCommand,
+  signal?: AbortSignal,
 ) => Promise<ProviderUsageCommandResult>;
