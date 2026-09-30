@@ -282,7 +282,7 @@ Keep generic artifact retrieval paged and add metadata-first inspection. The ren
 - Group captures by journey stage, show readable collision-safe filenames, and use a contextual magnifier action for each available file; do not render raw bodies inline.
 - Support stage-to-stage comparison by requesting bounded windows, not whole bodies.
 - Display `complete`, `partial`, or `unavailable`, original/captured byte counts, redaction status, and reason prominently.
-- Put both switches in Settings → Data & privacy: all-request capture defaults off and failed-request capture defaults on. Describe their sensitive-data and disk-use implications and display the resolved managed directory.
+- Put both switches in Settings → Diagnostics: all-request capture defaults off and failed-request capture defaults on. Describe their sensitive-data and disk-use implications and display the resolved managed directory.
 - Export, if added, must stream through the Control Plane and preserve the same access controls and redaction guarantees.
 
 ## 11. Implementation and certification order

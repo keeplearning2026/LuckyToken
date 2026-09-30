@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
+import { SettingHelp } from "./SettingHelp.js";
 
 /** The only response repair Token currently ships. */
 const namespaceRepairKey =
@@ -65,34 +66,14 @@ export function ResponseRepairSettings({ api }: { readonly api: TokenDesktopApi 
           <div className="settings-copy">
             <p className="eyebrow">RESPONSES</p>
             <h3>Response repair</h3>
-            <p>
-              A bounded repair Token may apply to a Provider Native response
-              before the client sees it. A repair does nothing when the response
-              is already correct, so leaving it on is safe; it exists so the
-              exception can be withdrawn once the upstream stops degrading.
-            </p>
           </div>
         </header>
-        <div className="settings-copy">
-          <h4>Function-call namespace repair</h4>
-          <p>
-            Some providers omit the namespace of a function call that the client
-            declared inside a namespace. Codex then resolves the bare name under
-            the default namespace and answers &apos;unsupported call&apos;.
-            Token inserts the namespace the request itself declared. It never
-            rewrites a namespace the provider already sent, never renames a
-            tool, and never touches a name that is ambiguous, declared under
-            several namespaces, also declared as a top-level tool, or not
-            declared at all.
-          </p>
-        </div>
         <div className="settings-action-row">
           <div className="settings-action-copy">
-            <strong>Provider Native lane</strong>
-            <p>
-              Preserved provider responses, before the client sees them. Other
-              lanes are intentionally not covered.
-            </p>
+            <strong>Function-call namespace repair <SettingHelp label="Function-call namespace repair">
+              For Provider Native Responses only. When a provider omits a function call namespace, Token inserts the unique namespace declared by the client. Existing namespaces, ambiguous names, and other lanes are left unchanged.
+            </SettingHelp></strong>
+            <p>Provider Native lane</p>
           </div>
           <button
             type="button"

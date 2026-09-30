@@ -43,6 +43,19 @@ async function flush(): Promise<void> {
   });
 }
 
+async function openAgentSettings(): Promise<void> {
+  await act(async () => {
+    (container.querySelector('button[aria-label="Settings"]') as HTMLButtonElement).click();
+  });
+  await act(async () => {
+    [...container.querySelectorAll('button[role="tab"]')].find((button) => button.textContent === "Advanced")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await act(async () => {
+    [...container.querySelectorAll('button[role="tab"]')].find((button) => button.textContent === "Agents")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await flush();
+}
+
 describe("desktop command-router shell", () => {
   it("switches the three color pages and keeps endpoint, runtime state, active count, and start/stop control in the header", async () => {
     const backendStateListeners = new Set<(state: DesktopBackendState) => void>();
@@ -431,6 +444,9 @@ describe("desktop command-router shell", () => {
       port: 5000,
     });
 
+    expect(container.querySelector('button[aria-label="Disable Codex integration"]')).toBeNull();
+    expect(container.querySelector('select[aria-label="Codex injection scope"]')).toBeNull();
+    await openAgentSettings();
     const codexToggle = container.querySelector('button[aria-label="Disable Codex integration"]');
     const piToggle = container.querySelector('button[aria-label="Enable Pi integration"]');
     const sync = container.querySelector('button[aria-label="Sync Agent integrations"]');
@@ -439,13 +455,15 @@ describe("desktop command-router shell", () => {
     expect(sync).toBeInstanceOf(HTMLButtonElement);
     expect(codexToggle?.getAttribute("aria-pressed")).toBe("true");
     expect(piToggle?.getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector(".codex-mark")).toBeInstanceOf(HTMLImageElement);
-    expect(container.querySelector('select[aria-label="Codex injection scope"]')).toBeInstanceOf(
-      HTMLSelectElement,
-    );
-    expect(container.querySelector('select[aria-label="Pi injection scope"]')).toBeInstanceOf(
-      HTMLSelectElement,
-    );
+    expect(container.querySelector('select[aria-label="Codex injection scope"]')).toBeInstanceOf(HTMLSelectElement);
+    expect(container.querySelector('select[aria-label="Pi injection scope"]')).toBeInstanceOf(HTMLSelectElement);
+    const codexScope = container.querySelector('select[aria-label="Codex injection scope"]') as HTMLSelectElement;
+    await act(async () => {
+      codexScope.value = "full";
+      codexScope.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "set_scope", agentId: "codex", scope: "full" });
     expect(sync?.classList.contains("dirty")).toBe(true);
     expect(sync?.querySelector("svg")).not.toBeNull();
 
@@ -502,6 +520,7 @@ describe("desktop command-router shell", () => {
 
     await act(async () => root.render(<App api={api} />));
     await flush();
+    await openAgentSettings();
     const sync = container.querySelector('button[aria-label="Sync Agent integrations"]');
     if (!(sync instanceof HTMLButtonElement)) throw new Error("sync button missing");
     await act(async () => {
@@ -569,6 +588,7 @@ describe("desktop command-router shell", () => {
 
     await act(async () => root.render(<App api={api} />));
     await flush();
+    await openAgentSettings();
     const toggle = container.querySelector('button[aria-label="Enable Codex integration"]');
     if (!(toggle instanceof HTMLButtonElement)) throw new Error("Codex icon missing");
     await act(async () => {
@@ -643,6 +663,7 @@ describe("desktop command-router shell", () => {
 
     await act(async () => root.render(<App api={api} />));
     await flush();
+    await openAgentSettings();
     const toggle = container.querySelector('button[aria-label="Disable Codex integration"]');
     if (!(toggle instanceof HTMLButtonElement)) throw new Error("Codex toggle missing");
     await act(async () => {

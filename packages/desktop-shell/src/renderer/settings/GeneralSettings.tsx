@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
+import { SettingHelp } from "./SettingHelp.js";
 
 export function GeneralSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [enabled, setEnabled] = useState<boolean>();
@@ -42,8 +43,7 @@ export function GeneralSettings({ api }: { readonly api: TokenDesktopApi }) {
       <header className="settings-section-header">
         <div className="settings-copy">
           <p className="eyebrow">DESKTOP</p>
-          <h3>Start Token automatically</h3>
-          <p>Launch Token in the background when you sign in to Windows.</p>
+          <h3>Start Token automatically <SettingHelp label="Start Token automatically">Launch Token in the background when you sign in to Windows.</SettingHelp></h3>
         </div>
         <span
           className={`settings-status ${unavailable ? "unavailable" : enabled ? "on" : "off"}`}
@@ -55,13 +55,7 @@ export function GeneralSettings({ api }: { readonly api: TokenDesktopApi }) {
       <div className="settings-action-row">
         <div className="settings-action-copy">
           <strong>Open at sign-in</strong>
-          <p>
-            {unavailable
-              ? "Windows startup settings could not be read."
-              : enabled
-                ? "Token starts minimized and keeps the gateway available."
-                : "Token starts only when you open it."}
-          </p>
+          {unavailable ? <p>Windows startup settings could not be read.</p> : null}
         </div>
         <button
           type="button"

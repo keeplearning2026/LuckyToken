@@ -84,8 +84,8 @@ silently redirect it).
   captured, so Direct Mode is unmeasured rather than proven unaffected. That
   failure stays unfixed there, and this module will not be the place that changes
   it. Adding a lane later means a new setting key, a new integration point, and
-  a second control on the Response repair page; today the page carries exactly
-  one switch, and no lane is enabled by implication.
+  a second control in Settings → Advanced → Protocols → Response repair; today
+  that section carries exactly one switch, and no lane is enabled by implication.
 
 ## Byte discipline and failure behaviour
 

@@ -1,37 +1,40 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AdvancedSettings } from "./AdvancedSettings.js";
 import { DataSettings } from "./DataSettings.js";
 import { GeneralSettings } from "./GeneralSettings.js";
 import { ProviderUsageSettings } from "./ProviderUsageSettings.js";
-import { ResponseRepairSettings } from "./ResponseRepairSettings.js";
 
-type SettingsSection = "general" | "data" | "advanced" | "responseRepair";
+type SettingsSection = "general" | "diagnostics" | "advanced";
 
 const sections: ReadonlyArray<Readonly<{
   id: SettingsSection;
   label: string;
-  description: string;
 }>> = Object.freeze([
-  { id: "general", label: "General", description: "Startup behavior" },
-  { id: "data", label: "Data & privacy", description: "History and backups" },
-  { id: "advanced", label: "Advanced", description: "Codex and diagnostics" },
-  {
-    id: "responseRepair",
-    label: "Response repair",
-    description: "Protocol response repairs",
-  },
+  { id: "general", label: "General" },
+  { id: "diagnostics", label: "Diagnostics" },
+  { id: "advanced", label: "Advanced" },
 ]);
 
-export function SettingsPage({ api }: { readonly api: TokenDesktopApi }) {
+export function SettingsPage({ api, modelRevision }: { readonly api: TokenDesktopApi; readonly modelRevision?: number | undefined }) {
   const [section, setSection] = useState<SettingsSection>("general");
+
+  const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>, current: SettingsSection): void => {
+    const index = sections.findIndex((entry) => entry.id === current);
+    const nextIndex = event.key === "ArrowRight" ? (index + 1) % sections.length
+      : event.key === "ArrowLeft" ? (index + sections.length - 1) % sections.length
+        : event.key === "Home" ? 0 : event.key === "End" ? sections.length - 1 : undefined;
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    const next = sections[nextIndex]?.id;
+    if (next === undefined) return;
+    setSection(next);
+    document.getElementById(`settings-tab-${next}`)?.focus();
+  };
 
   return (
     <section className="page-stack settings-page">
-      <p className="settings-lead">
-        Manage startup, stored data, and advanced Codex behavior.
-      </p>
       <div className="settings-tabs" role="tablist" aria-label="Settings sections">
         {sections.map((entry) => (
           <button
@@ -44,9 +47,9 @@ export function SettingsPage({ api }: { readonly api: TokenDesktopApi }) {
             tabIndex={section === entry.id ? 0 : -1}
             className={section === entry.id ? "active" : undefined}
             onClick={() => setSection(entry.id)}
+            onKeyDown={(event) => handleTabKey(event, entry.id)}
           >
             <strong>{entry.label}</strong>
-            <span>{entry.description}</span>
           </button>
         ))}
       </div>
@@ -61,12 +64,10 @@ export function SettingsPage({ api }: { readonly api: TokenDesktopApi }) {
             <GeneralSettings api={api} />
             <ProviderUsageSettings api={api} />
           </>
-        ) : section === "data" ? (
+        ) : section === "diagnostics" ? (
           <DataSettings api={api} />
-        ) : section === "responseRepair" ? (
-          <ResponseRepairSettings api={api} />
         ) : (
-          <AdvancedSettings api={api} />
+          <AdvancedSettings api={api} modelRevision={modelRevision} />
         )}
       </div>
     </section>

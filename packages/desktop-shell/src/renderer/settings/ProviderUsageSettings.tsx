@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
+import { SettingHelp } from "./SettingHelp.js";
 
 const SETTING_KEY = "providerUsage.refreshIntervalMinutes";
 
@@ -67,8 +68,7 @@ export function ProviderUsageSettings({ api }: { readonly api: TokenDesktopApi }
       <header className="settings-section-header">
         <div className="settings-copy">
           <p className="eyebrow">PROVIDER USAGE</p>
-          <h3>Automatic usage refresh</h3>
-          <p>Refresh supported Provider usage in the background, even when the Providers page is closed.</p>
+          <h3>Automatic usage refresh <SettingHelp label="Automatic usage refresh">Refresh supported Provider usage in the background, even when the Providers page is closed. Default: every 15 minutes. Changes apply immediately.</SettingHelp></h3>
         </div>
       </header>
       <label className="field-row">
@@ -83,7 +83,6 @@ export function ProviderUsageSettings({ api }: { readonly api: TokenDesktopApi }
           onChange={(event) => setDraft(event.currentTarget.value)}
         />
       </label>
-      <p className="setting-state">Default: 15 minutes. Changes apply immediately.</p>
       {notice === undefined ? null : <p className="setting-state" role="status">{notice}</p>}
       <button type="button" disabled={busy || interval === undefined} onClick={() => void save()}>
         {busy ? "Saving…" : "Save usage interval"}

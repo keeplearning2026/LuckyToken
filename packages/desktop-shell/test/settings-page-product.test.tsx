@@ -19,7 +19,7 @@ const settingsResult = () => ({ outcome: "ok" as const, settings: Object.fromEnt
 describe("Settings product slice", () => {
   it("shows one unified history total", async () => {
     await render(createFakeDesktopApi({ control: { queryHistory: async () => ({ range: "all", counts: { requestJourneys: 2, runtimeEvents: 1 } }) } }));
-    await click("Data & privacyHistory and backups");
+    await click("Diagnostics");
     expect(container.textContent).toContain("3 stored history records");
     expect(container.textContent).not.toContain("captures");
     expect(container.querySelector('.settings-danger-section .settings-status')?.textContent).toBe("3 records");
@@ -91,9 +91,9 @@ describe("Settings product slice", () => {
         }),
       },
     }));
-    await click("Data & privacyHistory and backups");
+    await click("Diagnostics");
 
-    expect(container.textContent).toContain("Full journey capture");
+    expect(container.textContent).toContain("Request capture");
     expect(container.textContent).toContain(
       "D:\\TokenData\\state\\request-diagnostics\\full-journeys-v4",
     );
@@ -117,9 +117,11 @@ describe("Settings product slice", () => {
   it("removes deep-capture controls and reads typed Runtime Events", async () => {
     const executeSettings = vi.fn(async () => settingsResult());
     await render(createFakeDesktopApi({ control: { executeSettings, queryRuntimeEvents: async () => ({ outcome: "ok", result: { records: [{ kind: "runtime_event", id: 1, runtimeId: "runtime-1", recordId: "event-1", sequence: 1, time: 1, level: "warning", classification: "provider_attention", safeMessage: "Provider needs attention" }], hasMore: false } }) } }));
-    await click("AdvancedCodex and diagnostics");
+    await click("Diagnostics");
     expect(container.textContent).toContain("Provider needs attention");
     expect(container.textContent).toContain("provider_attention");
+    await click("Advanced");
+    await click("Agents");
     expect(container.textContent).toContain("Model provider");
     expect(container.textContent).toContain("model_provider");
     expect(container.textContent).not.toContain("deep diagnostics");
@@ -145,7 +147,8 @@ describe("Settings product slice", () => {
       },
     }));
     await render(createFakeDesktopApi({ control: { executeSettings } }));
-    await click("AdvancedCodex and diagnostics");
+    await click("Advanced");
+    await click("Agents");
     expect((container.querySelector('input[aria-label="Codex search model"]') as HTMLInputElement).value).toBe("gpt-5.6-sol");
     await clickAria("Save Codex search model");
     expect(executeSettings).toHaveBeenCalledWith({
@@ -159,12 +162,18 @@ describe("Settings product slice", () => {
     await render(createFakeDesktopApi({ platform: { getAutoStart: async () => false } }));
 
     expect(container.querySelectorAll(".settings-heading")).toHaveLength(0);
-    expect(container.querySelectorAll('.settings-tabs [role="tab"]')).toHaveLength(4);
-    expect(container.textContent).toContain("Startup behavior");
+    expect(container.querySelectorAll('.settings-tabs [role="tab"]')).toHaveLength(3);
+    expect(container.textContent).toContain("Diagnostics");
     expect(container.textContent).toContain("Start Token automatically");
     const autoStart = container.querySelector('.settings-action-row .switch-control[aria-pressed="false"]');
     expect(autoStart?.getAttribute("aria-label")).toBe("Enable auto-start");
     expect(autoStart?.textContent).toBe("");
+    const generalTab = container.querySelector('#settings-tab-general') as HTMLButtonElement;
+    await act(async () => {
+      generalTab.focus();
+      generalTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    expect(container.querySelector('#settings-tab-diagnostics')?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("toggles the Provider Native namespace repair from Response repair settings", async () => {
@@ -186,7 +195,7 @@ describe("Settings product slice", () => {
     }));
     await render(createFakeDesktopApi({ control: { executeSettings } }));
 
-    await click("Response repairProtocol response repairs");
+    await click("Advanced");
 
     const toggle = container.querySelector(
       '.switch-control[aria-label="Disable function-call namespace repair"]',
@@ -201,6 +210,30 @@ describe("Settings product slice", () => {
       key: settingKey,
       value: false,
     });
+  });
+
+  it("keeps both protocol controls in Advanced settings", async () => {
+    const values: Record<string, boolean> = {
+      "protocols.openai-responses.enabled": true,
+      "protocols.anthropic-messages.enabled": true,
+    };
+    const executeSettings = vi.fn(async (command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0]) => {
+      if (command.command === "set") values[command.key] = command.value === true;
+      return {
+        outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
+        settings: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, {
+          key, type: "boolean" as const, default: true,
+          validation: { type: "boolean" as const }, sensitivity: "public" as const,
+          applyMode: "hot-apply" as const, value,
+        }])),
+      };
+    });
+    await render(createFakeDesktopApi({ control: { executeSettings } }));
+    await click("Advanced");
+    await clickAria("Disable Responses protocol");
+    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: "protocols.openai-responses.enabled", value: false });
+    await clickAria("Disable Anthropic Messages protocol");
+    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key: "protocols.anthropic-messages.enabled", value: false });
   });
 
   it("enables Windows auto-start from General settings and reflects the effective state", async () => {

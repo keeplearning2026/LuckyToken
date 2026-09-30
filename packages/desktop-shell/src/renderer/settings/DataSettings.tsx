@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
+import { DiagnosticWarnings } from "./DiagnosticWarnings.js";
+import { SettingHelp } from "./SettingHelp.js";
 
 type DeleteResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeHistoryDelete"]>>;
 type BackupResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeBackup"]>>;
@@ -190,11 +192,7 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
         <header className="settings-section-header">
           <div className="settings-copy">
             <p className="eyebrow">DIAGNOSTICS</p>
-            <h3>Full journey capture</h3>
-            <p>
-              Save lane-owned request, intermediate, upstream, and response
-              evidence for all three data-plane lanes.
-            </p>
+            <h3>Request capture <SettingHelp label="Request capture">Save request, intermediate, upstream, and response evidence for all three data-plane lanes.</SettingHelp></h3>
           </div>
           <span className={`settings-status ${captureEnabled || failedCaptureEnabled ? "on" : "off"}`}>
             {captureEnabled === undefined || failedCaptureEnabled === undefined
@@ -208,11 +206,7 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
         </header>
         <div className="settings-action-row">
           <div className="settings-action-copy">
-            <strong>Capture every request journey</strong>
-            <p>
-              64 MiB per JSON file, 512 MiB per journey. Capture runs in an
-              isolated diagnostics process and fails open.
-            </p>
+            <strong>Capture every request journey <SettingHelp label="Capture every request journey">64 MiB per JSON file, 512 MiB per journey. Capture runs in an isolated diagnostics process and fails open.</SettingHelp></strong>
           </div>
           <button
             type="button"
@@ -238,11 +232,7 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
         </div>
         <div className="settings-action-row">
           <div className="settings-action-copy">
-            <strong>Force capture when a request fails</strong>
-            <p>
-              Enabled by default. Failed, aborted, or interrupted journeys keep
-              their complete available scene even when all-request capture is off.
-            </p>
+            <strong>Force capture when a request fails <SettingHelp label="Failed-request capture">Enabled by default. Failed, aborted, or interrupted journeys keep their complete available scene even when all-request capture is off.</SettingHelp></strong>
           </div>
           <button
             type="button"
@@ -279,12 +269,12 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
           </small>
         </div>
       </div>
+      <DiagnosticWarnings api={api} />
       <div className="page-card settings-section settings-danger-section">
         <header className="settings-section-header">
           <div className="settings-copy">
             <p className="eyebrow">DATA &amp; PRIVACY</p>
-            <h3>Stored history</h3>
-            <p>Request activity and runtime events used by Overview and diagnostics.</p>
+            <h3>Stored history <SettingHelp label="Stored history">Request activity and runtime events used by Overview and diagnostics.</SettingHelp></h3>
           </div>
           <span className={`settings-status ${historyUnavailable ? "unavailable" : "off"}`}>
             {historyUnavailable || total === undefined
@@ -328,8 +318,7 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
         <header className="settings-section-header">
           <div className="settings-copy">
             <p className="eyebrow">BACKUP</p>
-            <h3>Create a full backup</h3>
-            <p>Export configuration and the diagnostic index to a file you choose.</p>
+            <h3>Create a full backup <SettingHelp label="Full backup">Export configuration and the diagnostic index to a file you choose.</SettingHelp></h3>
           </div>
         </header>
         <div className="settings-action-row">
