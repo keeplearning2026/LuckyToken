@@ -112,6 +112,12 @@ export type {
   ProviderProfileAuthCommandResult,
 } from "./credential-profiles-contract.js";
 export {
+  EXTERNAL_CREDENTIAL_SELECTION_ID,
+  hasDeclaredExternalCredentialSource,
+  resolveProviderCredentialSelection,
+  type ProviderCredentialSelection,
+} from "./credential-profiles-contract.js";
+export {
   decodeCredentialProfilesCommand,
   decodeCredentialProfilesCommandResult,
   decodeProviderProfileAuthCommand,
