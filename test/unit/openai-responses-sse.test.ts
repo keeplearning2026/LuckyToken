@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ResponsesResponseObject } from "../../src/protocols/openai-responses/response.js";
-import { renderResponsesSse } from "../../src/protocols/openai-responses/sse.js";
+import { renderResponsesSse } from "../../src/responses-sse.js";
 
 function responseObject(): ResponsesResponseObject {
   return {

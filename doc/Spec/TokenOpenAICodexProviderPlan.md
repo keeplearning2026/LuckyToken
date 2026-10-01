@@ -2,8 +2,9 @@
 
 **Status:** Draft v3.3 (2026-10-01). P1 gate evidence recorded (section 11);
 P0–P3 implemented on branch `codex/openai-codex-auth-native-catalog`. The
-offline acceptance suite is green; the P4 online gates that require a
-dedicated Codex test login remain open (see section 12).
+implementation review repairs are recorded in section 13. Actual delegated
+rotation coverage remains open (see section 12); historical smoke success is
+not full P4 certification.
 
 **Scope:** the `openai-codex` provider inside Token — credential sources and
 model catalog as consumed by Provider Native Responses and Semantic Conversion
@@ -13,9 +14,9 @@ caller credential envelope, and transport and is not changed.
 **References:** [AGENTS.md](../../AGENTS.md),
 [TokenProviderCredentialProfilesPRD.md](./TokenProviderCredentialProfilesPRD.md),
 [TokenCodexModelCatalogSpec.md](./TokenCodexModelCatalogSpec.md).
-The authoritative opencodex reference is the standalone checkout
-`D:\project\opencodex`; the in-repo copy under `reference/opencodex` may lag and
-must not be used as behavior evidence. The Codex reference is
+For the implementation repair, the user selected the in-repo
+`reference/opencodex` as the opencodex reference. Earlier review evidence from
+the standalone checkout is historical. The Codex reference is
 `reference/codex` (codex-rs sources cited below).
 
 ## 0. What changed in v3
@@ -305,6 +306,10 @@ v3.2 evidence:
 
 `id_token` is optional for Token's own internal use; the compatibility is
 one-way. External documents are Codex's and are never rewritten by Token.
+The public Pi OAuth credential does not retain `id_token` or a refresh
+timestamp. The internal codec therefore omits `id_token` and writes
+`last_refresh: null` (unknown); it never manufactures either fact. It verifies
+the nested account claim and JWT expiry before persisting the ChatGPT envelope.
 
 | Mark | Writer | Refresh | Delete |
 | --- | --- | --- | --- |
@@ -835,11 +840,14 @@ Implemented modules:
   variant of `ProviderAuthBindingFacts` in
   `src/credentials/profile-contract.ts`.
 - Internal storage — `src/credentials/profile-record-store.ts` schema v2:
-  incarnation documents at
-  `<pi directory>/credentials/<providerId>/<credentialId>/<credentialGeneration>.auth.json`
+  only `openai-codex` uses AuthDotJson incarnation documents at
+  `<pi directory>/credentials/openai-codex/<credentialId>/<credentialGeneration>.auth.json`
   with the record reference switch as the commit point, referenced-path-only
   recovery, per-credential-lock-confined orphan collection, and a consistent
-  sensitive-backup snapshot.
+  sensitive-backup snapshot. Other Providers retain opaque inline credentials.
+  The one record schema discriminates `kind: inline | incarnation` and rejects
+  both/neither carriers and Provider/carrier scope mismatches. There is no
+  migration or dual-format reader.
 - Model overlay — `src/integrations/codex/codex-model-candidates.ts`,
   `src/providers/automatic-model-overlay.ts`, and the runtime/publication
   wiring in `src/providers/runtime.ts` and `src/application.ts`. One native
@@ -925,9 +933,56 @@ Online procedure:
 
 P4 status:
 
-- Offline suites (unit + integration) are green, including the temporary
-  `CODEX_HOME` guard. The online `openai-codex` suite now requires a dedicated
-  test login (`TOKEN_CODEX_TEST_AUTH_HOME`) and never reads or copies the
-  user's real `~/.codex/auth.json`; it records skip when that login is
-  unavailable. A successful Codex-delegated rotation has not yet been observed
-  in this environment.
+- The local-login path was explicitly authorized for the historical online
+  run above. The guarded command uses a temporary `CODEX_HOME` and skips when
+  no dedicated login is available; no command copies `auth.json`.
+- The repaired smoke gate requires usage `succeeded`, HTTP 200 with protocol
+  completion from both lanes, and a still-usable, non-terminal binding.
+  Structured entitlement rejection is `incomplete`, never whole-run `pass`;
+  other failures and a failed required delegation fail the gate.
+- `rotation: not_required` is recorded with `rotationCoverage: uncovered`.
+  Smoke success does not certify actual rotation. A successful delegated
+  rotation has not yet been observed in this environment.
+
+## 13. Implementation review repair (2026-10-01)
+
+| Finding | Repair and falsifiable regression evidence |
+| --- | --- |
+| S1 write-path escape | Validate canonical ancestors and reject junctions/symlinks before staging and rename; `provider-credential-incarnation-commit.test.ts` proves no secret is written outside the owned root. |
+| S2 stale tokenRevision | Reconcile only the still-referenced path under credential → record locks, including backup collection; commit and backup fault-injection tests require matching record/content hashes without a management revision change. |
+| P1 carrier/scope | Codex-only AuthDotJson codec and incarnation layout; other Providers inline; `provider-credential-storage-scope.test.ts` requires roundtrip and rejects XOR/scope violations. |
+| P2 double acquisition | One explicitly acquired immutable snapshot scopes both consumers, including zero TTL; the real integration/runtime test checks injection rows, served additions, target validator runtime, and Direct ids. |
+| P3 preview cache | Acquisition generation joins the preview cache key without changing the disk revision; `models-preview-generation.test.ts` checks unchanged bytes with new facts. |
+| P4 override-only id | Only full model definitions suppress additions; override keys still apply to appended rows. `automatic-model-overlay.test.ts` requires the candidate to remain present. |
+| P5 late unavailable publication | Failure publication uses the same binding guard as success; external usage tests reject delayed failures after account or token-revision changes. |
+| P6 terminal evidence | Bare 401/403 stays temporary; only bounded structured known terminal codes stop retries. Probe tests distinguish entitlement, plain denial, and terminal evidence using `reference/opencodex`. |
+| P7 other Provider reset | Refresh recomposes only `openai-codex`; runtime regression preserves Radius dynamic models. |
+| P8 permissive online gate | Positive completion/status/usage assertions and explicit incomplete/rotation coverage; `openai-codex-online-gate.test.ts` rejects false-pass cases. |
+| P9 runtime ordering | Explicit overrides first; otherwise resolved numeric CLI versions descending, mtime as tie/fallback; catalog-source tests select newer PATH over older Desktop. |
+| P10 dropped warnings | Bounded diagnostics publication at startup/refresh, once per generation/warning batch, with observer failures contained; runtime test observes the conservative-template warning. |
+
+This repair does not replace the historical online evidence or claim a newly
+observed rotation. Repository-wide validation results are reported separately.
+The user's compaction change is included: its helper and SSE framing live at
+neutral `src/responses-compaction.ts` / `src/responses-sse.ts` boundaries,
+without dependencies on lane execution or response-conversion owners. The
+isolation certification checks both helper closures and prohibits Direct Mode
+from reaching them.
+
+Validation after repair (2026-10-01):
+
+- `npm run typecheck` and `npm run lint` passed.
+- Guarded `npm test` passed all 75 certification tests, 310 Vitest files /
+  2843 cases, and 23 Desktop files / 152 cases.
+- At the user's explicit request, `test:online-openai-codex:local` passed
+  against the local login: usage `succeeded`; `gpt-6.1-sol` Native Responses
+  and Semantic Messages both HTTP 200 / completed; 8 native-listable rows,
+  3 Pi-missing rows, 9 served models; binding remained usable/non-terminal.
+- The local auth document's SHA-256, length (4157), and mtime were unchanged
+  before and after both real runs. No credential was copied or relocated.
+- Rotation was `not_required` / `uncovered`. The synthetic temporary-home
+  delegation completed its handshake and correctly failed verification on an
+  unchanged revision; this is not successful real-rotation certification.
+- The real run exposed the adapter's retained WebSocket session: the suite
+  now calls Pi's public `closeOpenAICodexWebSocketSessions()` during teardown.
+  The repeated real run exited with code 0 after cleanup.

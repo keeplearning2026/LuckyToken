@@ -19,6 +19,7 @@ import type { Credential } from "@earendil-works/pi-ai";
 import lockfile from "proper-lockfile";
 
 import { isSafeProviderId } from "../providers/provider-id.js";
+import { parseCodexInternalAuth, serializeCodexInternalAuth } from "./codex-internal-auth.js";
 
 export const PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION = 2 as const;
 
@@ -38,10 +39,9 @@ export interface CredentialIncarnationReference {
   readonly tokenRevision: string;
 }
 
-/** Persisted Profile metadata. Token material lives only in the referenced
- * incarnation document; the record is the authority for identity, selection,
- * generations, and the active incarnation path. */
-export interface PersistedCredentialProfileV2 {
+/** The record owns identity, selection and generations. Codex material lives
+ * in its referenced AuthDotJson; other Providers keep opaque inline payloads. */
+interface PersistedCredentialProfileMetadata {
   readonly credentialId: string;
   readonly credentialGeneration: string;
   readonly authType: Credential["type"];
@@ -53,8 +53,13 @@ export interface PersistedCredentialProfileV2 {
   readonly priority: number;
   readonly createdAt: number;
   readonly updatedAt: number;
-  readonly incarnation: CredentialIncarnationReference;
 }
+
+export type CredentialProfileCarrier =
+  | { readonly kind: "inline"; readonly inline: Credential; readonly incarnation?: never }
+  | { readonly kind: "incarnation"; readonly incarnation: CredentialIncarnationReference; readonly inline?: never };
+
+export type PersistedCredentialProfileV2 = PersistedCredentialProfileMetadata & CredentialProfileCarrier;
 
 export interface PersistedProviderCredentialRecordV2 {
   readonly schemaVersion: typeof PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION;
@@ -69,18 +74,17 @@ export interface PersistedProviderCredentialRecordV2 {
   readonly profiles: readonly PersistedCredentialProfileV2[];
 }
 
-/** One new logical incarnation to publish before the record commit that
- * makes it visible. */
-export interface CredentialIncarnationPublication {
+/** A new credential grant. The record commit makes it visible, with a
+ * separately published AuthDotJson only for Codex. */
+export interface CredentialPublication {
   readonly credentialId: string;
   readonly credentialGeneration: string;
   readonly credential: Credential;
 }
 
-/** Result of reading the credential document referenced by the record. The
- * record is always the authority: only the referenced path is read, and a
- * missing or invalid document marks the credential unavailable. */
-export type ProviderCredentialIncarnationRead =
+/** Read the selected carrier. Only the referenced Codex path is read; missing
+ * or invalid material makes that credential unavailable. */
+export type ProviderCredentialRead =
   | {
       readonly state: "ok";
       readonly credential: Credential;
@@ -151,33 +155,31 @@ export interface ProviderCredentialRecordStore {
       current: PersistedProviderCredentialRecordV2 | undefined,
     ) => ManagementMutation<T>,
   ): Promise<ManagementMutationResult<T>>;
-  /** Add/reconnect/replace commit protocol. Holds the per-credential lock,
-   * writes the new incarnation document at its unique path first, then
-   * switches the record reference and credentialGeneration in one record
-   * commit. That commit is the visibility point; a crash before it leaves the
-   * document unreferenced, and recovery never adopts it by hash. */
-  publishIncarnation<T>(
+  /** Add/reconnect/replace: publish a Codex incarnation before switching its
+   * record reference, or commit an opaque inline payload for other Providers.
+   * The record commit is the visibility point. */
+  publishCredential<T>(
     providerId: string,
     expectedRevision: string,
-    publication: CredentialIncarnationPublication,
+    publication: CredentialPublication,
     mutation: (
       current: PersistedProviderCredentialRecordV2 | undefined,
     ) => ManagementMutation<T>,
   ): Promise<ManagementMutationResult<T>>;
-  /** Normal rotation inside one incarnation: writes the referenced document
-   * via tmp+rename+fsync, then commits the record tokenRevision. */
+  /** Rotate the selected carrier. Codex writes tmp+rename+fsync then commits
+   * tokenRevision; other Providers atomically replace their inline payload. */
   modifyCredential(
     providerId: string,
     credentialId: string,
     credentialGeneration: string,
     mutation: (current: Credential) => Promise<Credential | undefined>,
   ): Promise<Credential | undefined>;
-  /** Read only the incarnation path the record references. */
+  /** Read only the carrier the record selects. */
   readCredential(
     providerId: string,
     credentialId: string,
     credentialGeneration: string,
-  ): Promise<ProviderCredentialIncarnationRead>;
+  ): Promise<ProviderCredentialRead>;
   modifySelection<T>(
     providerId: string,
     mutation: (
@@ -316,9 +318,7 @@ function sha256Hex(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function serializeCredentialDocument(credential: Credential): string {
-  return `${JSON.stringify(credential, null, 2)}\n`;
-}
+const serializeCredentialDocument = serializeCodexInternalAuth;
 
 /** Path segments that become directory or file names under the credential
  * root. Rejects separators, traversal, and Windows-hostile trailing dots or
@@ -355,6 +355,7 @@ export function credentialIncarnationReference(
   credentialGeneration: string,
   credential: Credential,
 ): CredentialIncarnationReference {
+  if (providerId !== "openai-codex") throw new ProviderCredentialRecordShapeError("Only Codex uses credential incarnations");
   if (!isSafeProviderId(providerId)) {
     throw new ProviderCredentialRecordShapeError(
       `Unsafe Provider ID ${JSON.stringify(providerId)}`,
@@ -371,6 +372,15 @@ export function credentialIncarnationReference(
     relativePath: incarnationRelativePath(providerId, credentialId, credentialGeneration),
     tokenRevision: sha256Hex(serializeCredentialDocument(credential)),
   });
+}
+
+export function credentialProfileCarrier(
+  providerId: string, credentialId: string, credentialGeneration: string, credential: Credential,
+): CredentialProfileCarrier {
+  if (!isCredential(credential)) throw new ProviderCredentialRecordShapeError("Invalid credential payload");
+  return providerId === "openai-codex"
+    ? { kind: "incarnation", incarnation: credentialIncarnationReference(providerId, credentialId, credentialGeneration, credential) }
+    : { kind: "inline", inline: structuredClone(credential) };
 }
 
 function isIncarnationReference(
@@ -425,12 +435,12 @@ function isProfile(
     typeof value.updatedAt === "number" &&
     Number.isSafeInteger(value.updatedAt) &&
     value.updatedAt >= 0 &&
-    isIncarnationReference(
+    (providerId === "openai-codex" ? value.kind === "incarnation" && !("inline" in value) && value.authType === "oauth" && isIncarnationReference(
       value.incarnation,
       providerId,
       value.credentialId,
       value.credentialGeneration,
-    )
+    ) : value.kind === "inline" && !("incarnation" in value) && isCredential(value.inline) && value.inline.type === value.authType)
   );
 }
 
@@ -555,7 +565,9 @@ async function writeDurableFile(options: {
   readonly path: string;
   readonly content: string;
   readonly assertOwned?: () => void;
+  readonly validatePath?: () => Promise<void>;
 }): Promise<void> {
+  await options.validatePath?.();
   await mkdir(dirname(options.path), { recursive: true, mode: PROFILE_DIRECTORY_MODE });
   const temporaryPath = `${options.path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
@@ -567,8 +579,18 @@ async function writeDurableFile(options: {
       await handle.close().catch(() => undefined);
     }
     await chmod(temporaryPath, PROFILE_FILE_MODE).catch(() => undefined);
-    options.assertOwned?.();
-    await rename(temporaryPath, options.path);
+    for (let attempt = 0; ; attempt += 1) {
+      options.assertOwned?.();
+      await options.validatePath?.();
+      try {
+        await rename(temporaryPath, options.path);
+        break;
+      } catch (error) {
+        if (process.platform !== "win32" || attempt >= 5 ||
+            !["EPERM", "EACCES", "EBUSY"].includes(errorCode(error) ?? "")) throw error;
+        await sleep(15 * (attempt + 1));
+      }
+    }
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => undefined);
   }
@@ -584,14 +606,14 @@ interface InMemoryIncarnation {
 
 function validatePublication(
   providerId: string,
-  publication: CredentialIncarnationPublication,
-): CredentialIncarnationReference {
+  publication: CredentialPublication,
+): CredentialProfileCarrier {
   if (!isSafeProviderId(providerId)) {
     throw new ProviderCredentialRecordShapeError(
       `Unsafe Provider ID ${JSON.stringify(providerId)}`,
     );
   }
-  return credentialIncarnationReference(
+  return credentialProfileCarrier(
     providerId,
     publication.credentialId,
     publication.credentialGeneration,
@@ -601,8 +623,8 @@ function validatePublication(
 
 function assertCommittedPublication(
   record: PersistedProviderCredentialRecordV2,
-  publication: CredentialIncarnationPublication,
-  reference: CredentialIncarnationReference,
+  publication: CredentialPublication,
+  carrier: CredentialProfileCarrier,
 ): void {
   const profile = record.profiles.find(
     (candidate) => candidate.credentialId === publication.credentialId,
@@ -611,8 +633,10 @@ function assertCommittedPublication(
     profile === undefined ||
     profile.credentialGeneration !== publication.credentialGeneration ||
     profile.authType !== publication.credential.type ||
-    profile.incarnation.relativePath !== reference.relativePath ||
-    profile.incarnation.tokenRevision !== reference.tokenRevision
+    profile.kind !== carrier.kind ||
+    (carrier.kind === "incarnation" && (profile.incarnation?.relativePath !== carrier.incarnation.relativePath ||
+      profile.incarnation?.tokenRevision !== carrier.incarnation.tokenRevision)) ||
+    (carrier.kind === "inline" && JSON.stringify(profile.inline) !== JSON.stringify(carrier.inline))
   ) {
     throw new ProviderCredentialRecordShapeError(
       "Committed Provider credential record does not reference the published incarnation",
@@ -701,6 +725,7 @@ export function createInMemoryProviderCredentialRecordStore(options: {
           ...outcome.record,
           revision: options.createRevision(),
         });
+        validateRecord(committed, providerId);
         records.set(providerId, committed);
         return Object.freeze({
           kind: "committed",
@@ -710,15 +735,15 @@ export function createInMemoryProviderCredentialRecordStore(options: {
       });
     },
 
-    async publishIncarnation<T>(
+    async publishCredential<T>(
       providerId: string,
       expectedRevision: string,
-      publication: CredentialIncarnationPublication,
+      publication: CredentialPublication,
       mutation: (
         current: PersistedProviderCredentialRecordV2 | undefined,
       ) => ManagementMutation<T>,
     ): Promise<ManagementMutationResult<T>> {
-      const reference = validatePublication(providerId, publication);
+      const carrier = validatePublication(providerId, publication);
       const credentialKey = `${providerId}\u0000${publication.credentialId}`;
       return serializedIn(credentialTails, credentialKey, () =>
         serialized(providerId, async () => {
@@ -737,16 +762,16 @@ export function createInMemoryProviderCredentialRecordStore(options: {
             ...outcome.record,
             revision: options.createRevision(),
           });
-          assertCommittedPublication(committed, publication, reference);
-          const providerIncarnations =
-            incarnations.get(providerId) ?? new Map<string, InMemoryIncarnation>();
-          providerIncarnations.set(reference.relativePath, {
-            credential: structuredClone(publication.credential),
-            tokenRevision: reference.tokenRevision,
-            publishedAt: now(),
-          });
-          incarnations.set(providerId, providerIncarnations);
-          await options.hooks?.afterIncarnationPublication?.();
+          validateRecord(committed, providerId);
+          assertCommittedPublication(committed, publication, carrier);
+          if (carrier.kind === "incarnation") {
+            const providerIncarnations = incarnations.get(providerId) ?? new Map<string, InMemoryIncarnation>();
+            providerIncarnations.set(carrier.incarnation.relativePath, {
+              credential: structuredClone(publication.credential), tokenRevision: carrier.incarnation.tokenRevision, publishedAt: now(),
+            });
+            incarnations.set(providerId, providerIncarnations);
+            await options.hooks?.afterIncarnationPublication?.();
+          }
           records.set(providerId, committed);
           return Object.freeze({
             kind: "committed",
@@ -771,6 +796,22 @@ export function createInMemoryProviderCredentialRecordStore(options: {
             profile.credentialGeneration === credentialGeneration,
         );
         if (before === undefined) return undefined;
+        if (before.kind === "inline") {
+          const next = await mutation(structuredClone(before.inline));
+          return serialized(providerId, async () => {
+            const current = records.get(providerId);
+            const index = current?.profiles.findIndex((profile) => profile.credentialId === credentialId && profile.credentialGeneration === credentialGeneration) ?? -1;
+            if (current === undefined || index < 0) return undefined;
+            const selected = current.profiles[index]!;
+            if (selected.kind !== "inline") return undefined;
+            if (next === undefined) return structuredClone(selected.inline);
+            if (!isCredential(next) || next.type !== selected.authType) throw new ProviderCredentialRecordShapeError("Invalid credential refresh");
+            const profiles = [...current.profiles];
+            profiles[index] = { ...selected, inline: structuredClone(next) };
+            records.set(providerId, { ...current, profiles });
+            return structuredClone(next);
+          });
+        }
         const entry = incarnations
           .get(providerId)
           ?.get(before.incarnation.relativePath);
@@ -793,6 +834,7 @@ export function createInMemoryProviderCredentialRecordStore(options: {
           ) ?? -1;
           if (current === undefined || profileIndex < 0) return undefined;
           const profile = current.profiles[profileIndex]!;
+          if (profile.kind !== "incarnation") return undefined;
           const currentEntry = incarnations
             .get(providerId)
             ?.get(profile.incarnation.relativePath);
@@ -830,25 +872,32 @@ export function createInMemoryProviderCredentialRecordStore(options: {
       providerId: string,
       credentialId: string,
       credentialGeneration: string,
-    ): Promise<ProviderCredentialIncarnationRead> {
-      const profile = records.get(providerId)?.profiles.find(
-        (candidate) =>
-          candidate.credentialId === credentialId &&
-          candidate.credentialGeneration === credentialGeneration,
-      );
-      if (profile === undefined) return Object.freeze({ state: "missing" });
-      const entry = incarnations
-        .get(providerId)
-        ?.get(profile.incarnation.relativePath);
-      if (entry === undefined) return Object.freeze({ state: "missing" });
-      if (entry.credential.type !== profile.authType) {
-        return Object.freeze({ state: "invalid" });
-      }
-      return Object.freeze({
-        state: "ok",
-        credential: structuredClone(entry.credential),
-        tokenRevision: entry.tokenRevision,
-      });
+    ): Promise<ProviderCredentialRead> {
+      return serializedIn(credentialTails, `${providerId}\u0000${credentialId}`, () => serialized(providerId, async () => {
+        const record = records.get(providerId);
+        const profile = record?.profiles.find(
+          (candidate) => candidate.credentialId === credentialId &&
+            candidate.credentialGeneration === credentialGeneration,
+        );
+        if (profile === undefined) return Object.freeze({ state: "missing" });
+        if (profile.kind === "inline") return Object.freeze({
+          state: "ok", credential: structuredClone(profile.inline),
+          tokenRevision: sha256Hex(JSON.stringify(profile.inline)),
+        });
+        const entry = incarnations.get(providerId)?.get(profile.incarnation.relativePath);
+        if (entry === undefined) return Object.freeze({ state: "missing" });
+        if (entry.credential.type !== profile.authType) return Object.freeze({ state: "invalid" });
+        if (record !== undefined && profile.incarnation.tokenRevision !== entry.tokenRevision) {
+          records.set(providerId, { ...record, profiles: record.profiles.map((candidate) => candidate === profile
+            ? { ...candidate, incarnation: { ...profile.incarnation, tokenRevision: entry.tokenRevision } }
+            : candidate) });
+        }
+        return Object.freeze({
+          state: "ok",
+          credential: structuredClone(entry.credential),
+          tokenRevision: entry.tokenRevision,
+        });
+      }));
     },
 
     async modifySelection<T>(
@@ -867,6 +916,7 @@ export function createInMemoryProviderCredentialRecordStore(options: {
           ...outcome.record,
           revision: options.createRevision(),
         });
+        validateRecord(committed, providerId);
         records.set(providerId, committed);
         return Object.freeze({
           kind: "committed",
@@ -889,7 +939,7 @@ export function createInMemoryProviderCredentialRecordStore(options: {
         const providerIncarnations = incarnations.get(providerId);
         if (providerIncarnations === undefined) return Object.freeze([]);
         const referenced = new Set(
-          records.get(providerId)?.profiles.map(
+          records.get(providerId)?.profiles.filter((profile) => profile.kind === "incarnation").map(
             (profile) => profile.incarnation.relativePath,
           ) ?? [],
         );
@@ -972,7 +1022,15 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
   }
 
   async #ensureDirectory(): Promise<void> {
-    await mkdir(this.#directory, { recursive: true, mode: PROFILE_DIRECTORY_MODE });
+    const base = dirname(this.#directory);
+    await mkdir(base, { recursive: true, mode: PROFILE_DIRECTORY_MODE });
+    try { await mkdir(this.#directory, { mode: PROFILE_DIRECTORY_MODE }); }
+    catch (error) { if (errorCode(error) !== "EEXIST") throw error; }
+    const info = await lstat(this.#directory);
+    if (info.isSymbolicLink() || !info.isDirectory() ||
+        relative(join(await realpath(base), RECORD_DIRECTORY_NAME), await realpath(this.#directory)) !== "") {
+      throw new ProviderCredentialRecordShapeError("Unsafe Provider credential record directory");
+    }
     await chmod(this.#directory, PROFILE_DIRECTORY_MODE);
   }
 
@@ -1069,6 +1127,7 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
       path: recordPath,
       content: `${JSON.stringify(record, null, 2)}\n`,
       assertOwned,
+      validatePath: () => this.#ensureDirectory(),
     });
   }
 
@@ -1084,29 +1143,65 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
       );
     }
     const credentialDirectory = dirname(target);
-    await mkdir(credentialDirectory, { recursive: true, mode: PROFILE_DIRECTORY_MODE });
+    await this.#checkIncarnationDirectory(target, true);
     await chmod(this.#credentialDirectory, PROFILE_DIRECTORY_MODE).catch(() => undefined);
     await chmod(credentialDirectory, PROFILE_DIRECTORY_MODE).catch(() => undefined);
     await writeDurableFile({
       path: target,
       content: serializeCredentialDocument(credential),
       assertOwned,
+      validatePath: () => this.#checkIncarnationDirectory(target, false),
     });
     return sha256Hex(serializeCredentialDocument(credential));
+  }
+
+  /** Check each owned ancestor before traversing it. Recursive mkdir would
+   * follow a junction before we could reject it. Recheck before rename too. */
+  async #checkIncarnationDirectory(target: string, create: boolean): Promise<void> {
+    const base = dirname(this.#credentialDirectory);
+    const canonicalBase = await realpath(base);
+    const segments = relative(base, dirname(target)).split(/[\\/]/u);
+    let path = base;
+    let canonical = canonicalBase;
+    for (const segment of segments) {
+      path = join(path, segment);
+      canonical = join(canonical, segment);
+      if (create) {
+        try {
+          await mkdir(path, { mode: PROFILE_DIRECTORY_MODE });
+        } catch (error) {
+          if (errorCode(error) !== "EEXIST") throw error;
+        }
+      }
+      const info = await lstat(path);
+      if (info.isSymbolicLink() || !info.isDirectory() ||
+          relative(canonical, await realpath(path)) !== "") {
+        throw new ProviderCredentialRecordShapeError("Unsafe Provider credential directory");
+      }
+    }
+    try {
+      const info = await lstat(target);
+      if (info.isSymbolicLink() || !info.isFile()) {
+        throw new ProviderCredentialRecordShapeError("Unsafe Provider credential file");
+      }
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
   }
 
   async #readIncarnation(
     reference: CredentialIncarnationReference,
     authType: Credential["type"],
-  ): Promise<ProviderCredentialIncarnationRead> {
+  ): Promise<ProviderCredentialRead> {
     const target = this.#resolveRelativePath(reference.relativePath);
     if (target === undefined) return Object.freeze({ state: "invalid" });
     let bytes: Buffer;
     try {
+      await this.#checkIncarnationDirectory(target, false);
       bytes = await readFile(target);
     } catch (error) {
       return Object.freeze({
-        state: errorCode(error) === "ENOENT" ? "missing" : "unreadable",
+        state: error instanceof ProviderCredentialRecordShapeError ? "invalid" : errorCode(error) === "ENOENT" ? "missing" : "unreadable",
       });
     }
     let info;
@@ -1134,18 +1229,13 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
         state: errorCode(error) === "ENOENT" ? "missing" : "unreadable",
       });
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(bytes.toString("utf8")) as unknown;
-    } catch {
-      return Object.freeze({ state: "invalid" });
-    }
-    if (!isCredential(parsed) || parsed.type !== authType) {
+    const credential = parseCodexInternalAuth(bytes.toString("utf8"));
+    if (credential === undefined || credential.type !== authType) {
       return Object.freeze({ state: "invalid" });
     }
     return Object.freeze({
       state: "ok",
-      credential: structuredClone(parsed),
+      credential,
       tokenRevision: sha256Hex(bytes),
     });
   }
@@ -1158,9 +1248,10 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
     if (target === undefined) return false;
     let info;
     try {
+      await this.#checkIncarnationDirectory(target, false);
       info = await lstat(target);
     } catch (error) {
-      if (errorCode(error) === "ENOENT") return false;
+      if (errorCode(error) === "ENOENT" || error instanceof ProviderCredentialRecordShapeError) return false;
       throw error;
     }
     if (info.isSymbolicLink() || !info.isFile()) return false;
@@ -1250,15 +1341,23 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
     });
   }
 
-  async publishIncarnation<T>(
+  async publishCredential<T>(
     providerId: string,
     expectedRevision: string,
-    publication: CredentialIncarnationPublication,
+    publication: CredentialPublication,
     mutation: (
       current: PersistedProviderCredentialRecordV2 | undefined,
     ) => ManagementMutation<T>,
   ): Promise<ManagementMutationResult<T>> {
-    const reference = validatePublication(providerId, publication);
+    const carrier = validatePublication(providerId, publication);
+    if (carrier.kind === "inline") {
+      return this.modifyManagement(providerId, expectedRevision, (current) => {
+        const outcome = mutation(current);
+        if (outcome.kind === "commit") assertCommittedPublication(outcome.record, publication, carrier);
+        return outcome;
+      });
+    }
+    const reference = carrier.incarnation;
     await this.#ensureDirectory();
     const recordPath = this.#recordPath(providerId);
     const credentialLockPath = this.#credentialLockPath(
@@ -1285,7 +1384,7 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
           revision: this.#createRevision(),
         });
         validateRecord(committed, providerId);
-        assertCommittedPublication(committed, publication, reference);
+        assertCommittedPublication(committed, publication, carrier);
         assertOwned();
         const tokenRevision = await this.#writeIncarnation(
           reference.relativePath,
@@ -1315,6 +1414,28 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
     credentialGeneration: string,
     mutation: (current: Credential) => Promise<Credential | undefined>,
   ): Promise<Credential | undefined> {
+    if (providerId !== "openai-codex") {
+      await this.#ensureDirectory();
+      return this.#withPathLock(this.#credentialLockPath(providerId, credentialId), async (assertCredentialOwned) => {
+        const before = (await this.#readRecord(providerId))?.profiles.find((profile) => profile.credentialId === credentialId && profile.credentialGeneration === credentialGeneration);
+        if (before?.kind !== "inline") return undefined;
+        const next = await mutation(structuredClone(before.inline));
+        return this.#withPathLock(this.#recordPath(providerId), async (assertRecordOwned) => {
+          const current = await this.#readRecord(providerId);
+          const index = current?.profiles.findIndex((profile) => profile.credentialId === credentialId && profile.credentialGeneration === credentialGeneration) ?? -1;
+          if (current === undefined || index < 0) return undefined;
+          const selected = current.profiles[index]!;
+          if (selected.kind !== "inline") return undefined;
+          if (next === undefined) return structuredClone(selected.inline);
+          if (!isCredential(next) || next.type !== selected.authType) throw new ProviderCredentialRecordShapeError("Invalid credential refresh");
+          const profiles = [...current.profiles];
+          profiles[index] = { ...selected, inline: structuredClone(next) };
+          const assertOwned = (): void => { assertCredentialOwned(); assertRecordOwned(); };
+          await this.#writeRecord(this.#recordPath(providerId), { ...current, profiles }, assertOwned);
+          return structuredClone(next);
+        });
+      });
+    }
     assertSafeIncarnationSegment(credentialId, "credential ID");
     assertSafeIncarnationSegment(credentialGeneration, "credential generation");
     await this.#ensureDirectory();
@@ -1329,6 +1450,7 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
             candidate.credentialGeneration === credentialGeneration,
         );
         if (profile === undefined) return undefined;
+        if (profile.kind !== "incarnation") return undefined;
         const read = await this.#readIncarnation(profile.incarnation, profile.authType);
         return { profile, read };
       });
@@ -1361,6 +1483,7 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
         ) ?? -1;
         if (current === undefined || profileIndex < 0) return undefined;
         const profile = current.profiles[profileIndex]!;
+        if (profile.kind !== "incarnation") return undefined;
         if (profile.incarnation.relativePath !== before.profile.incarnation.relativePath) {
           // The referenced incarnation changed while the rotation was in
           // flight; an old capture never publishes into a new grant.
@@ -1397,7 +1520,7 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
     providerId: string,
     credentialId: string,
     credentialGeneration: string,
-  ): Promise<ProviderCredentialIncarnationRead> {
+  ): Promise<ProviderCredentialRead> {
     const record = await this.#readRecord(providerId);
     const profile = record?.profiles.find(
       (candidate) =>
@@ -1405,7 +1528,28 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
         candidate.credentialGeneration === credentialGeneration,
     );
     if (profile === undefined) return Object.freeze({ state: "missing" });
-    return this.#readIncarnation(profile.incarnation, profile.authType);
+    if (profile.kind === "inline") return Object.freeze({ state: "ok", credential: structuredClone(profile.inline), tokenRevision: sha256Hex(JSON.stringify(profile.inline)) });
+    const read = await this.#readIncarnation(profile.incarnation, profile.authType);
+    if (read.state !== "ok" || read.tokenRevision === profile.incarnation.tokenRevision) return read;
+    await this.#ensureDirectory();
+    return this.#withPathLock(this.#credentialLockPath(providerId, credentialId), async (assertCredentialOwned) =>
+      this.#withPathLock(this.#recordPath(providerId), async (assertRecordOwned) => {
+        const current = await this.#readRecord(providerId);
+        const index = current?.profiles.findIndex((candidate) =>
+          candidate.credentialId === credentialId && candidate.credentialGeneration === credentialGeneration &&
+          candidate.kind === "incarnation" && candidate.incarnation.relativePath === profile.incarnation.relativePath) ?? -1;
+        if (current === undefined || index < 0) return Object.freeze({ state: "missing" as const });
+        const selected = current.profiles[index]!;
+        if (selected.kind !== "incarnation") return Object.freeze({ state: "missing" as const });
+        const latest = await this.#readIncarnation(selected.incarnation, selected.authType);
+        if (latest.state === "ok" && latest.tokenRevision !== selected.incarnation.tokenRevision) {
+          const profiles = [...current.profiles];
+          profiles[index] = { ...selected, incarnation: { ...selected.incarnation, tokenRevision: latest.tokenRevision } };
+          const assertOwned = (): void => { assertCredentialOwned(); assertRecordOwned(); };
+          await this.#writeRecord(this.#recordPath(providerId), { ...current, profiles }, assertOwned);
+        }
+        return latest;
+      }));
   }
 
   async modifySelection<T>(
@@ -1497,7 +1641,7 @@ class FileProviderCredentialRecordStore implements ProviderCredentialRecordStore
             const record = await this.#readRecord(providerId);
             const stillReferenced =
               record?.profiles.some(
-                (profile) => profile.incarnation.relativePath === fullRelativePath,
+                (profile) => profile.kind === "incarnation" && profile.incarnation.relativePath === fullRelativePath,
               ) === true;
             if (stillReferenced) return;
             assertCredentialOwned();

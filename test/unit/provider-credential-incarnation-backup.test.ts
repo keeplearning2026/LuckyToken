@@ -1,3 +1,4 @@
+import { syntheticCodexAccess } from "../support/codex-credential-fixture.js";
 import { createHash } from "node:crypto";
 import {
   mkdir,
@@ -24,17 +25,17 @@ import {
   type ProviderCredentialRecordStore,
 } from "../../src/credentials/profile-record-store.js";
 
-const providerId = "fixture-provider";
+const providerId = "openai-codex";
 const credentialId = "credential-a";
 const credentialA: Credential = {
   type: "oauth",
-  access: "access-a",
+  access: syntheticCodexAccess("access-a"),
   refresh: "refresh-a",
   expires: 1_900_000_000_000,
 };
 const credentialB: Credential = {
   ...credentialA,
-  access: "access-b",
+  access: syntheticCodexAccess("access-b"),
 };
 
 interface SnapshotProvider {
@@ -73,7 +74,7 @@ function recordFor(input: {
       priority: 0,
       createdAt: 1,
       updatedAt: 1,
-      incarnation: credentialIncarnationReference(
+      kind: "incarnation", incarnation: credentialIncarnationReference(
         providerId,
         credentialId,
         input.credentialGeneration,
@@ -115,13 +116,13 @@ function assertConsistentPair(provider: SnapshotProvider): void {
   expect(provider.incarnations).toHaveLength(record.profiles.length);
   for (const profile of record.profiles) {
     const incarnation = provider.incarnations.find(
-      (candidate) => candidate.relativePath === profile.incarnation.relativePath,
+      (candidate) => candidate.relativePath === profile.incarnation!.relativePath,
     );
     expect(incarnation).toBeDefined();
     const bytes = Buffer.from(incarnation!.content, "base64");
     expect(createHash("sha256").update(bytes).digest("hex"))
-      .toBe(profile.incarnation.tokenRevision);
-    expect(incarnation!.tokenRevision).toBe(profile.incarnation.tokenRevision);
+      .toBe(profile.incarnation!.tokenRevision);
+    expect(incarnation!.tokenRevision).toBe(profile.incarnation!.tokenRevision);
   }
 }
 
@@ -131,7 +132,7 @@ async function publishGeneration(
   generation: string,
   credential: Credential,
 ): Promise<void> {
-  const result = await store.publishIncarnation(
+  const result = await store.publishCredential(
     providerId,
     expectedRevision,
     { credentialId, credentialGeneration: generation, credential },
@@ -153,6 +154,18 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
 }
 
 describe("sensitive Provider credential profile snapshot", () => {
+  it("recovers an interrupted rotation before a backup without another OAuth refresh", async () => {
+    const piDirectory = await mkdtemp(join(tmpdir(), "Token-incarnation-backup-recovery-"));
+    try {
+      const store = createFileProviderCredentialRecordStore({ piDirectory, createRevision: () => "revision-1",
+        hooks: { afterIncarnationRotation: () => { throw new Error("crash before record commit"); } } });
+      await publishGeneration(store, NO_PROVIDER_RECORD_REVISION, "generation-1", credentialA);
+      await expect(store.modifyCredential(providerId, credentialId, "generation-1", async (current) => ({ ...current, access: syntheticCodexAccess("rotated") }))).rejects.toThrow("crash before record commit");
+      const snapshot = await takeSnapshot(piDirectory);
+      assertConsistentPair(snapshot.providers[0]!);
+      expect(decodedRecord(snapshot.providers[0]!).revision).toBe("revision-1");
+    } finally { await rm(piDirectory, { recursive: true, force: true }); }
+  });
   it("captures the record and every referenced incarnation consistently", async () => {
     const piDirectory = await mkdtemp(join(tmpdir(), "Token-incarnation-backup-"));
     try {
@@ -187,15 +200,16 @@ describe("sensitive Provider credential profile snapshot", () => {
       });
       expect(provider.incarnations).toEqual([{
         relativePath: `${providerId}/${credentialId}/generation-1.auth.json`,
-        tokenRevision: recorded.profiles[0]!.incarnation.tokenRevision,
-        content: Buffer.from(`${JSON.stringify(credentialA, null, 2)}\n`).toString("base64"),
+        tokenRevision: recorded.profiles[0]!.incarnation!.tokenRevision,
+        content: expect.any(String),
       }]);
       assertConsistentPair(provider);
       const serialized = JSON.stringify(snapshot);
       expect(serialized).not.toContain("external-codex-canary");
       expect(serialized).not.toContain("orphan-canary");
-      expect(decodedIncarnations(provider)[0]!.bytes.toString("utf8"))
-        .toBe(`${JSON.stringify(credentialA, null, 2)}\n`);
+      expect(JSON.parse(decodedIncarnations(provider)[0]!.bytes.toString("utf8")))
+        .toEqual({ auth_mode: "chatgpt", tokens: { access_token: credentialA.access,
+          refresh_token: credentialA.refresh, account_id: "acct-test" }, last_refresh: null });
     } finally {
       await rm(piDirectory, { recursive: true, force: true });
     }
@@ -270,7 +284,7 @@ describe("sensitive Provider credential profile snapshot", () => {
         providerId,
         credentialId,
         "generation-1",
-        async (current) => ({ ...current, access: "access-rotated" }),
+        async (current) => ({ ...current, access: syntheticCodexAccess("access-rotated") }),
       );
       await paused.promise;
 
@@ -286,15 +300,15 @@ describe("sensitive Provider credential profile snapshot", () => {
       assertConsistentPair(provider);
       const incarnation = decodedIncarnations(provider)[0]!;
       expect(JSON.parse(incarnation.bytes.toString("utf8"))).toMatchObject({
-        access: "access-rotated",
+        tokens: { access_token: syntheticCodexAccess("access-rotated") },
       });
-      expect(record.profiles[0]!.incarnation.tokenRevision)
+      expect(record.profiles[0]!.incarnation!.tokenRevision)
         .toBe(createHash("sha256").update(incarnation.bytes).digest("hex"));
       await expect(readFile(
         join(
           piDirectory,
           "credentials",
-          record.profiles[0]!.incarnation.relativePath,
+          record.profiles[0]!.incarnation!.relativePath,
         ),
       )).resolves.toEqual(incarnation.bytes);
     } finally {

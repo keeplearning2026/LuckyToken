@@ -470,7 +470,9 @@ describe("Backend Application public lifecycle seam", () => {
     } finally {
       await secondClient.close();
     }
-  });
+  // Two real Backend starts include bounded installed-Codex version/catalog
+  // probes; use the same lifecycle deadline as the other real-start tests.
+  }, 30_000);
 
   it("starts normal serving, exposes the Control Plane, and closes idempotently", async () => {
     const { configPath, descriptorPath, port } = await fixture();

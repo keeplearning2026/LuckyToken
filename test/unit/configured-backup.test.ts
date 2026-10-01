@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +9,7 @@ import {
   recoveryBackupSnapshots,
 } from "../../src/backup/configured.js";
 import {
-  credentialIncarnationReference,
+  credentialProfileCarrier,
   createFileProviderCredentialRecordStore,
 } from "../../src/credentials/profile-record-store.js";
 import type { TokenCliConfig } from "../../src/cli-config.js";
@@ -101,7 +100,7 @@ describe("configured backup contract versions", () => {
         createRevision: () => "revision-a",
       });
       const credential = { type: "api_key", key: "profile-secret" } as const;
-      await store.publishIncarnation(
+      await store.publishCredential(
         "provider-a",
         "absent",
         {
@@ -129,7 +128,7 @@ describe("configured backup contract versions", () => {
                 priority: 0,
                 createdAt: 1,
                 updatedAt: 1,
-                incarnation: credentialIncarnationReference(
+                ...credentialProfileCarrier(
                   "provider-a",
                   "credential-a",
                   "generation-a",
@@ -164,17 +163,11 @@ describe("configured backup contract versions", () => {
           await readFile(join(directory, "provider-a.json"))
         ).toString("base64"),
       });
-      expect(snapshot.providers[0]?.incarnations).toHaveLength(1);
-      const incarnation = snapshot.providers[0]!.incarnations[0]!;
-      expect(incarnation.relativePath).toBe(
-        "provider-a/credential-a/generation-a.auth.json",
-      );
-      const incarnationBytes = Buffer.from(incarnation.content, "base64");
-      expect(createHash("sha256").update(incarnationBytes).digest("hex")).toBe(
-        incarnation.tokenRevision,
-      );
+      expect(snapshot.providers[0]?.incarnations).toEqual([]);
+      const recordDocument = JSON.parse(Buffer.from(snapshot.providers[0]!.record, "base64").toString("utf8"));
+      expect(recordDocument.profiles[0]).toMatchObject({ kind: "inline", inline: credential });
       expect(JSON.stringify(snapshot)).not.toContain("obsolete-auth-canary");
-      expect(incarnationBytes.toString("utf8")).toContain("profile-secret");
+      expect(recordDocument.profiles[0]).not.toHaveProperty("incarnation");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

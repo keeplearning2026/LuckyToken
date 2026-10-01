@@ -13,6 +13,7 @@ import {
   fetchProviderUsageJson,
   normalizePercent,
   normalizeResetAt,
+  readBoundedJson,
   toFiniteNumber,
 } from "../wire.js";
 import { resolveCodexAccountIdentity } from "../../credentials/external-auth.js";
@@ -20,6 +21,8 @@ import { resolveCodexAccountIdentity } from "../../credentials/external-auth.js"
 const PROVIDER_ID = "openai-codex";
 const ORIGIN = "https://chatgpt.com";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+// Evidence pinned to reference/opencodex auth-api/pool-quota-probe.ts.
+const TERMINAL_AUTH_CODES = new Set(["invalid_workspace_selected", "invalid_refresh_token"]);
 function usableText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
@@ -121,6 +124,18 @@ export function createOpenAiCodexUsageProbe(fetch: FetchFunction): ProviderUsage
         signal,
       );
       if (result.reason !== undefined) {
+        if (result.reason === "auth" && result.response !== undefined) {
+          let code: unknown;
+          try {
+            const body = asRecord(await readBoundedJson(result.response, signal));
+            code = asRecord(body?.detail)?.code ?? asRecord(body?.error)?.code ?? body?.code;
+          } catch {
+            // Missing, malformed, oversized, or interrupted bodies are not evidence.
+          }
+          return Object.freeze({ state: "unavailable" as const,
+            reason: typeof code === "string" && TERMINAL_AUTH_CODES.has(code)
+              ? "terminal" as const : "temporary" as const });
+        }
         return Object.freeze({ state: "unavailable" as const, reason: result.reason });
       }
       const body = asRecord(result.body);

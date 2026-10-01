@@ -22,6 +22,27 @@ async function home(): Promise<string> {
 }
 
 describe("Codex native catalog source", () => {
+  it("selects the newest discovered version while respecting an explicit command", async () => {
+    const codexHome = await home();
+    const options = { codexHome, discoverCommands: async () => ["desktop-old", "path-new"],
+      runVersion: async (command: string) => command === "desktop-old" ? "codex-cli 0.158.0" : "codex-cli 0.159.2",
+      runBundledCatalog: async (command: string) => JSON.stringify({ models: [{ slug: command }] }) };
+    expect((await createCodexNativeCatalogSource(options).load()).runtimeIdentity?.command).toBe("path-new");
+    expect((await createCodexNativeCatalogSource({ ...options, codexCommand: "desktop-old" }).load()).runtimeIdentity?.command).toBe("desktop-old");
+  });
+  it("pins one acquisition across projections even with zero TTL and another acquisition", async () => {
+    const codexHome = await home();
+    let acquisitions = 0;
+    const source = createCodexNativeCatalogSource({ codexHome, ttlMs: 0, discoverCommands: async () => ["fixture"],
+      runVersion: async () => "codex-cli 0.159.2", runBundledCatalog: async () => JSON.stringify({ models: [{ slug: `native-${++acquisitions}` }] }) });
+    const snapshot = await source.load();
+    await source.withSnapshot(snapshot, async () => {
+      expect((await source.load()).entries.map((entry) => entry.slug)).toEqual(["native-1"]);
+      source.invalidate();
+      expect((await source.load()).generation).toBe(snapshot.generation);
+    });
+    expect((await source.load()).entries.map((entry) => entry.slug)).toEqual(["native-2"]);
+  });
   it("uses the installed Codex bundled catalog as the native snapshot", async () => {
     const codexHome = await home();
     const source = createCodexNativeCatalogSource({

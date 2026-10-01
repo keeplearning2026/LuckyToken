@@ -33,7 +33,6 @@ function parseProviderEntry(value: unknown): ParsedProviderEntry | undefined {
   const modelOverrides = value.modelOverrides;
   if (modelOverrides !== undefined) {
     if (!isRecord(modelOverrides)) return undefined;
-    for (const id of Object.keys(modelOverrides)) definedIds.add(id);
   }
   return { entry: value, models, definedIds };
 }

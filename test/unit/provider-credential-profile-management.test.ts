@@ -10,7 +10,7 @@ import {
   NO_PROVIDER_RECORD_REVISION,
 } from "../../src/credentials/profile-authority.js";
 import {
-  credentialIncarnationReference,
+  credentialProfileCarrier,
   createFileProviderCredentialRecordStore,
   createInMemoryProviderCredentialRecordStore,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
@@ -47,7 +47,7 @@ describe("CredentialProfileManagement", () => {
       priority,
       createdAt,
       updatedAt: createdAt,
-      incarnation: credentialIncarnationReference(
+      ...credentialProfileCarrier(
         provider.id,
         credentialId,
         credentialGeneration,
@@ -82,7 +82,7 @@ describe("CredentialProfileManagement", () => {
       -4,
       2,
     );
-    await store.publishIncarnation(
+    await store.publishCredential(
       provider.id,
       NO_PROVIDER_RECORD_REVISION,
       {
@@ -96,7 +96,7 @@ describe("CredentialProfileManagement", () => {
         value: undefined,
       }),
     );
-    await store.publishIncarnation(
+    await store.publishCredential(
       provider.id,
       "revision-seed-a",
       {
@@ -164,7 +164,7 @@ describe("CredentialProfileManagement", () => {
         priority: 0,
         createdAt: 1,
         updatedAt: 1,
-        incarnation: credentialIncarnationReference(
+        ...credentialProfileCarrier(
           providerId,
           "credential-a",
           "credential-generation-a",

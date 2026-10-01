@@ -613,7 +613,7 @@ describe("Responses native provider sender", () => {
     });
   });
 
-  it("certifies Responses and Compact independently", () => {
+  it("certifies Responses, remote Compaction v2, and Compact independently", () => {
     const compactCertified = [
       model("openai", "openai-responses", "https://api.openai.com/v1"),
       model("xai", "openai-responses", "https://api.x.ai/v1"),
@@ -634,12 +634,40 @@ describe("Responses native provider sender", () => {
       expect(supportsProviderNativeResponses(candidate, "compact")).toBe(true);
     }
 
+    // Remote compaction v2 is a backend-side semantic the upstream must
+    // implement itself. Only the canonical OpenAI/Azure/Codex backends are
+    // certified for it; gateway providers fall through to Semantic
+    // Conversion so Token summarizes with its own prompt.
+    const remoteCompactionCertified = [
+      model("openai", "openai-responses", "https://api.openai.com/v1"),
+      model("openai-codex", "openai-codex-responses", "https://chatgpt.com/backend-api"),
+      model("azure-openai-responses", "azure-openai-responses", ""),
+    ];
+    for (const candidate of remoteCompactionCertified) {
+      expect(
+        supportsProviderNativeResponses(candidate, "responses-compaction"),
+      ).toBe(true);
+    }
+    const remoteCertifiedKeys = new Set(
+      remoteCompactionCertified.map(
+        (candidate) => `${candidate.provider}|${candidate.api}`,
+      ),
+    );
+    for (const candidate of compactCertified) {
+      expect(
+        supportsProviderNativeResponses(candidate, "responses-compaction"),
+      ).toBe(remoteCertifiedKeys.has(`${candidate.provider}|${candidate.api}`));
+    }
+
     const goat = model(
       "commandcode-goat",
       "openai-responses",
       "https://api.commandcode.ai/provider/v1",
     );
     expect(supportsProviderNativeResponses(goat, "responses")).toBe(true);
+    expect(
+      supportsProviderNativeResponses(goat, "responses-compaction"),
+    ).toBe(false);
     expect(supportsProviderNativeResponses(goat, "compact")).toBe(false);
 
     const goatCompletions = model(

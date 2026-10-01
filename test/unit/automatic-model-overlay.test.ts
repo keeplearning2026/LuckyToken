@@ -96,7 +96,7 @@ describe("automatic model overlay", () => {
     expect(providers).toEqual({ anthropic: { models: [] } });
   });
 
-  it("drops candidates defined by models[].id and modelOverrides keys", () => {
+  it("keeps override-only models available while excluding full user definitions", () => {
     const userModel = { id: "gpt-model-defined", name: "User model" };
     const userOverride = { reasoning: true };
     const appended = candidate("gpt-new");
@@ -127,6 +127,7 @@ describe("automatic model overlay", () => {
     expect(modelIds(entry)).toEqual([
       "gpt-model-defined",
       "gpt-existing",
+      "gpt-override-defined",
       "gpt-new",
     ]);
     expect(entry.modelOverrides).toEqual({ "gpt-override-defined": userOverride });

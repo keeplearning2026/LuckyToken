@@ -11,7 +11,7 @@ const providerSpecs = [
   ["opencode-go", "OpenCode Go", true],
   ["amazon-bedrock", "Amazon Bedrock", false],
   ["anthropic", "Anthropic", false],
-  ["azure-openai", "Azure OpenAI", false],
+  ["azure-openai-responses", "Azure OpenAI", false],
 ] as const;
 
 const profilesByProvider = new Map<string, any>([

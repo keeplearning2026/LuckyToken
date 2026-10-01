@@ -1,4 +1,5 @@
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import {
   isManagedProviderAuthBindingCapture,
   MAX_PROFILE_ATTEMPTS_PER_REQUEST,
@@ -6,6 +7,14 @@ import {
 } from "../credentials/profile-contract.js";
 
 import { renderResponsesError } from "../protocols/openai-responses/error-rendering.js";
+import {
+  buildCodexRoutedCompactionRequest,
+  expandTokenCompactionEnvelopes,
+  extractResponsesSseOutputText,
+  isCodexRoutedCompactionRequest,
+  renderRoutedCompactionClientResponse,
+  TOKEN_COMPACTION_PREFIX,
+} from "../responses-compaction.js";
 import { createAzureResponsesSender } from "./azure.js";
 import {
   certifiedResponsesOperation,
@@ -21,6 +30,7 @@ import { createCodexResponsesSender } from "./codex.js";
 import { ProviderResponsesNetworkError } from "./contract.js";
 import type {
   CreateProviderResponsesSenderOptions,
+  ProviderResponsesClaim,
   ProviderResponsesLane,
   ProviderResponsesObservationContext,
   ProviderResponsesOperation,
@@ -36,6 +46,7 @@ import {
 
 export type {
   CreateProviderResponsesSenderOptions,
+  ProviderResponsesClaim,
   ProviderResponsesLane,
   ProviderResponsesOperation,
   ProviderResponsesSender,
@@ -95,6 +106,83 @@ function finishObservedResponse(
     // Observation cannot change the selected Provider response.
   }
   return response;
+}
+
+interface ProviderNativeOutboundPlan {
+  readonly body: string;
+  readonly summarizeRoutedCompaction: boolean;
+  readonly stream: boolean;
+}
+
+/**
+ * Routed Codex compaction v2 turns share one wire-level implementation with
+ * the Semantic lane: the same request rewrite, the same Token envelope, and
+ * the same synthesized client response. Provider Native keeps the turn when
+ * its upstream cannot compact itself and only delegates the summarizer text
+ * extraction to this lane's own Responses SSE reading.
+ */
+function planProviderNativeOutboundBody(
+  input: {
+    readonly operation: ProviderResponsesOperation;
+    readonly rawBody: string;
+    readonly model: Model<string>;
+  },
+): ProviderNativeOutboundPlan {
+  if (input.operation !== "responses") {
+    return {
+      body: input.rawBody,
+      summarizeRoutedCompaction: false,
+      stream: false,
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input.rawBody);
+  } catch {
+    return {
+      body: input.rawBody,
+      summarizeRoutedCompaction: false,
+      stream: false,
+    };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      body: input.rawBody,
+      summarizeRoutedCompaction: false,
+      stream: false,
+    };
+  }
+  const stream = (parsed as { stream?: unknown }).stream === true;
+  if (
+    isCodexRoutedCompactionRequest(parsed) &&
+    !certifiedResponsesOperation(
+      input.model.provider,
+      input.model.api,
+      "responses-compaction",
+    )
+  ) {
+    return {
+      body: JSON.stringify(
+        buildCodexRoutedCompactionRequest(
+          expandTokenCompactionEnvelopes(parsed),
+        ),
+      ),
+      summarizeRoutedCompaction: true,
+      stream,
+    };
+  }
+  if (input.rawBody.includes(TOKEN_COMPACTION_PREFIX)) {
+    return {
+      body: JSON.stringify(expandTokenCompactionEnvelopes(parsed)),
+      summarizeRoutedCompaction: false,
+      stream,
+    };
+  }
+  return {
+    body: input.rawBody,
+    summarizeRoutedCompaction: false,
+    stream,
+  };
 }
 
 function profileCaptureLocation(attempt: number) {
@@ -291,7 +379,7 @@ function providerResponsesTransportKind(
 
 export function supportsProviderNativeResponses(
   model: Model<string>,
-  operation: ProviderResponsesOperation,
+  operation: ProviderResponsesClaim,
 ): boolean {
   return certifiedResponsesOperation(model.provider, model.api, operation);
 }
@@ -333,7 +421,7 @@ export function createProviderNativeResponses(
   return Object.freeze({
     claims(
       model: Model<string>,
-      operation: ProviderResponsesOperation,
+      operation: ProviderResponsesClaim,
     ): boolean {
       return supportsProviderNativeResponses(model, operation);
     },
@@ -341,6 +429,7 @@ export function createProviderNativeResponses(
       input: Parameters<ProviderResponsesLane["execute"]>[0],
     ): Promise<Response> {
       enterProfileCapture(input.observation, 1);
+      const outbound = planProviderNativeOutboundBody(input);
       let capture: Awaited<
         ReturnType<
           Pick<ProviderAuthBindingAuthority, "capture">["capture"]
@@ -451,7 +540,7 @@ export function createProviderNativeResponses(
                 try {
                   physicalResponse = await sender.send(
                     input.operation,
-                    input.rawBody,
+                    outbound.body,
                     input.signal,
                     physicalObservation,
                   );
@@ -534,6 +623,39 @@ export function createProviderNativeResponses(
                   input.operation !== "responses" ||
                   retryAttempt >= configuration.transport.maxRetries
                 ) {
+                  if (physicalResponse.ok && outbound.summarizeRoutedCompaction) {
+                    let upstreamBody: string | undefined;
+                    try {
+                      upstreamBody = await physicalResponse.text();
+                    } catch {
+                      upstreamBody = undefined;
+                    }
+                    const summary =
+                      upstreamBody === undefined
+                        ? undefined
+                        : extractResponsesSseOutputText(upstreamBody);
+                    if (summary === undefined) {
+                      return finishObservedResponse(
+                        input.observation,
+                        syntheticErrorResponse(
+                          502,
+                          "api_error",
+                          "Routed compaction summarizer produced no complete text",
+                        ),
+                        responseAttempt,
+                      );
+                    }
+                    return finishObservedResponse(
+                      input.observation,
+                      renderRoutedCompactionClientResponse(summary, {
+                        responseId: `resp_${randomUUID()}`,
+                        createdAt: retryDependencies.now(),
+                        model: input.model.id,
+                        stream: outbound.stream,
+                      }),
+                      responseAttempt,
+                    );
+                  }
                   return finishObservedResponse(
                     input.observation,
                     physicalResponse,

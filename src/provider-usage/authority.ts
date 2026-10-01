@@ -130,17 +130,14 @@ function classifyBindingFailure(
   }
 }
 
-/** Probe failure classification. For an external capture the probe's `auth`
- * class means the credential the boundary had already resolved and verified
- * was rejected by the resource server (HTTP 401/403) or is unusable at the
- * request boundary: the only documented terminal evidence in this chain.
- * Other bindings keep the probe's own class. */
+/** Only a probe's explicit terminal evidence stops retries. Missing auth and
+ * bare HTTP authentication failures are transient for external bindings. */
 function classifyProbeFailure(
   capture: ProviderAuthBindingCapture,
   reason: ProviderUsageUnavailableReason,
 ): ProviderUsageUnavailableReason {
   return capture.facts.kind === "external" && reason === "auth"
-    ? "terminal"
+    ? "temporary"
     : reason;
 }
 
@@ -410,8 +407,17 @@ export function createProviderUsageAuthority(
       // abort only ends the run.
       const timeoutSignal = AbortSignal.timeout(resolveRefreshTimeoutMs());
       const signal = AbortSignal.any([timeoutSignal, lifecycleAbort.signal]);
-      const fail = (reason: ProviderUsageUnavailableReason): ProviderUsageRefreshResult => {
-        recordUnavailable(capture, destination, reason);
+      const fail = async (reason: ProviderUsageUnavailableReason): Promise<ProviderUsageRefreshResult> => {
+        if (capture.facts.kind === "external") {
+          let committed = false;
+          const current = await options.binding.publishIfCurrent(capture, (assertCurrent) => {
+            if (closed || destinationKey(servedBaseUrls(providerId)) !== destination) return;
+            assertCurrent();
+            recordUnavailable(capture, destination, reason);
+            committed = true;
+          });
+          if (!current || !committed) return Object.freeze({ providerId, outcome: "superseded" });
+        }
         return Object.freeze({ providerId, outcome: "unavailable", reason });
       };
       let acquired:

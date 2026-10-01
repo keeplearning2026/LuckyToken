@@ -1,3 +1,4 @@
+import { syntheticCodexAccess } from "../support/codex-credential-fixture.js";
 import {
   lstat,
   mkdir,
@@ -24,11 +25,11 @@ import {
   type ProviderCredentialRecordStore,
 } from "../../src/credentials/profile-record-store.js";
 
-const providerId = "fixture-provider";
+const providerId = "openai-codex";
 const credentialId = "credential-a";
 const credential: Credential = {
   type: "oauth",
-  access: "access-a",
+  access: syntheticCodexAccess("access-a"),
   refresh: "refresh-a",
   expires: 1_900_000_000_000,
 };
@@ -54,7 +55,7 @@ function recordFor(input: {
       priority: 0,
       createdAt: 1,
       updatedAt: 1,
-      incarnation: credentialIncarnationReference(
+      kind: "incarnation", incarnation: credentialIncarnationReference(
         providerId,
         credentialId,
         input.credentialGeneration,
@@ -89,7 +90,7 @@ async function publishFirstIncarnation(
   store: ProviderCredentialRecordStore,
   generation: string,
 ): Promise<void> {
-  const result = await store.publishIncarnation(
+  const result = await store.publishCredential(
     providerId,
     NO_PROVIDER_RECORD_REVISION,
     { credentialId, credentialGeneration: generation, credential },
@@ -166,19 +167,19 @@ describe("Provider credential orphan collection", () => {
           },
         },
       });
-      const publication = pausedStore.publishIncarnation(
+      const publication = pausedStore.publishCredential(
         providerId,
         "revision-1",
         {
           credentialId,
           credentialGeneration: "generation-2",
-          credential: { ...credential, access: "access-b" },
+          credential: { ...credential, access: syntheticCodexAccess("access-b") },
         },
         () => ({
           kind: "commit",
           record: recordFor({
             credentialGeneration: "generation-2",
-            credential: { ...credential, access: "access-b" },
+            credential: { ...credential, access: syntheticCodexAccess("access-b") },
           }),
           value: undefined,
         }),
@@ -345,19 +346,19 @@ describe("Provider credential orphan collection", () => {
       now: () => 1_000,
     });
     await publishFirstIncarnation(store, "generation-1");
-    await store.publishIncarnation(
+    await store.publishCredential(
       providerId,
       "revision-1",
       {
         credentialId,
         credentialGeneration: "generation-2",
-        credential: { ...credential, access: "access-b" },
+        credential: { ...credential, access: syntheticCodexAccess("access-b") },
       },
       () => ({
         kind: "commit",
         record: recordFor({
           credentialGeneration: "generation-2",
-          credential: { ...credential, access: "access-b" },
+          credential: { ...credential, access: syntheticCodexAccess("access-b") },
         }),
         value: undefined,
       }),

@@ -8,6 +8,8 @@ import {
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createCodexNativeCatalogSource } from "../../src/integrations/codex/native-catalog-source.js";
+import { createCodexIntegrationAuthority } from "../../src/integrations/codex/integration.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -67,6 +69,84 @@ async function getBoundModelAuth(runtime: Awaited<ReturnType<typeof createProvid
  * source classification; P4 — reserved bundled identities.
  */
 describe("Provider Runtime composition", () => {
+  it("commits injection and served overlay from one zero-TTL acquisition", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-shared-acquisition-"));
+    roots.push(root);
+    await writeFile(join(root, "config.toml"), 'model = "gpt-native"\n');
+    let acquisitions = 0;
+    const source = createCodexNativeCatalogSource({ codexHome: root, ttlMs: 0, discoverCommands: async () => ["fixture"],
+      runVersion: async () => "codex-cli 0.159.2", runBundledCatalog: async () => JSON.stringify({ models: [
+        { slug: `gpt-99-${++acquisitions}-fixture`, display_name: "Listable", visibility: "list", supported_in_api: true },
+        { slug: `hidden-${acquisitions}`, display_name: "Hidden", visibility: "hide", supported_in_api: false },
+      ] }) });
+    const snapshot = await source.load();
+    const integration = createCodexIntegrationAuthority({ codexHome: root, stateDirectory: join(root, "integration"),
+      endpoint: () => "http://127.0.0.1:3000/v1", nativeCatalog: source,
+      buildCatalog: async (native) => ({ content: JSON.stringify({ models: [...native, { slug: "token/fixture" }] }),
+        modelCount: native.length + 1, injectedModelCount: 1, warnings: [] }),
+      validateCatalog: async (_content, selected) => { expect(selected?.command).toBe(snapshot.runtimeIdentity?.command); } });
+    await source.withSnapshot(snapshot, async () => {
+      const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath: join(root, "models.json"),
+        nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule() });
+      expect((await integration.reconcile("enable")).observedState).toBe("managed");
+      source.invalidate();
+      await runtime.automaticModelOverlay.refresh(snapshot);
+      const projection = await integration.query();
+      const injected = JSON.parse(await readFile(projection.catalogPath, "utf8")) as { models: { slug: string }[] };
+      expect(injected.models.map((model) => model.slug)).toEqual([...snapshot.entries.map((model) => model.slug), "token/fixture"]);
+      expect(runtime.models.getModels("openai-codex").filter((model) => model.id.endsWith("-fixture")).map((model) => model.id)).toEqual([snapshot.entries[0]!.slug]);
+      expect(integration.directModels.has(snapshot.entries[1]!.slug)).toBe(true);
+      expect(acquisitions).toBe(1);
+    });
+  });
+  it("publishes bounded conservative-overlay warnings once per generation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-overlay-warning-"));
+    roots.push(root);
+    const source = createCodexNativeCatalogSource({ codexHome: root, discoverCommands: async () => ["fixture"],
+      runVersion: async () => "codex-cli 0.159.2", runBundledCatalog: async () => JSON.stringify({ models: [
+        { slug: "gpt-99-fixture", display_name: "Future", visibility: "list", supported_in_api: true },
+      ] }) });
+    const warnings: string[][] = [];
+    const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath: join(root, "models.json"),
+      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule(),
+      onAutomaticModelOverlayWarnings: (batch) => { warnings.push([...batch]); } });
+    expect(warnings.flat().some((warning) => warning.includes("conservative"))).toBe(true);
+    await runtime.automaticModelOverlay.refresh();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.every((warning) => warning.length <= 512)).toBe(true);
+  });
+  it("publishes the supplied native snapshot without reacquiring it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-overlay-acquisition-"));
+    roots.push(root);
+    let acquisition = 0;
+    const source = createCodexNativeCatalogSource({ codexHome: root, discoverCommands: async () => ["fixture"],
+      runVersion: async () => "codex-cli 0.159.2", runBundledCatalog: async () => JSON.stringify({ models: [
+        { slug: `gpt-6.${++acquisition}-fixture`, display_name: "Native fixture", visibility: "list", supported_in_api: true },
+      ] }) });
+    const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath: join(root, "models.json"),
+      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule() });
+    const snapshot = await source.load();
+    await runtime.automaticModelOverlay.refresh(snapshot);
+    expect(runtime.models.getModels("openai-codex").filter((model) => model.id.endsWith("-fixture")).map((model) => model.id)).toEqual([snapshot.entries[0]!.slug]);
+    expect(acquisition).toBe(2);
+  });
+  it("keeps Radius dynamic models after a Codex overlay refresh", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-overlay-radius-"));
+    roots.push(root);
+    const modelsJsonPath = join(root, "models.json");
+    await writeFile(modelsJsonPath, JSON.stringify({ providers: { radius: { oauth: "radius", baseUrl: "https://radius.invalid/v1" } } }));
+    const source = createCodexNativeCatalogSource({ codexHome: root, discoverCommands: async () => ["fixture"],
+      runVersion: async () => "codex-cli 0.159.2", runBundledCatalog: async () => JSON.stringify({ models: [] }) });
+    const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath,
+      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule() });
+    const dynamic: Model<"pi-messages"> = { id: "dynamic", provider: "radius", api: "pi-messages", name: "Dynamic", baseUrl: "https://radius.invalid/v1",
+      reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 4096, maxTokens: 1024 };
+    await runtime.catalog.restoreProvider("radius", { models: [dynamic], checkedAt: 1 });
+    runtime.catalog.capture();
+    expect(runtime.models.getModels("radius").map((model) => model.id)).toEqual(["dynamic"]);
+    await runtime.automaticModelOverlay.refresh();
+    expect(runtime.models.getModels("radius").map((model) => model.id)).toEqual(["dynamic"]);
+  });
   it("injects only the Profile Store into the one Backend-lifetime Models collection", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-profile-runtime-"));
     roots.push(root);

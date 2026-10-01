@@ -55,7 +55,7 @@ import {
   buildCodexModelCandidates,
   type CodexModelCandidateGeneration,
 } from "../integrations/codex/codex-model-candidates.js";
-import type { CodexNativeCatalogSource } from "../integrations/codex/native-catalog-source.js";
+import type { CodexNativeCatalogSource, CodexNativeCatalogSnapshot } from "../integrations/codex/native-catalog-source.js";
 import { applyAutomaticModelOverlay } from "./automatic-model-overlay.js";
 import {
   bundledProviderIds,
@@ -92,7 +92,7 @@ export interface AutomaticModelOverlayHandle {
   generation(): CodexModelCandidateGeneration | undefined;
   /** Acquire one fresh native snapshot, rebuild the candidate set, and
    * publish it as one unit. A failure keeps the previous generation. */
-  refresh(): Promise<{
+  refresh(snapshot?: CodexNativeCatalogSnapshot): Promise<{
     readonly generation?: string;
     readonly warnings: readonly string[];
   }>;
@@ -128,6 +128,7 @@ export interface CreateProviderRuntimeOptions {
   readonly importModule?: ImportProviderModule;
   readonly onInvalidModelsJson?: (error: unknown) => void;
   readonly onCredentialStoreDegraded?: (error: unknown) => void;
+  readonly onAutomaticModelOverlayWarnings?: (warnings: readonly string[]) => void;
   readonly createUuid?: () => string;
   readonly now?: () => number;
   /** Codex-owned home observed by the external credential source and the
@@ -271,14 +272,21 @@ export async function createProviderRuntime(
   const userProvidersView: Readonly<Record<string, unknown>> =
     modelsJson?.providers ?? Object.freeze({});
   let automaticOverlay: CodexModelCandidateGeneration | undefined;
-  const automaticOverlayWarnings: string[] = [];
+  let lastOverlayWarningKey: string | undefined;
+  const reportOverlayWarnings = (generation: string | undefined, warnings: readonly string[]): void => {
+    const bounded = Object.freeze(warnings.slice(0, 32).map((warning) => warning.slice(0, 512)));
+    const key = JSON.stringify([generation, bounded]);
+    if (bounded.length === 0 || key === lastOverlayWarningKey) return;
+    lastOverlayWarningKey = key;
+    try { options.onAutomaticModelOverlayWarnings?.(bounded); } catch { /* Observation cannot change publication. */ }
+  };
   if (options.nativeCatalogSource !== undefined) {
     try {
       automaticOverlay = buildCodexModelCandidates({
         snapshot: await options.nativeCatalogSource.load(),
         piModels: piCodexModels,
       });
-      automaticOverlayWarnings.push(...automaticOverlay.warnings);
+      reportOverlayWarnings(automaticOverlay.generation, automaticOverlay.warnings);
     } catch {
       automaticOverlay = undefined;
     }
@@ -460,32 +468,33 @@ export async function createProviderRuntime(
 
   const automaticModelOverlayHandle: AutomaticModelOverlayHandle = Object.freeze({
     generation: () => automaticOverlay,
-    async refresh() {
+    async refresh(snapshot?: CodexNativeCatalogSnapshot) {
       if (options.nativeCatalogSource === undefined) {
         return Object.freeze({ warnings: Object.freeze([]) });
       }
       // Explicit invalidation: a manual refresh re-acquires rather than
       // reusing a TTL-optimized snapshot.
-      options.nativeCatalogSource.invalidate();
+      if (snapshot === undefined) options.nativeCatalogSource.invalidate();
       let next: CodexModelCandidateGeneration;
       try {
         next = buildCodexModelCandidates({
-          snapshot: await options.nativeCatalogSource.load(),
+          snapshot: snapshot ?? await options.nativeCatalogSource.load(),
           piModels: piCodexModels,
         });
       } catch {
         // Publication is staged: a failed refresh keeps the previous
         // generation authoritative.
-        return Object.freeze({
-          warnings: Object.freeze([
-            "Codex native model overlay refresh failed; the previous generation stays published.",
-          ]),
-        });
+        const warnings = Object.freeze(["Codex native model overlay refresh failed; the previous generation stays published."]);
+        reportOverlayWarnings(automaticOverlay?.generation, warnings);
+        return Object.freeze({ warnings });
       }
       registerTokenProviders(mutableModels, {
+        builtins: builtins.filter((provider) => provider.id === automaticOverlayProviderId),
         modelsJson: Object.freeze({
           providers: applyAutomaticModelOverlay({
-            providers: userProvidersView,
+            providers: Object.hasOwn(userProvidersView, automaticOverlayProviderId)
+              ? { [automaticOverlayProviderId]: userProvidersView[automaticOverlayProviderId] }
+              : {},
             overlay: next,
             providerId: automaticOverlayProviderId,
           }) as unknown as ModelsJsonConfig["providers"],
@@ -494,6 +503,7 @@ export async function createProviderRuntime(
       });
       automaticOverlay = next;
       served.capture();
+      reportOverlayWarnings(next.generation, next.warnings);
       return Object.freeze({
         generation: next.generation,
         warnings: next.warnings,

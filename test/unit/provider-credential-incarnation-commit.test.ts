@@ -1,3 +1,4 @@
+import { syntheticCodexAccess } from "../support/codex-credential-fixture.js";
 import { createHash } from "node:crypto";
 import {
   mkdir,
@@ -5,6 +6,7 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,17 +25,17 @@ import {
   type ProviderCredentialRecordStore,
 } from "../../src/credentials/profile-record-store.js";
 
-const providerId = "fixture-provider";
+const providerId = "openai-codex";
 const credentialId = "credential-a";
 const credentialA: Credential = {
   type: "oauth",
-  access: "access-a",
+  access: syntheticCodexAccess("access-a"),
   refresh: "refresh-a",
   expires: 1_900_000_000_000,
 };
 const credentialB: Credential = {
   ...credentialA,
-  access: "access-b",
+  access: syntheticCodexAccess("access-b"),
 };
 
 function recordFor(input: {
@@ -60,7 +62,7 @@ function recordFor(input: {
       priority: 0,
       createdAt: 1,
       updatedAt: 1,
-      incarnation: credentialIncarnationReference(
+      kind: "incarnation", incarnation: credentialIncarnationReference(
         providerId,
         input.credentialId,
         input.credentialGeneration,
@@ -115,15 +117,35 @@ async function assertRecordFileConsistency(
     );
     expect(read.state).toBe("ok");
     if (read.state !== "ok") continue;
-    expect(read.tokenRevision).toBe(profile.incarnation.tokenRevision);
+    expect(read.tokenRevision).toBe(profile.incarnation!.tokenRevision);
     const bytes = await readFile(
-      join(piDirectory, "credentials", profile.incarnation.relativePath),
+      join(piDirectory, "credentials", profile.incarnation!.relativePath),
     );
-    expect(hashFile(bytes)).toBe(profile.incarnation.tokenRevision);
+    expect(hashFile(bytes)).toBe(profile.incarnation!.tokenRevision);
   }
 }
 
 describe("Provider credential incarnation commit protocol", () => {
+  it("refuses publication through a parent junction without writing secrets outside", async () => {
+    const piDirectory = await mkdtemp(join(tmpdir(), "Token-incarnation-junction-"));
+    try {
+      const outside = join(piDirectory, "outside");
+      const parent = join(piDirectory, "credentials", providerId);
+      await mkdir(outside);
+      await mkdir(parent, { recursive: true });
+      await symlink(outside, join(parent, credentialId), process.platform === "win32" ? "junction" : "dir");
+      const store = createFileProviderCredentialRecordStore({ piDirectory, createRevision: () => "revision-1" });
+      await expect(store.publishCredential(providerId, NO_PROVIDER_RECORD_REVISION, {
+        credentialId, credentialGeneration: "generation-1", credential: credentialA,
+      }, () => ({ kind: "commit", record: recordFor({
+        credentialId, credentialGeneration: "generation-1", credential: credentialA,
+      }), value: undefined }))).rejects.toThrow(/credential.*directory/i);
+      expect(await readdir(outside)).toEqual([]);
+      expect(await store.read(providerId)).toBeUndefined();
+    } finally {
+      await rm(piDirectory, { recursive: true, force: true });
+    }
+  });
   it("writes the incarnation document before switching the record reference", async () => {
     const piDirectory = await mkdtemp(join(tmpdir(), "Token-incarnation-commit-"));
     const revisions = ["revision-1", "revision-2"];
@@ -154,7 +176,7 @@ describe("Provider credential incarnation commit protocol", () => {
         },
       });
 
-      const first = await store.publishIncarnation(
+      const first = await store.publishCredential(
         providerId,
         NO_PROVIDER_RECORD_REVISION,
         {
@@ -177,7 +199,7 @@ describe("Provider credential incarnation commit protocol", () => {
         files: ["generation-1.auth.json"],
       });
 
-      const second = await store.publishIncarnation(
+      const second = await store.publishCredential(
         providerId,
         "revision-1",
         {
@@ -216,8 +238,10 @@ describe("Provider credential incarnation commit protocol", () => {
       const profile = record!.profiles[0]!;
       expect(profile.credentialGeneration).toBe("generation-2");
       const bytes = await readFile(incarnationPath(piDirectory, credentialId, "generation-2"));
-      expect(profile.incarnation.tokenRevision).toBe(hashFile(bytes));
-      expect(JSON.parse(bytes.toString("utf8"))).toEqual(credentialB);
+      expect(profile.incarnation!.tokenRevision).toBe(hashFile(bytes));
+      expect(JSON.parse(bytes.toString("utf8"))).toEqual({ auth_mode: "chatgpt", tokens: {
+        access_token: credentialB.access, refresh_token: credentialB.refresh, account_id: "acct-test",
+      }, last_refresh: null });
     } finally {
       await rm(piDirectory, { recursive: true, force: true });
     }
@@ -231,7 +255,7 @@ describe("Provider credential incarnation commit protocol", () => {
         piDirectory,
         createRevision: () => revisions.shift() ?? "unexpected-revision",
       });
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         NO_PROVIDER_RECORD_REVISION,
         {
@@ -259,7 +283,7 @@ describe("Provider credential incarnation commit protocol", () => {
           },
         },
       });
-      await expect(crashing.publishIncarnation(
+      await expect(crashing.publishCredential(
         providerId,
         "revision-1",
         {
@@ -312,7 +336,7 @@ describe("Provider credential incarnation commit protocol", () => {
         piDirectory,
         createRevision: () => revisions.shift() ?? "unexpected-revision",
       });
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         NO_PROVIDER_RECORD_REVISION,
         {
@@ -330,7 +354,7 @@ describe("Provider credential incarnation commit protocol", () => {
           value: undefined,
         }),
       );
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         "revision-1",
         {
@@ -356,7 +380,7 @@ describe("Provider credential incarnation commit protocol", () => {
         "generation-1",
         async () => {
           mutations += 1;
-          return { ...credentialA, access: "stale-rotation" };
+          return { ...credentialA, access: syntheticCodexAccess("stale-rotation") };
         },
       );
       expect(oldCapture).toBeUndefined();
@@ -368,7 +392,7 @@ describe("Provider credential incarnation commit protocol", () => {
         store.readCredential(providerId, credentialId, "generation-2"),
       ).resolves.toMatchObject({ state: "ok", credential: credentialB });
 
-      const stale = await store.publishIncarnation(
+      const stale = await store.publishCredential(
         providerId,
         "revision-1",
         {
@@ -394,7 +418,7 @@ describe("Provider credential incarnation commit protocol", () => {
         piDirectory,
         createRevision: () => "revision-1",
       });
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         NO_PROVIDER_RECORD_REVISION,
         {
@@ -417,18 +441,18 @@ describe("Provider credential incarnation commit protocol", () => {
         providerId,
         credentialId,
         "generation-1",
-        async (current) => ({ ...current, access: "access-rotated" }),
+        async (current) => ({ ...current, access: syntheticCodexAccess("access-rotated") }),
       );
-      expect(rotated).toMatchObject({ access: "access-rotated" });
+      expect(rotated).toMatchObject({ access: syntheticCodexAccess("access-rotated") });
 
       const record = await store.read(providerId);
       expect(record?.revision).toBe("revision-1");
       expect(record?.profiles[0]!.credentialGeneration).toBe("generation-1");
       const bytes = await readFile(incarnationPath(piDirectory, credentialId, "generation-1"));
       expect(JSON.parse(bytes.toString("utf8"))).toMatchObject({
-        access: "access-rotated",
+        tokens: { access_token: syntheticCodexAccess("access-rotated") },
       });
-      expect(record?.profiles[0]!.incarnation.tokenRevision).toBe(hashFile(bytes));
+      expect(record?.profiles[0]!.incarnation!.tokenRevision).toBe(hashFile(bytes));
 
       const declined = await store.modifyCredential(
         providerId,
@@ -436,7 +460,7 @@ describe("Provider credential incarnation commit protocol", () => {
         "generation-1",
         async () => undefined,
       );
-      expect(declined).toMatchObject({ access: "access-rotated" });
+      expect(declined).toMatchObject({ access: syntheticCodexAccess("access-rotated") });
       await assertRecordFileConsistency(store, piDirectory);
     } finally {
       await rm(piDirectory, { recursive: true, force: true });
@@ -459,7 +483,7 @@ describe("Provider credential incarnation commit protocol", () => {
           },
         },
       });
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         NO_PROVIDER_RECORD_REVISION,
         {
@@ -482,7 +506,7 @@ describe("Provider credential incarnation commit protocol", () => {
         providerId,
         credentialId,
         "generation-1",
-        async () => ({ ...credentialA, access: "access-rotated" }),
+        async () => ({ ...credentialA, access: syntheticCodexAccess("access-rotated") }),
       )).rejects.toThrow("simulated rotation record-commit failure");
 
       // The referenced document is newer than the record hash. The next read
@@ -494,22 +518,26 @@ describe("Provider credential incarnation commit protocol", () => {
       );
       expect(reconciled).toMatchObject({
         state: "ok",
-        credential: { access: "access-rotated" },
+        credential: { access: syntheticCodexAccess("access-rotated") },
       });
       const bytes = await readFile(incarnationPath(piDirectory, credentialId, "generation-1"));
       if (reconciled.state === "ok") {
         expect(reconciled.tokenRevision).toBe(hashFile(bytes));
       }
-      const staleRecord = await store.read(providerId);
-      expect(staleRecord?.profiles[0]!.incarnation.tokenRevision)
-        .not.toBe(hashFile(bytes));
+      const recoveredStore = createFileProviderCredentialRecordStore({
+        piDirectory, createRevision: () => "must-not-change-management-revision",
+      });
+      await recoveredStore.readCredential(providerId, credentialId, "generation-1");
+      const recoveredRecord = await recoveredStore.read(providerId);
+      expect(recoveredRecord?.profiles[0]!.incarnation!.tokenRevision).toBe(hashFile(bytes));
+      expect(recoveredRecord?.revision).toBe("revision-1");
 
       // A later successful rotation commits the reconciled revision.
       await store.modifyCredential(
         providerId,
         credentialId,
         "generation-1",
-        async (current) => ({ ...current, access: "access-committed" }),
+        async (current) => ({ ...current, access: syntheticCodexAccess("access-committed") }),
       );
       await assertRecordFileConsistency(store, piDirectory);
     } finally {
@@ -524,7 +552,7 @@ describe("Provider credential incarnation commit protocol", () => {
         piDirectory,
         createRevision: () => "revision-1",
       });
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         NO_PROVIDER_RECORD_REVISION,
         {
@@ -593,7 +621,7 @@ describe("Provider credential incarnation commit protocol", () => {
         piDirectory,
         createRevision: () => revisions.shift() ?? "unexpected-revision",
       });
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         NO_PROVIDER_RECORD_REVISION,
         {
@@ -617,11 +645,11 @@ describe("Provider credential incarnation commit protocol", () => {
         providerId,
         credentialId,
         "generation-1",
-        async (current) => ({ ...current, access: "access-rotated" }),
+        async (current) => ({ ...current, access: syntheticCodexAccess("access-rotated") }),
       );
       await assertRecordFileConsistency(store, piDirectory);
 
-      await store.publishIncarnation(
+      await store.publishCredential(
         providerId,
         "revision-1",
         {
@@ -676,7 +704,7 @@ describe("Provider credential incarnation commit protocol", () => {
         store.readCredential(providerId, credentialId, "generation-2"),
       ).resolves.toEqual({ state: "missing" });
 
-      const readded = await store.publishIncarnation(
+      const readded = await store.publishCredential(
         providerId,
         "revision-3",
         {
@@ -750,13 +778,28 @@ describe("Provider credential incarnation commit protocol", () => {
     }
   });
 
+  it("reconciles interrupted in-memory rotation without changing logical identity", async () => {
+    const store = createInMemoryProviderCredentialRecordStore({ createRevision: () => "revision-1",
+      hooks: { afterIncarnationRotation: () => { throw new Error("interrupted"); } } });
+    await store.publishCredential(providerId, "absent", { credentialId, credentialGeneration: "generation-1", credential: credentialA },
+      () => ({ kind: "commit", record: recordFor({ credentialId, credentialGeneration: "generation-1", credential: credentialA }), value: undefined }));
+    await expect(store.modifyCredential(providerId, credentialId, "generation-1", async () => credentialB)).rejects.toThrow("interrupted");
+    const resolved = await store.readCredential(providerId, credentialId, "generation-1");
+    expect(resolved).toMatchObject({ state: "ok", credential: credentialB });
+    const record = (await store.read(providerId))!;
+    expect(record.revision).toBe("revision-1");
+    expect(record.profiles[0]!.credentialGeneration).toBe("generation-1");
+    if (resolved.state !== "ok") throw new Error("Missing credential");
+    expect(record.profiles[0]!.incarnation!.tokenRevision).toBe(resolved.tokenRevision);
+  });
+
   it("keeps the in-memory store on the same commit contract", async () => {
     const revisions = ["revision-1", "revision-2"];
     const store = createInMemoryProviderCredentialRecordStore({
       createRevision: () => revisions.shift() ?? "unexpected-revision",
       now: () => 1_000,
     });
-    await store.publishIncarnation(
+    await store.publishCredential(
       providerId,
       NO_PROVIDER_RECORD_REVISION,
       {
@@ -781,15 +824,15 @@ describe("Provider credential incarnation commit protocol", () => {
       providerId,
       credentialId,
       "generation-1",
-      async (current) => ({ ...current, access: "access-memory-rotated" }),
+      async (current) => ({ ...current, access: syntheticCodexAccess("access-memory-rotated") }),
     );
     await expect(
       store.readCredential(providerId, credentialId, "generation-1"),
     ).resolves.toMatchObject({
       state: "ok",
-      credential: { access: "access-memory-rotated" },
+      credential: { access: syntheticCodexAccess("access-memory-rotated") },
     });
-    await store.publishIncarnation(
+    await store.publishCredential(
       providerId,
       "revision-1",
       {

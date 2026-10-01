@@ -67,7 +67,13 @@ const CLIENT_SHARED_SEAMS = new Set([
   // of the protocol boundary.
 ]);
 
-const RESPONSES_SHARED_SEAMS = CLIENT_SHARED_SEAMS;
+const RESPONSES_SHARED_SEAMS = new Set([
+  ...CLIENT_SHARED_SEAMS,
+  // The explicit remote-compaction exception and pure wire framing have no
+  // lane execution/response-conversion dependencies (certified separately).
+  "responses-compaction.ts",
+  "responses-sse.ts",
+]);
 
 function slash(value) {
   return value.split(path.sep).join("/");

@@ -89,8 +89,6 @@ test("Direct Mode, Provider Native, and Semantic Conversion are pairwise indepen
       path.join(repositoryRoot, "src/protocols/openai-responses/request.ts"),
       path.join(repositoryRoot, "src/protocols/openai-responses/response.ts"),
       path.join(repositoryRoot, "src/protocols/openai-responses/session-state.ts"),
-      path.join(repositoryRoot, "src/protocols/openai-responses/sse.ts"),
-      path.join(repositoryRoot, "src/protocols/openai-responses/codex-routed-compaction.ts"),
       path.join(repositoryRoot, "src/protocols/anthropic/semantic"),
       path.join(repositoryRoot, "src/protocols/anthropic/request.ts"),
       path.join(repositoryRoot, "src/protocols/anthropic/response.ts"),
@@ -115,6 +113,20 @@ test("Direct Mode, Provider Native, and Semantic Conversion are pairwise indepen
         ),
     });
   }
+
+  // The explicit compaction exception is a shared wire boundary. Its full
+  // dependency closure must never reach any lane execution/conversion owner.
+  await assertNoDependency({
+    entries: [path.join(repositoryRoot, "src/responses-compaction.ts"), path.join(repositoryRoot, "src/responses-sse.ts")],
+    forbidden: (dependency) => names.some((name) => lanes[name].some((entry) => {
+      const root = display(entry);
+      return dependency === root || dependency.startsWith(`${root}/`);
+    })),
+  });
+  await assertNoDependency({
+    entries: lanes["Direct Mode"],
+    forbidden: (dependency) => dependency === "src/responses-compaction.ts" || dependency === "src/responses-sse.ts",
+  });
 
   // The Provider Native namespace repair lives in the protocol directory, so
   // the lane-directory rule above no longer covers it. Semantic Conversion must

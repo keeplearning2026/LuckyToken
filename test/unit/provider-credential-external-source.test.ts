@@ -1,9 +1,10 @@
 import type { Credential, Provider } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { syntheticCodexAccess } from "../support/codex-credential-fixture.js";
 
 import { createProviderCredentialProfiles } from "../../src/credentials/profile-authority.js";
 import {
-  credentialIncarnationReference,
+  credentialProfileCarrier,
   createInMemoryProviderCredentialRecordStore,
 } from "../../src/credentials/profile-record-store.js";
 import { ProviderAuthBindingError } from "../../src/credentials/profile-contract.js";
@@ -304,11 +305,11 @@ describe("external Codex credential binding", () => {
     const { composition, recordStore } = createAuthority(source);
     const credential: Credential = {
       type: "oauth",
-      access: "managed-access",
+      access: syntheticCodexAccess("managed-access"),
       refresh: "managed-refresh",
-      expires: Date.now() + 3600_000,
+      expires: 1_900_000_000_000,
     };
-    await recordStore.publishIncarnation(
+    await recordStore.publishCredential(
       PROVIDER_ID,
       "absent",
       {
@@ -336,7 +337,7 @@ describe("external Codex credential binding", () => {
               priority: 0,
               createdAt: 1,
               updatedAt: 1,
-              incarnation: credentialIncarnationReference(
+              ...credentialProfileCarrier(
                 PROVIDER_ID,
                 "managed-1",
                 "generation-1",

@@ -71,7 +71,7 @@ export function canonicalUrl(
   }
 }
 
-async function readBoundedJson(
+export async function readBoundedJson(
   response: Response,
   signal: AbortSignal,
 ): Promise<unknown | undefined> {

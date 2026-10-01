@@ -79,8 +79,8 @@ export type ProviderUsageUnsupportedReason =
  * - `insufficient_validity`: the resource request received a credential that
  *   does not satisfy the account-claim contract, so it cannot be used.
  * - `terminal`: an explicit structured rejection of a credential the external
- *   boundary had already resolved and verified — the usage probe's HTTP
- *   401/403 class. Only this evidence stops automatic network attempts, and
+ *   boundary had already resolved and verified, with a known terminal code
+ *   in the bounded response body. Bare HTTP 401/403 is insufficient. Only this evidence stops automatic network attempts, and
  *   only until the external document's revision changes. Diagnostics text
  *   (stderr) is never parsed for classification
  *   ([P1 error-classification evidence](../../doc/Research/TokenOpenAICodexP1ErrorClassification.md)).

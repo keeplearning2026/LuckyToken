@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { closeOpenAICodexWebSocketSessions } from "@earendil-works/pi-ai/api/openai-codex-responses";
 
 import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createProviderUsageAuthority } from "../../src/provider-usage/authority.js";
@@ -18,10 +19,6 @@ import {
   readCodexExternalAuth,
 } from "../../src/credentials/external-auth.js";
 import {
-  codexDebugModelsInvocation,
-  discoverCodexCommands,
-} from "../../src/integrations/codex/runtime-discovery.js";
-import {
   createCodexNativeCatalogSource,
 } from "../../src/integrations/codex/native-catalog-source.js";
 import { resolveCodexHome } from "../../src/integrations/codex/home.js";
@@ -31,10 +28,8 @@ import {
   createOnlinePublicModelAuthority,
   reconcileOnlinePublicModels,
 } from "./public-model-fixture.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { classifyCodexOnlineLane, codexOnlineGate, type CodexOnlineLane as LaneProbeResult } from "./openai-codex-gate.js";
 
-const execFileAsync = promisify(execFile);
 const DEDICATED_CODEX_AUTH_HOME_ENV = "TOKEN_CODEX_TEST_AUTH_HOME";
 const PROVIDER_ID = "openai-codex";
 
@@ -48,37 +43,6 @@ const PROVIDER_ID = "openai-codex";
  * ChatGPT login is available the suite records a skip instead of mocking
  * anything.
  */
-async function nativeListableIds(codexHome: string): Promise<readonly string[]> {
-  const commands = await discoverCodexCommands({});
-  for (const command of commands) {
-    const invocation = codexDebugModelsInvocation(command, process.platform, process.env);
-    try {
-      const result = await execFileAsync(invocation.file, [...invocation.args], {
-        encoding: "utf8",
-        env: { ...process.env, CODEX_HOME: codexHome },
-        windowsHide: true,
-        timeout: 15_000,
-        ...invocation.options,
-      });
-      const parsed = JSON.parse(result.stdout) as {
-        models?: Array<{ slug?: unknown; visibility?: unknown; supported_in_api?: unknown }>;
-      };
-      return Object.freeze(
-        (parsed.models ?? []).flatMap((entry) =>
-          entry.visibility === "list" &&
-          entry.supported_in_api === true &&
-          typeof entry.slug === "string"
-            ? [entry.slug]
-            : [],
-        ),
-      );
-    } catch {
-      // Try the next discovered runtime.
-    }
-  }
-  return Object.freeze([]);
-}
-
 /**
  * Delegation mechanics against the real Codex app-server, in a temp home with
  * synthetic tokens. Proves the trigger fires, the handshake completes, and the
@@ -106,6 +70,7 @@ async function probeDelegationMechanics(
     `${JSON.stringify({
       auth_mode: "chatgpt",
       tokens: {
+        id_token: [encode({ alg: "none" }), encode({ sub: "probe-user", "https://api.openai.com/auth": { chatgpt_account_id: "probe-account" } }), "signature"].join("."),
         access_token: accessToken,
         refresh_token: "probe-refresh-token",
         account_id: "probe-account",
@@ -193,14 +158,16 @@ async function run(): Promise<void> {
       (builtinProviders().find((builtin) => builtin.id === PROVIDER_ID)?.getModels() ?? [])
         .map((model) => model.id),
     );
-    const nativeIds = await nativeListableIds(codexHome);
+    const nativeSnapshot = await nativeCatalogSource.load();
+    const nativeIds = nativeSnapshot.entries.filter((entry) => entry.visibility === "list" && entry.supported_in_api === true).map((entry) => entry.slug);
     assert.ok(nativeIds.length > 0, "native catalog must expose at least one listable model");
     const missingNative = nativeIds.filter((id) => !piIds.has(id));
     assert.ok(
       missingNative.length > 0,
       "the local Codex login must expose at least one Pi-missing native model",
     );
-    const laneProbeModel = missingNative[0]!;
+    const laneProbeModel = process.env.TOKEN_CODEX_TEST_MODEL?.trim() || missingNative[0]!;
+    assert.ok(nativeIds.includes(laneProbeModel), "the selected known-available test model must be native-listable");
     const laneAlias = `${PROVIDER_ID}/${laneProbeModel}`;
     const publicModelAuthority = await createOnlinePublicModelAuthority({
       path: join(stateDirectory, "public-models.json"),
@@ -209,12 +176,12 @@ async function run(): Promise<void> {
       providerId: PROVIDER_ID,
       modelId: laneProbeModel,
     });
-    composition = await createConfiguredTokenDataPlane({
+    composition = await nativeCatalogSource.withSnapshot(nativeSnapshot, () => createConfiguredTokenDataPlane({
       config,
       fetch: globalThis.fetch,
       nativeCatalogSource,
       publicModelAuthority,
-    });
+    }));
     await reconcileOnlinePublicModels(
       publicModelAuthority,
       composition.catalog.models,
@@ -252,10 +219,10 @@ async function run(): Promise<void> {
       probes: createBuiltInProviderUsageProbes(globalThis.fetch),
     });
     const usageResult = await usage.refresh(PROVIDER_ID, AbortSignal.timeout(60_000));
-    assert.notEqual(
+    assert.equal(
       usageResult.refresh.outcome,
-      "unsupported",
-      "an external Codex login must be usage-eligible",
+      "succeeded",
+      "external Codex usage must succeed",
     );
 
     // Real lane probes for an appended, Pi-missing model. A Provider Native
@@ -264,11 +231,8 @@ async function run(): Promise<void> {
     // entitlement is recorded, and the credential must stay usable.
     const nativeResponses = await probeNativeResponses(server.origin, laneAlias);
     const semanticMessages = await probeSemanticMessages(server.origin, laneAlias);
-    // A lane that errors (transport/5xx/non-4xx) fails the suite. A 4xx is
-    // recorded instead: the account may simply lack entitlement to this
-    // listable model (plan acceptance 31).
-    assert.notEqual(nativeResponses.outcome, "error", nativeResponses.detail);
-    assert.notEqual(semanticMessages.outcome, "error", semanticMessages.detail);
+    // A documented entitlement rejection records incomplete coverage. It
+    // cannot certify either lane or produce a passing suite.
     const credentialAfterProbes = await readCodexExternalAuth(authPath);
     const credentialStayedUsable = credentialAfterProbes.state === "ok";
     // A rejected probe must never push the shared credential into a terminal
@@ -278,6 +242,7 @@ async function run(): Promise<void> {
       AbortSignal.timeout(60_000),
     );
     await usage.close();
+    assert.equal(usageAfterProbes.refresh.outcome, "succeeded", "usage must stay usable after both lane probes");
     const usageStateAfterProbes = usageAfterProbes.snapshot.providers.find(
       (entry) =>
         (entry.state === "observed"
@@ -293,6 +258,8 @@ async function run(): Promise<void> {
       "lane rejections must not make the external credential terminal",
     );
     const delegationMechanics = await probeDelegationMechanics(root);
+    assert.equal(delegationMechanics.outcome, "verification_failed:revision_unchanged",
+      "the synthetic delegation must complete the handshake and fail closed on unchanged credentials");
 
     const before = await readCodexExternalAuth(authPath);
     assert.equal(before.state, "ok");
@@ -319,8 +286,11 @@ async function run(): Promise<void> {
       }
     }
 
+    const gate = codexOnlineGate({ usage: usageResult.refresh.outcome, native: nativeResponses,
+      semantic: semanticMessages, rotation, usable: credentialStayedUsable, nonTerminal: credentialStayedNonTerminal });
+    if (gate.result !== "pass") process.exitCode = 1;
     process.stdout.write(`${JSON.stringify({
-      result: "pass",
+      ...gate,
       codexHome,
       loginSource,
       connected: true,
@@ -340,43 +310,11 @@ async function run(): Promise<void> {
   } finally {
     await server?.close().catch(() => undefined);
     await composition?.close().catch(() => undefined);
+    // This dedicated probe process owns all its Pi sessions. The public
+    // adapter caches WebSockets for reuse; release them before process exit.
+    closeOpenAICodexWebSocketSessions();
     await rm(root, { recursive: true, force: true });
   }
-}
-
-interface LaneProbeResult {
-  readonly status: number;
-  readonly outcome: "completed" | "rejected" | "error";
-  readonly detail?: string;
-}
-
-function summarizeStream(status: number, body: string): LaneProbeResult {
-  // The Native lane streams Responses SSE; the Anthropic lane answers with an
-  // Anthropic Messages object (or SSE when the client asks for a stream).
-  const completed =
-    /response\.completed/u.test(body) ||
-    /message_stop/u.test(body) ||
-    /"type"\s*:\s*"message"/u.test(body) ||
-    /"stop_reason"\s*:\s*"(end_turn|max_tokens|stop_sequence|tool_use)"/u.test(body);
-  if (status === 200 && completed) {
-    return Object.freeze({ status, outcome: "completed" as const });
-  }
-  if (status >= 400 && status < 500) {
-    return Object.freeze({
-      status,
-      outcome: "rejected" as const,
-      detail: boundedDetail(body),
-    });
-  }
-  return Object.freeze({
-    status,
-    outcome: "error" as const,
-    detail: boundedDetail(body),
-  });
-}
-
-function boundedDetail(body: string): string {
-  return body.replace(/\s+/gu, " ").slice(0, 240);
 }
 
 async function probeNativeResponses(
@@ -415,7 +353,7 @@ async function probeNativeResponses(
     }),
     signal: AbortSignal.timeout(120_000),
   });
-  return summarizeStream(response.status, await response.text());
+  return classifyCodexOnlineLane(response.status, await response.text());
 }
 
 async function probeSemanticMessages(
@@ -437,7 +375,7 @@ async function probeSemanticMessages(
     }),
     signal: AbortSignal.timeout(120_000),
   });
-  return summarizeStream(response.status, await response.text());
+  return classifyCodexOnlineLane(response.status, await response.text());
 }
 
 void run().catch((error: unknown) => {

@@ -150,6 +150,21 @@ describe("Ticket 15 Responses passthrough response projection", () => {
     }
   });
 
+  it("preserves the [DONE] compatibility terminator without failing projection", () => {
+    const stream =
+      `event: response.completed\ndata: ${responseObject(CANONICAL)}\n\n` +
+      "data: [DONE]\n\n";
+    const result = projectResponsesPassthroughBody(
+      encode(stream),
+      "text/event-stream",
+      ALIAS,
+    );
+    expect("error" in result).toBe(false);
+    const projected = decode((result as { body: Uint8Array }).body);
+    expect(projected).toContain('"model":"my-alias"');
+    expect(projected).toContain("data: [DONE]");
+  });
+
   it("fails closed when a non-streaming response carries a nested model that cannot be told apart from semantic content", () => {
     const body = JSON.parse(responseObject(CANONICAL)) as Record<string, unknown>;
     body.output = [

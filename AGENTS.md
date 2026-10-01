@@ -198,6 +198,14 @@ the model alias projection. The insertion is documented in
 `protocols.openai-responses.responseRepair.functionCallNamespace.providerNative`, default
 on; it only inserts the `namespace` property of a `function_call` whose child the request
 declared uniquely, and never rewrites an existing value or an item name).
+One shared Responses compaction helper covers the one semantic exception: a Codex
+remote-compaction v2 turn (`input` ending with `compaction_trigger`) whose upstream is
+not certified for `responses-compaction` is rewritten into a summarizer turn, sent over
+the same native transport, and answered with exactly one Token-owned `compaction` item
+carrying the `Token1:` envelope; replayed `Token1:` items decode before forwarding. The
+same helper owns the Semantic Conversion rewrite and envelope, so the behavior has one
+implementation. This path still never enters Pi IR. See
+`doc/Spec/TokenResponsesRemoteCompactionHandlingSpec.md`.
 
 Semantic Conversion uses Client Protocol modules and Pi Provider execution and never
 imports either preservation lane's request builders, credentials, transports, or

@@ -12,7 +12,7 @@ import type {
 import {
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
-  credentialIncarnationReference,
+  credentialProfileCarrier,
   type PersistedCredentialProfileV2,
   type PersistedProviderCredentialRecordV2,
   type ProviderCredentialRecordStore,
@@ -348,7 +348,7 @@ function withoutActiveCredential(
 
 function withoutIdentityHint(
   profile: PersistedCredentialProfileV2,
-): Omit<PersistedCredentialProfileV2, "identityHint"> {
+): PersistedCredentialProfileV2 {
   return {
     credentialId: profile.credentialId,
     credentialGeneration: profile.credentialGeneration,
@@ -360,13 +360,13 @@ function withoutIdentityHint(
     priority: profile.priority,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
-    incarnation: profile.incarnation,
+    ...(profile.kind === "inline" ? { kind: "inline", inline: profile.inline } : { kind: "incarnation", incarnation: profile.incarnation }),
   };
 }
 
 function withoutNote(
   profile: PersistedCredentialProfileV2,
-): Omit<PersistedCredentialProfileV2, "note"> {
+): PersistedCredentialProfileV2 {
   return {
     credentialId: profile.credentialId,
     credentialGeneration: profile.credentialGeneration,
@@ -380,7 +380,7 @@ function withoutNote(
     priority: profile.priority,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
-    incarnation: profile.incarnation,
+    ...(profile.kind === "inline" ? { kind: "inline", inline: profile.inline } : { kind: "incarnation", incarnation: profile.incarnation }),
   };
 }
 
@@ -906,7 +906,7 @@ export function createProviderCredentialProfiles(options: {
 
       const timestamp = options.now();
       const hint = identityHint(credential);
-      const incarnation = credentialIncarnationReference(
+      const carrier = credentialProfileCarrier(
         providerId,
         binding.credentialId,
         binding.credentialGeneration,
@@ -924,7 +924,7 @@ export function createProviderCredentialProfiles(options: {
         priority: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
-        incarnation,
+        ...carrier,
       };
 
       if (metadataContainsSecret(profile.displayName, profile.note, [credential])) {
@@ -949,7 +949,7 @@ export function createProviderCredentialProfiles(options: {
         credential,
       ]);
 
-      const result = await options.recordStore.publishIncarnation(
+      const result = await options.recordStore.publishCredential(
         providerId,
         binding.expectedRevision,
         {
@@ -981,13 +981,15 @@ export function createProviderCredentialProfiles(options: {
                 "Credential Profile authentication method changed",
               );
             }
+            const { kind, inline, incarnation, ...metadata } = withoutIdentityHint(target);
+            void kind; void inline; void incarnation;
             const replacement: PersistedCredentialProfileV2 = {
-              ...withoutIdentityHint(target),
+              ...metadata,
               credentialGeneration: binding.credentialGeneration,
               authMethodLabel,
               ...(hint === undefined ? {} : { identityHint: hint }),
               updatedAt: timestamp,
-              incarnation,
+              ...carrier,
             };
             const profiles = [...current.profiles];
             profiles[profileIndex] = replacement;

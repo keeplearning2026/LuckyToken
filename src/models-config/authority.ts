@@ -95,6 +95,9 @@ function createNodeLock(): ModelsJsonLock {
 
 export interface ModelsJsonAuthorityOptions {
   readonly path: string;
+  /** Candidate generation used by the edit-preview composer. This does not
+   * change the disk revision or hot-apply configuration to the runtime. */
+  readonly compositionGeneration?: () => string | undefined;
   readonly fileSystem?: ModelsJsonFileSystem;
   readonly lock?: ModelsJsonLock;
   /**
@@ -481,6 +484,7 @@ export function createModelsJsonAuthority(
   let diskRaw = "";
   let diskPresent = false;
   let refreshed = false;
+  let compositionGeneration: string | undefined;
 
   const refresh = async (): Promise<ModelsFileState> => {
     let raw: string;
@@ -497,13 +501,15 @@ export function createModelsJsonAuthority(
         readError = error;
       }
     }
-    if (refreshed && present === diskPresent && raw === diskRaw) {
+    const nextGeneration = options.compositionGeneration?.();
+    if (refreshed && present === diskPresent && raw === diskRaw && nextGeneration === compositionGeneration) {
       return current;
     }
     const firstObservation = !refreshed;
     refreshed = true;
     diskPresent = present;
     diskRaw = raw;
+    compositionGeneration = nextGeneration;
     const next = buildState(path, current.revision, raw, present, readError, compose);
     if (firstObservation) {
       // The first observation is the baseline: the existing file's content

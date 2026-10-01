@@ -837,7 +837,7 @@ describe("Provider Usage probes", () => {
         const result = await acquire(fixture.probe, fixture.auth);
         expect(result, fixture.name).toEqual({
           state: "unavailable",
-          reason,
+          reason: fixture.probe.providerId === "openai-codex" && reason === "auth" ? "temporary" : reason,
         });
         expect(JSON.stringify(result), fixture.name).not.toContain(
           "fixture-secret",
@@ -845,6 +845,22 @@ describe("Provider Usage probes", () => {
       }
     });
   }
+
+  it.each([
+    [401, "{}", "temporary"],
+    [403, "<html>blocked</html>", "temporary"],
+    [401, '{"error":{"code":"invalid_refresh_token"}}', "terminal"],
+    [403, '{"detail":{"code":"invalid_workspace_selected"}}', "terminal"],
+    [403, '{"error":{"code":"model_not_available"}}', "temporary"],
+  ] as const)("requires terminal evidence for Codex HTTP %s (%s)", async (status, body, reason) => {
+    const access = `header.${Buffer.from(JSON.stringify({
+      exp: 4_000_000_000, "https://api.openai.com/auth": { chatgpt_account_id: "acct-123" },
+    })).toString("base64url")}.signature`;
+    const transport = createFetch(() => new Response(body, { status }));
+    expect(await acquire(createOpenAiCodexUsageProbe(transport.fetch), {
+      auth: { apiKey: access }, source: "oauth",
+    })).toEqual({ state: "unavailable", reason });
+  });
 
   it("rejects malformed provider schemas for every registered probe", async () => {
     const transport = createFetch(() => json({}));

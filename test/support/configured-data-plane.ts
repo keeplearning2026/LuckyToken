@@ -18,7 +18,7 @@ import type {
   ProviderAuthBindingAuthority,
 } from "../../src/credentials/profile-contract.js";
 import {
-  credentialIncarnationReference,
+  credentialProfileCarrier,
   createInMemoryProviderCredentialRecordStore,
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
@@ -417,7 +417,7 @@ export async function createSeededCredentialRecordStore(
   for (const entry of entries) {
     const credentialId = `test-credential-${entry.providerId}`;
     const credentialGeneration = `test-generation-${entry.providerId}`;
-    await store.publishIncarnation(
+    await store.publishCredential(
       entry.providerId,
       NO_PROVIDER_RECORD_REVISION,
       {
@@ -444,7 +444,7 @@ export async function createSeededCredentialRecordStore(
             priority: 0,
             createdAt: 1,
             updatedAt: 1,
-            incarnation: credentialIncarnationReference(
+            ...credentialProfileCarrier(
               entry.providerId,
               credentialId,
               credentialGeneration,

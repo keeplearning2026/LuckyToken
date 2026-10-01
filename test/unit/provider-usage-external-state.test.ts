@@ -169,6 +169,32 @@ afterEach(() => {
 });
 
 describe("Provider usage external Codex state", () => {
+  it.each(["account", "revision"])("does not let a late failure replace newer %s usage", async (change) => {
+    const bindings = createExternalBinding({ accountId: "acct-a", tokenRevision: "r1" });
+    const models = createModels({ getAuth: async () => oauthAuth });
+    let finishOld!: (result: ProviderUsageProbeResult) => void;
+    let started!: () => void;
+    const pending = new Promise<ProviderUsageProbeResult>((resolve) => { finishOld = resolve; });
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    let first = true;
+    const { probe } = createProbe(async () => {
+      if (first) { first = false; started(); return pending; }
+      return observed(12);
+    });
+    const authority = createProviderUsageAuthority({ models: models.models, binding: bindings.binding, probes: [probe] });
+    try {
+      const old = authority.refresh(PROVIDER_ID);
+      await entered;
+      bindings.setFile({ ...(change === "account" ? { accountId: "acct-b" } : {}), tokenRevision: "r2" });
+      expect((await authority.refresh(PROVIDER_ID)).refresh.outcome).toBe("succeeded");
+      finishOld({ state: "unavailable", reason: "network" });
+      expect((await old).refresh.outcome).toBe("superseded");
+      expect((await authority.query()).providers[0]).toMatchObject({ state: "observed", observation: { windows: [{ usedPercent: 12 }] } });
+    } finally {
+      finishOld({ state: "unavailable", reason: "network" });
+      await authority.close();
+    }
+  });
   it("reports a bounded transient state and recovers once the source resolves", async () => {
     const bindings = createExternalBinding({
       accountId: "acct-a",
@@ -320,7 +346,7 @@ describe("Provider usage external Codex state", () => {
     let reject = true;
     const { probe, calls } = createProbe(async () =>
       reject
-        ? { state: "unavailable", reason: "auth" }
+        ? { state: "unavailable", reason: "terminal" }
         : observed(12),
     );
     const authority = createProviderUsageAuthority({

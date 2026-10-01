@@ -637,6 +637,7 @@ async function startNormalApplication(options: {
     let currentAutomaticOverlay: CodexModelCandidateGeneration | undefined;
     const modelsAuthority = createModelsJsonAuthority({
       path: config.pi.modelsJson,
+      compositionGeneration: () => currentAutomaticOverlay?.generation,
       compose: (providers) =>
         composeEffectiveCatalog(
           applyAutomaticModelOverlay({
@@ -734,7 +735,8 @@ async function startNormalApplication(options: {
       codexHome,
       ttlMs: 5 * 60_000,
     });
-    const providerRuntime = await createProviderRuntime({
+    const initialCodexSnapshot = await codexNativeCatalog.load();
+    const providerRuntime = await codexNativeCatalog.withSnapshot(initialCodexSnapshot, () => createProviderRuntime({
       piDirectory: config.pi.directory,
       modelsJsonPath: config.pi.modelsJson,
       codexHome,
@@ -760,13 +762,36 @@ async function startNormalApplication(options: {
             "Provider credential storage lock release was degraded after a completed operation.",
         });
       },
+      onAutomaticModelOverlayWarnings: (warnings) => {
+        for (const safeMessage of warnings) ownedDiagnosticsAuthority.observeRuntime({
+          level: "warning", classification: "provider_codex_model_overlay", safeMessage,
+        });
+      },
       credentialUsage: (credentialIds) =>
         credentialIds.flatMap((credentialId) => {
           const usage = credentialUsageById.get(credentialId);
           return usage === undefined ? [] : [usage];
         }),
-    });
+    }));
     currentAutomaticOverlay = providerRuntime.automaticModelOverlay.generation();
+    // Serialize acquisition and both consumers together. The operation-local
+    // snapshot is independent of the source's TTL and concurrent readers.
+    let codexRefreshTail: Promise<unknown> = Promise.resolve();
+    const withFreshCodexCatalog = <T>(operation: () => Promise<T>): Promise<T> => {
+      const next = codexRefreshTail.then(async () => {
+        codexNativeCatalog.invalidate();
+        const snapshot = await codexNativeCatalog.load();
+        return codexNativeCatalog.withSnapshot(snapshot, async () => {
+          const result = await operation();
+          await providerRuntime.automaticModelOverlay.refresh(snapshot);
+          currentAutomaticOverlay = providerRuntime.automaticModelOverlay.generation();
+          await modelsAuthority.query();
+          return result;
+        });
+      });
+      codexRefreshTail = next.catch(() => undefined);
+      return next;
+    };
     const providerUsageAuthority = createProviderUsageAuthority({
       models: providerRuntime.models,
       binding: providerRuntime.providerAuthBindings,
@@ -1341,25 +1366,12 @@ async function startNormalApplication(options: {
               state: await agentIntegrations.query(),
               results: Object.freeze([]),
             };
-          case "sync":
           case "sync": {
-            const result = await agentIntegrations.sync();
-            await providerRuntime.automaticModelOverlay.refresh();
-            currentAutomaticOverlay =
-              providerRuntime.automaticModelOverlay.generation();
-            return result;
+            return withFreshCodexCatalog(() => agentIntegrations.sync());
           }
           case "set_enabled": {
-            const result = await agentIntegrations.setEnabled(
-              command.agentId,
-              command.enabled,
-            );
-            if (command.enabled) {
-              await providerRuntime.automaticModelOverlay.refresh();
-              currentAutomaticOverlay =
-                providerRuntime.automaticModelOverlay.generation();
-            }
-            return result;
+            const operation = () => agentIntegrations.setEnabled(command.agentId, command.enabled);
+            return command.enabled ? withFreshCodexCatalog(operation) : operation();
           }
           case "set_scope":
             return agentIntegrations.setScope(command.agentId, command.scope);
@@ -1453,7 +1465,7 @@ async function startNormalApplication(options: {
     // Backend startup is the automatic apply point for enabled Agent integrations.
     // Data Plane listener restarts never resync external Agent files.
     if (lastPublishedStatus.modelDataPlane === "running") {
-      await agentIntegrations.startup();
+      await codexNativeCatalog.withSnapshot(initialCodexSnapshot, () => agentIntegrations.startup());
     }
     lifecycle = createLifecycle({
       ownership,

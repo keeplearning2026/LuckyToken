@@ -9,7 +9,7 @@ import {
   COMMANDCODE_MODEL_CATALOG_SCHEMA,
   parseCommandCodeModelCatalogText,
 } from "@token/commandcode-model-catalog";
-import { parseProviderCredentialRecord } from "../credentials/profile-record-store.js";
+import { createFileProviderCredentialRecordStore, parseProviderCredentialRecord } from "../credentials/profile-record-store.js";
 import { stripJsonComments } from "../providers/models-json-schema.js";
 import { PI_COMPATIBILITY_BASELINE } from "../providers/pi-baseline.js";
 import {
@@ -204,13 +204,28 @@ async function captureCredentialProfileSnapshot(
     const match = /^([A-Za-z0-9][A-Za-z0-9._-]{0,63})\.json$/u.exec(entry.name);
     if (match === null) continue;
     const providerId = match[1]!;
-    const recordBytes = await readFile(join(directory, entry.name));
+    let recordBytes = await readFile(join(directory, entry.name));
     // Record writes are atomic renames and stale formats fail closed, so a
     // parse failure is never a torn read that retrying could repair.
-    const record = parseProviderCredentialRecord(
+    let record = parseProviderCredentialRecord(
       recordBytes.toString("utf8"),
       providerId,
     );
+    if (record.profiles.some((profile) => profile.kind === "incarnation")) {
+      // Recovery uses the store's credential → record locking and adopts only
+      // the still-referenced incarnation. Then capture the reconciled record.
+      const store = createFileProviderCredentialRecordStore({ piDirectory: dirname(directory),
+        createRevision: () => { throw new Error("Backup recovery cannot change management identity"); } });
+      for (const profile of record.profiles) {
+        signal.throwIfAborted();
+        if (profile.kind === "incarnation") {
+          const read = await store.readCredential(providerId, profile.credentialId, profile.credentialGeneration);
+          if (read.state === "invalid" || read.state === "unreadable") throw new Error("Credential backup refused an unsafe or unreadable incarnation");
+        }
+      }
+      recordBytes = await readFile(join(directory, entry.name));
+      record = parseProviderCredentialRecord(recordBytes.toString("utf8"), providerId);
+    }
     const incarnations: Array<{
       relativePath: string;
       tokenRevision: string;
@@ -218,6 +233,7 @@ async function captureCredentialProfileSnapshot(
     }> = [];
     for (const profile of record.profiles) {
       signal.throwIfAborted();
+      if (profile.kind === "inline") continue;
       const content = await readReferencedIncarnation(
         credentialDirectory,
         profile.incarnation.relativePath,

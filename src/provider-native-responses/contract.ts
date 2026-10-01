@@ -3,6 +3,18 @@ import type { RequestJourneyObserver } from "../diagnostics/contract.js";
 import type { CredentialActivitySink } from "../credentials/activity.js";
 
 export type ProviderResponsesOperation = "responses" | "compact";
+/**
+ * Claim surface. `responses-compaction` is a Codex remote compaction v2 turn:
+ * a `POST /v1/responses` whose input ends with `compaction_trigger`. It is a
+ * claim-only capability — execution keeps using the `responses` transport —
+ * because an upstream can serve the Responses wire without implementing the
+ * backend-side compaction semantic. The lane consults it internally: a
+ * certified upstream receives the turn unchanged, everything else takes the
+ * shared in-lane summarizer rewrite.
+ */
+export type ProviderResponsesClaim =
+  | ProviderResponsesOperation
+  | "responses-compaction";
 
 export class ProviderResponsesNetworkError extends Error {
   constructor(cause: unknown) {
@@ -48,7 +60,7 @@ export type ProviderResponsesLaneInput = {
 );
 
 export interface ProviderResponsesLane {
-  claims(model: Model<string>, operation: ProviderResponsesOperation): boolean;
+  claims(model: Model<string>, operation: ProviderResponsesClaim): boolean;
   execute(input: ProviderResponsesLaneInput): Promise<Response>;
 }
 

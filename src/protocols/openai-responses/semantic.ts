@@ -57,7 +57,14 @@ import {
   ResponseStateConversionFailure,
   type ResponseSessionState,
 } from "./session-state.js";
-import { renderResponsesSse } from "./sse.js";
+import { renderResponsesSse } from "../../responses-sse.js";
+import {
+  buildCodexRoutedCompactionRequest,
+  CodexRoutedCompactionSummaryError,
+  expandTokenCompactionEnvelopes,
+  isCodexRoutedCompactionRequest,
+  projectRoutedCompactionResponse,
+} from "../../responses-compaction.js";
 
 export interface SemanticResponsesExecutionOptions {
   readonly request: Request;
@@ -471,6 +478,33 @@ export async function executeSemanticResponses(
       typeof previousResponseId === "string" && previousResponseId.length > 0
         ? await options.sessionState.expand(options.body)
         : options.body;
+    // Token-owned compaction envelopes replay as plain summary text. Foreign
+    // encrypted blobs stay untouched and keep failing conversion.
+    const replayed = expandTokenCompactionEnvelopes(expanded);
+    const compactionTurn = isCodexRoutedCompactionRequest(replayed);
+    if (compactionTurn) {
+      const planLocation = {
+        phase: "lane_request_preparation",
+        lane: "semantic_conversion",
+        direction: "client_to_pi",
+        step: "plan_routed_compaction",
+        subject: "envelope",
+      } as const;
+      enterSemanticJourneyStep(
+        options.journey,
+        "p3.plan_routed_compaction",
+        planLocation,
+      );
+      completeSemanticJourneyStep(
+        options.journey,
+        "p3.plan_routed_compaction",
+        planLocation,
+        "success",
+      );
+    }
+    const conversionBody = compactionTurn
+      ? buildCodexRoutedCompactionRequest(replayed)
+      : replayed;
 
     const conversionLocation = {
       phase: "lane_request_preparation",
@@ -487,7 +521,7 @@ export async function executeSemanticResponses(
     let invocation: ResponsesInvocation;
     try {
       invocation = convertResponsesRequest(
-        expanded,
+        conversionBody,
         options.now(),
         options.configuration.conversion.request,
       );
@@ -819,7 +853,7 @@ export async function executeSemanticResponses(
         observeClientConversionNotice(options.journey, notice);
       },
     );
-    const rendered = convertAssistantMessageToResponses(
+    let rendered = convertAssistantMessageToResponses(
       message,
       projection,
       options.createResponseId(),
@@ -832,6 +866,27 @@ export async function executeSemanticResponses(
       responseProjectionLocation,
       "success",
     );
+    if (compactionTurn) {
+      const compactProjectionLocation = {
+        phase: "lane_response_processing",
+        lane: "semantic_conversion",
+        direction: "pi_to_client",
+        step: "project_routed_compaction",
+        subject: "message",
+      } as const;
+      enterSemanticJourneyStep(
+        options.journey,
+        "p5.project_routed_compaction",
+        compactProjectionLocation,
+      );
+      rendered = projectRoutedCompactionResponse(rendered, message);
+      completeSemanticJourneyStep(
+        options.journey,
+        "p5.project_routed_compaction",
+        compactProjectionLocation,
+        "success",
+      );
+    }
 
     const responseStateLocation = {
       phase: "lane_response_processing",
@@ -920,6 +975,13 @@ export async function executeSemanticResponses(
     ) {
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
+      );
+    }
+    if (error instanceof CodexRoutedCompactionSummaryError) {
+      // A compaction turn that cannot produce a complete summary must fail
+      // before the client installs replacement history.
+      return toResponse(
+        renderResponsesError(502, "api_error", error.message),
       );
     }
     if (

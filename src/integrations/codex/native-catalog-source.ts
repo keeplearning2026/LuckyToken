@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -124,7 +125,7 @@ async function runVersion(
 }
 
 function parseVersion(stdout: string): string | undefined {
-  return /codex-cli\s+([^\s]+)/u.exec(stdout)?.[1];
+  return /codex-cli\s+(\d+\.\d+\.\d+)(?:[-+][^\s]+)?(?:\s|$)/u.exec(stdout)?.[1];
 }
 
 async function readModelsCache(
@@ -164,7 +165,10 @@ function snapshotGeneration(
  */
 export function createCodexNativeCatalogSource(
   options: CreateCodexNativeCatalogSourceOptions,
-): CodexNativeCatalogSource {
+): CodexNativeCatalogSource & {
+  withSnapshot<T>(snapshot: CodexNativeCatalogSnapshot, operation: () => Promise<T>): Promise<T>;
+} {
+  const acquisitionScope = new AsyncLocalStorage<CodexNativeCatalogSnapshot>();
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const now = options.now ?? Date.now;
@@ -183,14 +187,30 @@ export function createCodexNativeCatalogSource(
 
   const acquire = async (): Promise<CodexNativeCatalogSnapshot> => {
     const commands = await discover().catch(() => Object.freeze([]));
-    for (const command of commands) {
-      let reportedVersion: string | undefined;
-      try {
-        reportedVersion = parseVersion(await version(command));
-      } catch {
-        // A runtime that cannot report its version is still a usable candidate;
-        // the identity simply omits the version.
+    const configuredKey = Object.keys(env).find((key) => key.toLowerCase() === "codex_cli_path");
+    const explicit = [options.codexCommand?.trim(), configuredKey === undefined ? undefined : env[configuredKey]?.trim()].filter((command): command is string => Boolean(command));
+    const key = (command: string): string => platform === "win32" ? command.toLowerCase() : command;
+    const candidates = await Promise.all(commands.map(async (command, index) => ({
+      command, index,
+      reportedVersion: await version(command).then(parseVersion, () => undefined),
+      mtime: await stat(command).then((info) => info.mtimeMs, () => 0),
+      priority: explicit.findIndex((configured) => key(configured) === key(command)),
+    })));
+    candidates.sort((left, right) => {
+      if (left.priority >= 0 || right.priority >= 0) {
+        return (left.priority < 0 ? Infinity : left.priority) - (right.priority < 0 ? Infinity : right.priority);
       }
+      const a = left.reportedVersion?.split(".").map(Number);
+      const b = right.reportedVersion?.split(".").map(Number);
+      if (a !== undefined && b === undefined) return -1;
+      if (a === undefined && b !== undefined) return 1;
+      for (let index = 0; index < 3; index += 1) {
+        const difference = (b?.[index] ?? 0) - (a?.[index] ?? 0);
+        if (difference !== 0) return difference;
+      }
+      return right.mtime - left.mtime || left.index - right.index;
+    });
+    for (const { command, reportedVersion } of candidates) {
       try {
         const entries = parseNativeEntries(await bundled(command));
         if (entries !== undefined) {
@@ -240,11 +260,16 @@ export function createCodexNativeCatalogSource(
   };
 
   return Object.freeze({
+    withSnapshot<T>(snapshot: CodexNativeCatalogSnapshot, operation: () => Promise<T>): Promise<T> {
+      return acquisitionScope.run(snapshot, operation);
+    },
     invalidate(): void {
       cached = undefined;
       cachedAt = 0;
     },
     async load(): Promise<CodexNativeCatalogSnapshot> {
+      const snapshot = acquisitionScope.getStore();
+      if (snapshot !== undefined) return snapshot;
       if (cached !== undefined && ttlMs > 0 && now() - cachedAt < ttlMs) {
         return cached;
       }

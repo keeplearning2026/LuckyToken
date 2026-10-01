@@ -1,3 +1,19 @@
+# Provider card icon QA
+
+- Implementation captures: `design-qa-provider-icons-implementation.png` (light) and `design-qa-provider-icons-dark.png` (dark), from `http://127.0.0.1:4173/visual-preview.html` → Providers.
+- Coverage sheet: `design-qa-provider-icons-coverage.png` renders all 43 shipped Provider identities (41 pinned Pi built-ins plus the 2 Token bundled packages) and the monogram fallback.
+- Viewport: 1280 × 900 CSS pixels, device pixel ratio 2; light and dark theme.
+
+Each Provider card now leads its title row with a 34 × 34 muted tile holding the Provider brand mark; the Provider name stays immediately to its right, and the favorite star and publish switch keep their existing positions at the far right. Glyphs are monotone marks vendored on the source 24 × 24 grid (`@lobehub/icons-static-svg@1.95.1`, MIT; `simple-icons@16`, CC0 for Xiaomi — provenance in `packages/desktop-shell/src/renderer/providers/provider-icons.LICENSE.txt`) and drawn in `currentColor`, so one asset set serves both themes and the status colors stay the only semantic accent.
+
+Two shipped identities intentionally use the parent brand mark: `ant-ling` → Ant Group and `radius` → Pi (`radius.pi.dev`). The Xiaomi token plans use the Simple Icons Xiaomi mark because the LobeHub Xiaomi MiMo mark is a wordmark that is illegible at 20 px. User Provider Packages and future unknown Provider IDs render a one-character monogram tile of identical size, so the title row height never depends on icon coverage.
+
+Verification: the guarded desktop suite passed (23 files, 152 tests), including a coverage test that fails when the pinned Pi runtime ships a Provider without a glyph or drops one the map still carries; root typecheck, desktop typecheck, and lint passed. The preview was checked in light and dark themes with no console error.
+
+final result: passed
+
+---
+
 # Token Settings control-alignment QA
 
 ## Comparison target

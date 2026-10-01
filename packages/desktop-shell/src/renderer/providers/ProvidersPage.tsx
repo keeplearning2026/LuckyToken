@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import type { TokenDesktopApi } from "../../shared/desktop-api.js";
+import { ProviderIcon } from "./ProviderIcon.js";
 import {
   projectProviderCardUsage,
   providerUsageRefreshFailureNotice,
@@ -1214,7 +1215,10 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     return (
       <article className="page-card provider-card compact" key={provider.providerId}>
         <div className="provider-title">
-          <h3>{provider.name}</h3>
+          <div className="provider-title-identity">
+            <ProviderIcon providerId={provider.providerId} name={provider.name} />
+            <h3>{provider.name}</h3>
+          </div>
           <div className="provider-title-actions">
             <button
               type="button"

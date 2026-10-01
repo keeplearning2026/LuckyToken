@@ -390,6 +390,9 @@ describe("Providers Profile product slice", () => {
     expect(providerCard?.textContent).not.toContain("Release traffic");
     expect(providerCard?.textContent).not.toContain("AWS organization sign-in");
     expect(
+      providerCard?.querySelector('[data-provider-icon="fallback"]')?.textContent,
+    ).toBe("A");
+    expect(
       providerCard?.querySelector('[aria-label="1 published, 1 currently available"]'),
     ).not.toBeNull();
 

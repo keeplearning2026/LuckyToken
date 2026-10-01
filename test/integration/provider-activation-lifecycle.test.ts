@@ -1,7 +1,7 @@
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -177,26 +177,13 @@ describe("Provider Profiles remain independent of Gateway lifecycle", () => {
         "commandcode-private.json",
       ), "utf8")) as {
         profiles: Array<{
-          incarnation: { relativePath: string; tokenRevision: string };
+          kind: string;
+          inline: { key: string };
         }>;
       };
-      // Credential material lives only in the referenced incarnation
-      // document; the record holds the reference and content hash.
-      const incarnation = record.profiles[0]?.incarnation;
-      const incarnationPath = join(
-        root,
-        "pi",
-        "credentials",
-        ...incarnation!.relativePath.split("/"),
-      );
-      const incarnationBytes = await readFile(incarnationPath);
-      const incarnationDocument = JSON.parse(
-        incarnationBytes.toString("utf8"),
-      ) as { key: string };
-      expect(incarnationDocument.key).toBe("sk-profile-lifecycle");
-      expect(createHash("sha256")
-        .update(incarnationBytes)
-        .digest("hex")).toBe(incarnation?.tokenRevision);
+      expect(record.profiles[0]?.kind).toBe("inline");
+      expect(record.profiles[0]?.inline.key).toBe("sk-profile-lifecycle");
+      expect(record.profiles[0]).not.toHaveProperty("incarnation");
       await expect(access(join(root, "pi", "auth.json"))).rejects.toThrow();
 
       expect((await client.executeRuntimeCommand("start")).outcome).toBe("completed");
@@ -209,7 +196,8 @@ describe("Provider Profiles remain independent of Gateway lifecycle", () => {
     } finally {
       await client.close();
     }
-  });
+  // Real startup includes bounded installed-Codex version/catalog acquisition.
+  }, 30_000);
 
   it("keeps Profile and Catalog queries available after Gateway startup failure", async () => {
     const blocker = createServer();

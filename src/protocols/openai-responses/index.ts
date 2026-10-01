@@ -27,7 +27,7 @@ export {
   type ResponsesResponseToolChoice,
   type ResponsesResponseObject,
 } from "./response.js";
-export { renderResponsesSse } from "./sse.js";
+export { renderResponsesSse } from "../../responses-sse.js";
 export {
   mapUpstreamFailureFact,
   redactMessage,

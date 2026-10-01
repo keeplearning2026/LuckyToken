@@ -1,5 +1,11 @@
-import type { PreparedHttpResponse } from "./error-rendering.js";
-import type { ResponsesResponseObject } from "./response.js";
+import type { PreparedHttpResponse } from "./protocols/openai-responses/error-rendering.js";
+
+/** Already-rendered wire facts only; no Pi response conversion or continuity
+ * knowledge belongs to the shared framing boundary. */
+interface ResponsesSseWire {
+  readonly status: "completed" | "incomplete" | "failed";
+  readonly output: readonly unknown[];
+}
 
 /**
  * Render a complete Responses response object as the canonical atomic SSE
@@ -21,8 +27,8 @@ import type { ResponsesResponseObject } from "./response.js";
  * `[DONE]` is a compatibility terminator, never a substitute for the semantic
  * terminal event.
  */
-export function renderResponsesSse(
-  response: ResponsesResponseObject,
+export function renderResponsesSse<T extends ResponsesSseWire>(
+  response: T,
 ): PreparedHttpResponse {
   const frames: string[] = [];
   let sequence = 0;

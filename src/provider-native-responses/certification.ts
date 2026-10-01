@@ -1,4 +1,4 @@
-import type { ProviderResponsesOperation } from "./contract.js";
+import type { ProviderResponsesClaim } from "./contract.js";
 
 export type ProviderResponsesTransportKind = "openai" | "codex" | "azure";
 export type ProviderResponsesCertificationAuthType =
@@ -14,12 +14,21 @@ export type ProviderResponsesCertificationAuthType =
  * `operations` is the closed set of operations this exact provider/api pair
  * may serve. `commandcode-goat` for example is certified for `responses` but
  * never for `compact`.
+ *
+ * `responses-compaction` is the Codex remote compaction v2 claim: a
+ * `/v1/responses` turn whose input ends with `compaction_trigger`. It is
+ * listed only for upstreams proven to answer it with exactly one compaction
+ * item. Provider Native consults it inside the lane: a certified upstream
+ * receives the turn unchanged and mints its own compaction item, while every
+ * other upstream keeps the same lane but takes the shared summarizer rewrite
+ * instead of being forwarded a trigger it would ignore (commandcode-goat was
+ * measured online: it returns reasoning + message).
  */
 export interface ProviderNativeResponsesCertification {
   readonly transport: ProviderResponsesTransportKind;
   readonly provider: string;
   readonly api: string;
-  readonly operations: readonly ProviderResponsesOperation[];
+  readonly operations: readonly ProviderResponsesClaim[];
   readonly authTypes: readonly ProviderResponsesCertificationAuthType[];
 }
 
@@ -40,7 +49,7 @@ export const PROVIDER_NATIVE_RESPONSES_CERTIFIED: readonly ProviderNativeRespons
       transport: "openai",
       provider: "openai",
       api: "openai-responses",
-      operations: ["responses", "compact"],
+      operations: ["responses", "responses-compaction", "compact"],
       authTypes: ["managed", "ambient"],
     },
     {
@@ -89,14 +98,14 @@ export const PROVIDER_NATIVE_RESPONSES_CERTIFIED: readonly ProviderNativeRespons
       transport: "codex",
       provider: "openai-codex",
       api: "openai-codex-responses",
-      operations: ["responses", "compact"],
+      operations: ["responses", "responses-compaction", "compact"],
       authTypes: ["managed", "external"],
     },
     {
       transport: "azure",
       provider: "azure-openai-responses",
       api: "azure-openai-responses",
-      operations: ["responses", "compact"],
+      operations: ["responses", "responses-compaction", "compact"],
       authTypes: ["managed", "ambient"],
     },
   ]);
@@ -118,7 +127,7 @@ export function certifiedResponsesTransport(
 export function certifiedResponsesOperation(
   provider: string,
   api: string,
-  operation: ProviderResponsesOperation,
+  operation: ProviderResponsesClaim,
 ): boolean {
   return PROVIDER_NATIVE_RESPONSES_CERTIFIED.some(
     (entry) =>

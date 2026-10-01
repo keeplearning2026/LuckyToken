@@ -323,6 +323,10 @@ function frameModelRawSpan(
   if (parts.length === 0) return {};
   const payload = parts.map((part) => part.text).join("\n");
   if (payload.length === 0) return {};
+  // The Responses wire compatibility terminator is not a JSON frame. The
+  // lifecycle normalizer and namespace repair already treat it as a sentinel;
+  // the model projection must not fail the whole response on it.
+  if (payload === "[DONE]") return {};
 
   let parsed: unknown;
   try {
