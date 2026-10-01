@@ -215,6 +215,11 @@ async function run(): Promise<void> {
     // entitlement is recorded, and the credential must stay usable.
     const nativeResponses = await probeNativeResponses(server.origin, laneAlias);
     const semanticMessages = await probeSemanticMessages(server.origin, laneAlias);
+    // A lane that errors (transport/5xx/non-4xx) fails the suite. A 4xx is
+    // recorded instead: the account may simply lack entitlement to this
+    // listable model (plan acceptance 31).
+    assert.notEqual(nativeResponses.outcome, "error", nativeResponses.detail);
+    assert.notEqual(semanticMessages.outcome, "error", semanticMessages.detail);
     const credentialAfterProbes = await readCodexExternalAuth(authPath);
     const credentialStayedUsable = credentialAfterProbes.state === "ok";
     // A rejected probe must never push the shared credential into a terminal

@@ -904,6 +904,12 @@ P4 online evidence (2026-10-01, `codex-cli 0.159.2`, local Codex login at
 | Delegated rotation | `not_required` (access token valid until 2026-10-08) |
 | Credential after a lane probe | still usable and non-terminal |
 
+A lane probe that fails with a transport/5xx error fails the suite; a 4xx is
+recorded as a rejection and the run additionally proves the credential stayed
+usable and its usage state stayed non-terminal (acceptance 31). The document
+was byte-identical after both online runs (length 4157, unchanged mtime,
+SHA-256 `C485F8041760B38FFAC753AF45A95C51FAA98DE0EC731360314D894CEB5E3CEB`).
+
 The run also recorded that the Codex backend rejects `max_output_tokens`
 (`Unsupported parameter: max_output_tokens`), which Pi's adapter never sends;
 the online probes therefore use the Codex client body shape.
