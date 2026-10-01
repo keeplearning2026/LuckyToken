@@ -902,6 +902,7 @@ P4 online evidence (2026-10-01, `codex-cli 0.159.2`, local Codex login at
 | Anthropic Messages → Semantic Conversion for `gpt-6.1-sol` | HTTP 200, completed message |
 | Usage (WHAM) through the external binding | `succeeded` |
 | Delegated rotation | `not_required` (access token valid until 2026-10-08) |
+| Delegation mechanics (real `codex app-server`, temp home, synthetic tokens) | handshake completed; outcome `verification_failed:revision_unchanged`, i.e. RPC success alone was rejected by the re-read verification; the user's home was not written |
 | Credential after a lane probe | still usable and non-terminal |
 
 A lane probe that fails with a transport/5xx error fails the suite; a 4xx is

@@ -79,6 +79,55 @@ async function nativeListableIds(codexHome: string): Promise<readonly string[]> 
   return Object.freeze([]);
 }
 
+/**
+ * Delegation mechanics against the real Codex app-server, in a temp home with
+ * synthetic tokens. Proves the trigger fires, the handshake completes, and the
+ * re-read verification — not the RPC result — decides the outcome. The user's
+ * Codex home is never touched.
+ */
+async function probeDelegationMechanics(
+  root: string,
+): Promise<{ readonly outcome: string; readonly wroteUserHome: false }> {
+  const probeHome = join(root, "delegation-probe-home");
+  await mkdir(probeHome, { recursive: true });
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  const accessToken = [
+    encode({ alg: "none" }),
+    encode({
+      exp: Math.floor(Date.now() / 1000) + 60,
+      "https://api.openai.com/auth": { chatgpt_account_id: "probe-account" },
+    }),
+    "signature",
+  ].join(".");
+  const authPath = codexExternalAuthPath(probeHome);
+  await writeFile(
+    authPath,
+    `${JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: accessToken,
+        refresh_token: "probe-refresh-token",
+        account_id: "probe-account",
+      },
+      last_refresh: new Date().toISOString(),
+    })}\n`,
+    "utf8",
+  );
+  const source = createExternalCredentialSource({
+    authPath,
+    refresher: createCodexAppServerRefresher({ codexHome: probeHome }),
+  });
+  const resolution = await source.resolve();
+  return Object.freeze({
+    outcome:
+      resolution.state === "ok"
+        ? "unexpectedly_resolved"
+        : `${resolution.reason}:${resolution.detail}`,
+    wroteUserHome: false as const,
+  });
+}
+
 async function run(): Promise<void> {
   const dedicatedHome = process.env[DEDICATED_CODEX_AUTH_HOME_ENV]?.trim();
   const codexHome =
@@ -243,6 +292,7 @@ async function run(): Promise<void> {
       credentialStayedNonTerminal,
       "lane rejections must not make the external credential terminal",
     );
+    const delegationMechanics = await probeDelegationMechanics(root);
 
     const before = await readCodexExternalAuth(authPath);
     assert.equal(before.state, "ok");
@@ -285,6 +335,7 @@ async function run(): Promise<void> {
       semanticMessages,
       credentialStayedUsable,
       credentialStayedNonTerminal,
+      delegationMechanics,
     })}\n`);
   } finally {
     await server?.close().catch(() => undefined);
