@@ -9,6 +9,8 @@ import type {
 import { createAnthropicUsageProbe } from "../../src/provider-usage/probes/anthropic.js";
 import { createCommandCodeGoatUsageProbe } from "../../src/provider-usage/probes/commandcode-goat.js";
 import { createCommandCodePrivateUsageProbe } from "../../src/provider-usage/probes/commandcode-private.js";
+import { createDeepSeekAnthropicUsageProbe } from "../../src/provider-usage/probes/deepseek-anthropic.js";
+import { createDeepSeekResponseUsageProbe } from "../../src/provider-usage/probes/deepseek-response.js";
 import { createDeepSeekUsageProbe } from "../../src/provider-usage/probes/deepseek.js";
 import { createKimiCodingUsageProbe } from "../../src/provider-usage/probes/kimi-coding.js";
 import { createMiniMaxUsageProbe } from "../../src/provider-usage/probes/minimax.js";
@@ -121,6 +123,20 @@ function probeFixtures(fetch: FetchFunction): readonly {
     {
       name: "DeepSeek",
       probe: createDeepSeekUsageProbe(fetch),
+      baseUrl: "https://api.deepseek.com",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "DeepSeek (Anthropic)",
+      probe: createDeepSeekAnthropicUsageProbe(fetch),
+      baseUrl: "https://api.deepseek.com/anthropic",
+      authType: "api_key",
+      auth: API_KEY_AUTH,
+    },
+    {
+      name: "DeepSeek (Responses)",
+      probe: createDeepSeekResponseUsageProbe(fetch),
       baseUrl: "https://api.deepseek.com",
       authType: "api_key",
       auth: API_KEY_AUTH,
@@ -395,7 +411,7 @@ describe("Provider Usage probes", () => {
     });
   });
 
-  it("projects DeepSeek balance without fabricating a percentage", async () => {
+  it("projects every DeepSeek currency balance without fabricating a percentage", async () => {
     const transport = createFetch(() =>
       json({
         balance_infos: [
@@ -417,9 +433,141 @@ describe("Provider Usage probes", () => {
       state: "observed",
       facts: {
         windows: [],
-        budgets: [{ kind: "balance", amount: 42.5, currency: "USD" }],
+        budgets: [
+          { kind: "balance", amount: 42.5, currency: "USD" },
+          { kind: "balance", amount: 100, currency: "CNY" },
+        ],
       },
     });
+  });
+
+  it("orders DeepSeek balances independently of the upstream row order", async () => {
+    const payloads = [
+      [
+        { currency: "USD", total_balance: "0.00" },
+        { currency: "CNY", total_balance: "9.39" },
+      ],
+      [
+        { currency: "CNY", total_balance: "9.39" },
+        { currency: "USD", total_balance: "0.00" },
+      ],
+    ];
+    for (const balance_infos of payloads) {
+      const transport = createFetch(() => json({ balance_infos }));
+      expect(await acquire(createDeepSeekUsageProbe(transport.fetch))).toEqual({
+        state: "observed",
+        facts: {
+          windows: [],
+          budgets: [
+            { kind: "balance", amount: 9.39, currency: "CNY" },
+            { kind: "balance", amount: 0, currency: "USD" },
+          ],
+        },
+      });
+    }
+  });
+
+  it("keeps zero and single-currency DeepSeek balances visible", async () => {
+    const zeroTransport = createFetch(() =>
+      json({
+        balance_infos: [
+          { currency: "CNY", total_balance: "0.00" },
+          { currency: "USD", total_balance: "0.00" },
+        ],
+      }),
+    );
+    expect(await acquire(createDeepSeekUsageProbe(zeroTransport.fetch))).toEqual({
+      state: "observed",
+      facts: {
+        windows: [],
+        budgets: [
+          { kind: "balance", amount: 0, currency: "USD" },
+          { kind: "balance", amount: 0, currency: "CNY" },
+        ],
+      },
+    });
+
+    const singleTransport = createFetch(() =>
+      json({ balance_infos: [{ currency: "CNY", total_balance: "0.37" }] }),
+    );
+    expect(await acquire(createDeepSeekUsageProbe(singleTransport.fetch))).toEqual({
+      state: "observed",
+      facts: {
+        windows: [],
+        budgets: [{ kind: "balance", amount: 0.37, currency: "CNY" }],
+      },
+    });
+  });
+
+  it("shares one DeepSeek balance result across the three DeepSeek Providers", async () => {
+    const expected = {
+      state: "observed",
+      facts: {
+        windows: [],
+        budgets: [
+          { kind: "balance", amount: 9.39, currency: "CNY" },
+          { kind: "balance", amount: 0, currency: "USD" },
+        ],
+      },
+    } as const;
+    for (const createProbe of [
+      createDeepSeekUsageProbe,
+      createDeepSeekAnthropicUsageProbe,
+      createDeepSeekResponseUsageProbe,
+    ]) {
+      const transport = createFetch(() =>
+        json({
+          balance_infos: [
+            { currency: "USD", total_balance: "0.00" },
+            { currency: "CNY", total_balance: "9.39" },
+          ],
+        }),
+      );
+      expect(await acquire(createProbe(transport.fetch)), createProbe.name).toEqual(expected);
+    }
+  });
+
+  it("keeps the three DeepSeek Provider destinations on their canonical base paths", () => {
+    const fetch: FetchFunction = async () => {
+      throw new Error("network must not be reached");
+    };
+    const builtIn = createDeepSeekUsageProbe(fetch);
+    const anthropicProvider = createDeepSeekAnthropicUsageProbe(fetch);
+    const responseProvider = createDeepSeekResponseUsageProbe(fetch);
+    expect(
+      builtIn.eligibility(context("deepseek", "https://api.deepseek.com")),
+    ).toEqual({ state: "eligible" });
+    expect(
+      builtIn.eligibility(context("deepseek", "https://api.deepseek.com/v1")),
+    ).toEqual({ state: "eligible" });
+    expect(
+      builtIn.eligibility(context("deepseek", "https://api.deepseek.com/anthropic")),
+    ).toEqual({ state: "unsupported_destination" });
+    expect(
+      anthropicProvider.eligibility(
+        context("deepseek-anthropic", "https://api.deepseek.com/anthropic"),
+      ),
+    ).toEqual({ state: "eligible" });
+    expect(
+      anthropicProvider.eligibility(
+        context("deepseek-anthropic", "https://api.deepseek.com"),
+      ),
+    ).toEqual({ state: "unsupported_destination" });
+    expect(
+      responseProvider.eligibility(
+        context("deepseek-response", "https://api.deepseek.com"),
+      ),
+    ).toEqual({ state: "eligible" });
+    expect(
+      responseProvider.eligibility(
+        context("deepseek-response", "https://api.deepseek.com/v1"),
+      ),
+    ).toEqual({ state: "eligible" });
+    expect(
+      responseProvider.eligibility(
+        context("deepseek-response", "https://api.deepseek.com/anthropic"),
+      ),
+    ).toEqual({ state: "unsupported_destination" });
   });
 
   it("treats OpenRouter uncapped success as authoritative empty", async () => {
@@ -950,6 +1098,8 @@ describe("Provider Usage probes", () => {
       createOpenCodeGoUsageProbe(transport.fetch),
       createKimiCodingUsageProbe(transport.fetch),
       createDeepSeekUsageProbe(transport.fetch),
+      createDeepSeekAnthropicUsageProbe(transport.fetch),
+      createDeepSeekResponseUsageProbe(transport.fetch),
       createOpenRouterUsageProbe(transport.fetch),
       createMiniMaxUsageProbe(transport.fetch),
       createMiniMaxCnUsageProbe(transport.fetch),

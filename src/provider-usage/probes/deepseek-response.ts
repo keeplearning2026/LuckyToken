@@ -3,9 +3,11 @@ import type { FetchFunction } from "@earendil-works/pi-ai";
 import type { ProviderUsageProbe } from "../contract.js";
 import { createDeepSeekBalanceUsageProbe } from "./deepseek-balance.js";
 
-const PROVIDER_ID = "deepseek";
+const PROVIDER_ID = "deepseek-response";
 
-export function createDeepSeekUsageProbe(fetch: FetchFunction): ProviderUsageProbe {
+export function createDeepSeekResponseUsageProbe(
+  fetch: FetchFunction,
+): ProviderUsageProbe {
   return createDeepSeekBalanceUsageProbe(fetch, {
     providerId: PROVIDER_ID,
     acceptedBasePaths: ["/", "/v1"],

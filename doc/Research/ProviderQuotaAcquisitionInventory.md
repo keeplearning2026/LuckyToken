@@ -669,11 +669,11 @@ Yes. The built-in `opencode-go` Provider stores an API key; `Models.getAuth()` r
 
 **Information obtainable**
 
-- account balance in the selected currency;
+- one account balance per returned currency (`CNY`, `USD`);
 - granted balance component when present;
 - topped-up balance component when present.
 
-There is no consumed percentage and no time-window quota. The display is a balance row, not a usage bar.
+There is no consumed percentage and no time-window quota. The display is balance rows, not a usage bar.
 
 **How to obtain**
 
@@ -686,32 +686,42 @@ Authorization: Bearer <DeepSeek API key>
 
 ```json
 {
+  "is_available": true,
   "balance_infos": [
     {
+      "currency": "CNY",
+      "total_balance": "9.39",
+      "granted_balance": "0.00",
+      "topped_up_balance": "9.39"
+    },
+    {
       "currency": "USD",
-      "total_balance": "42.50",
-      "granted_balance": "10.00",
-      "topped_up_balance": "32.50"
+      "total_balance": "0.00",
+      "granted_balance": "0.00",
+      "topped_up_balance": "0.00"
     }
   ]
 }
 ```
 
+Live observation (2026-10-01): both rows are returned for a CNY-funded account, and the upstream array order changed between calls.
+
 **Normalization**
 
-- Prefer USD, then CNY, then the first parseable row.
-- `total_balance` wins; otherwise `granted_balance`, then `topped_up_balance`.
-- Display as a custom balance window with `percent: 0`.
-- `0%` here means "no percentage information", not "nothing used".
+- Emit one `{ kind: "balance", amount, currency }` per valid currency row instead of collapsing to a single currency.
+- Deterministic fact order: funded (`amount > 0`) rows first, then USD, then CNY, then other currencies by code. The upstream array order is never trusted.
+- `total_balance` wins; otherwise `granted_balance`, then `topped_up_balance`. A negative or unparseable amount skips that row; a response with no valid row is `unavailable/schema`.
+- A row whose `total_balance` is 0 is a real observation and stays visible; the card renders all balances under one label, e.g. `Balance CN¥9.39 · $0.00`.
+- Missing or empty `balance_infos` is `unavailable/schema`, not an authoritative zero.
 
 **Conditions**
 
 - API key only.
-- Canonical host must be `https://api.deepseek.com` or its `/v1` form.
+- Canonical host `https://api.deepseek.com`; accepted model base paths are `/` and `/v1` (Pi built-in `deepseek`, `deepseek-response`) and `/anthropic` (`deepseek-anthropic`).
 
 **Our credentials**
 
-Yes. The built-in `deepseek` Provider stores an API key.
+Yes. All three DeepSeek Providers store an API key: the Pi built-in `deepseek`, `deepseek-anthropic`, and `deepseek-response`.
 
 #### `minimax` and `minimax-cn`
 

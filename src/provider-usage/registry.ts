@@ -4,6 +4,8 @@ import type { ProviderUsageProbe } from "./contract.js";
 import { createAnthropicUsageProbe } from "./probes/anthropic.js";
 import { createCommandCodeGoatUsageProbe } from "./probes/commandcode-goat.js";
 import { createCommandCodePrivateUsageProbe } from "./probes/commandcode-private.js";
+import { createDeepSeekAnthropicUsageProbe } from "./probes/deepseek-anthropic.js";
+import { createDeepSeekResponseUsageProbe } from "./probes/deepseek-response.js";
 import { createDeepSeekUsageProbe } from "./probes/deepseek.js";
 import { createKimiCodingUsageProbe } from "./probes/kimi-coding.js";
 import { createMiniMaxUsageProbe } from "./probes/minimax.js";
@@ -26,6 +28,8 @@ export function createBuiltInProviderUsageProbes(
     createOpenCodeGoUsageProbe(fetch),
     createKimiCodingUsageProbe(fetch),
     createDeepSeekUsageProbe(fetch),
+    createDeepSeekAnthropicUsageProbe(fetch),
+    createDeepSeekResponseUsageProbe(fetch),
     createOpenRouterUsageProbe(fetch),
     createMiniMaxUsageProbe(fetch),
     createMiniMaxCnUsageProbe(fetch),

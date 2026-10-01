@@ -174,9 +174,24 @@ export function projectProviderCardUsage(
     }
   }
 
+  // All currency balances share one "Balance" label:
+  // `Balance CN¥9.39 · $0.00`.
+  const balanceAmounts: string[] = [];
   for (const budget of provider.budgets) {
     if (budget.kind === "balance") {
-      primary.push(`Balance ${money(budget.amount, budget.currency)}`);
+      balanceAmounts.push(money(budget.amount, budget.currency));
+    }
+  }
+  const balanceLine =
+    balanceAmounts.length === 0 ? undefined : `Balance ${balanceAmounts.join(" · ")}`;
+  let balanceLinePushed = false;
+
+  for (const budget of provider.budgets) {
+    if (budget.kind === "balance") {
+      if (!balanceLinePushed && balanceLine !== undefined) {
+        primary.push(balanceLine);
+        balanceLinePushed = true;
+      }
       continue;
     }
     if (budget.kind === "reset_credits") {

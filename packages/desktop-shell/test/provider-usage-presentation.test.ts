@@ -80,6 +80,28 @@ describe("Provider usage presentation", () => {
     });
   });
 
+  it("groups every currency balance under one Balance label", () => {
+    expect(
+      projectProviderCardUsage(
+        {
+          providerId: "deepseek",
+          state: "observed",
+          observedAt: 1,
+          refreshable: true,
+          windows: [],
+          budgets: [
+            { kind: "balance", amount: 9.39, currency: "CNY" },
+            { kind: "balance", amount: 0, currency: "USD" },
+          ],
+        },
+        0,
+      ),
+    ).toMatchObject({
+      primary: ["Balance CN¥9.39 · $0.00"],
+      refreshable: true,
+    });
+  });
+
   it("does not offer refresh for passive-only observations, unsupported bindings, or destinations", () => {
     expect(
       projectProviderCardUsage(
