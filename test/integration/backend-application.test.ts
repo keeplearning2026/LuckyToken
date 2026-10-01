@@ -111,7 +111,7 @@ async function writeCommandCodeCatalog(
   await writeFile(
     join(dirname(configPath), "commandcode-models.json"),
     `${JSON.stringify({
-      schema: "luckytoken-commandcode-models-v2",
+      schema: "token-commandcode-models-v2",
       models: [
         {
           id: "deepseek/deepseek-v4.1-flash",

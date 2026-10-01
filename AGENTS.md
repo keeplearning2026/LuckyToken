@@ -1,4 +1,4 @@
-# LuckyToken Agent Instructions
+# Token Agent Instructions
 
 ## Project
 

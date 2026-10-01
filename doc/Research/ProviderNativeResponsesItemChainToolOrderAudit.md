@@ -99,7 +99,7 @@ Command, run from the Token repository:
 node doc/Research/provider-native-item-chain-replay.mjs
 ```
 
-[Replay harness](/D:/project/LuckyToken/doc/Research/provider-native-item-chain-replay.mjs) starts a loopback SSE server and feeds synthetic messages to the installed CLI. Each invocation gets a newly created temporary `CODEX_HOME` and temporary working directory. No user config, authentication, catalog or sessions are copied. The local provider uses a dummy key. All temporary directories are removed in `finally` after checking the cleanup path lies under the OS temporary directory. The provider emits no tool calls.
+[Replay harness](./provider-native-item-chain-replay.mjs) starts a loopback SSE server and feeds synthetic messages to the installed CLI. Each invocation gets a newly created temporary `CODEX_HOME` and temporary working directory. No user config, authentication, catalog or sessions are copied. The local provider uses a dummy key. All temporary directories are removed in `finally` after checking the cleanup path lies under the OS temporary directory. The provider emits no tool calls.
 
 Two messages always have the same identities, indexes and final text: item 0 is `ANSWER_A`, item 1 is `ANSWER_B`. Every variant has the same final `response.completed.output = [A, B]`, and each chain's event payloads/order are unchanged except regenerated sequence numbers.
 

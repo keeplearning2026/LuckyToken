@@ -49,7 +49,7 @@ export function configuredBackupFiles(
     {
       id: "commandcode-models",
       path: join(dirname(configPath), "commandcode-models.json"),
-      contract: "luckytoken-commandcode-models",
+      contract: "token-commandcode-models",
       version: COMMANDCODE_MODEL_CATALOG_SCHEMA,
       category: "configuration",
       optional: true,

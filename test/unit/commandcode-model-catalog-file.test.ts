@@ -115,12 +115,12 @@ describe("CommandCode model catalog file authority", () => {
   it("rejects the obsolete v1 schema instead of migrating it", () => {
     expect(() =>
       parseCommandCodeModelCatalogText(JSON.stringify({
-        schema: "luckytoken-commandcode-models-v1",
+        schema: "token-commandcode-models-v1",
         models: [
           model("old-schema", ["/responses"]),
         ],
       })),
-    ).toThrow(/schema must be luckytoken-commandcode-models-v2/u);
+    ).toThrow(/schema must be token-commandcode-models-v2/u);
   });
 
   it("rejects unsupported reasoning effort mappings", () => {

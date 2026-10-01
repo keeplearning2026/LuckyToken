@@ -1,4 +1,4 @@
-# LuckyToken Pi AI 0.86.1 Boundary Convergence Refactoring Plan
+# Token Pi AI 0.86.1 Boundary Convergence Refactoring Plan
 
 Status: **SUPERSEDED HISTORICAL PLAN — implemented/certified for 0.86.1, replaced by the clean upstream Pi 0.87.0 boundary on 2026-09-22**
 
@@ -47,7 +47,7 @@ independent data-plane lanes.
 The ownership rule is:
 
 > Client Protocol owns Client semantics. Pi common Context/options preserve portable
-> intent. LuckyToken Pi Context compatibility repairs the narrow set of model-dependent
+> intent. Token Pi Context compatibility repairs the narrow set of model-dependent
 > Pi IR cases where Pi's generic fallback would change semantic timing. The selected Pi
 > Provider owns Provider Wire and all remaining Provider capability mapping.
 

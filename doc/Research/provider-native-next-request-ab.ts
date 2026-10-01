@@ -377,7 +377,7 @@ async function runCase(
       'model = "gpt-native"',
       'model_provider = "ab_replay"',
       "[model_providers.ab_replay]",
-      'name = "LuckyToken next-request A/B replay"',
+      'name = "Token next-request A/B replay"',
       `base_url = "${baseUrl}"`,
       'wire_api = "responses"',
       "requires_openai_auth = false",

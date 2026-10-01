@@ -2,7 +2,7 @@
 
 Status: **historical research complete; implementation follows `../Spec/TokenProviderNativeResponsesLifecycleNormalizationPlan.md`**
 
-Scope: LuckyToken `/v1/responses` **Provider Native Preservation** path, with Codex CLI as the downstream client.
+Scope: Token `/v1/responses` **Provider Native Preservation** path, with Codex CLI as the downstream client.
 
 This report is intended to be handed directly to a local Codex implementation agent. It records the observed production problem, reproduction evidence, OpenAI Responses semantics review, Codex CLI source audit, root-cause analysis, architectural constraints, proposed repair algorithm, TDD plan, and acceptance criteria.
 
@@ -10,7 +10,7 @@ This report is intended to be handed directly to a local Codex implementation ag
 
 ## 1. Executive conclusion
 
-LuckyToken currently forwards CommandCode Goat's native OpenAI Responses SSE to Codex after buffering and response alias projection.
+Token currently forwards CommandCode Goat's native OpenAI Responses SSE to Codex after buffering and response alias projection.
 
 The upstream stream can contain overlapping output-item lifecycles such as:
 
@@ -245,7 +245,7 @@ Do **not** assume that every form of item interleaving is necessarily invalid Op
 
 The Responses API represents output through typed streaming events and reasoning-capable responses may contain richer interleaving than a simple one-item-at-a-time client state machine expects.
 
-Therefore LuckyToken should not claim:
+Therefore Token should not claim:
 
 > “CommandCode is invalid because two item lifecycles overlap.”
 
@@ -802,7 +802,7 @@ Example:
 440 B.delta
 ```
 
-Before implementing this rule, verify that LuckyToken does not expose a provider-native resume mechanism that relies on upstream sequence numbers.
+Before implementing this rule, verify that Token does not expose a provider-native resume mechanism that relies on upstream sequence numbers.
 
 If such a resume mechanism is introduced later, an explicit upstream-sequence ↔ client-sequence mapping will be required.
 
@@ -1222,6 +1222,6 @@ Reject any implementation that:
 
 The design principle should be frozen as:
 
-> Provider Native remains preservation-first. For a buffered OpenAI Responses SSE sent to Codex, LuckyToken may perform a narrow, deterministic, diagnosable lifecycle normalization only when it can prove that the transformation preserves content semantics and removes a known Codex active-item incompatibility. Real content deltas are never guessed or reordered. Ambiguous interleaving fails closed.
+> Provider Native remains preservation-first. For a buffered OpenAI Responses SSE sent to Codex, Token may perform a narrow, deterministic, diagnosable lifecycle normalization only when it can prove that the transformation preserves content semantics and removes a known Codex active-item incompatibility. Real content deltas are never guessed or reordered. Ambiguous interleaving fails closed.
 
 This protects product compatibility without turning Provider Native into another semantic-conversion lane.

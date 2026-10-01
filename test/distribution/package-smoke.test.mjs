@@ -112,7 +112,7 @@ test("installs all distribution tarballs and resolves the Provider from node_mod
       installedCatalogPath,
       `${JSON.stringify(
         {
-          schema: "luckytoken-commandcode-models-v2",
+          schema: "token-commandcode-models-v2",
           models: [
             {
               id: "authority-probe",

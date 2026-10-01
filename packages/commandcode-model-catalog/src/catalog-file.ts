@@ -14,7 +14,7 @@ import {
 } from "./models.js";
 
 export const COMMANDCODE_MODEL_CATALOG_SCHEMA =
-  "luckytoken-commandcode-models-v2" as const;
+  "token-commandcode-models-v2" as const;
 
 export interface CommandCodeModelCatalog {
   readonly schema: typeof COMMANDCODE_MODEL_CATALOG_SCHEMA;

@@ -1,7 +1,7 @@
 import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { resolve, dirname, join } from "node:path";
+import { basename, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -115,7 +115,7 @@ export async function assembleReleaseBackend({
   );
 
   const dependencies = Object.fromEntries(
-    tarballs.map((tarball) => [tarball.name, `file:${tarball.path}`]),
+    tarballs.map((tarball) => [tarball.name, `file:./tarballs/${basename(tarball.path)}`]),
   );
   // The root package's production dependency on the pinned Pi runtime must
   // resolve from the installed tree.

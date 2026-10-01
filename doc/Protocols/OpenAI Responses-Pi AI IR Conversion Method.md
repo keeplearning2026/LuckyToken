@@ -169,7 +169,7 @@ Every input message with role `system` or `developer` is converted at its origin
 position to a Pi `SystemMessage`. The converter does not promote it into `systemPrompt`
 and does not pre-emptively degrade it based on a target model.
 
-After reasoning preparation and model resolution, LuckyToken applies one shared Pi
+After reasoning preparation and model resolution, Token applies one shared Pi
 Context compatibility rule. A `SystemMessage` is "mid" only after at least one non-system
 message has already appeared. Leading system messages remain system messages.
 

@@ -180,7 +180,7 @@ The plan is based on the current repository implementation:
 9. The current Control Plane version is `5`.
 10. Pi `Models.getAuth(providerId, { signal })` accepts an abort signal, so one Provider Usage refresh signal can cover OAuth refresh and the subsequent quota acquisition.
 11. `models.json` can overlay a Pi built-in Provider's effective `baseUrl`; therefore `providerId` alone does not prove that a credential is safe to send to that Provider's canonical quota endpoint.
-12. Pi's public `StreamOptions.onResponse` exposes HTTP status/headers, which is sufficient for Anthropic API-key passive rate-limit observation. The current OpenAI Responses stream processor does not expose unknown SSE events such as Meta `response.subscription_usage` to LuckyToken.
+12. Pi's public `StreamOptions.onResponse` exposes HTTP status/headers, which is sufficient for Anthropic API-key passive rate-limit observation. The current OpenAI Responses stream processor does not expose unknown SSE events such as Meta `response.subscription_usage` to Token.
 13. The research inventory proves reliable acquisition methods for only a subset of Providers; the remaining Providers must stay unsupported.
 
 Provider Usage therefore becomes a fourth independent card input:
@@ -737,7 +737,7 @@ Passive acquisition is split by actual observability in the current source basel
 
 ### Anthropic API-key passive observation — implemented
 
-Pi's public `StreamOptions.onResponse` exposes HTTP response status/headers, and the Anthropic Messages adapter invokes it before consuming the body. LuckyToken's semantic execution has a fail-open Provider response observation seam. Anthropic Provider Native also owns exact Profile capture plus upstream HTTP status/headers, so it feeds the same neutral response-observation callback.
+Pi's public `StreamOptions.onResponse` exposes HTTP response status/headers, and the Anthropic Messages adapter invokes it before consuming the body. Token's semantic execution has a fail-open Provider response observation seam. Anthropic Provider Native also owns exact Profile capture plus upstream HTTP status/headers, so it feeds the same neutral response-observation callback.
 
 Therefore Anthropic API-key rate-limit headers are observed in both Semantic Conversion and Anthropic Provider Native without modifying Pi or coupling either lane to Provider Usage internals.
 
@@ -760,7 +760,7 @@ Because Provider Usage is intentionally not part of `StatusSnapshot`, a successf
 
 ### Meta `response.subscription_usage` — gated/deferred
 
-The current Meta semantic path uses Pi's OpenAI Responses adapter. The current `processResponsesStream()` consumes recognized Responses events and does not expose arbitrary/unknown SSE events to LuckyToken. `onResponse` exposes HTTP metadata only, not stream body events.
+The current Meta semantic path uses Pi's OpenAI Responses adapter. The current `processResponsesStream()` consumes recognized Responses events and does not expose arbitrary/unknown SSE events to Token. `onResponse` exposes HTTP metadata only, not stream body events.
 
 Therefore Meta `response.subscription_usage` is **not an implementable passive source under the current public Pi seam**.
 
@@ -1106,7 +1106,7 @@ Before Codex, settle the narrow ChatGPT account-ID acquisition seam.
 
 Implement:
 
-- Anthropic API-key response-header observations through the existing Pi `onResponse`/LuckyToken fail-open response observation seam.
+- Anthropic API-key response-header observations through the existing Pi `onResponse`/Token fail-open response observation seam.
 
 Do **not** schedule Meta `response.subscription_usage` as an implementation item under the current Pi contract. It remains gated/deferred until the observability condition in section 10.2 is satisfied.
 
@@ -1416,7 +1416,7 @@ Add accepted narrow identity-fact seams and active probes.
 
 ## Slice 9 — Anthropic passive acquisition
 
-Add Anthropic API-key response-header observation through the existing public Pi/LuckyToken response observation seam without affecting request success.
+Add Anthropic API-key response-header observation through the existing public Pi/Token response observation seam without affecting request success.
 
 Meta passive acquisition remains deferred and is not part of this slice unless the section 10.2 gate has been satisfied by an accepted public observation seam.
 

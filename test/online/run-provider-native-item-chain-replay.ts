@@ -328,7 +328,7 @@ try {
         'model = "openai/gpt-native"',
         'model_provider = "token_replay"',
         "[model_providers.token_replay]",
-        'name = "LuckyToken production lifecycle replay"',
+        'name = "Token production lifecycle replay"',
         `base_url = "${tokenServer.origin}/v1"`,
         'wire_api = "responses"',
         "requires_openai_auth = false",
@@ -448,7 +448,7 @@ try {
         // enables that client feature instead of inventing the notice text.
         "features.image_resize_notice = true",
         "[model_providers.token_replay]",
-        'name = "LuckyToken production lifecycle replay"',
+        'name = "Token production lifecycle replay"',
         `base_url = "${clientServer.origin}/v1"`,
         'wire_api = "responses"',
         "requires_openai_auth = false",

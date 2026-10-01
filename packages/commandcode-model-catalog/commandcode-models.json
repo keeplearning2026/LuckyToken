@@ -1,5 +1,5 @@
 {
-  "schema": "luckytoken-commandcode-models-v2",
+  "schema": "token-commandcode-models-v2",
   "models": [
     {
       "id": "claude-sonnet-5",

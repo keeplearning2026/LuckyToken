@@ -76,5 +76,4 @@ test("Windows installation certification follows the Token NSIS install root", a
   assert.match(script, /Get-FileHash -LiteralPath \$bundledCatalog -Algorithm SHA256/u);
   assert.match(script, /catalog-sentinel-differs-from-bundled/u);
   assert.match(script, /reinstall-replaces-user-catalog/u);
-  assert.doesNotMatch(script, /Join-Path \$env:LOCALAPPDATA "luckytoken"/i);
 });
