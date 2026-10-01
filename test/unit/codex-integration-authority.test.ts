@@ -41,7 +41,9 @@ function nativeSource(
         source === "unavailable"
           ? ["Codex native model metadata is unavailable."]
           : [],
+      generation: `${source}:${entries.map((entry) => entry.slug).join(",")}`,
     }),
+    invalidate: () => undefined,
   });
 }
 
@@ -569,7 +571,9 @@ describe("Codex integration authority", () => {
           source,
           entries,
           warnings: source === "unavailable" ? ["native catalog unavailable"] : [],
+          generation: `${source}:${entries.map((entry) => entry.slug).join(",")}`,
         }),
+        invalidate: () => undefined,
       },
       buildCatalog: async (native) => ({
         content: `${JSON.stringify({ models: native })}\n`,

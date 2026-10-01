@@ -85,6 +85,8 @@
     "test:online-codex:goat:inner": "npm run build:packages && npm run test:online-codex:run:goat",
     "test:online-codex:run:private": "tsx test/online/run-codex-cli.ts --provider commandcode-private --model commandcode-private/deepseek/deepseek-v4.1-flash --alias commandcode-private/deepseek-v4.1-flash --api-key-file CommandcodeAPIKey.txt",
     "test:online-codex:run:goat": "tsx test/online/run-codex-cli.ts --provider commandcode-goat --model commandcode-goat/deepseek/deepseek-v4.1-flash --alias commandcode-goat/deepseek-v4.1-flash --api-key-file CommandcodeAPIKey.txt",
+    "test:online-openai-codex": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-openai-codex:inner",
+    "test:online-openai-codex:inner": "npm run build:packages && tsx test/online/run-openai-codex-provider.ts",
     "test:online-claude": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-claude:inner",
     "test:online-claude:inner": "npm run build:packages && npm --prefix onlinetest/claude test --",
     "test:online-smoke": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-smoke:inner",

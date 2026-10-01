@@ -89,7 +89,13 @@ export function createOperationalAttentionAuthority(
       for (const provider of credentialProjection?.providers ?? []) {
         if (!PROVIDER_ID.test(provider.providerId)) continue;
         visibleProviders.add(provider.providerId);
-        if (provider.profiles.length === 0) {
+        // A verified external Codex login is a usable Provider source even
+        // though it owns no managed Profile; a Provider with no managed
+        // Profile and no external source stays out of this episode tracking.
+        const externalConnected =
+          provider.profiles.length === 0 &&
+          provider.ambient?.status === "connected";
+        if (provider.profiles.length === 0 && provider.ambient === undefined) {
           providerWasEffective.delete(provider.providerId);
           providerInvalidEpisodes.delete(provider.providerId);
           continue;
@@ -98,9 +104,10 @@ export function createOperationalAttentionAuthority(
           (profile) => profile.credentialId === provider.activeCredentialId,
         );
         const effective = provider.implementationAvailable &&
-          active?.enabled === true &&
-          active.health !== "reconnect_required" &&
-          active.health !== "disabled";
+          (externalConnected ||
+            (active?.enabled === true &&
+              active.health !== "reconnect_required" &&
+              active.health !== "disabled"));
         const previous = providerWasEffective.get(provider.providerId);
         if (effective) {
           providerWasEffective.set(provider.providerId, true);

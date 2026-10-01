@@ -2,6 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { arch, platform, release } from "node:os";
 import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
 
+import { resolveCodexAccountIdentity } from "../credentials/external-auth.js";
 import { resolveRequestModel } from "../providers/request-composition.js";
 import {
   applyHeaders,
@@ -27,24 +28,15 @@ import {
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 
 function extractAccountId(token: string): string {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) throw new Error("Invalid token");
-    const payload = JSON.parse(
-      Buffer.from(parts[1]!, "base64url").toString("utf8"),
-    ) as Record<string, unknown>;
-    const auth = payload["https://api.openai.com/auth"];
-    if (typeof auth !== "object" || auth === null || Array.isArray(auth)) {
-      throw new Error("Missing auth claim");
-    }
-    const accountId = (auth as Record<string, unknown>).chatgpt_account_id;
-    if (typeof accountId !== "string" || accountId.length === 0) {
-      throw new Error("Missing account id");
-    }
-    return accountId;
-  } catch {
+  // The account-claim intersection contract is shared with external
+  // credential parsing: the nested claim is required, and a present top-level
+  // claim must match. Token never rewrites the JWT or injects headers to widen
+  // acceptance.
+  const identity = resolveCodexAccountIdentity(token, undefined);
+  if ("error" in identity) {
     throw new Error("Failed to extract accountId from token");
   }
+  return identity.accountId;
 }
 
 function resolveCodexUrl(baseUrl?: string): string {

@@ -233,6 +233,44 @@ They are presented as **External auth sources** with locally known configuration
 
 Request selection mirrors Pi's stored-wins/otherwise-ambient contract exactly: when any managed Profile exists, a valid active managed Profile is required and missing/disabled/unavailable active state fails closed without ambient fallback; when zero managed Profiles exist, an operation-local ambient binding may allow Pi to resolve its existing external sources. Ambient binding is not a persisted selection or Profile and needs no product selector.
 
+### 6.6.1 Codex-owned external credential (`openai-codex` only)
+
+`openai-codex` additionally recognizes the Codex-owned `<CODEX_HOME>/auth.json`
+document as a first-class **external OAuth source**. This is the only Provider
+whose external source carries a delegated refresh contract, and it does not
+change the general external-source rules above for any other Provider.
+
+- Ownership. Codex writes and refreshes the document. Token reads it, may
+  request an in-place refresh through a bounded one-shot `codex app-server`
+  `account/read {"refreshToken": true}` call against the same `CODEX_HOME`, and
+  never writes, copies, moves, deletes, or rewrites it. Token never uses the
+  refresh token itself and never executes Pi's OAuth refresh callback for it.
+- Selection. A managed `openai-codex` Profile remains authoritative. Only when
+  zero managed Profiles exist may a request capture the external source; when
+  the external document is missing, invalid, unreadable, or cannot be made
+  sufficiently fresh, the request fails closed with a Codex-refresh prompt
+  instead of falling back to Pi refresh, ambient resolution, or another lane.
+- Freshness. The refresh trigger is the Codex threshold: the access token
+  expires within five minutes, or its expiry is unparseable and `last_refresh`
+  is older than eight days. Freshness is enforced inside the private binding
+  boundary; a near-expiry external credential is never handed to Pi, and RPC
+  success is never accepted without a re-read that proves the same canonical
+  path, the same account identity, an advanced revision, and more than the
+  minimum validity.
+- Identity. The account identity is the intersection contract: the nested
+  `https://api.openai.com/auth.chatgpt_account_id` claim is required, a
+  top-level `chatgpt_account_id` must match when present, and `tokens.account_id`
+  must match when present. A top-level-only document is rejected consistently
+  by Provider Native, Semantic Conversion, and usage.
+- Presentation. The credential-management view presents the source as
+  `connected` when a valid ChatGPT document was read, `configured` when the
+  document is locally present but temporarily unreadable, and `unknown` when no
+  local signal exists. Usage, Public Model availability, and Operational
+  Attention treat `connected` as usable.
+
+Token-internal Profiles and this external document share one payload family
+(the Codex ChatGPT branch) but not ownership, path, or refresh rules.
+
 ---
 
 # 7. Core user experience

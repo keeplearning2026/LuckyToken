@@ -39,9 +39,12 @@ export interface ProviderCredentialProfilesProjectionV1 {
     readonly code: "invalid_record" | "storage_error";
     readonly message: string;
   };
+  /** External auth source presentation. `connected` reports a verified
+   * Codex-owned ChatGPT credential; `configured` reports a locally present
+   * but temporarily unreadable document; `unknown` reports no local signal. */
   readonly ambient?: {
     readonly kind: "external";
-    readonly status: "configured" | "unknown";
+    readonly status: "connected" | "configured" | "unknown";
     readonly message: string;
   };
   readonly profiles: readonly CredentialProfileProjectionV1[];

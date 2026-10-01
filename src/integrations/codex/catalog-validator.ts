@@ -6,9 +6,9 @@ import { promisify } from "node:util";
 
 import {
   codexCliInvocation,
-  type CreateCodexNativeCatalogSourceOptions,
   discoverCodexCommands,
-} from "./native-catalog-source.js";
+  type CodexRuntimeDiscoveryOptions,
+} from "./runtime-discovery.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT_BYTES = 64 * 1_024 * 1_024;
@@ -16,11 +16,18 @@ const VALIDATION_TIMEOUT_MS = 30_000;
 const VALIDATION_PROMPT = "Token catalog validation";
 
 export interface CodexCatalogValidator {
-  validate(content: string): Promise<void>;
+  validate(content: string, runtime?: CodexCatalogValidationRuntime): Promise<void>;
 }
 
-export type CreateCodexCatalogValidatorOptions =
-  CreateCodexNativeCatalogSourceOptions;
+/** The validator proves the candidate parses with the runtime that produced
+ * the native snapshot. A different runtime must not commit the injection. */
+export interface CodexCatalogValidationRuntime {
+  readonly command: string;
+}
+
+export type CreateCodexCatalogValidatorOptions = CodexRuntimeDiscoveryOptions & {
+  readonly codexHome: string;
+};
 
 function candidateSlugs(content: string): readonly string[] {
   const parsed = JSON.parse(content) as unknown;
@@ -129,7 +136,10 @@ export function createCodexCatalogValidator(
     options.discoverCommands ?? (() => discoverCodexCommands(options));
 
   return Object.freeze({
-    async validate(content: string): Promise<void> {
+    async validate(
+      content: string,
+      runtime?: CodexCatalogValidationRuntime,
+    ): Promise<void> {
       const expectedSlugs = candidateSlugs(content);
       const routedSlug = expectedSlugs.find((slug) => slug.includes("/"));
       if (routedSlug === undefined) {
@@ -153,7 +163,10 @@ export function createCodexCatalogValidator(
           "utf8",
         );
         const env = { ...baseEnv, CODEX_HOME: probeHome };
-        const commands = await discover();
+        const commands =
+          runtime === undefined
+            ? await discover()
+            : Object.freeze([runtime.command]);
         let lastFailure = "no Codex CLI command was discovered";
         for (const command of commands) {
           let stage = "debug models";

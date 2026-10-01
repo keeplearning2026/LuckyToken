@@ -79,7 +79,26 @@ function providerUsageBindingKey(provider: ProviderProfiles): string {
     provider.selectionGeneration ?? "",
     provider.activeCredentialId ?? "",
     provider.profiles.length === 0 ? "ambient" : "managed",
+    // A verified external Codex login appears as `connected` without any
+    // managed Profile; the transition must re-query the usage snapshot.
+    provider.ambient?.status ?? "",
   ]);
+}
+
+/** Whether this Provider has any source the usage card can speak for: a
+ * managed Profile, or a verified external Codex login. */
+function providerHasUsageSource(provider: ProviderProfiles | undefined): boolean {
+  if (provider === undefined) return false;
+  return provider.profiles.length > 0 ||
+    provider.ambient?.status === "connected";
+}
+
+function providerUsesExternalUsageSource(
+  provider: ProviderProfiles | undefined,
+): boolean {
+  return provider !== undefined &&
+    provider.profiles.length === 0 &&
+    provider.ambient?.status === "connected";
 }
 
 function modelNameFromInternalAlias(
@@ -669,7 +688,11 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           [providerId]: row,
         }));
       }
-      const refreshNotice = providerUsageRefreshNotice(result.refresh);
+      const refreshNotice = providerUsageRefreshNotice(result.refresh, {
+        externalSource: providerUsesExternalUsageSource(
+          profileByProvider.get(providerId),
+        ),
+      });
       if (refreshNotice !== undefined) setNotice(refreshNotice);
     } catch {
       if ((usageEpochByProvider.current.get(providerId) ?? 0) === expectedEpoch) {
@@ -1160,6 +1183,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     const usagePresentation = projectProviderCardUsage(
       providerUsageById[provider.providerId],
       Date.now(),
+      { externalSource: providerUsesExternalUsageSource(managed) },
     );
     const usageText = [
       ...usagePresentation.primary,
@@ -1167,8 +1191,13 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       ...usagePresentation.secondary,
     ].filter((part): part is string => part !== undefined).join(" · ");
     const usageRefreshing = usageRefreshingProviders.has(provider.providerId);
-    const showUsage = (managed?.profiles.length ?? 0) > 0 &&
-      (usagePresentation.primary.length > 0 || usagePresentation.secondary.length > 0 || usagePresentation.status === "Usage not refreshed");
+    // The card is shown whenever the Provider has a usage source (a managed
+    // Profile or a verified external Codex login) and something to say: the
+    // WHAM windows, the "not refreshed" cue, or the bounded external prompt.
+    const showUsage = providerHasUsageSource(managed) &&
+      (usagePresentation.primary.length > 0 ||
+        usagePresentation.secondary.length > 0 ||
+        usagePresentation.status !== undefined);
 
     return (
       <article className="page-card provider-card compact" key={provider.providerId}>

@@ -171,7 +171,15 @@ function unsupportedReason(value: unknown): ProviderUsageUnsupportedReason | und
 }
 
 function unavailableReason(value: unknown): ProviderUsageUnavailableReason | undefined {
-  return value === "auth" || value === "network" || value === "upstream" || value === "schema"
+  return value === "auth" ||
+    value === "timeout" ||
+    value === "temporary" ||
+    value === "account_change" ||
+    value === "insufficient_validity" ||
+    value === "terminal" ||
+    value === "network" ||
+    value === "upstream" ||
+    value === "schema"
     ? value
     : undefined;
 }

@@ -51,7 +51,10 @@ test("Provider Native Responses claims only its certified provider/api tuples", 
   assert.match(certification, /api: "openai-codex-responses"/u);
   assert.match(certification, /api: "azure-openai-responses"/u);
   assert.match(certification, /authTypes: \["managed", "ambient"\]/u);
-  assert.match(certification, /provider: "openai-codex"[\s\S]*?authTypes: \["managed"\]/u);
+  assert.match(
+    certification,
+    /provider: "openai-codex"[\s\S]*?authTypes: \["managed", "external"\]/u,
+  );
   assert.match(implementation, /certifiedResponsesTransport/u);
   assert.match(contract, /custom-provider[\s\S]*?toBe\(false\)/u);
 });

@@ -15,24 +15,11 @@ import {
   normalizeResetAt,
   toFiniteNumber,
 } from "../wire.js";
+import { resolveCodexAccountIdentity } from "../../credentials/external-auth.js";
 
 const PROVIDER_ID = "openai-codex";
 const ORIGIN = "https://chatgpt.com";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-const ACCOUNT_CLAIM = "https://api.openai.com/auth";
-
-function accessTokenPayload(accessToken: string): Record<string, unknown> | undefined {
-  const parts = accessToken.split(".");
-  if (parts.length < 2 || !parts[1]) return undefined;
-  try {
-    return JSON.parse(
-      Buffer.from(parts[1], "base64url").toString("utf8"),
-    ) as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-}
-
 function usableText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
@@ -40,12 +27,8 @@ function usableText(value: unknown): string | undefined {
 }
 
 function accountIdFromAccessToken(accessToken: string): string | undefined {
-  const payload = accessTokenPayload(accessToken);
-  if (payload === undefined) return undefined;
-  const top = usableText(payload.chatgpt_account_id);
-  const nested = usableText(asRecord(payload[ACCOUNT_CLAIM])?.chatgpt_account_id);
-  if (top !== undefined && nested !== undefined && top !== nested) return undefined;
-  return top ?? nested;
+  const identity = resolveCodexAccountIdentity(accessToken, undefined);
+  return "accountId" in identity ? identity.accountId : undefined;
 }
 
 function planType(value: unknown): string | undefined {
@@ -97,7 +80,12 @@ export function createOpenAiCodexUsageProbe(fetch: FetchFunction): ProviderUsage
   return Object.freeze({
     providerId: PROVIDER_ID,
     eligibility(context: ProviderUsageEligibilityContext) {
-      if (context.binding.kind !== "managed" || context.binding.authType !== "oauth") {
+      const oauthBinding =
+        (context.binding.kind === "managed" &&
+          context.binding.authType === "oauth") ||
+        (context.binding.kind === "external" &&
+          context.binding.authType === "oauth");
+      if (!oauthBinding) {
         return Object.freeze({ state: "unsupported_binding" as const });
       }
       return canonicalUrl(context.effectiveBaseUrl, ORIGIN, ["/backend-api"])
@@ -111,7 +99,13 @@ export function createOpenAiCodexUsageProbe(fetch: FetchFunction): ProviderUsage
       }
       const accountId = accountIdFromAccessToken(accessToken);
       if (accountId === undefined) {
-        return Object.freeze({ state: "unavailable" as const, reason: "auth" as const });
+        // The token is present but fails the account-claim contract
+        // (section 3.4), so the resolved credential is not sufficiently valid
+        // for the resource request.
+        return Object.freeze({
+          state: "unavailable" as const,
+          reason: "insufficient_validity" as const,
+        });
       }
       const result = await fetchProviderUsageJson(
         fetch,

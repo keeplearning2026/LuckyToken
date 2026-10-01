@@ -38,9 +38,13 @@ export interface ProviderCredentialStateProjection {
     readonly code: "invalid_record" | "storage_error";
     readonly message: string;
   };
+  /** External auth source presentation. `internal` credentials are managed
+   * Profiles; `external` is the read-only Codex-owned `auth.json` source
+   * consumed by Provider Native Responses, Semantic Conversion, and usage.
+   * `connected` means a valid ChatGPT credential was read and verified. */
   readonly ambient?: {
     readonly kind: "external";
-    readonly status: "configured" | "unknown";
+    readonly status: "connected" | "configured" | "unknown";
     readonly message: string;
   };
   readonly profiles: readonly CredentialProfileProjection[];
@@ -170,6 +174,23 @@ export type ProviderAuthBindingFacts =
       readonly selectionGeneration: string;
     }
   | {
+      readonly kind: "external";
+      readonly providerId: string;
+      readonly authType: "oauth";
+      readonly authMethodLabel: string;
+      readonly displayName: string;
+      /** Canonical, resolved path of the Codex-owned document. Never written
+       * by Token; used as the single-flight key for delegated freshness. */
+      readonly canonicalPath: string;
+      /** ChatGPT account identity parsed from the nested access-token claim.
+       * Publication guards and usage cache identity use this value; it is
+       * never projected to Renderer or logs. */
+      readonly accountId: string;
+      /** Content hash of the token document. Changes only when content
+       * changes; no write counter. */
+      readonly tokenRevision: string;
+    }
+  | {
       readonly kind: "ambient";
       readonly providerId: string;
     };
@@ -184,6 +205,12 @@ export type ProviderAuthBindingCapture =
   | {
       readonly facts: Extract<
         ProviderAuthBindingFacts,
+        { readonly kind: "external" }
+      >;
+    }
+  | {
+      readonly facts: Extract<
+        ProviderAuthBindingFacts,
         { readonly kind: "ambient" }
       >;
     };
@@ -193,10 +220,21 @@ export type ManagedProviderAuthBindingCapture = Extract<
   { readonly facts: { readonly kind: "managed" } }
 >;
 
+export type ExternalProviderAuthBindingCapture = Extract<
+  ProviderAuthBindingCapture,
+  { readonly facts: { readonly kind: "external" } }
+>;
+
 export function isManagedProviderAuthBindingCapture(
   capture: ProviderAuthBindingCapture,
 ): capture is ManagedProviderAuthBindingCapture {
   return capture.facts.kind === "managed";
+}
+
+export function isExternalProviderAuthBindingCapture(
+  capture: ProviderAuthBindingCapture,
+): capture is ExternalProviderAuthBindingCapture {
+  return capture.facts.kind === "external";
 }
 
 export const MAX_PROFILE_ATTEMPTS_PER_REQUEST = 3;
@@ -212,17 +250,44 @@ export type AdvanceAfterFinal429Result =
   | { readonly outcome: "switched"; readonly capture: ManagedProviderAuthBindingCapture }
   | { readonly outcome: "disabled" | "exhausted" | "stale_binding" | "storage_failure" };
 
+/** Bounded, structured reason for an external-source failure. Callers
+ * classify by this value, never by message text. */
+export type ProviderAuthBindingExternalReason =
+  | "missing"
+  | "invalid"
+  | "unreadable"
+  | "refresh_unavailable"
+  | "timeout"
+  | "verification_failed"
+  | "insufficient_validity"
+  | "account_changed";
+
 export class ProviderAuthBindingError extends Error {
   readonly outcome:
     | "unknown_provider"
     | "no_active_profile"
     | "stale_binding"
-    | "storage_failure";
+    | "storage_failure"
+    /** The Codex-owned external credential is missing, invalid, unreadable,
+     * or could not be made sufficiently fresh. The caller must not fall back
+     * to Pi OAuth refresh, another source, or a different lane. */
+    | "external_unavailable"
+    /** Pi asked to mutate an external credential. Token never executes Pi's
+     * refresh callback for the Codex-owned document. */
+    | "external_read_only";
+  readonly externalReason?: ProviderAuthBindingExternalReason;
 
-  constructor(outcome: ProviderAuthBindingError["outcome"], message: string) {
+  constructor(
+    outcome: ProviderAuthBindingError["outcome"],
+    message: string,
+    options?: { readonly externalReason?: ProviderAuthBindingExternalReason },
+  ) {
     super(message);
     this.name = "ProviderAuthBindingError";
     this.outcome = outcome;
+    if (options?.externalReason !== undefined) {
+      this.externalReason = options.externalReason;
+    }
   }
 }
 

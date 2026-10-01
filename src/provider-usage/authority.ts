@@ -17,14 +17,27 @@ import {
   type ProviderUsageRefreshResult,
   type ProviderUsageSnapshot,
   type ProviderUsageState,
+  type ProviderUsageUnavailableReason,
 } from "./contract.js";
 
 export const PROVIDER_USAGE_REFRESH_TIMEOUT_MS = 45_000 as const;
 
-interface CacheSlot {
+interface ProviderUsageSlot {
   readonly bindingIdentity: string;
+  /** Identity of the account the observation belongs to. A new token
+   * revision for the same account may keep displaying the last-known
+   * observation as stale; a different account never carries over. */
+  readonly accountKey: string;
   readonly destinationKey: string;
-  readonly observation: ProviderUsageObservation;
+  readonly observation?: ProviderUsageObservation;
+  /** Bounded failure classification for an external capture, recorded only for
+   * the exact credential revision that produced it. Managed and ambient
+   * bindings keep the previous behavior: a failed refresh is returned but not
+   * persisted as Provider state. */
+  readonly unavailable?: {
+    readonly bindingIdentity: string;
+    readonly reason: ProviderUsageUnavailableReason;
+  };
 }
 
 export interface CreateProviderUsageAuthorityOptions {
@@ -40,9 +53,20 @@ export interface CreateProviderUsageAuthorityOptions {
 
 function bindingIdentity(capture: ProviderAuthBindingCapture): string {
   const facts = capture.facts;
-  return facts.kind === "ambient"
-    ? `${facts.providerId}\u0000ambient`
-    : `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
+  if (facts.kind === "ambient") return `${facts.providerId}\u0000ambient`;
+  if (facts.kind === "external") {
+    return `${facts.providerId}\u0000external\u0000${facts.accountId}\u0000${facts.tokenRevision}`;
+  }
+  return `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
+}
+
+function bindingAccountKey(capture: ProviderAuthBindingCapture): string {
+  const facts = capture.facts;
+  if (facts.kind === "ambient") return `${facts.providerId}\u0000ambient`;
+  if (facts.kind === "external") {
+    return `${facts.providerId}\u0000external\u0000${facts.accountId}`;
+  }
+  return `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
 }
 
 function inflightIdentity(
@@ -51,16 +75,73 @@ function inflightIdentity(
 ): string {
   const facts = capture.facts;
   const binding =
-    facts.kind === "ambient"
+    facts.kind !== "managed"
       ? bindingIdentity(capture)
       : `${bindingIdentity(capture)}\u0000${facts.selectionGeneration}`;
   return `${binding}\u0000${destinationKey}`;
 }
 
 function bindingContext(capture: ProviderAuthBindingCapture): ProviderUsageBindingContext {
-  return capture.facts.kind === "ambient"
-    ? Object.freeze({ kind: "ambient" })
-    : Object.freeze({ kind: "managed", authType: capture.facts.authType });
+  if (capture.facts.kind === "ambient") return Object.freeze({ kind: "ambient" });
+  if (capture.facts.kind === "external") {
+    return Object.freeze({ kind: "external", authType: "oauth" });
+  }
+  return Object.freeze({ kind: "managed", authType: capture.facts.authType });
+}
+
+/** Follow `cause` links so a Pi `ModelsError` wrapper still exposes the
+ * credential boundary's typed outcome. Message text is never inspected. */
+function findBindingFailure(error: unknown): ProviderAuthBindingError | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (current instanceof ProviderAuthBindingError) return current;
+    if (typeof current !== "object" || current === null || !("cause" in current)) {
+      return undefined;
+    }
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/** Credential-boundary failure classification (plan section 6). The external
+ * boundary reports a structured `externalReason`; classification never
+ * inspects message text. Read/parse failures, an unavailable delegation, and
+ * post-refresh verification failures stay bounded transient. Only documented
+ * terminal evidence (a verified credential rejected by the resource server)
+ * stops network attempts. Managed and ambient bindings keep their previous
+ * classification. */
+function classifyBindingFailure(
+  capture: ProviderAuthBindingCapture,
+  error: unknown,
+): ProviderUsageUnavailableReason {
+  const failure = findBindingFailure(error);
+  if (capture.facts.kind !== "external") {
+    return failure === undefined ? "upstream" : "auth";
+  }
+  switch (failure?.externalReason) {
+    case "account_changed":
+      return "account_change";
+    case "timeout":
+      return "timeout";
+    case "insufficient_validity":
+      return "insufficient_validity";
+    default:
+      return failure?.outcome === "stale_binding" ? "account_change" : "temporary";
+  }
+}
+
+/** Probe failure classification. For an external capture the probe's `auth`
+ * class means the credential the boundary had already resolved and verified
+ * was rejected by the resource server (HTTP 401/403) or is unusable at the
+ * request boundary: the only documented terminal evidence in this chain.
+ * Other bindings keep the probe's own class. */
+function classifyProbeFailure(
+  capture: ProviderAuthBindingCapture,
+  reason: ProviderUsageUnavailableReason,
+): ProviderUsageUnavailableReason {
+  return capture.facts.kind === "external" && reason === "auth"
+    ? "terminal"
+    : reason;
 }
 
 export function createProviderUsageAuthority(
@@ -74,7 +155,7 @@ export function createProviderUsageAuthority(
     probes.set(probe.providerId, probe);
   }
 
-  const cache = new Map<string, CacheSlot>();
+  const cache = new Map<string, ProviderUsageSlot>();
   const inflight = new Map<string, Promise<ProviderUsageRefreshResult>>();
   const lifecycleAbort = new AbortController();
   let closed = false;
@@ -163,32 +244,47 @@ export function createProviderUsageAuthority(
       return Object.freeze({ state: "unobserved", providerId });
     }
     const slot = cache.get(providerId);
+    const identity = bindingIdentity(capture);
+    const accountKey = bindingAccountKey(capture);
     const matchingSlot =
-      slot !== undefined &&
-      slot.bindingIdentity === bindingIdentity(capture) &&
-      slot.destinationKey === key
+      slot !== undefined && slot.destinationKey === key &&
+      (slot.bindingIdentity === identity || slot.accountKey === accountKey)
         ? slot
         : undefined;
+    // A recorded failure describes one exact revision: it is shown until the
+    // external document (or the managed credential) changes, and never for a
+    // different account or destination.
+    const unavailable =
+      matchingSlot?.unavailable !== undefined &&
+      matchingSlot.unavailable.bindingIdentity === identity
+        ? matchingSlot.unavailable.reason
+        : undefined;
     const candidate: ProviderUsageState =
-      matchingSlot !== undefined
+      matchingSlot?.observation !== undefined
         ? Object.freeze({
             state: "observed",
             observation: matchingSlot.observation,
             refreshable: eligibility.state === "eligible",
           })
-        : eligibility.state === "unsupported_binding"
+        : unavailable !== undefined
           ? Object.freeze({
-              state: "unsupported",
+              state: "unavailable",
               providerId,
-              reason: "binding",
+              reason: unavailable,
             })
-          : eligibility.state === "unsupported_destination"
+          : eligibility.state === "unsupported_binding"
             ? Object.freeze({
                 state: "unsupported",
                 providerId,
-                reason: "destination",
+                reason: "binding",
               })
-            : Object.freeze({ state: "unobserved", providerId });
+            : eligibility.state === "unsupported_destination"
+              ? Object.freeze({
+                  state: "unsupported",
+                  providerId,
+                  reason: "destination",
+                })
+              : Object.freeze({ state: "unobserved", providerId });
 
     let published: ProviderUsageState | undefined;
     const current = await options.binding.publishIfCurrent(capture, () => {
@@ -214,6 +310,37 @@ export function createProviderUsageAuthority(
       outcome: "unavailable",
       reason: "network",
     });
+
+  /** Publish the bounded failure state of an external capture. Managed and
+   * ambient bindings are not persisted, matching the previous behavior. An
+   * observation for the same account and destination is preserved so the
+   * last-known windows stay displayed as stale. */
+  const recordUnavailable = (
+    capture: ProviderAuthBindingCapture,
+    destination: string,
+    reason: ProviderUsageUnavailableReason,
+  ): void => {
+    if (closed || capture.facts.kind !== "external") return;
+    const identity = bindingIdentity(capture);
+    const accountKey = bindingAccountKey(capture);
+    const previous = cache.get(capture.facts.providerId);
+    const observation =
+      previous !== undefined &&
+      previous.destinationKey === destination &&
+      previous.accountKey === accountKey
+        ? previous.observation
+        : undefined;
+    cache.set(
+      capture.facts.providerId,
+      Object.freeze({
+        bindingIdentity: identity,
+        accountKey,
+        destinationKey: destination,
+        ...(observation === undefined ? {} : { observation }),
+        unavailable: Object.freeze({ bindingIdentity: identity, reason }),
+      }),
+    );
+  };
 
   const startRefresh = (
     providerId: string,
@@ -257,15 +384,36 @@ export function createProviderUsageAuthority(
     }
 
     const destination = destinationKey(baseUrls);
+    const current = cache.get(providerId);
+    if (
+      capture.facts.kind === "external" &&
+      current?.destinationKey === destination &&
+      current.unavailable?.bindingIdentity === bindingIdentity(capture) &&
+      current.unavailable.reason === "terminal"
+    ) {
+      // Documented terminal evidence stops automatic network attempts for
+      // this exact credential revision; a changed revision retries.
+      return Promise.resolve(
+        Object.freeze({
+          providerId,
+          outcome: "unavailable" as const,
+          reason: "terminal" as const,
+        }),
+      );
+    }
     const key = inflightIdentity(capture, destination);
     const existing = inflight.get(key);
     if (existing !== undefined) return existing;
 
     const pending = (async (): Promise<ProviderUsageRefreshResult> => {
-      const signal = AbortSignal.any([
-        AbortSignal.timeout(resolveRefreshTimeoutMs()),
-        lifecycleAbort.signal,
-      ]);
+      // The bounded deadline is the authority's own failure class; a lifecycle
+      // abort only ends the run.
+      const timeoutSignal = AbortSignal.timeout(resolveRefreshTimeoutMs());
+      const signal = AbortSignal.any([timeoutSignal, lifecycleAbort.signal]);
+      const fail = (reason: ProviderUsageUnavailableReason): ProviderUsageRefreshResult => {
+        recordUnavailable(capture, destination, reason);
+        return Object.freeze({ providerId, outcome: "unavailable", reason });
+      };
       let acquired:
         | ProviderUsageProbeResult
         | { readonly state: "unsupported_destination" };
@@ -291,24 +439,9 @@ export function createProviderUsageAuthority(
         });
       } catch (error) {
         if (signal.aborted) {
-          return Object.freeze({
-            providerId,
-            outcome: "unavailable",
-            reason: "network",
-          });
+          return timeoutSignal.aborted ? fail("timeout") : unavailableRefresh(providerId);
         }
-        if (error instanceof ProviderAuthBindingError) {
-          return Object.freeze({
-            providerId,
-            outcome: "unavailable",
-            reason: "auth",
-          });
-        }
-        return Object.freeze({
-          providerId,
-          outcome: "unavailable",
-          reason: "upstream",
-        });
+        return fail(classifyBindingFailure(capture, error));
       }
 
       if (acquired.state === "unsupported_destination") {
@@ -319,19 +452,11 @@ export function createProviderUsageAuthority(
         });
       }
       if (acquired.state === "unavailable") {
-        return Object.freeze({
-          providerId,
-          outcome: "unavailable",
-          reason: acquired.reason,
-        });
+        return fail(classifyProbeFailure(capture, acquired.reason));
       }
       const facts = normalizeProviderUsageFacts(acquired.facts);
       if (facts === undefined) {
-        return Object.freeze({
-          providerId,
-          outcome: "unavailable",
-          reason: "schema",
-        });
+        return fail("schema");
       }
       const observation: ProviderUsageObservation = Object.freeze({
         providerId,
@@ -347,6 +472,7 @@ export function createProviderUsageAuthority(
         if (destinationKey(servedBaseUrls(providerId)) !== destination) return;
         cache.set(providerId, Object.freeze({
           bindingIdentity: bindingIdentity(capture),
+          accountKey: bindingAccountKey(capture),
           destinationKey: destination,
           observation,
         }));
@@ -422,6 +548,7 @@ export function createProviderUsageAuthority(
         providerId,
         Object.freeze({
           bindingIdentity: bindingIdentity(capture),
+          accountKey: bindingAccountKey(capture),
           destinationKey: destination,
           observation,
         }),

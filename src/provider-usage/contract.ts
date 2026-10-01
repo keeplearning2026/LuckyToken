@@ -60,8 +60,40 @@ export type ProviderUsageUnsupportedReason =
   | "binding"
   | "destination";
 
+/**
+ * Bounded failure classification (plan section 6). Each class stays distinct
+ * end to end: usage authority → Control Plane DTO → Public Model/Attention →
+ * Renderer.
+ *
+ * - `auth`: the credential was missing or unusable for the resource request.
+ *   Managed and ambient bindings keep this class unchanged.
+ * - `timeout`: the authority's own bounded refresh deadline elapsed.
+ * - `temporary`: a bounded transient failure of the external Codex source.
+ *   The credential boundary reports read/parse failures, an unavailable
+ *   delegation, and post-refresh verification failures (including
+ *   insufficient validity after a delegated refresh) as one
+ *   `external_unavailable` outcome, so they all stay transient here and never
+ *   become a permanent reconnect state.
+ * - `account_change`: the Codex-owned document no longer belongs to the
+ *   account captured for the request; last-known usage is never carried over.
+ * - `insufficient_validity`: the resource request received a credential that
+ *   does not satisfy the account-claim contract, so it cannot be used.
+ * - `terminal`: an explicit structured rejection of a credential the external
+ *   boundary had already resolved and verified — the usage probe's HTTP
+ *   401/403 class. Only this evidence stops automatic network attempts, and
+ *   only until the external document's revision changes. Diagnostics text
+ *   (stderr) is never parsed for classification
+ *   ([P1 error-classification evidence](../../doc/Research/TokenOpenAICodexP1ErrorClassification.md)).
+ * - `network`, `upstream`, `schema`: transport, upstream status, and response
+ *   shape failures.
+ */
 export type ProviderUsageUnavailableReason =
   | "auth"
+  | "timeout"
+  | "temporary"
+  | "account_change"
+  | "insufficient_validity"
+  | "terminal"
   | "network"
   | "upstream"
   | "schema";
@@ -91,6 +123,12 @@ export type ProviderUsageBindingContext =
   | {
       readonly kind: "managed";
       readonly authType: "api_key" | "oauth";
+    }
+  | {
+      /** Codex-owned external ChatGPT credential consumed through the shared
+       * binding path. Freshness is delegated to Codex, never to Pi OAuth. */
+      readonly kind: "external";
+      readonly authType: "oauth";
     }
   | {
       readonly kind: "ambient";

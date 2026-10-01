@@ -266,7 +266,8 @@ function decodeProviderState(
       !isObject(value.ambient) ||
       !exactKeys(value.ambient, ["kind", "status", "message"]) ||
       value.ambient.kind !== "external" ||
-      (value.ambient.status !== "configured" &&
+      (value.ambient.status !== "connected" &&
+        value.ambient.status !== "configured" &&
         value.ambient.status !== "unknown") ||
       !metadata(value.ambient.message, 256)
     ) return undefined;

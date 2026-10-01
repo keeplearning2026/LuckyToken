@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  codexDebugModelsInvocation,
   createCodexNativeCatalogSource,
 } from "../../src/integrations/codex/native-catalog-source.js";
+import { codexDebugModelsInvocation } from "../../src/integrations/codex/runtime-discovery.js";
 
 const roots: string[] = [];
 
@@ -41,7 +41,7 @@ describe("Codex native catalog source", () => {
       }),
     });
 
-    await expect(source.load()).resolves.toEqual({
+    await expect(source.load()).resolves.toMatchObject({
       source: "bundled",
       entries: [
         {
@@ -93,7 +93,7 @@ describe("Codex native catalog source", () => {
       },
     });
 
-    await expect(source.load()).resolves.toEqual({
+    await expect(source.load()).resolves.toMatchObject({
       source: "unavailable",
       entries: [],
       warnings: ["Codex native model metadata is unavailable."],
@@ -155,13 +155,15 @@ describe("Codex native catalog source", () => {
   );
 
   it.runIf(process.platform === "win32")(
-    "executes a real Windows cmd shim through the bundled-catalog path",
+    "executes a real Windows cmd shim through the bundled-catalog path and passes the explicit CODEX_HOME",
     async () => {
       const codexHome = await home();
       const shim = join(codexHome, "codex.cmd");
+      // The shim echoes the CODEX_HOME it actually received; a runner that
+      // inherits the user's real home would produce a different value.
       await writeFile(
         shim,
-        '@echo off\r\necho {"models":[{"slug":"gpt-cmd-shim"}]}\r\n',
+        '@echo off\r\necho {"models":[{"slug":"gpt-cmd-shim","display_name":"%CODEX_HOME:\\=/%"}]}\r\n',
         "utf8",
       );
       const source = createCodexNativeCatalogSource({
@@ -174,7 +176,9 @@ describe("Codex native catalog source", () => {
       const snapshot = await source.load();
 
       expect(snapshot.source).toBe("bundled");
-      expect(snapshot.entries).toEqual([{ slug: "gpt-cmd-shim" }]);
+      expect(snapshot.entries).toEqual([
+        { slug: "gpt-cmd-shim", display_name: codexHome.replaceAll("\\", "/") },
+      ]);
     },
   );
 

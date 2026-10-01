@@ -119,6 +119,27 @@ const notYetVerifiedProfiles = (): ProfilesResult => {
   };
 };
 
+/** External Codex-style source: verified login, zero managed Profiles. */
+const externalConnectedProfiles = (): ProfilesResult => ({
+  outcome: "ok",
+  state: {
+    providers: [
+      {
+        providerId: "aws-provider",
+        implementationAvailable: true,
+        revision: "absent",
+        ambient: {
+          kind: "external" as const,
+          status: "connected" as const,
+          message: "Codex login is connected and refreshed in place by Codex",
+        },
+        profiles: [],
+      },
+    ],
+  },
+  options: providerOptions,
+});
+
 const verifiedProfiles = (): ProfilesResult => {
   const managed = managedProfiles();
   return {
@@ -1026,6 +1047,28 @@ describe("Providers Profile product slice", () => {
 
     expect(container.textContent).toContain("Usage not refreshed");
     expect(usageRegion().getAttribute("aria-label")).toContain("Double-click or press Enter to refresh");
+  });
+
+  it("shows usage for a verified external Codex login with no managed Profile", async () => {
+    await render({
+      profiles: externalConnectedProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: {
+          providers: [{
+            providerId: "aws-provider",
+            state: "observed",
+            observedAt: 1,
+            refreshable: true,
+            windows: [{ kind: "weekly", usedPercent: 25 }],
+            budgets: [],
+          }],
+        },
+      }),
+    });
+
+    expect(usageRegion().getAttribute("aria-label")).toContain("Week 25%");
+    expect(container.textContent).not.toContain("Usage not refreshed");
   });
 
   it("hides unavailable usage for a connected account type", async () => {

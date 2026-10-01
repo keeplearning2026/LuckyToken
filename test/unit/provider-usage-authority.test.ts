@@ -45,6 +45,14 @@ function sameCapture(
   if (a.facts.kind === "ambient" || b.facts.kind === "ambient") {
     return a.facts.kind === b.facts.kind;
   }
+  if (a.facts.kind === "external" && b.facts.kind === "external") {
+    return (
+      a.facts.accountId === b.facts.accountId &&
+      a.facts.tokenRevision === b.facts.tokenRevision &&
+      a.facts.authType === b.facts.authType
+    );
+  }
+  if (a.facts.kind !== "managed" || b.facts.kind !== "managed") return false;
   return (
     a.facts.credentialId === b.facts.credentialId &&
     a.facts.credentialGeneration === b.facts.credentialGeneration &&

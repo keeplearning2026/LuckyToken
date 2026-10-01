@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, type Credential } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,9 +10,12 @@ import {
   NO_PROVIDER_RECORD_REVISION,
 } from "../../src/credentials/profile-authority.js";
 import {
+  credentialIncarnationReference,
   createFileProviderCredentialRecordStore,
   createInMemoryProviderCredentialRecordStore,
-  type PersistedProviderCredentialRecordV1,
+  PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
+  type PersistedCredentialProfileV2,
+  type PersistedProviderCredentialRecordV2,
   type ProviderCredentialRecordLock,
 } from "../../src/credentials/profile-record-store.js";
 import { createBrowserOAuthProvider } from "../support/auth-login-fixture.js";
@@ -20,50 +23,90 @@ import { createFixtureProvider } from "../support/credential-fixture.js";
 
 describe("CredentialProfileManagement", () => {
   it("atomically persists a complete Profile order and normalizes priorities", async () => {
-    const revisions = ["revision-initial", "revision-reordered"];
+    const revisions = ["revision-seed-a", "revision-seed-b", "revision-reordered"];
     const provider = createFixtureProvider();
     const store = createInMemoryProviderCredentialRecordStore({
       createRevision: () => revisions.shift() ?? "unexpected-revision",
     });
-    await store.modifyManagement(
+    const credentialA: Credential = { type: "api_key", key: "secret-a" };
+    const credentialB: Credential = { type: "api_key", key: "secret-b" };
+    const seedProfile = (
+      credentialId: string,
+      credentialGeneration: string,
+      credential: Credential,
+      displayName: string,
+      priority: number,
+      createdAt: number,
+    ): PersistedCredentialProfileV2 => ({
+      credentialId,
+      credentialGeneration,
+      authType: credential.type,
+      authMethodLabel: "Fixture credentials",
+      displayName,
+      enabled: true,
+      priority,
+      createdAt,
+      updatedAt: createdAt,
+      incarnation: credentialIncarnationReference(
+        provider.id,
+        credentialId,
+        credentialGeneration,
+        credential,
+      ),
+    });
+    const seedRecord = (
+      revision: string,
+      profiles: readonly PersistedCredentialProfileV2[],
+    ): PersistedProviderCredentialRecordV2 => ({
+      schemaVersion: PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
+      providerId: provider.id,
+      revision,
+      selectionGeneration: "selection-a",
+      activeCredentialId: "credential-a",
+      switchPolicy: { apiKeyOn429: true, oauthOn429: false },
+      profiles,
+    });
+    const profileA = seedProfile(
+      "credential-a",
+      "generation-a",
+      credentialA,
+      "Profile A",
+      12,
+      1,
+    );
+    const profileB = seedProfile(
+      "credential-b",
+      "generation-b",
+      credentialB,
+      "Profile B",
+      -4,
+      2,
+    );
+    await store.publishIncarnation(
       provider.id,
       NO_PROVIDER_RECORD_REVISION,
+      {
+        credentialId: "credential-a",
+        credentialGeneration: "generation-a",
+        credential: credentialA,
+      },
       () => ({
         kind: "commit" as const,
-        record: {
-          schemaVersion: 1 as const,
-          providerId: provider.id,
-          revision: NO_PROVIDER_RECORD_REVISION,
-          selectionGeneration: "selection-a",
-          activeCredentialId: "credential-a",
-          switchPolicy: { apiKeyOn429: true, oauthOn429: false },
-          profiles: [
-            {
-              credentialId: "credential-a",
-              credentialGeneration: "generation-a",
-              authType: "api_key" as const,
-              authMethodLabel: "Fixture credentials",
-              displayName: "Profile A",
-              enabled: true,
-              priority: 12,
-              createdAt: 1,
-              updatedAt: 1,
-              credential: { type: "api_key" as const, key: "secret-a" },
-            },
-            {
-              credentialId: "credential-b",
-              credentialGeneration: "generation-b",
-              authType: "api_key" as const,
-              authMethodLabel: "Fixture credentials",
-              displayName: "Profile B",
-              enabled: true,
-              priority: -4,
-              createdAt: 2,
-              updatedAt: 2,
-              credential: { type: "api_key" as const, key: "secret-b" },
-            },
-          ],
-        },
+        record: seedRecord(NO_PROVIDER_RECORD_REVISION, [profileA]),
+        value: undefined,
+      }),
+    );
+    await store.publishIncarnation(
+      provider.id,
+      "revision-seed-a",
+      {
+        credentialId: "credential-b",
+        credentialGeneration: "generation-b",
+        credential: credentialB,
+      },
+      () => ({
+        kind: "commit" as const,
+        record: seedRecord("revision-seed-a", [profileA, profileB]),
         value: undefined,
       }),
     );
@@ -77,7 +120,7 @@ describe("CredentialProfileManagement", () => {
     const reordered = await profiles.management.reorderProfiles({
       providerId: provider.id,
       credentialIds: ["credential-b", "credential-a"],
-      expectedRevision: "revision-initial",
+      expectedRevision: "revision-seed-b",
     });
 
     expect(reordered).toMatchObject({
@@ -104,8 +147,8 @@ describe("CredentialProfileManagement", () => {
   it("fails closed before publication on a compromised file lock and surfaces release failure", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-profile-lock-"));
     const providerId = "lock-provider";
-    const record: PersistedProviderCredentialRecordV1 = {
-      schemaVersion: 1,
+    const record: PersistedProviderCredentialRecordV2 = {
+      schemaVersion: PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
       providerId,
       revision: "mutation-supplies-revision",
       selectionGeneration: "selection-a",
@@ -121,7 +164,12 @@ describe("CredentialProfileManagement", () => {
         priority: 0,
         createdAt: 1,
         updatedAt: 1,
-        credential: { type: "api_key", key: "lock-test-secret" },
+        incarnation: credentialIncarnationReference(
+          providerId,
+          "credential-a",
+          "credential-generation-a",
+          { type: "api_key", key: "lock-test-secret" },
+        ),
       }],
     };
     try {
@@ -413,7 +461,17 @@ describe("CredentialProfileManagement", () => {
     }
 
     const record = await store.read(provider.id);
-    expect(record?.profiles.map((profile) => profile.credential)).toEqual([
+    const storedCredentials: Array<Credential | undefined> = [];
+    for (const profile of record?.profiles ?? []) {
+      const read = await store.readCredential(
+        provider.id,
+        profile.credentialId,
+        profile.credentialGeneration,
+      );
+      expect(read.state).toBe("ok");
+      storedCredentials.push(read.state === "ok" ? read.credential : undefined);
+    }
+    expect(storedCredentials).toEqual([
       apiKeyCredential,
       oauthCredential,
     ]);
@@ -580,8 +638,10 @@ describe("CredentialProfileManagement", () => {
       },
     });
     const after = await store.read(provider.id);
-    expect(after?.profiles.map((profile) => profile.credential)).toEqual(
-      before?.profiles.map((profile) => profile.credential),
+    // A metadata-only update leaves every persisted incarnation reference
+    // untouched; the referenced documents are never rewritten.
+    expect(after?.profiles.map((profile) => profile.incarnation)).toEqual(
+      before?.profiles.map((profile) => profile.incarnation),
     );
 
     const cleared = await profiles.management.updateMetadata({

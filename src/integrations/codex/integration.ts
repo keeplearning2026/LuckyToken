@@ -82,7 +82,12 @@ export interface CodexIntegrationAuthorityOptions {
     nativeEntries: readonly CodexNativeCatalogEntry[],
     scope: AgentInjectionScope,
   ) => Promise<CodexCatalogBuildResult>;
-  readonly validateCatalog: (content: string) => Promise<void>;
+  /** Validate the candidate with the exact runtime identity that produced the
+   * native snapshot. A different runtime must not commit the injection. */
+  readonly validateCatalog: (
+    content: string,
+    runtime: { readonly command: string } | undefined,
+  ) => Promise<void>;
   readonly projectionFingerprint?: (
     snapshot: AgentInjectionSnapshot,
     scope: AgentInjectionScope,
@@ -412,7 +417,12 @@ export function createCodexIntegrationAuthority(
       });
     }
     try {
-      await options.validateCatalog(catalog.content);
+      await options.validateCatalog(
+        catalog.content,
+        nativeSnapshot.runtimeIdentity === undefined
+          ? undefined
+          : { command: nativeSnapshot.runtimeIdentity.command },
+      );
     } catch (error) {
       const detail =
         error instanceof Error && error.message.length > 0

@@ -1,45 +1,72 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join, win32 } from "node:path";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
+import {
+  codexCliInvocation,
+  codexDebugModelsInvocation,
+  discoverCodexCommands,
+  type CodexRuntimeDiscoveryOptions,
+} from "./runtime-discovery.js";
+
 const execFileAsync = promisify(execFile);
-const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
-const NPM_CMD_SHIM = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/iu;
-const DEBUG_MODEL_ARGS = Object.freeze(["debug", "models", "--bundled"] as const);
+const VERSION_TIMEOUT_MS = 10_000;
+const BUNDLED_TIMEOUT_MS = 10_000;
 
 export type CodexNativeCatalogEntry = Readonly<Record<string, unknown>> & {
   readonly slug: string;
 };
 
+/** Identity of the runtime and inputs that produced one snapshot. The
+ * validator must use this exact runtime; a different runtime cannot prove the
+ * injected catalog parses. */
+export interface CodexRuntimeIdentity {
+  readonly command: string;
+  readonly version?: string;
+  readonly codexHome: string;
+}
+
 export interface CodexNativeCatalogSnapshot {
   readonly source: "bundled" | "models-cache" | "unavailable";
+  readonly runtimeIdentity?: CodexRuntimeIdentity;
   readonly entries: readonly CodexNativeCatalogEntry[];
   readonly warnings: readonly string[];
+  /** Deterministic content hash of the strategy key, runtime identity, and
+   * entries. Consumers invalidate derived state by comparing generations. */
+  readonly generation: string;
 }
 
 export interface CodexNativeCatalogSource {
   load(): Promise<CodexNativeCatalogSnapshot>;
+  /** Drop any acquired snapshot so the next load re-acquires. Used for
+   * runtime change, Codex home change, strategy failure, and manual refresh. */
+  invalidate(): void;
 }
 
-export interface CodexDebugModelsInvocation {
-  readonly file: string;
-  readonly args: readonly string[];
-  readonly options: Readonly<{ windowsVerbatimArguments?: boolean }>;
-}
-
-export interface CreateCodexNativeCatalogSourceOptions {
+export type CreateCodexNativeCatalogSourceOptions = CodexRuntimeDiscoveryOptions & {
   readonly codexHome: string;
-  readonly codexCommand?: string;
-  readonly platform?: NodeJS.Platform;
-  readonly env?: NodeJS.ProcessEnv;
   readonly runBundledCatalog?: (command: string) => Promise<string>;
-  /** Internal test seam; production discovers explicit/env/Desktop/PATH runtimes. */
-  readonly discoverCommands?: () => Promise<readonly string[]>;
-}
+  readonly runVersion?: (command: string) => Promise<string>;
+  /** Acquisition TTL optimization only; consistency is owned by one
+   * generation per refresh, never by this cache. */
+  readonly ttlMs?: number;
+  readonly now?: () => number;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(nested);
+  }
+  return Object.freeze(value);
 }
 
 function parseNativeEntries(raw: string): readonly CodexNativeCatalogEntry[] | undefined {
@@ -50,172 +77,59 @@ function parseNativeEntries(raw: string): readonly CodexNativeCatalogEntry[] | u
     return undefined;
   }
   if (!isRecord(parsed) || !Array.isArray(parsed.models)) return undefined;
-  return Object.freeze(
+  return deepFreeze(
     parsed.models.flatMap((entry): CodexNativeCatalogEntry[] => {
       if (!isRecord(entry)) return [];
       const slug = entry.slug;
       if (typeof slug !== "string" || slug.length === 0 || slug.includes("/")) return [];
-      return [Object.freeze({ ...entry, slug }) as CodexNativeCatalogEntry];
-    }),
-  );
-}
-
-function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const direct = env[name];
-  if (direct !== undefined) return direct;
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
-}
-
-function escapeCmdArg(argument: string, doubleEscape: boolean): string {
-  let escaped = argument
-    .replace(/(\\*)"/gu, '$1$1\\"')
-    .replace(/(\\*)$/u, "$1$1");
-  escaped = `"${escaped}"`.replace(CMD_META, "^$1");
-  return doubleEscape ? escaped.replace(CMD_META, "^$1") : escaped;
-}
-
-function escapeCmdCommand(command: string): string {
-  return command.replace(CMD_META, "^$1");
-}
-
-/** Platform-safe invocation of a Codex CLI command. */
-export function codexCliInvocation(
-  command: string,
-  args: readonly string[],
-  platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
-): CodexDebugModelsInvocation {
-  if (platform !== "win32" || !/\.(?:cmd|bat)$/iu.test(command)) {
-    return Object.freeze({
-      file: command,
-      args: Object.freeze([...args]),
-      options: Object.freeze({}),
-    });
-  }
-
-  const doubleEscape = NPM_CMD_SHIM.test(command);
-  const commandLine = [
-    escapeCmdCommand(command),
-    ...args.map((argument) => escapeCmdArg(argument, doubleEscape)),
-  ].join(" ");
-  return Object.freeze({
-    file: envValue(env, "ComSpec")?.trim() || "cmd.exe",
-    args: Object.freeze(["/d", "/s", "/c", `"${commandLine}"`]),
-    options: Object.freeze({ windowsVerbatimArguments: true }),
-  });
-}
-
-/** Platform-safe invocation of the machine-readable Codex bundled-catalog command. */
-export function codexDebugModelsInvocation(
-  command: string,
-  platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
-): CodexDebugModelsInvocation {
-  return codexCliInvocation(command, DEBUG_MODEL_ARGS, platform, env);
-}
-
-async function isFile(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function windowsDesktopCommands(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
-  const localAppData = envValue(env, "LOCALAPPDATA")?.trim();
-  if (!localAppData) return Object.freeze([]);
-  const bin = win32.join(localAppData, "OpenAI", "Codex", "bin");
-  const candidates: Array<{ readonly path: string; readonly mtimeMs: number }> = [];
-
-  const add = async (path: string): Promise<void> => {
-    try {
-      const info = await stat(path);
-      if (info.isFile()) candidates.push({ path, mtimeMs: info.mtimeMs });
-    } catch {
-      // Missing/unreadable candidates are simply unavailable runtimes.
-    }
-  };
-
-  await add(win32.join(bin, "codex.exe"));
-  try {
-    const entries = await readdir(bin, { withFileTypes: true });
-    await Promise.all(
-      entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => add(win32.join(bin, entry.name, "codex.exe"))),
-    );
-  } catch {
-    return Object.freeze(candidates.map((candidate) => candidate.path));
-  }
-
-  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
-  return Object.freeze(candidates.map((candidate) => candidate.path));
-}
-
-async function windowsPathCommands(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
-  const pathValue = envValue(env, "PATH") ?? "";
-  const extensions = (envValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
-    .split(";")
-    .map((extension) => extension.trim())
-    .filter((extension) => extension.length > 0);
-  const candidates: string[] = [];
-  for (const rawDirectory of pathValue.split(win32.delimiter)) {
-    const directory = rawDirectory.trim().replace(/^"|"$/gu, "");
-    if (directory.length === 0) continue;
-    for (const extension of extensions) {
-      const candidate = win32.join(directory, `codex${extension}`);
-      if (await isFile(candidate)) candidates.push(candidate);
-    }
-  }
-  return Object.freeze(candidates);
-}
-
-export async function discoverCodexCommands(
-  options: CreateCodexNativeCatalogSourceOptions,
-): Promise<readonly string[]> {
-  const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
-  const candidates: string[] = [];
-  const explicit = options.codexCommand?.trim();
-  if (explicit) candidates.push(explicit);
-  const configured = envValue(env, "CODEX_CLI_PATH")?.trim();
-  if (configured) candidates.push(configured);
-
-  if (platform === "win32") {
-    candidates.push(...(await windowsDesktopCommands(env)));
-    candidates.push(...(await windowsPathCommands(env)));
-  }
-  candidates.push("codex");
-
-  const seen = new Set<string>();
-  return Object.freeze(
-    candidates.filter((candidate) => {
-      const key = platform === "win32" ? candidate.toLowerCase() : candidate;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+      return [{ ...entry, slug } as CodexNativeCatalogEntry];
     }),
   );
 }
 
 async function runBundledCatalog(
   command: string,
+  codexHome: string,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
 ): Promise<string> {
   const invocation = codexDebugModelsInvocation(command, platform, env);
   const result = await execFileAsync(invocation.file, [...invocation.args], {
     encoding: "utf8",
+    // Every spawned Codex helper receives the explicit Codex home; the
+    // catalog runner never reads the user's real home by inheritance.
+    env: { ...env, CODEX_HOME: codexHome },
     windowsHide: true,
-    timeout: 10_000,
+    timeout: BUNDLED_TIMEOUT_MS,
     ...invocation.options,
   });
   return result.stdout;
 }
 
-async function readModelsCache(codexHome: string): Promise<readonly CodexNativeCatalogEntry[] | undefined> {
+async function runVersion(
+  command: string,
+  codexHome: string,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const invocation = codexCliInvocation(command, ["--version"], platform, env);
+  const result = await execFileAsync(invocation.file, [...invocation.args], {
+    encoding: "utf8",
+    env: { ...env, CODEX_HOME: codexHome },
+    windowsHide: true,
+    timeout: VERSION_TIMEOUT_MS,
+    ...invocation.options,
+  });
+  return result.stdout;
+}
+
+function parseVersion(stdout: string): string | undefined {
+  return /codex-cli\s+([^\s]+)/u.exec(stdout)?.[1];
+}
+
+async function readModelsCache(
+  codexHome: string,
+): Promise<readonly CodexNativeCatalogEntry[] | undefined> {
   let raw: string;
   try {
     raw = await readFile(join(codexHome, "models_cache.json"), "utf8");
@@ -226,60 +140,133 @@ async function readModelsCache(codexHome: string): Promise<readonly CodexNativeC
   return parseNativeEntries(raw);
 }
 
+function snapshotGeneration(
+  source: CodexNativeCatalogSnapshot["source"],
+  runtimeIdentity: CodexRuntimeIdentity | undefined,
+  entries: readonly CodexNativeCatalogEntry[],
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        source,
+        runtimeIdentity: runtimeIdentity ?? null,
+        entries,
+      }),
+    )
+    .digest("hex");
+}
+
 /**
  * Read one Codex-owned native model snapshot. The installed Codex bundled
  * catalog is authoritative when available; the user's models cache is a
- * read-only fallback. Token never reconstructs native identity from Pi.
+ * read-only fallback. Token never reconstructs native identity from Pi and
+ * never writes or invalidates `models_cache.json`.
  */
 export function createCodexNativeCatalogSource(
   options: CreateCodexNativeCatalogSourceOptions,
 ): CodexNativeCatalogSource {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
+  const now = options.now ?? Date.now;
+  const ttlMs = options.ttlMs ?? 0;
   const discover = options.discoverCommands ?? (() => discoverCodexCommands(options));
   const bundled =
     options.runBundledCatalog ??
-    ((command: string) => runBundledCatalog(command, platform, env));
+    ((command: string) => runBundledCatalog(command, options.codexHome, platform, env));
+  const version =
+    options.runVersion ??
+    ((command: string) => runVersion(command, options.codexHome, platform, env));
 
-  return Object.freeze({
-    async load(): Promise<CodexNativeCatalogSnapshot> {
-      const commands = await discover().catch(() => Object.freeze([]));
-      for (const command of commands) {
-        try {
-          const entries = parseNativeEntries(await bundled(command));
-          if (entries !== undefined) {
-            return Object.freeze({
-              source: "bundled" as const,
-              entries,
-              warnings: Object.freeze([]),
-            });
-          }
-        } catch {
-          // Try the next discovered runtime. Discovery faults are metadata
-          // availability problems and never disable routed Token models.
-        }
-      }
+  let cached: CodexNativeCatalogSnapshot | undefined;
+  let cachedAt = 0;
+  let inflight: Promise<CodexNativeCatalogSnapshot> | undefined;
 
+  const acquire = async (): Promise<CodexNativeCatalogSnapshot> => {
+    const commands = await discover().catch(() => Object.freeze([]));
+    for (const command of commands) {
+      let reportedVersion: string | undefined;
       try {
-        const entries = await readModelsCache(options.codexHome);
+        reportedVersion = parseVersion(await version(command));
+      } catch {
+        // A runtime that cannot report its version is still a usable candidate;
+        // the identity simply omits the version.
+      }
+      try {
+        const entries = parseNativeEntries(await bundled(command));
         if (entries !== undefined) {
+          const runtimeIdentity: CodexRuntimeIdentity = Object.freeze({
+            command,
+            ...(reportedVersion === undefined ? {} : { version: reportedVersion }),
+            codexHome: options.codexHome,
+          });
           return Object.freeze({
-            source: "models-cache" as const,
+            source: "bundled" as const,
+            runtimeIdentity,
             entries,
-            warnings: Object.freeze([
-              "Codex bundled model catalog is unavailable; using models_cache.json.",
-            ]),
+            warnings: Object.freeze([]),
+            generation: snapshotGeneration("bundled", runtimeIdentity, entries),
           });
         }
       } catch {
-        // A malformed/unreadable cache is the same unavailable metadata state.
+        // Try the next discovered runtime. Discovery faults are metadata
+        // availability problems and never disable routed Token models.
       }
+    }
 
-      return Object.freeze({
-        source: "unavailable" as const,
-        entries: Object.freeze([]),
-        warnings: Object.freeze(["Codex native model metadata is unavailable."]),
-      });
+    try {
+      const entries = await readModelsCache(options.codexHome);
+      if (entries !== undefined) {
+        const warnings = Object.freeze([
+          "Codex bundled model catalog is unavailable; using models_cache.json.",
+        ]);
+        return Object.freeze({
+          source: "models-cache" as const,
+          entries,
+          warnings,
+          generation: snapshotGeneration("models-cache", undefined, entries),
+        });
+      }
+    } catch {
+      // A malformed/unreadable cache is the same unavailable metadata state.
+    }
+
+    const warnings = Object.freeze(["Codex native model metadata is unavailable."]);
+    return Object.freeze({
+      source: "unavailable" as const,
+      entries: Object.freeze([]),
+      warnings,
+      generation: snapshotGeneration("unavailable", undefined, Object.freeze([])),
+    });
+  };
+
+  return Object.freeze({
+    invalidate(): void {
+      cached = undefined;
+      cachedAt = 0;
+    },
+    async load(): Promise<CodexNativeCatalogSnapshot> {
+      if (cached !== undefined && ttlMs > 0 && now() - cachedAt < ttlMs) {
+        return cached;
+      }
+      if (inflight !== undefined) return inflight;
+      const pending = acquire()
+        .then(
+          (snapshot) => {
+            cached = snapshot;
+            cachedAt = now();
+            return snapshot;
+          },
+          (error: unknown) => {
+            cached = undefined;
+            cachedAt = 0;
+            throw error;
+          },
+        )
+        .finally(() => {
+          if (inflight === pending) inflight = undefined;
+        });
+      inflight = pending;
+      return pending;
     },
   });
 }

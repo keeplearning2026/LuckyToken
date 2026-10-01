@@ -1,7 +1,12 @@
 import type { ProviderResponsesOperation } from "./contract.js";
 
 export type ProviderResponsesTransportKind = "openai" | "codex" | "azure";
-export type ProviderResponsesCertificationAuthType = "managed" | "ambient";
+export type ProviderResponsesCertificationAuthType =
+  | "managed"
+  /** Codex-owned external `auth.json` source, consumed read-only with a
+   * Codex-delegated in-place refresh. Certified for `openai-codex` only. */
+  | "external"
+  | "ambient";
 
 /**
  * One certified Provider Native Responses tuple.
@@ -85,7 +90,7 @@ export const PROVIDER_NATIVE_RESPONSES_CERTIFIED: readonly ProviderNativeRespons
       provider: "openai-codex",
       api: "openai-codex-responses",
       operations: ["responses", "compact"],
-      authTypes: ["managed"],
+      authTypes: ["managed", "external"],
     },
     {
       transport: "azure",

@@ -34,10 +34,34 @@ The management UI is organized around user tasks rather than internal subsystems
   label, lane, attempt, and outcome facts. Secrets and Profile notes are not
   recorded.
 - Provider credentials are stored as independent
-  `pi/credential-profiles/<providerId>.json` records. The obsolete Provider
-  single-slot `pi/auth.json` is ignored, never migrated, never overwritten,
-  and never deleted automatically. After verifying that no older Token
-  installation is needed, users may manually remove that obsolete file.
+  `pi/credential-profiles/<providerId>.json` records whose token material
+  lives in one incarnation document per committed logical credential
+  (`pi/credentials/<providerId>/<credentialId>/<credentialGeneration>.auth.json`).
+  The record reference switch is the commit point; recovery reads only the
+  referenced incarnation and never adopts an unreferenced file. The obsolete
+  Provider single-slot `pi/auth.json` is ignored, never migrated, never
+  overwritten, and never deleted automatically. After verifying that no older
+  Token installation is needed, users may manually remove that obsolete file.
+
+## Codex-native `openai-codex` source and model catalog
+
+- `openai-codex` also recognizes the Codex-owned `<CODEX_HOME>/auth.json` as an
+  external ChatGPT credential source. Token reads it and may ask Codex, through
+  a bounded one-shot `codex app-server` call, to refresh it in place; Token
+  never writes, copies, moves, or deletes the document and never falls back to
+  Pi OAuth refresh, ambient auth, or another lane. A near-expiry external
+  credential is never handed to Pi, and every delegated refresh is verified by
+  re-reading the same canonical path, account, and revision.
+- The Provider's model list is extended with the local Codex native catalog
+  (`codex debug models --bundled`, read-only `models_cache.json` fallback),
+  append-only and never written to the user's `models.json`. Appended models
+  carry an explicit reasoning-level map (unlisted levels are `null`) and an
+  explicit compatibility set copied from a same-generation Pi sibling or, when
+  none exists, a closed conservative default with a bounded warning.
+- The usage card, Public Model availability, and Operational Attention treat a
+  verified external Codex login as a usable source; a Codex-side credential
+  rotation invalidates the cached observation for that account without
+  carrying quota across accounts.
 - This does not affect Codex Direct Mode: Codex's own
   `CODEX_HOME/auth.json` remains owned by Codex and is not a Provider Profile
   record.

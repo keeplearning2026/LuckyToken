@@ -18,6 +18,7 @@ import type {
   ProviderAuthBindingAuthority,
 } from "../../src/credentials/profile-contract.js";
 import {
+  credentialIncarnationReference,
   createInMemoryProviderCredentialRecordStore,
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
@@ -406,9 +407,16 @@ export async function createSeededCredentialRecordStore(
     createRevision: () => `test-revision-${++revision}`,
   });
   for (const entry of entries) {
-    await store.modifyManagement(
+    const credentialId = `test-credential-${entry.providerId}`;
+    const credentialGeneration = `test-generation-${entry.providerId}`;
+    await store.publishIncarnation(
       entry.providerId,
       NO_PROVIDER_RECORD_REVISION,
+      {
+        credentialId,
+        credentialGeneration,
+        credential: structuredClone(entry.credential),
+      },
       () => ({
         kind: "commit",
         record: {
@@ -416,11 +424,11 @@ export async function createSeededCredentialRecordStore(
           providerId: entry.providerId,
           revision: NO_PROVIDER_RECORD_REVISION,
           selectionGeneration: `test-selection-${entry.providerId}`,
-          activeCredentialId: `test-credential-${entry.providerId}`,
+          activeCredentialId: credentialId,
           switchPolicy: { apiKeyOn429: false, oauthOn429: false },
           profiles: [{
-            credentialId: `test-credential-${entry.providerId}`,
-            credentialGeneration: `test-generation-${entry.providerId}`,
+            credentialId,
+            credentialGeneration,
             authType: entry.credential.type,
             authMethodLabel: entry.authMethodLabel ?? "Test credentials",
             displayName: entry.displayName ?? "Test",
@@ -428,7 +436,12 @@ export async function createSeededCredentialRecordStore(
             priority: 0,
             createdAt: 1,
             updatedAt: 1,
-            credential: structuredClone(entry.credential),
+            incarnation: credentialIncarnationReference(
+              entry.providerId,
+              credentialId,
+              credentialGeneration,
+              entry.credential,
+            ),
           }],
         },
         value: undefined,

@@ -28,10 +28,14 @@ export function publicModelRuntimeFacts(
         );
         return Object.freeze({
           providerId: provider.providerId,
+          // `connected` is the verified external Codex login; `configured` is
+          // the pre-existing locally configured ambient source. Both make the
+          // Provider usable; `unknown` never does.
           usable: auth?.implementationAvailable === true &&
             ((active?.enabled === true &&
               active.health !== "reconnect_required" &&
               active.health !== "disabled") ||
+              auth.ambient?.status === "connected" ||
               auth.ambient?.status === "configured"),
           models: Object.freeze(provider.models.map((model) => model.id)),
         });

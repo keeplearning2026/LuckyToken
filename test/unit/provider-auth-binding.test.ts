@@ -305,13 +305,22 @@ describe("ProviderAuthBindingAuthority", () => {
       profiles: [{
         credentialGeneration: before?.profiles[0]?.credentialGeneration,
         updatedAt: before?.profiles[0]?.updatedAt,
-        credential: {
-          type: "oauth",
-          access: "rotated-access",
-          refresh: "refresh-token",
-          providerPrivate: { tenant: "tenant-a" },
-        },
       }],
+    });
+    expect(
+      await store.readCredential(
+        provider.id,
+        before!.profiles[0]!.credentialId,
+        before!.profiles[0]!.credentialGeneration,
+      ),
+    ).toMatchObject({
+      state: "ok",
+      credential: {
+        type: "oauth",
+        access: "rotated-access",
+        refresh: "refresh-token",
+        providerPrivate: { tenant: "tenant-a" },
+      },
     });
   });
 
@@ -470,8 +479,17 @@ describe("ProviderAuthBindingAuthority", () => {
         credentialId: "credential-a",
         credentialGeneration: "credential-generation-reconnected",
         displayName: "Stable identity",
-        credential: { type: "api_key", key: "new-secret" },
       }],
+    });
+    expect(
+      await store.readCredential(
+        provider.id,
+        "credential-a",
+        "credential-generation-reconnected",
+      ),
+    ).toMatchObject({
+      state: "ok",
+      credential: { type: "api_key", key: "new-secret" },
     });
     const model = models.getModel(provider.id, "fixture-model")!;
     await expect(

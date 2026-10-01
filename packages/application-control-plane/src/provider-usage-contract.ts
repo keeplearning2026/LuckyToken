@@ -8,8 +8,20 @@ export type ProviderUsageUnsupportedReason =
   | "binding"
   | "destination";
 
+/**
+ * Mirror of the Provider Usage authority's bounded failure classes
+ * (src/provider-usage/contract.ts). `timeout`, `temporary`, `account_change`,
+ * `insufficient_validity`, and `terminal` are the external Codex source
+ * classes required by plan section 6; only `terminal` stops automatic
+ * network attempts, and only until the external document revision changes.
+ */
 export type ProviderUsageUnavailableReason =
   | "auth"
+  | "timeout"
+  | "temporary"
+  | "account_change"
+  | "insufficient_validity"
+  | "terminal"
   | "network"
   | "upstream"
   | "schema";

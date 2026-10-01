@@ -40,10 +40,23 @@ import type {
   ProviderAuthBindingCapture,
 } from "../credentials/profile-contract.js";
 import { createProviderCredentialProfiles } from "../credentials/profile-authority.js";
+import { createCodexAppServerRefresher } from "../credentials/codex-app-server-refresh.js";
+import { codexExternalAuthPath } from "../credentials/external-auth.js";
+import {
+  createExternalCredentialSource,
+  type ExternalCredentialSource,
+} from "../credentials/external-credential-source.js";
 import {
   createFileProviderCredentialRecordStore,
   type ProviderCredentialRecordStore,
 } from "../credentials/profile-record-store.js";
+import { resolveCodexHome } from "../integrations/codex/home.js";
+import {
+  buildCodexModelCandidates,
+  type CodexModelCandidateGeneration,
+} from "../integrations/codex/codex-model-candidates.js";
+import type { CodexNativeCatalogSource } from "../integrations/codex/native-catalog-source.js";
+import { applyAutomaticModelOverlay } from "./automatic-model-overlay.js";
 import {
   bundledProviderIds,
   bundledProviderPackages,
@@ -61,7 +74,7 @@ import {
   type ConfigValueResolver,
   type EnvSource,
 } from "./config-value.js";
-import { loadModelsJson } from "./models-json.js";
+import { loadModelsJson, type ModelsJsonConfig } from "./models-json.js";
 import {
   loadProviderPackages,
   type ImportProviderModule,
@@ -73,11 +86,24 @@ export type ProviderSource =
   | "token_bundled"
   | "user";
 
+/** One Codex native-model overlay generation (plan sections 4.6–4.8). */
+export interface AutomaticModelOverlayHandle {
+  /** The candidate set currently published to the served catalog. */
+  generation(): CodexModelCandidateGeneration | undefined;
+  /** Acquire one fresh native snapshot, rebuild the candidate set, and
+   * publish it as one unit. A failure keeps the previous generation. */
+  refresh(): Promise<{
+    readonly generation?: string;
+    readonly warnings: readonly string[];
+  }>;
+}
+
 /** The narrow Provider Runtime seam (Spec §7.3). */
 export interface ProviderRuntime {
   readonly models: Models;
   readonly credentialManagement: CredentialProfileManagement;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
+  readonly automaticModelOverlay: AutomaticModelOverlayHandle;
   scrubCredentialText(value: string): string;
   readonly catalog: CatalogRuntimeHandle;
   catalogOperationsFor(capture: ProviderAuthBindingCapture): CatalogProviderOperations;
@@ -104,6 +130,14 @@ export interface CreateProviderRuntimeOptions {
   readonly onCredentialStoreDegraded?: (error: unknown) => void;
   readonly createUuid?: () => string;
   readonly now?: () => number;
+  /** Codex-owned home observed by the external credential source and the
+   * Codex-native refresh delegation. Defaults to `resolveCodexHome()`. */
+  readonly codexHome?: string;
+  /** Shared Codex native acquisition. When present, one snapshot generation
+   * feeds the automatic `openai-codex` model overlay. */
+  readonly nativeCatalogSource?: CodexNativeCatalogSource;
+  /** Test/composition seam for the external credential boundary. */
+  readonly externalCredentialSource?: ExternalCredentialSource;
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -181,19 +215,30 @@ export async function createProviderRuntime(
   );
   const now = options.now ?? Date.now;
   const createUuid = options.createUuid ?? randomUUID;
+  const codexHome = options.codexHome ?? resolveCodexHome();
+  const externalSource =
+    options.externalCredentialSource ??
+    createExternalCredentialSource({
+      authPath: codexExternalAuthPath(codexHome),
+      refresher: createCodexAppServerRefresher({ codexHome }),
+      now,
+    });
+  const recordStore =
+    options.credentialRecordStore ??
+    createFileProviderCredentialRecordStore({
+      piDirectory: options.piDirectory,
+      createRevision: createUuid,
+      ...(options.onCredentialStoreDegraded === undefined
+        ? {}
+        : { onLockDegraded: options.onCredentialStoreDegraded }),
+    });
   let currentProviders: () => readonly Provider[] = () => Object.freeze([]);
   const profileState = createProviderCredentialProfiles({
-    recordStore: options.credentialRecordStore ??
-      createFileProviderCredentialRecordStore({
-        piDirectory: options.piDirectory,
-        createRevision: createUuid,
-        ...(options.onCredentialStoreDegraded === undefined
-          ? {}
-          : { onLockDegraded: options.onCredentialStoreDegraded }),
-      }),
+    recordStore,
     providers: () => currentProviders(),
     createId: createUuid,
     now,
+    externalSource,
     ambientStatus: (providerId) =>
       modelsJson?.providers[providerId]?.apiKey === undefined
         ? "unknown"
@@ -214,11 +259,58 @@ export async function createProviderRuntime(
       : { modelsStore: options.modelsStore }),
   });
 
+  // Automatic `openai-codex` model overlay (plan section 4): one native
+  // acquisition generation, shared by every view. The candidate set is
+  // unfiltered by user configuration; each view applies the same per-id
+  // exclusion rule against its own configuration.
+  const automaticOverlayProviderId = "openai-codex" as const;
+  const builtins = builtinProviders();
+  const piCodexModels =
+    builtins.find((provider) => provider.id === automaticOverlayProviderId)
+      ?.getModels() ?? Object.freeze([]);
+  const userProvidersView: Readonly<Record<string, unknown>> =
+    modelsJson?.providers ?? Object.freeze({});
+  let automaticOverlay: CodexModelCandidateGeneration | undefined;
+  const automaticOverlayWarnings: string[] = [];
+  if (options.nativeCatalogSource !== undefined) {
+    try {
+      automaticOverlay = buildCodexModelCandidates({
+        snapshot: await options.nativeCatalogSource.load(),
+        piModels: piCodexModels,
+      });
+      automaticOverlayWarnings.push(...automaticOverlay.warnings);
+    } catch {
+      automaticOverlay = undefined;
+    }
+  }
+  const overlayForView = (
+    providers: Readonly<Record<string, unknown>>,
+  ): Readonly<Record<string, unknown>> =>
+    applyAutomaticModelOverlay({
+      providers,
+      overlay: automaticOverlay,
+      providerId: automaticOverlayProviderId,
+    });
+  // The candidate set is validated before it is appended, and every entry the
+  // overlay does not append to comes from the already-validated user
+  // configuration; the composed record is a models.json provider view by
+  // construction.
+  const servedModelsJson: ModelsJsonConfig = Object.freeze({
+    providers: overlayForView(userProvidersView) as unknown as ModelsJsonConfig["providers"],
+  });
+
   // Step 1+2: Pi built-ins + models.json overlays/custom Providers.
-  const modelsJsonProviderIds = registerTokenProviders(mutableModels, {
-    ...(modelsJson === undefined ? {} : { modelsJson }),
+  const registeredProviderIds = registerTokenProviders(mutableModels, {
+    modelsJson: servedModelsJson,
     configValues,
   });
+  const modelsJsonProviderIds = Object.freeze(
+    registeredProviderIds.filter(
+      (providerId) =>
+        providerId !== automaticOverlayProviderId ||
+        Object.hasOwn(userProvidersView, providerId),
+    ),
+  );
 
   // Step 3: Token bundled Provider Packages. They load through the
   // same Token Provider Package contract as user packages (Spec
@@ -277,7 +369,7 @@ export async function createProviderRuntime(
   // model-level configured header layer above the standard Pi auth path.
   const facade: Models = createRequestCompositionModels(
     mutableModels,
-    modelsJson,
+    servedModelsJson,
     { configValues },
   );
 
@@ -289,6 +381,20 @@ export async function createProviderRuntime(
   await served.refresh({ allowNetwork: false });
   served.capture();
   await profileState.management.query();
+
+  // Startup orphan maintenance: the record is authoritative, so an
+  // unreferenced incarnation is collected only after the store's grace period
+  // and only while holding the per-credential lock. Failures are bounded
+  // maintenance noise and never block startup.
+  void (async () => {
+    try {
+      for (const providerId of await recordStore.listProviderIds()) {
+        await recordStore.collectOrphans(providerId);
+      }
+    } catch {
+      // Best-effort maintenance.
+    }
+  })();
 
   // Source classification is deterministic (Spec §9.3): bundled IDs win,
   // then Pi built-in IDs, then the startup models.json/user-package Provider
@@ -352,10 +458,54 @@ export async function createProviderRuntime(
     });
   };
 
+  const automaticModelOverlayHandle: AutomaticModelOverlayHandle = Object.freeze({
+    generation: () => automaticOverlay,
+    async refresh() {
+      if (options.nativeCatalogSource === undefined) {
+        return Object.freeze({ warnings: Object.freeze([]) });
+      }
+      // Explicit invalidation: a manual refresh re-acquires rather than
+      // reusing a TTL-optimized snapshot.
+      options.nativeCatalogSource.invalidate();
+      let next: CodexModelCandidateGeneration;
+      try {
+        next = buildCodexModelCandidates({
+          snapshot: await options.nativeCatalogSource.load(),
+          piModels: piCodexModels,
+        });
+      } catch {
+        // Publication is staged: a failed refresh keeps the previous
+        // generation authoritative.
+        return Object.freeze({
+          warnings: Object.freeze([
+            "Codex native model overlay refresh failed; the previous generation stays published.",
+          ]),
+        });
+      }
+      registerTokenProviders(mutableModels, {
+        modelsJson: Object.freeze({
+          providers: applyAutomaticModelOverlay({
+            providers: userProvidersView,
+            overlay: next,
+            providerId: automaticOverlayProviderId,
+          }) as unknown as ModelsJsonConfig["providers"],
+        }),
+        configValues,
+      });
+      automaticOverlay = next;
+      served.capture();
+      return Object.freeze({
+        generation: next.generation,
+        warnings: next.warnings,
+      });
+    },
+  });
+
   return Object.freeze({
     models: served,
     credentialManagement: profileState.management,
     providerAuthBindings: profileState.binding,
+    automaticModelOverlay: automaticModelOverlayHandle,
     scrubCredentialText: (value: string) => profileState.scrub(value),
     catalog: Object.freeze({
       models: served,

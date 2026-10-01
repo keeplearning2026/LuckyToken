@@ -39,8 +39,10 @@
  *   - `~/.codex/Token-catalog.json` with the target model metadata.
  *
  * The suite creates a temporary `CODEX_HOME` and writes its own configuration.
- * The opt-in `--use-codex-auth` search probe loads the user's ChatGPT auth
- * into that temporary home and deletes it before returning.
+ * The opt-in `--dedicated-codex-auth` search/external probe requires a
+ * dedicated test login supplied through `TOKEN_CODEX_TEST_AUTH_HOME`; it never
+ * reads or copies the user's real `~/.codex/auth.json`. The suite is skipped,
+ * not mocked, when that dedicated login is unavailable.
  */
 
 import {
@@ -140,7 +142,18 @@ interface OnlineArguments {
   readonly onlyScenario: string | undefined;
   readonly injectedConfig: boolean;
   readonly searchProbe: boolean;
-  readonly useCodexAuth: boolean;
+  /** Dedicated test-login mode: the external Codex credential source, the
+   * Codex-delegated refresh, and the Codex CLI all observe one dedicated
+   * test home. */
+  readonly dedicatedCodexAuth: boolean;
+}
+
+const DEDICATED_CODEX_AUTH_HOME_ENV = "TOKEN_CODEX_TEST_AUTH_HOME";
+
+/** The dedicated test-login home; never the user's Codex home. */
+function dedicatedCodexAuthHome(): string | undefined {
+  const value = process.env[DEDICATED_CODEX_AUTH_HOME_ENV]?.trim();
+  return value === undefined || value.length === 0 ? undefined : resolve(value);
 }
 
 /**
@@ -189,7 +202,7 @@ function parseArguments(args: readonly string[]): OnlineArguments {
   let onlyScenario: string | undefined;
   let injectedConfig = false;
   let searchProbe = false;
-  let useCodexAuth = false;
+  let dedicatedCodexAuth = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
     if (argument === "--injected-config") {
@@ -200,8 +213,8 @@ function parseArguments(args: readonly string[]): OnlineArguments {
       searchProbe = true;
       continue;
     }
-    if (argument === "--use-codex-auth") {
-      useCodexAuth = true;
+    if (argument === "--dedicated-codex-auth") {
+      dedicatedCodexAuth = true;
       continue;
     }
     if (argument === "--scenario") {
@@ -268,7 +281,7 @@ function parseArguments(args: readonly string[]): OnlineArguments {
     onlyScenario,
     injectedConfig,
     searchProbe,
-    useCodexAuth,
+    dedicatedCodexAuth,
   };
 }
 
@@ -555,7 +568,12 @@ async function prepareIsolatedCodexHome(
     const sourceCodexHome =
       inheritedCodexHome !== undefined && inheritedCodexHome.length > 0
         ? inheritedCodexHome
-        : join(homedir(), ".codex");
+        : undefined;
+    if (sourceCodexHome === undefined) {
+      throw new Error(
+        "codex_home_required: run the online suite through scripts/run-with-codex-test-sandbox.mjs",
+      );
+    }
     const sourceCatalogPath = join(sourceCodexHome, "Token-catalog.json");
     const sourceCatalog = JSON.parse(
       await readFile(sourceCatalogPath, "utf8"),
@@ -1686,11 +1704,21 @@ export async function runCodexCliOnlineSuite(
     onlyScenario,
     injectedConfig,
     searchProbe,
-    useCodexAuth,
+    dedicatedCodexAuth,
   } = parseArguments(args);
   const aliasSegments = alias?.split("/") ?? [];
-  if (searchProbe && (!useCodexAuth || !injectedConfig)) {
-    throw new Error("--search-probe requires --use-codex-auth and --injected-config");
+  if (searchProbe && (!dedicatedCodexAuth || !injectedConfig)) {
+    throw new Error(
+      "--search-probe requires --dedicated-codex-auth and --injected-config",
+    );
+  }
+  const dedicatedAuthHome = dedicatedCodexAuth
+    ? dedicatedCodexAuthHome()
+    : undefined;
+  if (dedicatedCodexAuth && dedicatedAuthHome === undefined) {
+    throw new Error(
+      `Dedicated Codex test login is unavailable: set ${DEDICATED_CODEX_AUTH_HOME_ENV} to a dedicated CODEX_HOME containing auth.json`,
+    );
   }
   if (
     injectedConfig &&
@@ -1723,14 +1751,24 @@ export async function runCodexCliOnlineSuite(
   const stateDirectory = join(directory, ".Token");
   const piDirectory = join(stateDirectory, "pi");
   await mkdir(piDirectory, { recursive: true });
-  let responsesToken = "unused-local-sdk-key";
-  if (useCodexAuth) {
-    const auth = JSON.parse(await readFile(join(homedir(), ".codex", "auth.json"), "utf8")) as {
-      tokens?: { access_token?: unknown };
-    };
-    const token = auth.tokens?.access_token;
-    if (typeof token !== "string" || token.length === 0) throw new Error("Codex access token is unavailable");
-    responsesToken = token;
+  const responsesToken = "unused-local-sdk-key";
+  const codexHomeOverride: string | undefined = dedicatedAuthHome;
+  if (dedicatedAuthHome !== undefined) {
+    // The external credential source, the Codex-delegated refresh, and the
+    // Codex CLI must all observe the exact same dedicated home.
+    const auth = JSON.parse(
+      await readFile(join(dedicatedAuthHome, "auth.json"), "utf8"),
+    ) as { auth_mode?: unknown; tokens?: unknown };
+    if (
+      auth.auth_mode !== "chatgpt" ||
+      typeof auth.tokens !== "object" ||
+      auth.tokens === null
+    ) {
+      throw new Error(
+        `Dedicated Codex test login at ${DEDICATED_CODEX_AUTH_HOME_ENV} is not a ChatGPT auth document`,
+      );
+    }
+    process.env.CODEX_HOME = dedicatedAuthHome;
   }
   const stateFile = join(stateDirectory, "state", "openai-responses.json");
   const configPath = join(stateDirectory, "config.json");
@@ -1879,7 +1917,7 @@ export async function runCodexCliOnlineSuite(
       : undefined,
   );
   const codexEnvironment = Object.freeze({
-    [CODEX_HOME_ENV_KEY]: preparedCodexHome.path,
+    [CODEX_HOME_ENV_KEY]: codexHomeOverride ?? preparedCodexHome.path,
     ...(injectedConfig
       ? { [CODEX_INJECTED_CONFIG_ENV_KEY]: "1" }
       : {}),
@@ -1887,21 +1925,6 @@ export async function runCodexCliOnlineSuite(
   console.error(`[codex-suite] server listening at ${codexBaseUrl}`);
 
   try {
-    if (useCodexAuth) {
-      const source = JSON.parse(await readFile(join(homedir(), ".codex", "auth.json"), "utf8")) as {
-        auth_mode?: unknown;
-        tokens?: unknown;
-        last_refresh?: unknown;
-      };
-      if (source.auth_mode !== "chatgpt" || typeof source.tokens !== "object" || source.tokens === null) {
-        throw new Error("Codex ChatGPT auth is unavailable");
-      }
-      await writeFile(join(preparedCodexHome.path, "auth.json"), JSON.stringify({
-        auth_mode: source.auth_mode,
-        tokens: source.tokens,
-        last_refresh: source.last_refresh,
-      }), { encoding: "utf8", mode: 0o600 });
-    }
     const summary = emptySummary();
     const plan = searchProbe ? searchProbeScenarios() : buildPlan(batches);
     const scenarios =

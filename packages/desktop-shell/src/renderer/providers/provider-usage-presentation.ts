@@ -14,6 +14,10 @@ type ObservedProviderUsageProjection = Extract<
 >;
 type ProviderUsageWindowProjection =
   ObservedProviderUsageProjection["windows"][number];
+type ProviderUsageUnavailableReason = Extract<
+  ProviderUsageProviderProjection,
+  { readonly state: "unavailable" }
+>["reason"];
 
 export interface ProviderCardUsagePresentation {
   readonly primary: readonly string[];
@@ -22,15 +26,51 @@ export interface ProviderCardUsagePresentation {
   readonly refreshable: boolean;
 }
 
+export interface ProviderUsagePresentationOptions {
+  /** True when this Provider is served by the verified external Codex login
+   * (`ambient.status === "connected"`). The bounded unavailable/transient
+   * state then carries the "refresh through Codex" prompt; managed bindings
+   * keep their previous presentation. */
+  readonly externalSource?: boolean;
+}
+
 export function providerUsageRefreshFailureNotice(): string {
   return "Provider usage could not be refreshed.";
 }
 
+/** One bounded, actionable message per failure class (plan section 6). */
+function unavailableUsagePrompt(
+  reason: ProviderUsageUnavailableReason,
+): string {
+  switch (reason) {
+    case "terminal":
+      return "Codex sign-in was rejected. Refresh through Codex, then try again.";
+    case "account_change":
+      return "Codex sign-in changed accounts. Refresh through Codex, then try again.";
+    case "insufficient_validity":
+      return "Codex sign-in no longer satisfies the account contract. Refresh through Codex, then try again.";
+    case "temporary":
+      return "Codex sign-in is temporarily unreadable. Refresh through Codex, then try again.";
+    case "timeout":
+      return "Usage refresh timed out. Try again.";
+    case "auth":
+      return "Sign in to Codex, then try again.";
+    case "network":
+    case "upstream":
+      return "Usage is temporarily unavailable. Try again.";
+    case "schema":
+      return "Usage response could not be read.";
+  }
+}
+
 export function providerUsageRefreshNotice(
   refresh: ProviderUsageRefreshProjection | undefined,
+  options: ProviderUsagePresentationOptions = {},
 ): string | undefined {
   if (refresh?.outcome === "unavailable") {
-    return providerUsageRefreshFailureNotice();
+    return options.externalSource === true
+      ? unavailableUsagePrompt(refresh.reason)
+      : providerUsageRefreshFailureNotice();
   }
   if (refresh?.outcome === "unsupported") {
     return refresh.reason === "destination"
@@ -94,6 +134,7 @@ function money(amount: number, currency: string): string {
 export function projectProviderCardUsage(
   provider: ProviderUsageProviderProjection | undefined,
   now: number,
+  options: ProviderUsagePresentationOptions = {},
 ): ProviderCardUsagePresentation {
   if (provider === undefined || provider.state === "unobserved") {
     return Object.freeze({
@@ -114,6 +155,9 @@ export function projectProviderCardUsage(
     return Object.freeze({
       primary: Object.freeze([]),
       secondary: Object.freeze([]),
+      ...(options.externalSource === true
+        ? { status: unavailableUsagePrompt(provider.reason) }
+        : {}),
       refreshable: true,
     });
   }

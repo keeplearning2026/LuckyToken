@@ -94,6 +94,8 @@ import { createFileSettingsStore } from "./settings/file-store.js";
 import { startRunningDataPlaneListener } from "./running-data-plane-listener.js";
 import { resolveCodexHome } from "./integrations/codex/home.js";
 import { createCodexNativeCatalogSource } from "./integrations/codex/native-catalog-source.js";
+import type { CodexModelCandidateGeneration } from "./integrations/codex/codex-model-candidates.js";
+import { applyAutomaticModelOverlay } from "./providers/automatic-model-overlay.js";
 import { buildCodexCatalog } from "./integrations/codex/catalog.js";
 import {
   createCodexCatalogValidator,
@@ -627,9 +629,22 @@ async function startNormalApplication(options: {
       }
     })();
     const controlPipe = await createProductionControlPipe();
+    // The models.json edit preview composes the current-disk user
+    // configuration with the SAME acquisition generation the served catalog
+    // uses; a served refresh never hot-applies disk edits, and a preview
+    // refresh never changes the served catalog. `currentAutomaticOverlay` is
+    // assigned after the Provider Runtime acquires its first generation.
+    let currentAutomaticOverlay: CodexModelCandidateGeneration | undefined;
     const modelsAuthority = createModelsJsonAuthority({
       path: config.pi.modelsJson,
-      compose: (providers) => composeEffectiveCatalog(providers),
+      compose: (providers) =>
+        composeEffectiveCatalog(
+          applyAutomaticModelOverlay({
+            providers,
+            overlay: currentAutomaticOverlay,
+            providerId: "openai-codex",
+          }),
+        ),
     });
     const catalogCacheStore = createCatalogCacheStore({
       path: join(config.pi.directory, "models-catalog-cache.json"),
@@ -714,9 +729,16 @@ async function startNormalApplication(options: {
       });
     }
 
+    const codexHome = resolveCodexHome();
+    const codexNativeCatalog = createCodexNativeCatalogSource({
+      codexHome,
+      ttlMs: 5 * 60_000,
+    });
     const providerRuntime = await createProviderRuntime({
       piDirectory: config.pi.directory,
       modelsJsonPath: config.pi.modelsJson,
+      codexHome,
+      nativeCatalogSource: codexNativeCatalog,
       bundledProviderConfigurations:
         bundledProviderConfigurationLoad.configurations,
       userProviderPackages: config.providerPackages,
@@ -744,6 +766,7 @@ async function startNormalApplication(options: {
           return usage === undefined ? [] : [usage];
         }),
     });
+    currentAutomaticOverlay = providerRuntime.automaticModelOverlay.generation();
     const providerUsageAuthority = createProviderUsageAuthority({
       models: providerRuntime.models,
       binding: providerRuntime.providerAuthBindings,
@@ -826,7 +849,6 @@ async function startNormalApplication(options: {
     // ON from the real login authority rather than Catalog health.
     await catalogController.bind(providerRuntime.catalog);
     await reconcilePublicModels(catalogController.snapshot());
-    const codexHome = resolveCodexHome();
     const publicModels = Object.freeze({
       requestSnapshot: async () => publicModelAuthority.snapshot(),
     });
@@ -854,7 +876,6 @@ async function startNormalApplication(options: {
         publicModels: publicModelAuthority.snapshot(),
         models: providerRuntime.models,
       });
-    const codexNativeCatalog = createCodexNativeCatalogSource({ codexHome });
     const codexIntegrationAuthority = createCodexIntegrationAuthority({
       codexHome,
       stateDirectory: join(dirname(options.configPath), "integrations", "codex"),
@@ -1321,9 +1342,25 @@ async function startNormalApplication(options: {
               results: Object.freeze([]),
             };
           case "sync":
-            return agentIntegrations.sync();
-          case "set_enabled":
-            return agentIntegrations.setEnabled(command.agentId, command.enabled);
+          case "sync": {
+            const result = await agentIntegrations.sync();
+            await providerRuntime.automaticModelOverlay.refresh();
+            currentAutomaticOverlay =
+              providerRuntime.automaticModelOverlay.generation();
+            return result;
+          }
+          case "set_enabled": {
+            const result = await agentIntegrations.setEnabled(
+              command.agentId,
+              command.enabled,
+            );
+            if (command.enabled) {
+              await providerRuntime.automaticModelOverlay.refresh();
+              currentAutomaticOverlay =
+                providerRuntime.automaticModelOverlay.generation();
+            }
+            return result;
+          }
           case "set_scope":
             return agentIntegrations.setScope(command.agentId, command.scope);
         }
