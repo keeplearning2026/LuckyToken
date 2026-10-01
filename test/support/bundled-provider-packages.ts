@@ -9,6 +9,10 @@ import {
   DEEPSEEK_RESPONSE_PROVIDER_PACKAGE,
   deepSeekResponseProviderImportModule,
 } from "./deepseek-response-provider-package.js";
+import {
+  DEEPSEEK_ANTHROPIC_PROVIDER_PACKAGE,
+  deepSeekAnthropicProviderImportModule,
+} from "./deepseek-anthropic-provider-package.js";
 
 /**
  * Neutral test assembler: every bundled Provider Package keeps its own
@@ -19,11 +23,13 @@ import {
 export function bundledProviderImportModule(): ImportProviderModule {
   const commandCode = commandCodeProviderImportModule();
   const deepSeekResponse = deepSeekResponseProviderImportModule();
+  const deepSeekAnthropic = deepSeekAnthropicProviderImportModule();
   const fragments: Readonly<Record<string, ImportProviderModule>> =
     Object.freeze({
       [COMMANDCODE_PROVIDER_PACKAGE]: commandCode,
       [COMMANDCODE_GOAT_PROVIDER_PACKAGE]: commandCode,
       [DEEPSEEK_RESPONSE_PROVIDER_PACKAGE]: deepSeekResponse,
+      [DEEPSEEK_ANTHROPIC_PROVIDER_PACKAGE]: deepSeekAnthropic,
     });
   for (const entry of bundledProviderPackages) {
     if (fragments[entry.specifier] === undefined) {

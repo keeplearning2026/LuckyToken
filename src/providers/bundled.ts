@@ -45,6 +45,11 @@ export const bundledProviderPackages: readonly BundledProviderPackage[] =
       providerId: "deepseek-response",
       configuration: Object.freeze({}),
     }),
+    Object.freeze({
+      specifier: "@token/provider-deepseek-anthropic",
+      providerId: "deepseek-anthropic",
+      configuration: Object.freeze({}),
+    }),
   ]);
 
 /** The bundled package specifiers, as a set for cheap membership checks. */

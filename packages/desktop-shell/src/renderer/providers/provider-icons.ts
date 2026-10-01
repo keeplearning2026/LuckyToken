@@ -102,6 +102,7 @@ export const providerIconDefinitions: Readonly<
   },
   "deepseek": deepseekIcon,
   "deepseek-response": deepseekIcon,
+  "deepseek-anthropic": deepseekIcon,
   "fireworks": {
     title: "Fireworks",
     paths: [

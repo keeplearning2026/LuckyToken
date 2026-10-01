@@ -86,6 +86,10 @@ export async function assembleReleaseBackend({
       name: "@token/provider-deepseek-response",
     },
     {
+      directory: "packages/provider-deepseek-anthropic",
+      name: "@token/provider-deepseek-anthropic",
+    },
+    {
       directory: "packages/application-control-plane",
       name: "@token/application-control-plane",
     },

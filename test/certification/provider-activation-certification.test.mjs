@@ -319,6 +319,32 @@ test("the DeepSeek Responses integration is a bundled product Provider", async (
   );
 });
 
+test("the DeepSeek Anthropic integration is a bundled product Provider", async () => {
+  const bundled = await readFile(
+    path.join(repositoryRoot, "src", "providers", "bundled.ts"),
+    "utf8",
+  );
+  assert.match(
+    bundled,
+    /@token\/provider-deepseek-anthropic/u,
+    "bundled metadata must carry the DeepSeek Anthropic package specifier",
+  );
+  assert.match(
+    bundled,
+    /providerId:\s*"deepseek-anthropic"/u,
+    "bundled metadata must reserve the deepseek-anthropic Provider id",
+  );
+  const assemble = await readFile(
+    path.join(repositoryRoot, "scripts", "assemble-release-backend.mjs"),
+    "utf8",
+  );
+  assert.match(
+    assemble,
+    /provider-deepseek-anthropic/u,
+    "release assembly must pack the bundled DeepSeek Anthropic package",
+  );
+});
+
 test("the packaged Electron activation journey is a release blocker", async () => {
   const rootManifest = JSON.parse(
     await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
