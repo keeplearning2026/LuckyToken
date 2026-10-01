@@ -128,7 +128,7 @@ describe("Credential Profile public wire", () => {
   });
 
   it("accepts only the bounded configured/unknown ambient status projection", () => {
-    const ambientState = (status: string) => ({
+    const ambientState = (status: string, displayName?: unknown) => ({
       providers: [{
         providerId: "fixture-provider",
         implementationAvailable: true,
@@ -137,6 +137,7 @@ describe("Credential Profile public wire", () => {
           kind: "external",
           status,
           message: "Resolved when used",
+          ...(displayName === undefined ? {} : { displayName }),
         },
         profiles: [],
       }],
@@ -152,6 +153,20 @@ describe("Credential Profile public wire", () => {
     expect(decodeCredentialProfilesCommandResult({
       outcome: "ok",
       state: ambientState("verified"),
+    })).toBeUndefined();
+    // A verified external Codex login carries the Backend-projected label the
+    // Renderer displays instead of the generic not-connected copy.
+    expect(decodeCredentialProfilesCommandResult({
+      outcome: "ok",
+      state: ambientState("connected", "Codex login"),
+    })).toBeDefined();
+    expect(decodeCredentialProfilesCommandResult({
+      outcome: "ok",
+      state: ambientState("connected", "x".repeat(65)),
+    })).toBeUndefined();
+    expect(decodeCredentialProfilesCommandResult({
+      outcome: "ok",
+      state: ambientState("connected", 7),
     })).toBeUndefined();
   });
 });

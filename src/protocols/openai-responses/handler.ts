@@ -50,6 +50,7 @@ import {
 } from "./session-state.js";
 import {
   bufferNativeResponsesResponse,
+  nativeResponsesWireShape,
   projectNativeResponsesBody,
   type NativeResponsesResult,
 } from "./native-response.js";
@@ -1138,7 +1139,7 @@ async function providerNativeBranch(
   if (
     upstream.status >= 200 &&
     upstream.status < 300 &&
-    contentType.toLowerCase().includes("text/event-stream")
+    nativeResponsesWireShape(body, contentType) === "sse"
   ) {
     const normalizeLocation = {
       phase: "lane_response_processing",

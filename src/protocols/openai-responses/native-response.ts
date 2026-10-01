@@ -424,13 +424,59 @@ function projectSse(
   return { body: new TextEncoder().encode(projected) };
 }
 
+const UTF8_BOM = Object.freeze([0xef, 0xbb, 0xbf] as const);
+const WIRE_SHAPE_SCAN_BYTES = 64;
+const SSE_FIELD_PREFIX = /^(?:event|data|id|retry):/u;
+
+/**
+ * The wire shape of one buffered Provider Native Responses body.
+ *
+ * The upstream content type is authoritative when it names a shape. Some
+ * compatible backends — including the Codex Responses backend — answer a
+ * buffered SSE body without any content type, so the decision falls back to
+ * the first non-whitespace bytes: a JSON body always starts with `{`, while an
+ * SSE body starts with a field name or comment. The scan is bounded to the
+ * head of the body; it never parses or rewrites content.
+ */
+export function nativeResponsesWireShape(
+  body: Uint8Array,
+  contentType: string,
+): "sse" | "json" {
+  const normalized = contentType.trim().toLowerCase();
+  if (normalized.includes("text/event-stream")) return "sse";
+  if (normalized.includes("json")) return "json";
+  return bodyLooksLikeSse(body) ? "sse" : "json";
+}
+
+function bodyLooksLikeSse(body: Uint8Array): boolean {
+  let index =
+    body.length >= UTF8_BOM.length &&
+    UTF8_BOM.every((byte, offset) => body[offset] === byte)
+      ? UTF8_BOM.length
+      : 0;
+  const limit = Math.min(body.length, index + WIRE_SHAPE_SCAN_BYTES);
+  while (index < limit) {
+    const byte = body[index]!;
+    if (byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  if (index >= limit) return false;
+  const head = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+    body.subarray(index, Math.min(body.length, index + 16)),
+  );
+  return head.startsWith(":") || SSE_FIELD_PREFIX.test(head);
+}
+
 export function projectNativeResponsesBody(
   body: Uint8Array,
   contentType: string,
   alias: string,
 ): { readonly body: Uint8Array<ArrayBuffer> } | { readonly error: string } {
   const text = new TextDecoder().decode(body);
-  return contentType.toLowerCase().includes("text/event-stream")
+  return nativeResponsesWireShape(body, contentType) === "sse"
     ? projectSse(text, alias)
     : projectJson(text, alias);
 }

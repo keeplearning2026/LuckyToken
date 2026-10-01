@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { projectNativeResponsesBody as projectResponsesPassthroughBody } from "../../src/protocols/openai-responses/native-response.js";
+import {
+  nativeResponsesWireShape,
+  projectNativeResponsesBody as projectResponsesPassthroughBody,
+} from "../../src/protocols/openai-responses/native-response.js";
 
 const ALIAS = "my-alias";
 const CANONICAL = "gpt-4o";
@@ -325,6 +328,41 @@ describe("Ticket 15 Responses passthrough response projection", () => {
       "text/event-stream",
       ALIAS,
     );
+    expect("error" in result).toBe(false);
+    const projected = decode((result as { body: Uint8Array }).body);
+    expect(projected.match(/"model":"my-alias"/gu)).toHaveLength(2);
+    expect(projected).not.toContain(CANONICAL);
+  });
+
+  it("decides the wire shape without relying on a content type", () => {
+    const sse = encode(
+      ["event: response.created", `data: ${responseObject(CANONICAL)}`, ""].join("\n"),
+    );
+    const json = encode(responseObject(CANONICAL));
+
+    expect(nativeResponsesWireShape(sse, "")).toBe("sse");
+    expect(nativeResponsesWireShape(json, "")).toBe("json");
+    expect(nativeResponsesWireShape(sse, "text/event-stream; charset=utf-8")).toBe("sse");
+    expect(nativeResponsesWireShape(json, "application/json")).toBe("json");
+    // A BOM and leading blank lines do not hide the SSE field name.
+    expect(nativeResponsesWireShape(encode(`\uFEFF\n\n${"data: {}"}`), "")).toBe("sse");
+    expect(nativeResponsesWireShape(encode("   "), "")).toBe("json");
+    expect(nativeResponsesWireShape(encode(""), "")).toBe("json");
+  });
+
+  it("projects an SSE body the Codex backend delivered without a content type", () => {
+    const stream = [
+      "event: response.created",
+      `data: ${responseObject(CANONICAL)}`,
+      "",
+      "event: response.completed",
+      `data: ${responseObject(CANONICAL)}`,
+      "",
+      "",
+    ].join("\n");
+
+    const result = projectResponsesPassthroughBody(encode(stream), "", ALIAS);
+
     expect("error" in result).toBe(false);
     const projected = decode((result as { body: Uint8Array }).body);
     expect(projected.match(/"model":"my-alias"/gu)).toHaveLength(2);

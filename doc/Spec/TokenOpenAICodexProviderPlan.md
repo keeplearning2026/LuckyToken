@@ -808,12 +808,18 @@ Merge points:
    branch that copied the user's real `auth.json` has been removed; the online
    suite now requires `TOKEN_CODEX_TEST_AUTH_HOME` and records an explicit
    skip when that dedicated login is unavailable.
-3. **Dedicated online test login (P4 gate) — OPEN.** The provisioning path
-   (separate account or device-code test login) for the `openai-codex` online
-   suite is not yet defined. Without it the new
-   `npm run test:online-openai-codex` suite reports
-   `{"result":"skip","reason":"dedicated_codex_test_login_unavailable"}` and a
-   successful Codex-delegated rotation cannot be observed.
+3. **Online test login (P4 gate) — RESOLVED for the local-login path.** By
+   user decision the `openai-codex` online suite uses the local Codex login
+   (`CODEX_HOME` or `~/.codex`) unless `TOKEN_CODEX_TEST_AUTH_HOME` names a
+   dedicated home. The suite reads the document, never copies it, and a
+   Codex-native refresh may rewrite it in place exactly as Codex itself would.
+   The guarded script still records
+   `{"result":"skip","reason":"codex_login_unavailable"}` when it finds no
+   ChatGPT login. A successful **delegated rotation** has still not been
+   observed: the local access token is valid until 2026-10-08, so the run
+   reported `rotation: "not_required"`. Rotating deliberately requires an
+   account whose access token is inside the five-minute window, or a dedicated
+   test credential; that remains the one unobserved P4 branch.
 
 ## 12. Implementation record (branch `codex/openai-codex-auth-native-catalog`)
 
@@ -867,6 +873,48 @@ Clarifications recorded while implementing:
    the bound operation actually resolved (not the capture-time revision), so
    an allowed in-place refresh does not block its own publication while a late
    result from a superseded revision is still rejected.
+5. **Buffered response shape without a content type (found by the P4 online
+   run).** The Codex Responses backend answers a successful request with
+   `200` and a buffered SSE body **without** any `content-type` header. The
+   Provider Native Responses boundary previously gated both the SSE lifecycle
+   normalization and the model-alias projection on that header, so the alias
+   projection took the JSON path, failed, and returned
+   `502 Upstream response could not be projected safely` for every
+   `openai-codex` request. One authoritative decision now lives in
+   `nativeResponsesWireShape(body, contentType)` in
+   `src/protocols/openai-responses/native-response.ts`: an explicit content
+   type wins; otherwise the first non-whitespace bytes decide (`event:` /
+   `data:` / `id:` / `retry:` / `:` → SSE, everything else → JSON, with a
+   leading UTF-8 BOM skipped). The scan is bounded to the head of the buffered
+   body and never parses or rewrites content.
+
+P4 online evidence (2026-10-01, `codex-cli 0.159.2`, local Codex login at
+`%USERPROFILE%\.codex`):
+
+| Observation | Result |
+| --- | --- |
+| Credential source | `connected`; the document was read, never written |
+| `auth.json` after the run | byte-identical (same length, mtime, SHA-256) |
+| Native listable models | 8 |
+| Pi-missing native models appended | `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna` |
+| Served `openai-codex` model count | 9 (6 Pi bundled + 3 appended) |
+| Responses → Provider Native for `gpt-6.1-sol` | HTTP 200, `response.completed` |
+| Anthropic Messages → Semantic Conversion for `gpt-6.1-sol` | HTTP 200, completed message |
+| Usage (WHAM) through the external binding | `succeeded` |
+| Delegated rotation | `not_required` (access token valid until 2026-10-08) |
+| Credential after a lane probe | still usable and non-terminal |
+
+The run also recorded that the Codex backend rejects `max_output_tokens`
+(`Unsupported parameter: max_output_tokens`), which Pi's adapter never sends;
+the online probes therefore use the Codex client body shape.
+
+Online procedure:
+
+- Local login (this machine): `npm run test:online-openai-codex:local`.
+- Dedicated test login / CI: `TOKEN_CODEX_TEST_AUTH_HOME=<home>` with
+  `npm run test:online-openai-codex` (guarded). The suite records
+  `{"result":"skip", ...}` when no ChatGPT login is present and never mocks a
+  login or copies the document into the repository.
 
 P4 status:
 

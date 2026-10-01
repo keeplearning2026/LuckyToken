@@ -45,6 +45,9 @@ export interface ProviderCredentialProfilesProjectionV1 {
   readonly ambient?: {
     readonly kind: "external";
     readonly status: "connected" | "configured" | "unknown";
+    /** Backend-projected source label; for the Codex-owned external source
+     * this is exactly "Codex login". */
+    readonly displayName?: string;
     readonly message: string;
   };
   readonly profiles: readonly CredentialProfileProjectionV1[];

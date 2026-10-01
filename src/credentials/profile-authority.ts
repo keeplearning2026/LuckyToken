@@ -274,6 +274,7 @@ function projectRecord(
   ambientOverride?: {
     readonly kind: "external";
     readonly status: "connected" | "configured" | "unknown";
+    readonly displayName?: string;
     readonly message: string;
   },
 ): ProviderCredentialStateProjection {
@@ -621,6 +622,7 @@ export function createProviderCredentialProfiles(options: {
     | {
         readonly kind: "external";
         readonly status: "connected" | "configured" | "unknown";
+        readonly displayName?: string;
         readonly message: string;
       }
     | undefined
@@ -633,6 +635,7 @@ export function createProviderCredentialProfiles(options: {
         return Object.freeze({
           kind: "external" as const,
           status: "connected" as const,
+          displayName: EXTERNAL_AUTH_DISPLAY_NAME,
           message: "Codex login is connected and refreshed in place by Codex",
         });
       }
@@ -640,6 +643,7 @@ export function createProviderCredentialProfiles(options: {
         return Object.freeze({
           kind: "external" as const,
           status: "unknown" as const,
+          displayName: EXTERNAL_AUTH_DISPLAY_NAME,
           message:
             "Codex login is not available; sign in through Codex to use this Provider",
         });
@@ -647,6 +651,7 @@ export function createProviderCredentialProfiles(options: {
       return Object.freeze({
         kind: "external" as const,
         status: "configured" as const,
+        displayName: EXTERNAL_AUTH_DISPLAY_NAME,
         message:
           "Codex login is present but temporarily unreadable; retry or refresh through Codex",
       });
@@ -654,6 +659,7 @@ export function createProviderCredentialProfiles(options: {
       return Object.freeze({
         kind: "external" as const,
         status: "unknown" as const,
+        displayName: EXTERNAL_AUTH_DISPLAY_NAME,
         message: "Codex login state is unknown",
       });
     }

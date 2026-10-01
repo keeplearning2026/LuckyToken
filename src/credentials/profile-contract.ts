@@ -45,6 +45,10 @@ export interface ProviderCredentialStateProjection {
   readonly ambient?: {
     readonly kind: "external";
     readonly status: "connected" | "configured" | "unknown";
+    /** Backend-projected label for a verified external source (for the Codex
+     * source this is exactly "Codex login"). The Renderer displays this value
+     * and never derives a source label itself. */
+    readonly displayName?: string;
     readonly message: string;
   };
   readonly profiles: readonly CredentialProfileProjection[];

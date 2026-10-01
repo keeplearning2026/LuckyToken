@@ -265,8 +265,11 @@ change the general external-source rules above for any other Provider.
 - Presentation. The credential-management view presents the source as
   `connected` when a valid ChatGPT document was read, `configured` when the
   document is locally present but temporarily unreadable, and `unknown` when no
-  local signal exists. Usage, Public Model availability, and Operational
-  Attention treat `connected` as usable.
+  local signal exists. The Backend projects the bounded source label
+  (`Codex login`) with the projection; the Providers list shows that label and
+  a connected status tone instead of the generic `Not connected` copy, and the
+  Renderer never derives a source name itself. Usage, Public Model
+  availability, and Operational Attention treat `connected` as usable.
 
 Token-internal Profiles and this external document share one payload family
 (the Codex ChatGPT branch) but not ownership, path, or refresh rules.

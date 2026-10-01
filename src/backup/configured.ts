@@ -176,7 +176,18 @@ async function captureCredentialProfileSnapshot(
   credentialDirectory: string,
   signal: AbortSignal,
 ): Promise<Uint8Array> {
-  const entries = await readdir(directory, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    // A fresh install has never written a Provider record; an absent record
+    // directory is an empty snapshot, not a backup failure.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
   const providers: Array<{
     providerId: string;
     record: string;

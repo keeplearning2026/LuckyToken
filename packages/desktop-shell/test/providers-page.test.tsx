@@ -131,6 +131,7 @@ const externalConnectedProfiles = (): ProfilesResult => ({
         ambient: {
           kind: "external" as const,
           status: "connected" as const,
+          displayName: "Codex login" as const,
           message: "Codex login is connected and refreshed in place by Codex",
         },
         profiles: [],
@@ -1069,6 +1070,21 @@ describe("Providers Profile product slice", () => {
 
     expect(usageRegion().getAttribute("aria-label")).toContain("Week 25%");
     expect(container.textContent).not.toContain("Usage not refreshed");
+  });
+
+  it("labels a verified external Codex login instead of the generic not-connected copy", async () => {
+    await render({
+      profiles: externalConnectedProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: { providers: [{ providerId: "aws-provider", state: "unobserved" }] },
+      }),
+    });
+
+    const status = container.querySelector('[aria-label="Codex login"]');
+    expect(status).not.toBeNull();
+    expect(container.textContent).not.toContain("Not connected");
+    expect(container.querySelector(".status-dot.good")).not.toBeNull();
   });
 
   it("hides unavailable usage for a connected account type", async () => {

@@ -73,6 +73,23 @@ describe("configured backup contract versions", () => {
     });
   });
 
+  it("treats an absent Provider record directory as an empty sensitive snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-profile-backup-empty-"));
+    try {
+      const source = configuredCredentialProfileBackupSnapshot({
+        pi: { directory: root },
+      } as TokenCliConfig);
+
+      const snapshot = JSON.parse(
+        Buffer.from(await source.snapshot(new AbortController().signal)).toString("utf8"),
+      ) as { providers: readonly unknown[] };
+
+      expect(snapshot.providers).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("snapshots independent Provider records and never reads obsolete auth.json", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-profile-backup-"));
     try {

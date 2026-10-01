@@ -40,6 +40,7 @@ import {
   createProviderRuntime,
   type ProviderRuntime,
 } from "../../src/providers/runtime.js";
+import type { CodexNativeCatalogSource } from "../../src/integrations/codex/native-catalog-source.js";
 import type { SettingsRegistry } from "../../src/settings/catalog.js";
 
 export interface TestConfiguredDataPlaneOptions {
@@ -62,6 +63,10 @@ export interface TestConfiguredDataPlaneOptions {
   readonly codexDirectModels?: CodexDirectModelSource;
   readonly publicModelAuthority?: PublicModelAuthority;
   readonly providerRuntime?: ProviderRuntime;
+  /** Shared Codex native acquisition, forwarded to the Provider Runtime so the
+   * automatic `openai-codex` model overlay is composed exactly like
+   * production. */
+  readonly nativeCatalogSource?: CodexNativeCatalogSource;
 }
 
 export interface TestConfiguredDataPlane extends ProductionDataPlane {
@@ -310,6 +315,9 @@ export async function createConfiguredTokenDataPlane(
       ...(options.modelsStore === undefined
         ? {}
         : { modelsStore: options.modelsStore }),
+      ...(options.nativeCatalogSource === undefined
+        ? {}
+        : { nativeCatalogSource: options.nativeCatalogSource }),
       ...(options.configValueAdapters === undefined
         ? {}
         : { configValueAdapters: options.configValueAdapters }),

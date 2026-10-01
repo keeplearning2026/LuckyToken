@@ -264,11 +264,13 @@ function decodeProviderState(
   if (value.ambient !== undefined) {
     if (
       !isObject(value.ambient) ||
-      !exactKeys(value.ambient, ["kind", "status", "message"]) ||
+      !exactKeys(value.ambient, ["kind", "status", "message"], ["displayName"]) ||
       value.ambient.kind !== "external" ||
       (value.ambient.status !== "connected" &&
         value.ambient.status !== "configured" &&
         value.ambient.status !== "unknown") ||
+      (value.ambient.displayName !== undefined &&
+        !metadata(value.ambient.displayName, 64)) ||
       !metadata(value.ambient.message, 256)
     ) return undefined;
   }

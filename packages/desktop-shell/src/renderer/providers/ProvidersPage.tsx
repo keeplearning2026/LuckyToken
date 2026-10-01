@@ -1162,11 +1162,21 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       catalogFailed ||
       managed?.recordError !== undefined ||
       managed?.implementationAvailable === false;
+    // A verified external Codex login is a connected source even though it has
+    // no managed Profile. The Backend projects the bounded label; the
+    // Renderer never derives a source name itself.
+    const externalLoginLabel =
+      (managed?.profiles.length ?? 0) === 0 &&
+      managed?.ambient?.status === "connected"
+        ? managed.ambient.displayName
+        : undefined;
     const statusTone = hasError
       ? "error"
       : active?.health === "ready"
         ? "good"
-        : active?.health === "reconnect_required"
+        : externalLoginLabel !== undefined
+          ? "good"
+          : active?.health === "reconnect_required"
           ? "error"
           : (managed?.profiles.length ?? 0) > 0
             ? "warning"
@@ -1175,11 +1185,13 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       ? "Provider error"
       : active?.health === "ready"
         ? "Provider available"
-        : active?.health === "reconnect_required"
-          ? "Reconnect required"
-          : (managed?.profiles.length ?? 0) > 0
-            ? "Select or verify a Profile"
-            : "Not connected";
+        : externalLoginLabel !== undefined
+          ? externalLoginLabel
+          : active?.health === "reconnect_required"
+            ? "Reconnect required"
+            : (managed?.profiles.length ?? 0) > 0
+              ? "Select or verify a Profile"
+              : "Not connected";
     const usagePresentation = projectProviderCardUsage(
       providerUsageById[provider.providerId],
       Date.now(),

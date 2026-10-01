@@ -62,6 +62,14 @@ The management UI is organized around user tasks rather than internal subsystems
   verified external Codex login as a usable source; a Codex-side credential
   rotation invalidates the cached observation for that account without
   carrying quota across accounts.
+- The Providers list shows the Backend-projected `Codex login` label instead of
+  the generic `Not connected` copy when the only source is a verified external
+  Codex login.
+- The Codex Responses backend answers with a buffered SSE body and no
+  `content-type`; Provider Native Responses now decides the response wire shape
+  from an explicit content type first and from the bounded head of the body
+  otherwise, so the model-alias projection no longer rejects a valid Codex
+  stream.
 - This does not affect Codex Direct Mode: Codex's own
   `CODEX_HOME/auth.json` remains owned by Codex and is not a Provider Profile
   record.
