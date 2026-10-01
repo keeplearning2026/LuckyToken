@@ -106,7 +106,7 @@ function observeCompactRequestArtifact(
     kind: "artifact_observed",
     artifactId: "client_request_wire",
     artifactKind: "client_request_wire",
-    state: capturedBytes < bytes.byteLength ? "partial" : "captured",
+    state: capturedBytes < bytes.byteLength ? "unavailable" : "captured",
     ...(request.headers.get("content-type") === null
       ? {}
       : { mediaType: request.headers.get("content-type")! }),
@@ -228,7 +228,7 @@ function preserveProviderCompactResponse(
     kind: "artifact_observed",
     artifactId: "provider_native_preserved_response_wire",
     artifactKind: "provider_native_preserved_response_wire",
-    state: capturedBytes < input.body.byteLength ? "partial" : "captured",
+    state: capturedBytes < input.body.byteLength ? "unavailable" : "captured",
     ...(input.headers["content-type"] === undefined
       ? {}
       : { mediaType: input.headers["content-type"] }),

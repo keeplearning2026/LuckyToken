@@ -1,11 +1,13 @@
 # Token Request Journey Diagnostics Specification
 
-- **Status:** CURRENT — failure-diagnosis guarantee, full-journey capture, and unified Request Journey cutover implemented
-- **Date:** 2026-09-22
+- **Status:** IMPLEMENTED — v5 unredacted artifact bodies and current-only Control Plane v8
+- **Date:** 2026-09-30
 - **Scope:** Data Plane request journey, failure location, investigation artifacts, fail-open observation runtime, and one diagnostics persistence authority
 - **Out of scope:** physical SQL/index tuning and legacy data migration/import (not provided)
 
-This document establishes the request-processing map and observation contract implemented by Token's unified Request Journey diagnostics system.
+This document establishes the current request-processing map and observation contract for Token's unified Request Journey diagnostics system. The v5 body policy, storage selection, descriptor changes, and certification gates below are normative current-contract requirements. Implementation evidence and the scope of live verification are recorded in [Diagnostics v5 verification](../Research/TokenDiagnosticsV5Verification.md).
+
+The revision removes artifact-body redaction, retains safe non-body diagnostic facts and HTTP envelopes, and preserves the existing capture settings and observation boundaries. Production must implement one v5 contract only. No old-version reader, writer, migration, field alias, compatibility projection, fallback, or dormant body-redaction path may remain. Existing older files are outside the v5 authority and are not automatically deleted.
 
 It does not create a shared execution path. Direct Mode, Provider Native Preservation, and Semantic Conversion remain independent. They share only request-edge and lifecycle observation facts allowed by the architecture.
 
@@ -245,13 +247,13 @@ JSON and atomic SSE are encodings of the same fully converted Client response. E
 
 Compaction uses the common P0-P2 flow and may select all three lanes. Its additional subjects are compaction request validation, native compact capability, local state expansion, summarization invocation, compaction envelope provenance, and compact response projection. It requires the same Request Journey Record and failure-location precision as model generation.
 
-Current implementation gap: `POST /v1/responses/compact` does not begin the Request Ledger, Invocation Diagnostics, or Deep Capture lifecycle used by the generation handlers.
+`POST /v1/responses/compact` participates in the common Request Journey lifecycle. It does not reopen the former Request Ledger, Invocation Diagnostics, or Deep Capture authorities.
 
 ### 9.2 Model discovery
 
 Model discovery uses P0, P1, P6, P7, and P8. Its operation steps are `read_publication_snapshot`, `project_model_list`, and `encode_model_list`. It does not select a Data Plane Lane.
 
-Current implementation gap: `GET /v1/models` has no Request Journey record or request ID.
+`GET /v1/models` enters HTTP admission with a request ID and a `model_discovery` Journey; its projection failure remains queryable under that same ID.
 
 ### 9.3 Routing and transport rejection
 
@@ -259,11 +261,11 @@ Unmatched routes, drain rejection, and unsupported WebSocket upgrades terminate 
 
 ## 10. Request Artifact matrix
 
-Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_applicable`. Captured artifacts also declare redaction, truncation, original byte count when known, captured byte count, media type, and integrity hash when safe.
+Every artifact slot has a state: `captured`, `unavailable`, or `not_applicable`. Descriptors declare media type, original byte count when known, captured byte count, truncation, a bounded reason when unavailable, and an integrity hash when safely available. A captured body is complete at its declared observation boundary. Incomplete capture has no persisted prefix body and is `unavailable`, not a `partial` artifact. The descriptor and persisted artifact observation have no `redaction` field.
 
 | Artifact | Owner | Direct Mode | Provider Native | Semantic Conversion | Required on failure |
 |---|---|---:|---:|---:|---:|
-| Client Request Wire | Client Protocol edge | yes | yes | yes | yes, bounded and redacted |
+| Client Request Wire | Client Protocol edge | yes | yes | yes | yes when complete, supported, and within capture/retention policy |
 | Parsed Client Request summary | Client Protocol adapter | yes | yes | yes | yes when parsing succeeded |
 | Lane decision | request resolution | yes | yes | yes | yes |
 | Direct Mode outbound request wire | Direct Mode | yes | n/a | n/a | yes when constructed |
@@ -275,10 +277,34 @@ Every artifact slot has a state: `captured`, `partial`, `unavailable`, or `not_a
 | Complete Pi terminal IR | Neutral Core execution | n/a | n/a | yes | yes when any event was observed |
 | Client Response Wire | Client Protocol edge / HTTP transport | yes | yes | yes | yes when constructed |
 | Timeline and attempts | Journey observation | yes | yes | yes | yes |
-| Failure and exception chain | failing owner + redaction choke point | yes | yes | yes | yes |
+| Failure and exception chain | failing owner + non-body fact scrubbing | yes | yes | yes | yes |
 | Safe request context | Journey observation | yes | yes | yes | yes |
 
-Credential values, cookies, authorization capabilities, raw caller credential values, Control Plane capability, and unrelated environment values are never Request Artifacts. A safe Profile identifier, display name, auth type, and selection reason are attribution facts rather than credential material.
+Diagnostics must not independently inspect credential authorities, Profile/AuthResult objects, Control Plane capabilities, or unrelated environment values to build artifacts. Safe Profile identifiers, display names, auth types, and selection reasons remain attribution facts. Existing body observation boundaries may already contain credentials, cookies, tool output, or user code: those bytes and allowed snapshot fields are retained without body scrubbing. Credential-bearing header values and sensitive URL fields remain excluded by the safe-envelope serializer. Raw body content never becomes an ordinary event, failure fact, or SQLite payload.
+
+### 10.1 Evidence representation and protocol/lane coverage
+
+The byte-equality promise applies to complete retained bytes submitted at an existing observation boundary, not to a TCP/TLS trace or an entire replayable HTTP exchange. Safe envelopes omit sensitive fields, Provider Native may have already projected or repaired its wire, and a selected Pi adapter owns HTTP serialization. Replaying a body can require separately supplied credentials, endpoint, model, and protocol context.
+
+| Representation | Existing artifact IDs | Evidence promise |
+|---|---|---|
+| Client wire bytes | `client_request_wire`, `client_response_wire` | Persisted bytes equal the boundary input bytes |
+| Direct wire bytes | `direct_outbound_request_wire`, `direct_upstream_response_wire` | Persisted bytes equal the corresponding Direct transport boundary bytes |
+| Provider Native wire bytes | `provider_native_outbound_request_wire.N`, `provider_native_upstream_response_wire.N`, `provider_native_preserved_response_wire`; existing `provider_native_lifecycle_normalized_wire` where emitted | Persisted bytes equal that attempt/stage boundary input, after any lane-owned work already performed |
+| Pi object snapshot | `pi_invocation_snapshot`, `pi_provider_request_payload`, `pi_provider_response_ir`, existing `pi_terminal_summary` where emitted | Persisted bytes equal the bounded own-data snapshot produced at that ownership boundary; not SDK HTTP wire bytes |
+| Safe HTTP envelope snapshot | `client_request_envelope`, `client_response_envelope`, `direct_outbound_request_envelope`, `direct_upstream_response_envelope`, `provider_native_outbound_request_envelope.N`, `provider_native_upstream_response_envelope.N`, `pi_provider_response_metadata` | Persisted bytes equal the existing safe-envelope serialization; not raw HTTP headers or URL |
+
+`N` identifies the owning path's existing attempt number. No wildcard such as `direct_*` may classify both an envelope snapshot and wire bytes as network-original evidence. Optional existing stages do not become new mandatory observation points.
+
+| Client Protocol / lane | Client wire and safe envelopes | Pi snapshots | Provider request evidence | Provider response evidence |
+|---|---|---|---|---|
+| Responses / Direct | Existing request and response boundaries | Not applicable | Direct outbound wire and safe envelope | Direct upstream wire and safe envelope |
+| Responses / Provider Native | Existing request and response boundaries | Not applicable | Per-attempt native wire and safe envelope | Observed per-attempt upstream wire, safe envelope, and existing preserved/normalized stages |
+| Responses / Semantic | Existing request and response boundaries | Existing invocation and decoded response snapshots | Pi payload object snapshot | Safe metadata and decoded Pi IR; no upstream wire |
+| Anthropic / Provider Native | Existing request and response boundaries | Not applicable | Per-attempt native wire and safe envelope | Observed per-attempt upstream wire, safe envelope, and preserved response |
+| Anthropic / Semantic | Existing request and response boundaries | Existing invocation and decoded response snapshots | Pi payload object snapshot | Safe metadata and decoded Pi IR; no upstream wire |
+
+This revision changes retention representation at existing seams only. It adds no capture points for these five combinations or other operations. In particular, neither Semantic Client Protocol collects raw upstream response events. A retry response not read by its owning lane remains unavailable; diagnostics cannot read it to fill the table.
 
 ## 11. Failure source matrix
 
@@ -360,7 +386,7 @@ write_http_response / response_body
 3. A request has at most one committed Data Plane Lane. No failure after lane commitment changes the lane or falls through.
 4. A normally closed non-successful journey has one primary diagnosis. The first valid primary failure wins; retry/attempt failures remain ordered supporting events. If no primary was observed, the Authority and Worker seal the bounded degraded fallback rather than claiming a complete record without an Incident.
 5. Artifact absence is explicit and reasoned; missing data is never silently presented as complete capture.
-6. Redaction and truncation are permanent artifact facts and cannot be hidden by the UI.
+6. Artifact byte counts, truncation, boundary ownership, and unavailable reasons remain truthful through projection and eviction. Body redaction is absent; non-body safe-fact scrubbing remains mandatory.
 7. Semantic Conversion Provider request payload and response metadata come only from the selected Pi Provider's public `onPayload`/`onResponse` lifecycle as observed by Neutral Core execution; decoded response IR comes from the same Core execution boundary. Raw Provider response events are not a required artifact.
 8. Preservation-lane artifacts do not enter Pi AI IR, and Semantic Conversion artifacts do not reuse either Direct Mode or Provider Native transport or credential implementation.
 9. Observation and persistence failure cannot become the primary Request Incident or replace or modify the model-serving response. Record the completeness degradation when possible; if the single authority is unavailable, expose operational health/attention without creating a secondary request store.
@@ -368,7 +394,7 @@ write_http_response / response_body
 
 ## 14. Observation Runtime Contract
 
-The diagnostics Module is a deep observation Module behind one small Interface. Data Plane callers publish bounded facts and do not know about its queue, child process, redaction, SQLite schema, file tree, retention, retries, projections, or operational-health implementation. Deleting this Module would redistribute those responsibilities to every request path; therefore they belong behind this seam rather than in handlers or lane implementations.
+The diagnostics Module is a deep observation Module behind one small Interface. Data Plane callers publish bounded facts and do not know about its queue, child process, SQLite schema, file tree, retention, retries, projections, or operational-health implementation. Deleting this Module would redistribute those responsibilities to every request path; therefore they belong behind this seam rather than in handlers or lane implementations.
 
 ### 14.1 Data Plane observation Interface
 
@@ -395,7 +421,7 @@ interface ArtifactRecorder {
 }
 ```
 
-`begin`, `observe`, `openArtifact`, `captureJson`, `append`, `finish`, `abandon`, `close`, and `observeRuntime` are synchronous, no-throw operations and never return a `Promise`. `openArtifact` returns only a recorder/no-op recorder, never a serving decision. None of these methods return routing, lane, retry, Profile, cancellation, response, or any other execution decision. They perform only bounded validation/copying, sequencing, and in-memory admission; redaction and persistence run in the independent child process. No caller waits for child-process IPC, directory or file I/O, SQLite, subscription delivery, or persistence acknowledgement. If policy lookup, allocation, validation, redaction, queue admission, child-process, filesystem, or internal observation fails, the Adapter contains that failure, updates operational health when possible, and otherwise behaves as a no-op.
+`begin`, `observe`, `openArtifact`, `captureJson`, `append`, `finish`, `abandon`, `close`, and `observeRuntime` are synchronous, no-throw operations and never return a `Promise`. `openArtifact` returns only a recorder/no-op recorder, never a serving decision. None of these methods return routing, lane, retry, Profile, cancellation, response, or any other execution decision. They perform only bounded validation/copying, sequencing, and in-memory admission; body completeness checks and persistence run in the independent child process. No caller waits for child-process IPC, directory or file I/O, SQLite, subscription delivery, or persistence acknowledgement. If policy lookup, allocation, validation, safe-fact scrubbing, queue admission, child-process, filesystem, or internal observation fails, the Adapter contains that failure, updates operational health when possible, and otherwise behaves as a no-op.
 
 `RequestJourneyBeginInput` contains the request-edge `requestId`, operation candidate, transport kind, method/path facts, accepted time, and initial cancellation context. It contains no runtime-generated diagnostics ID. The Node HTTP edge creates the request ID at P0 before routing and passes the same Observer through the Runtime. A direct in-process `TokenRuntime.handle()` call creates its request ID at its own P0 seam and records `transport=in_process`. No handler, lane, capture Adapter, or persistence implementation may mint a second request correlation ID.
 
@@ -450,9 +476,9 @@ Artifacts are copied only where their owning module already has the bytes:
 
 Diagnostics must not clone or re-read a consumed body, add a second stream consumer, retain a live stream, wrap or replace `fetch`, inject a transport, or reconstruct evidence from a different representation. Capture failure changes only the artifact descriptor.
 
-The request-local Flight Recorder retains only bounded, unacknowledged copied chunks in the Backend process. Object-only Semantic artifacts have a fixed 1 MiB synchronous snapshot budget and become `unavailable:synchronous_json_snapshot_limit_exceeded` when they exceed it; this prevents an unbounded stringify, getter, or `toJSON` call on the serving thread. A dedicated Diagnostics child process owns at most 64 MiB for one complete naturally streamed wire artifact and 512 MiB across active artifacts, performs complete-document fail-closed redaction after `finish`, and writes only sanitized bytes into an unsealed Journey directory. The outcome is not known until close because work that succeeds at P7 may still fail HTTP handoff at P8. On close:
+The request-local Flight Recorder retains only bounded, unacknowledged copied chunks in the Backend process. Object-only Semantic artifacts have a fixed 1 MiB synchronous snapshot budget and become `unavailable:synchronous_json_snapshot_limit_exceeded` when they exceed it; this prevents an unbounded stringify, getter, or `toJSON` call on the serving thread. A dedicated Diagnostics child process owns at most 64 MiB for one complete naturally streamed wire artifact and 512 MiB across active artifacts. At `finish`, it verifies completeness and media eligibility and writes the submitted bytes unchanged into an unsealed Journey directory. The outcome is not known until close because work that succeeds at P7 may still fail HTTP handoff at P8. On close:
 
-- a Journey whose P0 all-request snapshot was enabled seals every complete, redacted, in-budget stage artifact for every outcome;
+- a Journey whose P0 all-request snapshot was enabled seals every complete, supported, in-budget stage artifact for every outcome;
 - otherwise a Journey whose P0 failed-request snapshot was enabled seals bodies only when the outcome is failed, aborted, or interrupted;
 - policy-rejected successful bodies record `unavailable:full_journey_capture_disabled`; policy-rejected abnormal bodies record `unavailable:failed_journey_capture_disabled`;
 - a mid-Journey Settings change does not alter this decision;
@@ -509,15 +535,18 @@ Normal Backend shutdown drains Data Plane work first, then gives diagnostics at 
 
 ### 14.6 One diagnostics persistence authority
 
-The full-capture revision uses one Diagnostics Authority and one child process owning an index plus a managed artifact tree:
+The v5 revision uses one Diagnostics Authority and one child process owning an index plus a managed artifact tree:
 
 ```text
-state/request-diagnostics/diagnostics-v4.sqlite3
-state/request-diagnostics/full-journeys-v4/
-logical schema: TOKEN_diagnostics v4
+state/request-diagnostics/diagnostics-v5.sqlite3
+state/request-diagnostics/full-journeys-v5/
+logical schema: TOKEN_diagnostics v5
+manifest schema: Token.full-journey.v5
 ```
 
-Former diagnostics database and capture files are not read, migrated, rewritten, or deleted. Version selection is expressed by the file name and schema together; there is no dual reader or compatibility projection.
+Only this file name, managed tree, and schema version are accepted. Former diagnostics databases and capture files are not opened, queried, imported, migrated, rewritten, included in backups/exports, or garbage-collected. Version selection is expressed by the file name and schema together; there is no old-version reader, dual writer, compatibility projection, fallback discovery, or old-record UI. Existing older files are left outside the authority, without automatic deletion.
+
+Application composition, backup source registration, storage-status projection, desktop settings, manifests, file references, retention, restart cleanup, and test fixtures must all use the v5 identity. The manifest declares `schema: "Token.full-journey.v5"` and the same current artifact descriptor contract. Replacing only the worker paths is insufficient. A v5 database with a mismatched schema fails diagnostics startup with operational attention; it must not select another database or affect Data Plane serving.
 
 The current configuration contract is intentionally new and has no legacy aliases:
 
@@ -544,7 +573,7 @@ diagnostics.fullJourneyCapture.enabled = false
 diagnostics.failedJourneyCapture.enabled = true
 ```
 
-They are hot-applied and persisted by the Settings Authority. The resolved artifact folder is `<diagnostics.directory>/full-journeys-v4`, is exposed read-only by the Control Plane, and is displayed beside the switches in Settings.
+They are hot-applied and persisted by the Settings Authority. The resolved artifact folder is `<diagnostics.directory>/full-journeys-v5`, is exposed read-only by the Control Plane, and is displayed beside the switches in Settings.
 
 Its logical tables are:
 
@@ -558,23 +587,81 @@ Its logical tables are:
 | `runtime_events` | requestless startup, store-health, catalog and application diagnostics |
 | `meta` | logical schema version and persistence metadata |
 
-Events and artifacts are child sections of a Journey, not independent persistence authorities. SQLite WAL/SHM and the managed file tree are implementation storage owned by the same child process, not additional authorities. Sanitized bodies are written below `full-journeys-v4/.inflight/<runtimeId>/<requestId>` using opaque hashed runtime/request path segments. Artifact file names use a bounded allowlisted artifact-ID slug plus a short collision-resistant hash and the truthful `.json`, `.jsonl`, or `.sse` extension, so a finalized file remains recognizable without trusting an identifier as a path. The child commits the closed index row/provisional references, then atomically writes the manifest and renames the directory into `full-journeys-v4/YYYY-MM-DD/<requestId>` outside the SQLite transaction. On restart, a closed row still pointing into `.inflight` is finalized idempotently before unreferenced `.inflight` orphans are removed. Request/artifact IDs are never unchecked path fragments and every path is verified below the managed root. Queries use the SQLite relationship and never scan caller-selected paths. Deletion removes index references transactionally and then garbage-collects unreferenced directories. History count, deletion, and retention exclude active Journeys whose close seal has not committed, so a concurrent management operation cannot turn later observations into orphan facts.
+Events and artifacts are child sections of a Journey, not independent persistence authorities. SQLite WAL/SHM and the managed file tree are implementation storage owned by the same child process, not additional authorities. Unredacted bodies are written below `full-journeys-v5/.inflight/<runtime-segment>/<request-segment>` using opaque hashed runtime/request segments for provisional files. Artifact file names use a bounded allowlisted artifact-ID slug plus a short collision-resistant hash and the declared media type's `.json`, `.jsonl`, or `.sse` extension. The extension does not certify valid syntax. The child commits the closed index row/provisional references, then atomically writes the manifest and renames the directory into `full-journeys-v5/YYYY-MM-DD/<requestId>` outside the SQLite transaction. The finalized directory name is the exact request ID, without a prefix, hash, encoding, or slug replacement, so an operator can find a retained Journey directly by request ID. The date is the UTC date of admission. Request IDs must match `[A-Za-z0-9][A-Za-z0-9_-]{0,254}` and must not be a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, case-insensitive). An invalid directory ID makes bodies `unavailable:invalid_request_id_directory`; it never changes the serving request ID or creates a substituted folder. Every resolved path remains verified below the managed root. On restart, a closed row still pointing into the v5 `.inflight` tree is finalized idempotently before unreferenced v5 `.inflight` orphans are removed. Queries use the SQLite relationship and never scan caller-selected paths. Deletion removes index references transactionally and then garbage-collects unreferenced v5 directories. History count, deletion, and retention exclude active Journeys whose close seal has not committed, so a concurrent management operation cannot turn later observations into orphan facts.
 
 Within the same transaction that closes an abnormal Journey, the Worker verifies that the chosen primary ID references a stored `failure_detected` event whose role is `primary` and whose safe diagnosis fields are valid. A missing, incorrect, supporting-only, or malformed reference is replaced transactionally by the same bounded fallback and the record is marked `degraded`; the Worker never commits an abnormal record as complete without an Incident.
 
-Request Journey structure and Runtime Events remain until explicit user deletion. Artifact bodies expire when any configured byte, age, or Journey-count ceiling requires eviction. Eviction preserves the descriptor, safe counts/hash, redaction/truncation facts, and changes its state to `unavailable:expired`; it never makes a previously partial artifact appear complete.
+Request Journey structure and Runtime Events remain until explicit user deletion. Artifact bodies expire when any configured byte, age, or Journey-count ceiling requires eviction. Eviction preserves original/captured counts, any existing integrity hash, and truncation facts, changes state/reason to `unavailable:expired`, clears the indexed body reference, records the eviction, and garbage-collects the body file. It does not rewrite body contents or zero the historical captured count. Acquisition failure and retention eviction are separate facts: an incomplete capture has no persisted body; an expired capture records that a complete body was previously saved.
 
-### 14.7 Artifact policy and redaction
+Backups and exports transfer only the v5 SQLite snapshot and safe facts. They never package artifact files, including `.part` files, and never add body content to the index to make a backup self-contained.
+
+Backup/restore contract registration must identify the v5 schema. Existing restore operations may accept matching new-version snapshots only; old-schema snapshots are rejected before replacing active storage, even when their generic snapshot ID matches. No restore operation translates old records or activates an old reader.
+
+### 14.7 Unredacted body policy
 
 All-request full-scene bodies are disabled by default; failed/aborted/interrupted full-scene bodies are enabled by default. The Diagnostics Module snapshots both Settings values once at P0, and neither can change during the Journey. The Data Plane does not read either setting. Journey timeline, Incident, safe failure facts, outcome, and artifact descriptors remain always-on even when body retention is disabled.
 
-Credential-bearing HTTP header values, URL userinfo, Control Plane capabilities, Profile/AuthResult objects, raw caller credential values, and unrelated environment values are excluded by their owning module before observation. Safe Profile ID/display name/auth type and selection reason may enter as attribution facts. A body can contain arbitrary secret-named fields, so its bounded raw chunks cross only the private Backend-to-diagnostics-process IPC seam transiently; they never enter SQLite, files, exports, subscriptions, or renderer results.
+#### 14.7.1 Retention settings
 
-The independent diagnostics process applies centralized bounded complete-document redaction after `finish` proves byte completeness and before any body reaches the filesystem. JSON/`+json` parses, redacts secret-named fields and credential patterns, and writes an indented UTF-8 document for human inspection. When indentation alone would exceed the fixed 64 MiB artifact ceiling, it retains the bounded compact sanitized representation instead of discarding a valid boundary-sized capture. JSONL/NDJSON preserves one sanitized record per line. SSE frames complete events, redacts JSON `data:` payloads, preserves `[DONE]`, and fails closed for unclassified data. If syntax, known-sensitive scrubbing, or artifact serialization fails, it drops the body and persists `unavailable:redaction_failed` or the more precise typed reason. Binary bodies persist only media type, original/captured length when known, a policy-approved integrity hash, and an explicit body-unavailable reason. Redaction and truncation facts are permanent and survive projection and retention eviction.
+The two existing setting keys and defaults remain unchanged. Their four combinations resolve to three retention states:
 
-### 14.8 Control Plane and compatibility contract
+| All-request setting | Failed-request setting | UI state | Retain success | Retain failed/aborted/interrupted |
+|---|---|---|---|---|
+| `true` | `true` | All requests | Yes | Yes |
+| `true` | `false` | All requests | Yes | Yes |
+| `false` | `true` | Failures only (default) | No | Yes |
+| `false` | `false` | Off | No | No |
 
-The Application Control Plane is the only management seam into the running diagnostics authority. Its current wire contract is version 5 and provides typed operations equivalent to:
+Each Yes is subject to actual boundary availability, media eligibility, completeness, admission, write success, and retention limits. Neither setting promises evidence for a boundary never reached or durability after Backend/OS failure. Retention uses the sealed Journey outcome, including handoff failure; it does not infer success from HTTP status or Pi terminal success alone.
+
+```text
+captureEnabled = allRequests || (abnormalOutcome && failedRequests)
+abnormalOutcome = closedJourney.outcome != success
+```
+
+No third setting, redaction switch, root-configuration alias, or protocol/lane-specific policy is added. Turning all-request capture off does not necessarily select Failures only; the second setting still determines the result.
+
+#### 14.7.2 Complete bytes and media classification
+
+At `artifact_finish`, the worker verifies a successful finish, ordered contiguous accepted chunks, byte-count equality, and the existing artifact/active-memory ceilings. For a supported complete artifact it writes the assembled bytes directly. It must not decode, parse, scrub, pretty-print, reserialize, normalize newlines, frame SSE, or repair the body. Object-only evidence is already serialized by the bounded snapshot boundary; the worker preserves those snapshot bytes identically.
+
+Media classification uses the declared media type's lowercased essence before `;`, without inspecting body content:
+
+| Media type | Body policy |
+|---|---|
+| `application/json` or a media type ending in `+json` | Preserve complete bytes, with `.json` extension |
+| `application/jsonl`, `application/x-jsonlines`, `application/ndjson`, `application/x-ndjson` | Preserve complete bytes, with `.jsonl` extension |
+| `text/event-stream` | Preserve complete bytes, with `.sse` extension |
+| `application/octet-stream`, `image/*`, `audio/*`, `video/*`, `application/pdf`, `application/zip` | No body file; `unavailable:binary_body_not_persisted` |
+| Missing or other media type | No body file; `unavailable:unsupported_media_type` |
+
+Invalid JSON/JSONL/SSE syntax, malformed UTF-8, duplicate keys, an SSE event without a terminal marker, or sensitive-looking field names do not invalidate complete byte evidence. Byte completeness is a recorder fact, not a document-validity judgment. Embedded image/base64 data inside supported JSON stays unchanged; it is not independently classified as a binary artifact. Protocol validation and lane-owned SSE repair remain serving concerns and cannot be influenced by this policy.
+
+For a supported body whose write succeeds, the completed descriptor is `captured`, has `capturedBytes === originalBytes`, and has `truncated:false`. Zero-length complete bodies are valid captured evidence and must remain distinguishable from missing evidence. A queue rejection, acquisition size limit, abandonment, missing finish, chunk/order/count mismatch, process loss, or file-write failure yields `unavailable` with a bounded acquisition reason and zero persisted body bytes. No prefix body is finalized; truncation and known original counts remain truthful. Discarded bytes are never called a `partial` retained artifact. Media-policy rejection records `truncated:false` when acquisition was complete.
+
+The body-redaction module, isolate-source injection, declarations, calls, failure reasons, Authority defaults/writes, descriptor/event fields, wire validation/projection, UI labels, and obsolete tests must be removed, not retained as constants or disabled branches. `partial` artifact state is removed from the complete-only artifact contract; semantic message partiality remains a separate Pi/protocol fact. Non-body fact scrubbing, error alias safety, and safe-envelope serialization remain active.
+
+#### 14.7.3 Write timing, cleanup, and capacity
+
+Complete eligible bodies are written to `.part` at `artifact_finish`, before Journey close knows retention eligibility. Close either indexes/finalizes the body under the retained v5 Journey or removes the provisional body. This ordering is unchanged. Failures only is a final-retention policy: a successful request can transiently leave an unredacted `.part`. Off also means no final body retention, not a guarantee of no transient write: existing byte recorder paths can finish before close, while object snapshot paths may skip capture when both settings are off. This revision does not add a policy gate to serving paths or alter their observation seams.
+
+An incomplete capture never writes a prefix file. If writing or finalization fails after a provisional file is created, cleanup is contained and attempted within the diagnostics process; a cleanup failure becomes diagnostics-health degradation and never a serving failure. Startup finalizes recoverable indexed v5 Journeys before deleting unreferenced v5 `.inflight` orphans. Abrupt termination can leave raw files until that cleanup succeeds; no retention switch promises immediate secure erasure.
+
+Existing bounds remain: 64 MiB per naturally yielding artifact, 512 MiB per Journey and across active worker artifacts, 16 MiB Backend admission/unacknowledged artifact windows, and a 1 MiB synchronous object snapshot. Existing retention defaults remain 5 GiB, 1000 artifact Journeys, and seven days. Acquisition limits reject capture without changing serving; retention limits evict saved bodies as specified in section 14.6. No failure permits a backup writer, handler writer, or second diagnostic store.
+
+File creation retains `0o600` permissions where supported, managed-root path validation, and atomic body/directory rename. Deployment must restrict the diagnostics directory using the platform's actual permissions/ACLs; a mode argument alone does not certify Windows access restrictions. Permissions and retention do not make the files sanitized.
+
+#### 14.7.4 Safe facts, envelopes, and product disclosure
+
+Raw bodies and allowed object snapshots may contain credentials and user content. They cross the private artifact IPC path and enter only the managed body files. They never enter SQLite/WAL/SHM body storage, admission/event payloads, failure messages, manifests, ordinary Control Plane projections, subscribers, exports, or the desktop Renderer. File manifests and descriptors contain only bounded safe metadata.
+
+Header handling remains the existing safe-envelope policy: Authorization, Cookie, x-api-key, and other non-allowlisted values are omitted; only bounded header names record the omission. URL userinfo is stripped; non-allowlisted query values are replaced; safe header/query allowlists and envelope limits remain unchanged. This revision does not create full-header capture or independently read credential objects. Safe failure facts, `safeMessage`, classification, Runtime Events, and exception summaries continue their existing scrubbing and alias-safety rules.
+
+Settings must keep the existing All requests / Failures only / Off states and show a persistent, visible disclosure beside Request capture. Required meaning: capture files are unredacted and can contain credentials, tool output, and user code; default failure capture also writes this content; turning off all-request capture does not turn off failed-request retention; retention Off does not promise absence of transient files; Open artifact opens the unredacted file. Help text alone or a warning visible only after enabling all-request capture is insufficient. The warning is product disclosure, not a new confirmation flow.
+
+### 14.8 Control Plane and single-version contract
+
+The Application Control Plane is the only management seam into the running diagnostics authority. This revision requires wire contract version 8, replacing the implemented version 7 because artifact DTOs lose fields/states. Matching Backend, Control Plane client, preload, Main, and Renderer contracts cut over together. Unsupported versions are rejected through existing version negotiation, never translated or silently accepted. Operations remain equivalent to:
 
 - `queryRequestJourneys(query)`;
 - `getRequestJourney({ requestId })`;
@@ -618,15 +705,21 @@ token speed = sum(output) / sum(execution duration seconds), for speedRequests
 An undefined derived value is omitted from the wire contract and rendered as
 `—`. Coverage is shown only when the relevant request count is below the total.
 
-Generic artifact reads return at most 256 KiB of base64 per call. The desktop Renderer requests one named open action and receives neither artifact bytes nor a filesystem path. The diagnostics authority resolves `requestId + artifactId`, verifies that the indexed existing file is a regular file below the managed root, and returns that one absolute path through the authenticated local Control Plane to trusted Electron Main. Main opens the original sanitized file directly with the system default viewer and falls back to the platform application chooser when no association exists; it does not read or copy the body. Subscriber, query, file-reference, file-read, desktop-open, and renderer failure is contained in its owning observation/management module and cannot affect the diagnostics child process or Data Plane. When the child/database/file is unavailable, reads and file references return a typed `unavailable` result with diagnostics-health facts; they do not fabricate a path or empty-complete body and do not open SQLite or scan the capture directory directly.
+Explicit `getRequestArtifact` calls return at most 256 KiB of decoded file bytes per call, encoded as base64. This authenticated local-management operation is a trusted unredacted-content channel, not a safe fact projection. Decoding and concatenating its chunks must reproduce the file bytes, including credential canaries. It must not apply response-time redaction. Ordinary queries, status, subscriptions, exports, and errors never embed those chunks or body previews.
 
-The production cutover is atomic and does not dual-write. Control Plane v5 and `TOKEN_diagnostics v4` do not read deprecated fields, aliases, v3 databases, or earlier capture directories. Legacy data is not migrated, imported, modified, or deleted. A new run creates only the v4 diagnostics database and managed folder; incompatible or corrupt v4 storage raises operational attention while Data Plane serving remains fail-open.
+The desktop Renderer requests one named open action and receives neither artifact bytes nor a filesystem path. The diagnostics authority resolves `requestId + artifactId`, verifies that the indexed existing file is a regular file below the v5 managed root, and returns that one absolute path through the authenticated local Control Plane to trusted Electron Main. Main opens the unredacted file directly with the system default viewer and falls back to the platform application chooser when no association exists; it does not read or copy the body. Subscriber, query, file-reference, file-read, desktop-open, and renderer failure is contained in its owning observation/management module and cannot affect the diagnostics child process or Data Plane. When the child/database/file is unavailable, reads and file references return a typed `unavailable` result with diagnostics-health facts; they do not fabricate a path or empty-complete body and do not open SQLite or scan the capture directory directly.
+
+Core observations, persisted events/descriptors/manifests, Control Plane DTOs, strict key allowlists, Desktop fixtures, and UI consume the same new artifact contract. `redaction` is neither required nor optional, receives no default, and has no old-key acceptance rule. Old `redaction` fields or `partial` artifact states are not decoded by a compatibility path. Remove obsolete body-redaction labels instead of replacing them with a constant status.
+
+The production cutover is atomic and does not dual-write. New production opens only `TOKEN_diagnostics v5` at the paths in section 14.6. Queries, history counts, deletion, backup, export, retention, and orphan cleanup operate only on that store/tree. No old-version data or code is imported, displayed, translated, or kept dormant for rollback. Incompatible or corrupt v5 storage raises operational attention while Data Plane serving remains fail-open.
+
+Removing the new feature in a later release requires an explicitly defined replacement contract; this specification supplies no downgrade reader or automatic rollback mode. Reverting source code is not data cleanup and does not scrub or remove previously written raw files. Older artifacts cannot be recovered as original bytes after prior redaction. Any cleanup of older or unredacted data requires a separate explicit data-management action.
 
 ### 14.9 Runtime certification requirements
 
 Non-interference is proved by comparing each fault-injected run with the same request under diagnostics disabled. Tests use latches/barriers rather than elapsed-time thresholds to prove that the request completes without a diagnostics acknowledgement.
 
-For a throwing Observer/recorder/policy source, saturated ordinary and reserved queues, failed child spawn/IPC, stalled/crashed/malformed/disconnected/out-of-memory diagnostics child process, slow/locked/unavailable SQLite, directory creation/file append/manifest rename/retention failure, redaction failure, oversized/cyclic/proxy artifact input, subscriber/query/renderer exception, and cancellation/Provider-terminal race, the following must be byte- or fact-identical to the disabled baseline:
+For a throwing Observer/recorder/policy source, saturated ordinary and reserved queues, failed child spawn/IPC, stalled/crashed/malformed/disconnected/out-of-memory diagnostics child process, slow/locked/unavailable SQLite, directory creation/body write/manifest rename/retention/cleanup failure, non-body fact-scrubbing failure, oversized/cyclic/proxy artifact input, subscriber/query/renderer exception, and cancellation/Provider-terminal race, the following must be byte- or fact-identical to the disabled baseline:
 
 - committed lane;
 - outbound method, URL, headers, body, and encoding;
@@ -641,11 +734,47 @@ Diagnostic quality certification must also prove:
 2. a `step_entered` without completion identifies the last active step after hang or interruption;
 3. origin, detection, and Client presentation remain separate facts;
 4. Pi success followed by Client render failure or P8 handoff failure remains three distinct outcomes;
-5. every artifact slot is `captured`, `partial`, `unavailable`, or `not_applicable` with a truthful reason;
+5. every artifact slot is `captured`, `unavailable`, or `not_applicable` with truthful byte/completeness facts and a reason where required; no incomplete prefix file is finalized;
 6. no record claims Client consumption;
-7. credential header/URL canaries are absent before Observer publication, and body credential canaries are absent from SQLite/WAL/SHM, artifact files, Control Plane results, exports, and subscriber projections after isolated redaction;
+7. credential header/URL canaries are absent from published safe envelopes and ordinary facts; body canaries are absent from SQLite/WAL/SHM, manifests, ordinary Control Plane fact projections, exports, and subscriptions, and present unchanged in retained body files and decoded explicit body-read results;
 8. architecture checks forbid Data Plane imports of the child-process supervisor, store, filesystem, or SQLite, `await` on observations, handler-generated request IDs, and observation transports injected into Pi execution;
 9. architecture checks preserve the three lane dependency prohibitions while allowing only the shared observation vocabulary.
+
+#### 14.9.1 Protocol/lane and policy matrix
+
+Each cell certifies both an available success body and available abnormal bodies against the retention table in section 14.7.1. For abnormal cases cover normally sealed `failed`, `aborted`, and `interrupted` outcomes. A stage not reached is unavailable and must not be fabricated. Abrupt process interruption is separately tested for truthful degraded coverage and orphan cleanup, not promised complete history.
+
+| Protocol / lane | All=true, Failed=true | All=true, Failed=false | All=false, Failed=true | All=false, Failed=false |
+|---|---|---|---|---|
+| Responses / Direct | All requests | All requests | Failures only | Off |
+| Responses / Provider Native | All requests | All requests | Failures only | Off |
+| Responses / Semantic | All requests | All requests | Failures only | Off |
+| Anthropic / Provider Native | All requests | All requests | Failures only | Off |
+| Anthropic / Semantic | All requests | All requests | Failures only | Off |
+
+Tests use the real composed lane and diagnostics process. Reopening a persisted file proves byte equality to the owning boundary fixture; an Authority acknowledgement, descriptor length, or string parse is not enough. Semantic object evidence is compared to its bounded boundary snapshot, not to hypothetical HTTP serialization. Assert absent Semantic upstream wire collection and unchanged safe-envelope omissions in both protocols.
+
+#### 14.9.2 Body evidence, settings, and failure gates
+
+Certification must include:
+
+- Request and response bytes containing secrets, JSON whitespace/key order, malformed JSON/JSONL, malformed UTF-8, SSE `\r\n`, multi-line `data:`, comments, and incomplete event syntax in an otherwise completely received body. The stored bytes remain identical, and the serving response remains identical to diagnostics disabled.
+- Supported empty bodies, declared binary/unsupported media, exact configured capture boundaries, acquisition exceeding those boundaries, the 1 MiB object-snapshot bound, missing finish, chunk mismatch, abandonment, and queue rejection. Capture failure has no body file or invented complete descriptor; no arbitrary serializer/getter/toJSON code executes.
+- P0 settings snapshots for success and abnormal Journeys, including setting changes during the Journey and policy-source exceptions using catalog defaults. After close, rejected bodies have unavailable descriptors and no indexed/provisional body left when cleanup succeeds.
+- Barrier-observed provisional `.part` creation before close in Failures only and existing byte-recorder Off paths, deletion after a successful policy-rejected close, and restart cleanup after process loss. Tests prove temporary raw content is real without promising all operations produce it.
+- Acquisition failure versus retention eviction: the former never saves a prefix; the latter deletes a previously complete body and preserves its historical counts/hash/truncation with `unavailable:expired`. All retention ceilings, containment of eviction failure, and exclusion of active Journeys remain certified.
+- Explicit body reads with base64 decoded before comparison. The body contains the original canary while SQLite/WAL/SHM, manifests, safe queries/status/subscriptions, errors, and the SQLite-only export/backup contain none. Credential-management hygiene tests remain intact; they are not a substitute for artifact-file and body-read tests.
+- Actual file-write/rename failure, worker unavailability/crash, stalled acknowledgements, queue saturation, and unavailable/slow storage under the section 14.9 equivalence test. Former redactor-rejection tests become invalid-document raw-capture tests; storage faults, not parsing rejection, prove write-failure containment.
+
+#### 14.9.3 Single-contract cutover and isolation gates
+
+Seed synthetic older storage plus sentinel files, then start the new runtime. Query, file read/open, settings directory display, backup, export, history deletion, retention, and orphan cleanup must exclusively address v5. Older sentinels remain byte-identical and absent from all new views/exports. This is exclusion certification, not an old-data decoder. A mismatched schema placed at the v5 path degrades diagnostics without creating an alternative store. Old wire versions and old artifact fields/states are rejected rather than projected into the new contract.
+
+Static review must prove removal of the artifact-body redactor and isolate source, all `redaction` field writes/defaults/key allowlists/projections/labels, obsolete artifact `partial` handling, production v4 paths, old readers/writers, deprecated aliases, migration helpers, and dormant compatibility branches. Non-body safe-fact scrubbers and safe-envelope code remain referenced and certified. Companion historical design/implementation records do not authorize old production paths.
+
+Every test or manual Backend/CLI/Electron/helper verification that can reach Codex state must run through the repository test sandbox or an equivalent newly created temporary `CODEX_HOME`. Copy only required `config.toml` and `token-model-catalog.json` when present, pass the temporary home explicitly to every process, and remove it in `finally`. Never copy native/auth/model caches, sessions, logs, or other user-owned state. Use deterministic local Provider fixtures and fake canaries; diagnostics verification does not require real credentials.
+
+Implementation release gates are `npm run typecheck`, `npm run lint`, `git diff --check`, sandboxed targeted diagnostics/journey/Provider Native/Control Plane/Desktop tests, and sandboxed `npm test`. Five composed-lane manual checks must verify persisted byte equality or snapshot equality at the declared boundary, safe-envelope behavior, explicit raw body access, and absence of body secrets from the index. The gates apply to implementation; editing this specification does not imply they have passed.
 
 ## 15. Pre-refactor implementation baseline
 

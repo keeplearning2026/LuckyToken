@@ -273,7 +273,7 @@ function observeResponsesWireArtifact(
     kind: "artifact_observed",
     artifactId: input.artifactId,
     artifactKind: input.artifactKind,
-    state: capturedBytes < input.bytes.byteLength ? "partial" : "captured",
+    state: capturedBytes < input.bytes.byteLength ? "unavailable" : "captured",
     ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
     bytes: input.bytes.slice(0, capturedBytes),
     originalBytes: input.bytes.byteLength,

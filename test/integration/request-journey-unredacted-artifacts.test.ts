@@ -19,9 +19,8 @@ import {
 import { createCommandCodeTestRuntime } from "../support/commandcode-serving.js";
 
 const REQUEST_ID = "40000000-0000-4000-8000-000000000001";
-const SAFE_MODEL = "missing-redaction-model";
+const SAFE_MODEL = "missing-unredacted-model";
 const SAFE_MARKER = "safe-investigation-marker-7b2e";
-const REDACTED = "[REDACTED]";
 
 const AUTHORIZATION_CANARY = "header-authorization-canary-6a41f0";
 const API_KEY_HEADER_CANARY = "header-api-key-canary-18b29d";
@@ -80,23 +79,21 @@ function combinedBytes(files: ReadonlyMap<string, Buffer>): Buffer {
   return Buffer.concat([...files.values()]);
 }
 
-function expectPhysicalRedaction(
+function expectPhysicalBoundaries(
   files: ReadonlyMap<string, Buffer>,
   phase: "running" | "closed",
 ): void {
   expect.soft([...files.keys()], `${phase}: diagnostics files`).toContain(
-    "diagnostics-v4.sqlite3",
+    "diagnostics-v5.sqlite3",
   );
   const bytes = combinedBytes(files);
   expect.soft(bytes.includes(Buffer.from(SAFE_MARKER)), `${phase}: safe marker`).toBe(
     true,
   );
-  expect.soft(bytes.includes(Buffer.from(REDACTED)), `${phase}: redaction marker`).toBe(
-    true,
-  );
+  const index = combinedBytes(new Map([...files].filter(([name]) => name.includes(".sqlite3") || name.endsWith("manifest.json"))));
   for (const canary of ALL_CANARIES) {
     expect
-      .soft(bytes.includes(Buffer.from(canary)), `${phase}: leaked ${canary}`)
+      .soft(index.includes(Buffer.from(canary)), `${phase}: leaked ${canary}`)
       .toBe(false);
   }
 }
@@ -110,11 +107,11 @@ function artifact(
   return result!;
 }
 
-describe("Request Journey failure artifact redaction", () => {
-  it("persists useful failed request evidence without writing credential canaries to the index or artifact files", async () => {
+describe("Request Journey unredacted artifacts", () => {
+  it("persists original failed request evidence while keeping secrets out of the index", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-artifact-redaction-"));
     const diagnosticsDirectory = join(root, "diagnostics");
-    const databasePath = join(diagnosticsDirectory, "diagnostics-v4.sqlite3");
+    const databasePath = join(diagnosticsDirectory, "diagnostics-v5.sqlite3");
     let authority: DiagnosticsAuthority | undefined;
     let server: RunningTokenHttpServer | undefined;
     let providerCalls = 0;
@@ -216,12 +213,10 @@ describe("Request Journey failure artifact redaction", () => {
         expect.objectContaining({
           artifactId: "client_request_envelope",
           state: "captured",
-          redaction: "not_required",
         }),
         expect.objectContaining({
           artifactId: "client_response_envelope",
           state: "captured",
-          redaction: "not_required",
         }),
       ]));
       const requestDescriptor = artifact(
@@ -236,7 +231,6 @@ describe("Request Journey failure artifact redaction", () => {
         artifactKind: "client_request_wire",
         state: "captured",
         mediaType: "application/json",
-        redaction: "applied",
         truncated: false,
         originalBytes: Buffer.byteLength(requestBody),
       });
@@ -245,23 +239,24 @@ describe("Request Journey failure artifact redaction", () => {
         artifactKind: "client_response_wire",
         state: "captured",
         mediaType: "application/json",
-        redaction: "not_required",
         truncated: false,
         originalBytes: responseBytes.byteLength,
-        capturedBytes: Buffer.byteLength(
-          JSON.stringify(JSON.parse(responseBytes.toString("utf8")), null, 2),
-        ),
+        capturedBytes: responseBytes.byteLength,
       });
-      expect.soft(responseDescriptor.capturedBytes).toBeGreaterThan(
+      expect.soft(responseDescriptor.capturedBytes).toBe(
         responseDescriptor.originalBytes!,
       );
+
+      const rawRead = await authority.getRequestArtifact({ requestId: REQUEST_ID, artifactId: "client_request_wire", offset: 0, limit: 256 * 1024 });
+      expect(Buffer.from(rawRead.dataBase64, "base64")).toEqual(Buffer.from(requestBody));
+      expect(JSON.stringify(journey)).not.toContain(PASSWORD_CANARY);
 
       // No more HTTP work may enter the diagnostics queue. The completed
       // Journey query above is the Worker commit barrier for every artifact.
       await server.close();
       server = undefined;
       const runningFiles = await readDiagnosticsFiles(diagnosticsDirectory);
-      expectPhysicalRedaction(runningFiles, "running");
+      expectPhysicalBoundaries(runningFiles, "running");
 
       await authority.close();
       authority = undefined;
@@ -301,14 +296,16 @@ describe("Request Journey failure artifact redaction", () => {
         model: SAFE_MODEL,
         max_tokens: 32,
         messages: [{ role: "user", content: SAFE_MARKER }],
-        password: REDACTED,
-        access_token: REDACTED,
-        api_key: REDACTED,
+        password: PASSWORD_CANARY,
+        access_token: ACCESS_TOKEN_CANARY,
+        api_key: API_KEY_BODY_CANARY,
       });
       const storedRequestDescriptor = JSON.parse(
         requestRow!.descriptorJson,
       ) as RequestArtifactDescriptor;
-      expect.soft(storedRequestDescriptor.redaction).toBe("applied");
+      expect.soft(storedRequestDescriptor).not.toHaveProperty("redaction");
+      expect(storedRequestText).toBe(requestBody);
+      expect(await readFile(join(diagnosticsDirectory, responseRow!.bodyPath!))).toEqual(responseBytes);
       expect.soft(storedRequestDescriptor.originalBytes).toBe(
         Buffer.byteLength(requestBody),
       );
@@ -333,7 +330,7 @@ describe("Request Journey failure artifact redaction", () => {
       });
 
       const closedFiles = await readDiagnosticsFiles(diagnosticsDirectory);
-      expectPhysicalRedaction(closedFiles, "closed");
+      expectPhysicalBoundaries(closedFiles, "closed");
     } finally {
       await Promise.allSettled([
         server?.close() ?? Promise.resolve(),

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,7 @@ const roots: string[] = [];
 async function createFixture(options: {
   readonly artifactRetentionAgeMs: number;
   readonly maxArtifactJourneys: number;
+  readonly maxArtifactDiskBytes?: number;
 }) {
   const root = await mkdtemp(join(tmpdir(), "Token-artifact-retention-"));
   roots.push(root);
@@ -25,6 +26,7 @@ async function createFixture(options: {
         directory: join(root, "diagnostics"),
         artifactRetentionAgeMs: options.artifactRetentionAgeMs,
         maxArtifactJourneys: options.maxArtifactJourneys,
+        ...(options.maxArtifactDiskBytes === undefined ? {} : { maxArtifactDiskBytes: options.maxArtifactDiskBytes }),
       },
       root,
     ),
@@ -58,7 +60,6 @@ async function createFixture(options: {
       artifactKind: "client_request_wire",
       state: "captured",
       mediaType: "application/json",
-      redaction: "not_required",
       truncated: false,
       bytes: Buffer.from(JSON.stringify({ marker })),
       location: {
@@ -111,6 +112,23 @@ describe("Request Journey artifact retention", () => {
     await Promise.all(
       roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
     );
+  });
+
+  it("evicts a complete saved body by total disk bytes without rewriting its historical counts", async () => {
+    const fixture = await createFixture({ artifactRetentionAgeMs: 604_800_000, maxArtifactJourneys: 10, maxArtifactDiskBytes: 30 });
+    try {
+      const requestId = "retention-disk-first";
+      await fixture.writeJourney(requestId, 3000, "first");
+      const before = (await fixture.authority.getRequestJourney({ requestId })).artifacts[0]!;
+      const file = await fixture.authority.resolveRequestArtifactFile({ requestId, artifactId: "client_request_wire" });
+      expect(before).toMatchObject({ state: "captured", originalBytes: 18, capturedBytes: 18, truncated: false });
+      expect(await readFile(file.absolutePath, "utf8")).toBe('{"marker":"first"}');
+      await fixture.writeJourney("retention-disk-second", 3001, "second");
+      await expectExpired(fixture.authority, requestId);
+      const after = (await fixture.authority.getRequestJourney({ requestId })).artifacts[0]!;
+      expect(after).toEqual({ ...before, state: "unavailable", reason: "expired" });
+      await expect(readFile(file.absolutePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { await fixture.authority.close(); }
   });
 
   it("expires artifact bodies by age while preserving truthful descriptors", async () => {

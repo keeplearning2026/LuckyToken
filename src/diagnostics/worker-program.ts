@@ -2,8 +2,7 @@
  * The diagnostics actor is created with an eval source so the same program
  * works both from TypeScript tests and from compiled JavaScript without a
  * second build asset. Production runs it in an independent child process;
- * the worker_threads transport remains only as a test adapter while the
- * process-isolation cutover is completed.
+ * the worker_threads transport is only a test adapter.
  * This function must remain self-contained: only its serialized body runs in
  * the Worker isolate.
  */
@@ -100,10 +99,10 @@ function diagnosticsWorkerMain(): void {
   >();
   let activeArtifactBytes = 0;
   mkdirSync(data.directory, { recursive: true });
-  const fullJourneyDirectory = join(data.directory, "full-journeys-v4");
+  const fullJourneyDirectory = join(data.directory, "full-journeys-v5");
   const inflightDirectory = join(fullJourneyDirectory, ".inflight");
   mkdirSync(inflightDirectory, { recursive: true });
-  const database = new DatabaseSync(join(data.directory, "diagnostics-v4.sqlite3"));
+  const database = new DatabaseSync(join(data.directory, "diagnostics-v5.sqlite3"));
   const permanentStartupFailure = (): void => {
     database.close();
     port.postMessage({
@@ -136,7 +135,7 @@ function diagnosticsWorkerMain(): void {
     const existingVersion = database
       .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
       .get() as { readonly value: number } | undefined;
-    if (existingVersion === undefined || Number(existingVersion.value) !== 4) {
+    if (existingVersion === undefined || Number(existingVersion.value) !== 5) {
       permanentStartupFailure();
       return;
     }
@@ -189,7 +188,7 @@ function diagnosticsWorkerMain(): void {
   }
   database.exec(`
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_name', 'TOKEN_diagnostics');
-    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 4);
+    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', 5);
     CREATE TABLE IF NOT EXISTS records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       record_kind TEXT NOT NULL,
@@ -299,6 +298,9 @@ function diagnosticsWorkerMain(): void {
   };
   const opaqueSegment = (prefix: string, value: string): string =>
     `${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+  const validRequestDirectoryName = (requestId: string): boolean =>
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/u.test(requestId) &&
+    !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu.test(requestId);
   const readableArtifactSegment = (artifactId: string): string => {
     const slug = artifactId
       .toLowerCase()
@@ -316,7 +318,7 @@ function diagnosticsWorkerMain(): void {
     requestId: string,
   ): string =>
     join(
-      "full-journeys-v4",
+      "full-journeys-v5",
       ".inflight",
       opaqueSegment("runtime", runtimeId),
       opaqueSegment("request", requestId),
@@ -346,7 +348,7 @@ function diagnosticsWorkerMain(): void {
     );
     activeArtifacts.delete(key);
   };
-  const writeSanitizedArtifact = (
+  const writeArtifactBody = (
     runtimeId: string,
     requestId: string,
     artifactId: string,
@@ -361,6 +363,23 @@ function diagnosticsWorkerMain(): void {
     const absolutePath = storagePath(relativePath);
     mkdirSync(dirname(absolutePath), { recursive: true });
     writeFileSync(absolutePath, bytes, { flag: "w", mode: 0o600 });
+  };
+  const bodyUnavailableReason = (mediaType: unknown): string | undefined => {
+    const essence = typeof mediaType === "string"
+      ? mediaType.split(";", 1)[0]!.trim().toLowerCase()
+      : "";
+    if (
+      essence === "application/json" || essence.endsWith("+json") ||
+      essence === "application/jsonl" || essence === "application/x-jsonlines" ||
+      essence === "application/ndjson" || essence === "application/x-ndjson" ||
+      essence === "text/event-stream"
+    ) return undefined;
+    return essence === "application/octet-stream" ||
+        essence.startsWith("image/") || essence.startsWith("audio/") ||
+        essence.startsWith("video/") || essence === "application/pdf" ||
+        essence === "application/zip"
+      ? "binary_body_not_persisted"
+      : "unsupported_media_type";
   };
   const completeArtifactBody = (
     runtimeId: string,
@@ -394,9 +413,9 @@ function diagnosticsWorkerMain(): void {
     const partPath = storagePath(partRelative);
     const finalPath = storagePath(finalRelative);
     const bodyAvailable =
-      (descriptor.state === "captured" || descriptor.state === "partial") &&
+      descriptor.state === "captured" &&
       typeof descriptor.capturedBytes === "number" &&
-      descriptor.capturedBytes > 0;
+      descriptor.capturedBytes >= 0;
     if (!bodyAvailable) {
       rmSync(partPath, { force: true });
       rmSync(finalPath, { force: true });
@@ -477,13 +496,16 @@ function diagnosticsWorkerMain(): void {
       .toISOString()
       .slice(0, 10);
     const finalRelative = join(
-      "full-journeys-v4",
+      "full-journeys-v5",
       date,
-      opaqueSegment("request", requestId),
+      requestId,
     );
+    if (!validRequestDirectoryName(requestId)) {
+      throw new Error("Diagnostics request ID is not a safe directory name");
+    }
     const finalPath = storagePath(finalRelative);
     const manifest = {
-      schema: "Token.full-journey.v1",
+      schema: "Token.full-journey.v5",
       requestId,
       runtimeId: journey.runtimeId,
       acceptedAt: Number(journey.acceptedAt),
@@ -711,7 +733,7 @@ function diagnosticsWorkerMain(): void {
     readonly requestId: string;
     readonly bodyPath: string;
   }>;
-  const inflightPrefix = `${join("full-journeys-v4", ".inflight")}${sep}`;
+  const inflightPrefix = `${join("full-journeys-v5", ".inflight")}${sep}`;
   for (const requestId of new Set(
     recoverableArtifacts
       .filter((row) => row.bodyPath.startsWith(inflightPrefix))
@@ -1754,47 +1776,35 @@ function diagnosticsWorkerMain(): void {
               state: "unavailable",
               originalBytes: message.originalBytes,
               capturedBytes: 0,
-              redaction: "failed",
               truncated: true,
               reason: message.reason ?? "artifact_capture_incomplete",
             });
           } else {
-            const raw = Buffer.concat(
-              active.chunks.map((chunk) => Buffer.from(chunk)),
-              active.receivedBytes,
-            );
-            const result = redactRequestArtifact({
-              artifactKind: String(active.descriptor.artifactKind),
-              ...(typeof active.descriptor.mediaType === "string"
-                ? { mediaType: active.descriptor.mediaType }
-                : {}),
-              bytes: raw,
-              originalBytes: message.originalBytes,
-              sourceTruncated: false,
-            });
-            if (result.kind === "unavailable") {
+            const reason = !validRequestDirectoryName(message.requestId!)
+              ? "invalid_request_id_directory"
+              : bodyUnavailableReason(active.descriptor.mediaType);
+            if (reason !== undefined) {
               completed = Object.freeze({
                 ...active.descriptor,
                 state: "unavailable",
                 originalBytes: message.originalBytes,
                 capturedBytes: 0,
-                redaction: result.redaction,
                 truncated: false,
-                reason: result.reason,
+                reason,
               });
             } else {
-              writeSanitizedArtifact(
+              const raw = Buffer.concat(active.chunks, active.receivedBytes);
+              writeArtifactBody(
                 message.runtimeId!,
                 message.requestId!,
                 message.artifactId!,
-                result.bytes,
+                raw,
               );
               completed = Object.freeze({
                 ...active.descriptor,
                 state: "captured",
                 originalBytes: message.originalBytes,
-                capturedBytes: result.bytes.byteLength,
-                redaction: result.redaction,
+                capturedBytes: raw.byteLength,
                 truncated: false,
               });
             }
@@ -1810,13 +1820,20 @@ function diagnosticsWorkerMain(): void {
           });
         } catch {
           discardActiveArtifact(key);
+          try {
+            rmSync(storagePath(artifactBodyRelative(
+              message.runtimeId!, message.requestId!, message.artifactId!, ".part",
+            )), { force: true });
+          } catch {
+            // Startup orphan cleanup owns any provisional file left behind.
+          }
           port.postMessage({
             type: "nack",
             runtimeId: message.runtimeId,
             requestId: message.requestId,
             artifactId: message.artifactId,
             chunkIndex: -2,
-            classification: "artifact_redaction_failed",
+            classification: "artifact_body_write_failed",
           });
         }
         return;
@@ -1866,7 +1883,6 @@ function diagnosticsWorkerMain(): void {
                   ...payload,
                   state: "unavailable",
                   capturedBytes: 0,
-                  redaction: "failed",
                   reason: "artifact_capture_incomplete",
                 }
               : {
@@ -1996,10 +2012,6 @@ function diagnosticsWorkerMain(): void {
                 ...(typeof payload.capturedBytes === "number"
                   ? { capturedBytes: payload.capturedBytes }
                   : {}),
-                redaction:
-                  typeof payload.redaction === "string"
-                    ? payload.redaction
-                    : "not_required",
                 truncated: payload.truncated === true,
                 ...(typeof payload.integrityHash === "string"
                   ? { integrityHash: payload.integrityHash }
@@ -2960,26 +2972,4 @@ function diagnosticsWorkerMain(): void {
   port.postMessage({ type: "ready" });
 }
 
-export const DIAGNOSTICS_WORKER_SOURCE = `${ARTIFACT_REDACTION_ISOLATE_SOURCE}\n(${diagnosticsWorkerMain.toString()})()`;
-import { ARTIFACT_REDACTION_ISOLATE_SOURCE } from "./artifact-redaction.js";
-
-declare const redactRequestArtifact: (
-  input: Readonly<{
-    artifactKind: string;
-    mediaType?: string;
-    bytes: Uint8Array;
-    originalBytes: number;
-    sourceTruncated: boolean;
-  }>,
-) =>
-  | Readonly<{
-      kind: "sanitized";
-      bytes: Uint8Array;
-      redaction: "not_required" | "applied";
-      truncated: false;
-    }>
-  | Readonly<{
-      kind: "unavailable";
-      redaction: "not_required" | "failed";
-      reason: string;
-    }>;
+export const DIAGNOSTICS_WORKER_SOURCE = `(${diagnosticsWorkerMain.toString()})()`;

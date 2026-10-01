@@ -55,7 +55,6 @@ function recordFailedJourney(
     bytes: artifactBytes,
     originalBytes: artifactBytes.byteLength,
     capturedBytes: artifactBytes.byteLength,
-    redaction: "not_required",
     truncated: false,
     location: FAILURE_LOCATION,
   });
@@ -77,7 +76,7 @@ function recordFailedJourney(
 }
 
 async function journeyFolderNames(root: string): Promise<string[]> {
-  const fullJourneyRoot = join(root, "full-journeys-v4");
+  const fullJourneyRoot = join(root, "full-journeys-v5");
   const result: string[] = [];
   for (const date of await readdir(fullJourneyRoot, { withFileTypes: true })) {
     if (!date.isDirectory() || date.name === ".inflight") continue;

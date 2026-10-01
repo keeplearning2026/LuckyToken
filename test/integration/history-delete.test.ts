@@ -72,7 +72,7 @@ describe("unified history authority", () => {
       createRequestId: () => `history-request-${endpointSequence}`,
       pipeConnector: createNodePipeTransport(),
     });
-    await client.hello(7);
+    await client.hello(8);
     return { root, client };
   }
 

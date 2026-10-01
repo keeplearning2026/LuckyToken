@@ -991,9 +991,9 @@ async function startNormalApplication(options: {
         {
           id: "request-diagnostics",
           contract: "token-diagnostics-sqlite",
-          version: 1,
+          version: 5,
           category: "history" as const,
-          sourcePath: join(config.diagnostics.directory, "diagnostics-v4.sqlite3"),
+          sourcePath: join(config.diagnostics.directory, "diagnostics-v5.sqlite3"),
           snapshot: (signal: AbortSignal) =>
             diagnosticsManagement.createBackupSnapshot(signal),
         },
@@ -1213,7 +1213,7 @@ async function startNormalApplication(options: {
           available: ownedDiagnosticsAuthority.diagnosticsAvailable(),
           fullJourneyDirectory: join(
             config.diagnostics.directory,
-            "full-journeys-v4",
+            "full-journeys-v5",
           ),
           maxJsonArtifactBytes: config.diagnostics.maxJsonArtifactBytes,
           maxJourneyArtifactBytes:

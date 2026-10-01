@@ -1,12 +1,14 @@
 /**
- * Universal credential-redaction choke point (Ticket 07).
+ * Credential-redaction choke point for non-body diagnostic facts (Ticket 07).
  *
- * Every untrusted value a producer submits — message text, nested details,
- * error/cause chains, header maps, Pi credentials — passes through exactly
+ * Untrusted values submitted to safe-fact projections — message text, nested
+ * details, error/cause chains, header maps, credential facts — pass through
  * one recursive sanitizer before anything is persisted, queried, or emitted.
  * The sanitizer never invokes attacker getters, toJSON, or toString, is
  * bounded in depth, breadth, and size, and replaces credential values so they
  * can never be reconstructed from persisted bytes.
+ * Artifact bodies use a separate unredacted byte channel and do not enter
+ * this sanitizer.
  */
 
 const MAX_DEPTH = 12;

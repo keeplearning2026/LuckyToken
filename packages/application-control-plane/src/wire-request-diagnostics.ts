@@ -129,7 +129,6 @@ const OUTCOMES = new Set<RequestJourneyOutcome | "running">([
 ]);
 const ARTIFACT_STATES = new Set<RequestArtifactState>([
   "captured",
-  "partial",
   "unavailable",
   "not_applicable",
 ]);
@@ -425,10 +424,9 @@ function decodeArtifactFields(
       !isNonNegativeSafeInteger(value.originalBytes)) ||
     (value.capturedBytes !== undefined &&
       !isNonNegativeSafeInteger(value.capturedBytes)) ||
-    (value.redaction !== undefined &&
-      value.redaction !== "not_required" &&
-      value.redaction !== "applied" &&
-      value.redaction !== "failed") ||
+    (value.state === "captured" &&
+      ((value.originalBytes !== undefined && value.capturedBytes !== undefined &&
+        value.originalBytes !== value.capturedBytes) || value.truncated === true)) ||
     (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
     (value.integrityHash !== undefined &&
       !boundedText(value.integrityHash, 256)) ||
@@ -447,9 +445,6 @@ function decodeArtifactFields(
     ...(value.capturedBytes === undefined
       ? {}
       : { capturedBytes: value.capturedBytes as number }),
-    ...(value.redaction === undefined
-      ? {}
-      : { redaction: value.redaction as "not_required" | "applied" | "failed" }),
     ...(value.truncated === undefined ? {} : { truncated: value.truncated }),
     ...(value.integrityHash === undefined
       ? {}
@@ -697,7 +692,6 @@ function decodePersistedObservation(
         "mediaType",
         "originalBytes",
         "capturedBytes",
-        "redaction",
         "truncated",
         "integrityHash",
         "reason",
@@ -833,14 +827,10 @@ function decodeArtifactDescriptor(value: unknown): RequestArtifactDescriptor | u
       "mediaType",
       "originalBytes",
       "capturedBytes",
-      "redaction",
       "truncated",
       "integrityHash",
       "reason",
     ]) ||
-    (value.redaction !== "not_required" &&
-      value.redaction !== "applied" &&
-      value.redaction !== "failed") ||
     typeof value.truncated !== "boolean"
   ) {
     return undefined;
@@ -848,7 +838,7 @@ function decodeArtifactDescriptor(value: unknown): RequestArtifactDescriptor | u
   const fields = decodeArtifactFields(value);
   return fields === undefined
     ? undefined
-    : Object.freeze({ ...fields, redaction: value.redaction, truncated: value.truncated });
+    : Object.freeze({ ...fields, truncated: value.truncated });
 }
 
 function decodeIncident(value: unknown): RequestIncident | undefined {

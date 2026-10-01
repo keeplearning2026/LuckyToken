@@ -1,9 +1,11 @@
 # Token Request Journey Diagnostics Implementation Plan
 
-- **Status:** implementation complete; Usage v2/Analytics v3 revision implemented on 2026-08-24
+- **Status:** historical implementation record; Usage v2/Analytics v3 revision implemented on 2026-08-24
 - **Authority:** `TokenRequestJourneyDiagnosticsSpec.md`
 - **Method:** test-driven replacement; no dual-write compatibility period
 - **Release rule:** the production cutover is atomic and is not releasable until every final gate is green
+
+The current v5 unredacted-body revision is defined by [Token Request Journey Diagnostics Specification](./TokenRequestJourneyDiagnosticsSpec.md), revised and implemented on 2026-09-30. This record describes the earlier cutover; its old storage, body-redaction, and wire-version instructions do not authorize compatibility paths in the new implementation.
 
 ## 1. Objective
 

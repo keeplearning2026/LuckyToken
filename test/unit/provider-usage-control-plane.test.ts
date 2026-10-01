@@ -8,7 +8,7 @@ import {
 
 describe("Provider Usage Control Plane contract", () => {
   it("ships on Control Plane v7", () => {
-    expect(controlPlaneVersion).toBe(7);
+    expect(controlPlaneVersion).toBe(8);
   });
 
   it("strictly decodes query and refresh commands", () => {

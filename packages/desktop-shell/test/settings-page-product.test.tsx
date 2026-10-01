@@ -95,7 +95,7 @@ describe("Settings product slice", () => {
             provider: "configured" as const,
             diagnostics: {
               available: true,
-              fullJourneyDirectory: "D:\\TokenData\\state\\request-diagnostics\\full-journeys-v4",
+              fullJourneyDirectory: "D:\\TokenData\\state\\request-diagnostics\\full-journeys-v5",
               maxJsonArtifactBytes: 67_108_864,
               maxJourneyArtifactBytes: 536_870_912,
               isolation: "process" as const,
@@ -108,11 +108,14 @@ describe("Settings product slice", () => {
 
     expect(container.textContent).toContain("Request capture");
     expect(container.textContent).toContain(
-      "D:\\TokenData\\state\\request-diagnostics\\full-journeys-v4",
+      "D:\\TokenData\\state\\request-diagnostics\\full-journeys-v5",
     );
-    expect(container.textContent).toContain("64 MiB per JSON file");
+    expect(container.textContent).toContain("64 MiB per artifact");
     expect(container.textContent).toContain("Force capture when a request fails");
     expect(container.textContent).toContain("Failures only");
+    expect(container.textContent).toContain("unredacted");
+    expect(container.textContent).toContain("credentials");
+    expect(container.textContent).toContain("temporary");
     await clickAria("Enable full journey capture");
     expect(executeSettings).toHaveBeenCalledWith({
       command: "set",

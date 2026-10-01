@@ -777,9 +777,7 @@ describe("OpenAI Responses Semantic Conversion Request Journey", () => {
             state: "captured",
             mediaType: "application/json",
             originalBytes: Buffer.byteLength(responseBody),
-            capturedBytes: Buffer.byteLength(
-              JSON.stringify(JSON.parse(responseBody), null, 2),
-            ),
+            capturedBytes: Buffer.byteLength(responseBody),
             truncated: false,
           }),
         ]),

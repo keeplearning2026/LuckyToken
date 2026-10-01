@@ -7,7 +7,7 @@ import {
 
 describe("Agent integrations Control Plane contract", () => {
   it("ships Claude integration on Control Plane v7", () => {
-    expect(controlPlaneVersion).toBe(7);
+    expect(controlPlaneVersion).toBe(8);
   });
 
   it("decodes Claude as a first-class Agent integration id", () => {

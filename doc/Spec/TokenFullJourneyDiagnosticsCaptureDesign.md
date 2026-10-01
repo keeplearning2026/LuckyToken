@@ -1,6 +1,8 @@
 # Token Full-Journey Diagnostics Capture Design
 
-Status: reviewed and implemented, updated for the clean upstream Pi 0.87.0 Semantic evidence boundary on 2026-09-22. Raw Provider response events are intentionally outside the required diagnostic scene.
+Status: historical v4 implementation record, updated for the clean upstream Pi 0.87.0 Semantic evidence boundary on 2026-09-22. Raw Provider response events are intentionally outside the required diagnostic scene.
+
+The current v5 contract is defined only by [Token Request Journey Diagnostics Specification](./TokenRequestJourneyDiagnosticsSpec.md), revised and implemented on 2026-09-30. The redaction policy, artifact states, and storage identities below describe the previous implementation; they do not authorize compatibility code, old-data readers, or a second active contract.
 
 ## 1. Decision
 

@@ -93,9 +93,7 @@ const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
       state: "captured",
       mediaType: "application/json",
       capturedBytes: 4,
-      originalBytes: 4,
-      redaction: "not_required",
-      truncated: false,
+      originalBytes: 4,      truncated: false,
     }),
   ]),
   incident: Object.freeze({
@@ -226,9 +224,7 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
       state: "captured",
       mediaType: "application/json",
       originalBytes: 4,
-      capturedBytes: 4,
-      redaction: "applied",
-      truncated: false,
+      capturedBytes: 4,      truncated: false,
       integrityHash: "sha256:fixture",
       location: { phase: "protocol_ingress", step: "capture_client_request_wire" },
     },
@@ -276,8 +272,8 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
   ]);
 
 describe("unified request diagnostics Control Plane contract", () => {
-  it("publishes the unified diagnostics contract through Control Plane v7", () => {
-    expect(controlPlaneVersion).toBe(7);
+  it("publishes the unified diagnostics contract through Control Plane v8", () => {
+    expect(controlPlaneVersion).toBe(8);
   });
 
   it("strictly decodes the bounded Request Journey query", () => {
@@ -550,21 +546,28 @@ describe("unified request diagnostics Control Plane contract", () => {
     ).toBeUndefined();
   });
 
-  it("accepts a sanitized artifact larger than its original wire", () => {
+  it("rejects captured bytes that differ from the original boundary count", () => {
     const record = {
       ...JOURNEY_RECORD,
       artifacts: [
         {
           ...JOURNEY_RECORD.artifacts[0],
           originalBytes: 4,
-          capturedBytes: 19,
-          redaction: "applied",
-          truncated: false,
+          capturedBytes: 19,          truncated: false,
         },
       ],
     } as const;
 
-    expect(decodeRequestJourneyRecord(record)).toEqual(record);
+    expect(decodeRequestJourneyRecord(record)).toBeUndefined();
+  });
+
+  it("rejects obsolete artifact fields and states instead of translating them", () => {
+    for (const extension of [{ redaction: "applied" }, { state: "partial" }]) {
+      expect(decodeRequestJourneyRecord({
+        ...JOURNEY_RECORD,
+        artifacts: [{ ...JOURNEY_RECORD.artifacts[0], ...extension }],
+      })).toBeUndefined();
+    }
   });
 
   it("strictly decodes Journey and bounded artifact read DTOs", () => {

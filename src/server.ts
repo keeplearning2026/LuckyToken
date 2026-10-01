@@ -325,7 +325,7 @@ async function writeWebResponse(
       kind: "artifact_observed",
       artifactId: "client_response_wire",
       artifactKind: "client_response_wire",
-      state: capturedBytes < body.byteLength ? "partial" : "captured",
+      state: capturedBytes < body.byteLength ? "unavailable" : "captured",
       ...(response.headers.get("content-type") === null
         ? {}
         : { mediaType: response.headers.get("content-type")! }),

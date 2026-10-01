@@ -147,7 +147,6 @@ export interface ConversionNoticeObservedObservation
 
 export type RequestArtifactState =
   | "captured"
-  | "partial"
   | "unavailable"
   | "not_applicable";
 
@@ -160,7 +159,6 @@ export interface ArtifactObservedObservation extends LocatedObservation {
   readonly bytes?: Uint8Array;
   readonly originalBytes?: number;
   readonly capturedBytes?: number;
-  readonly redaction?: "not_required" | "applied" | "failed";
   readonly truncated?: boolean;
   readonly integrityHash?: string;
   readonly reason?: string;

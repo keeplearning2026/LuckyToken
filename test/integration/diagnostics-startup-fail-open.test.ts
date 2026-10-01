@@ -94,8 +94,8 @@ describe("Diagnostics startup fail-open", () => {
     );
   });
 
-  it("leaves diagnostics v3 unread and untouched while creating diagnostics v4", async () => {
-    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-v4-"));
+  it("leaves diagnostics v3 unread and untouched while creating diagnostics v5", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-v5-"));
     roots.push(root);
     const v3Path = join(root, "diagnostics-v3.sqlite3");
     const v3Bytes = Buffer.from("legacy diagnostics v3 must remain untouched");
@@ -115,14 +115,14 @@ describe("Diagnostics startup fail-open", () => {
 
     expect(await readFile(v3Path)).toEqual(v3Bytes);
     expect((await stat(v3Path)).mtimeMs).toBe(v3Mtime);
-    const v4 = new DatabaseSync(join(root, "diagnostics-v4.sqlite3"), {
+    const v5 = new DatabaseSync(join(root, "diagnostics-v5.sqlite3"), {
       readOnly: true,
     });
     try {
       expect(
-        v4.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get(),
-      ).toEqual({ value: 4 });
-      const usageColumns = v4
+        v5.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get(),
+      ).toEqual({ value: 5 });
+      const usageColumns = v5
         .prepare("PRAGMA table_info(request_journeys)")
         .all()
         .map((column) => (column as { name: string }).name)
@@ -134,14 +134,14 @@ describe("Diagnostics startup fail-open", () => {
         "usage_output",
       ]);
     } finally {
-      v4.close();
+      v5.close();
     }
   });
 
   it("preserves the Data Plane and reports typed unavailability without mutating incompatible storage", async () => {
     const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-fail-open-"));
     roots.push(root);
-    const databasePath = join(root, "diagnostics-v4.sqlite3");
+    const databasePath = join(root, "diagnostics-v5.sqlite3");
     const database = new DatabaseSync(databasePath);
     database.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value NOT NULL);
@@ -264,7 +264,7 @@ describe("Diagnostics startup fail-open", () => {
     await initializer.close();
 
     const database = new DatabaseSync(
-      join(diagnosticsDirectory, "diagnostics-v4.sqlite3"),
+      join(diagnosticsDirectory, "diagnostics-v5.sqlite3"),
     );
     database.exec("BEGIN EXCLUSIVE");
     try {

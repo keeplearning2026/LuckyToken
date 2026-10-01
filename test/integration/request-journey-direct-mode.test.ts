@@ -355,9 +355,7 @@ describe("Direct Mode Request Journey", () => {
           state: "captured",
           mediaType: "application/json",
           originalBytes: Buffer.byteLength(requestBody),
-          capturedBytes: Buffer.byteLength(
-            JSON.stringify(JSON.parse(requestBody), null, 2),
-          ),
+          capturedBytes: Buffer.byteLength(requestBody),
           truncated: false,
         }),
         expect.objectContaining({
@@ -383,9 +381,7 @@ describe("Direct Mode Request Journey", () => {
           state: "captured",
           mediaType: "application/json",
           originalBytes: Buffer.byteLength(responseBody),
-          capturedBytes: Buffer.byteLength(
-            JSON.stringify(JSON.parse(responseBody), null, 2),
-          ),
+          capturedBytes: Buffer.byteLength(responseBody),
           truncated: false,
         }),
       ]),

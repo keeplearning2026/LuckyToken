@@ -255,7 +255,6 @@ describe("Request Journey close-seal reserve", () => {
         artifactKind: "client_response_wire",
         state: "captured",
         mediaType: "application/json",
-        redaction: "not_required",
         truncated: false,
         bytes: Buffer.from(JSON.stringify({ body: "s".repeat(240 * 1_024) })),
         location: {
@@ -299,7 +298,6 @@ describe("Request Journey close-seal reserve", () => {
         artifactKind: "upstream_response_wire",
         state: "captured",
         mediaType: "application/json",
-        redaction: "not_required",
         truncated: false,
         bytes: Buffer.from(JSON.stringify({ body: "f".repeat(240 * 1_024) })),
         location: {

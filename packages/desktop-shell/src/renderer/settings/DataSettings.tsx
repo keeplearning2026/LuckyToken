@@ -209,9 +209,15 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
                   : "Off"}
           </span>
         </header>
+        <p className="settings-hint" role="note">
+          Capture files are unredacted and may contain credentials, tool output, and user code.
+          Default failure capture saves this content even when all-request capture is off.
+          Off stops final retention; temporary files may still be written.
+          Opening a capture shows the unredacted file in your system viewer.
+        </p>
         <div className="settings-action-row">
           <div className="settings-action-copy">
-            <strong>Capture every request journey <SettingHelp label="Capture every request journey">64 MiB per JSON file, 512 MiB per journey. Capture runs in an isolated diagnostics process and fails open.</SettingHelp></strong>
+            <strong>Capture every request journey <SettingHelp label="Capture every request journey">64 MiB per artifact, 512 MiB per journey. Capture runs in an isolated diagnostics process and fails open.</SettingHelp></strong>
           </div>
           <button
             type="button"
@@ -329,7 +335,7 @@ export function DataSettings({ api }: { readonly api: TokenDesktopApi }) {
         <div className="settings-action-row">
           <div className="settings-action-copy">
             <strong>Sensitive diagnostic backup</strong>
-            <p>The file contains the diagnostic index and may contain sensitive request details. Full-journey JSON files remain in the capture folder.</p>
+            <p>The file contains the diagnostic index and may contain sensitive request details. Unredacted artifact files remain in the capture folder.</p>
           </div>
           <button type="button" className="settings-icon-button backup" aria-label="Choose backup location" title="Choose backup location" disabled={busy} onClick={() => void createFullBackup()}>
             <FolderOpen size={19} aria-hidden="true" />

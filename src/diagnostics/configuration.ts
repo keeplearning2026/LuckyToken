@@ -2,7 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 
 export interface DiagnosticsConfiguration {
   readonly directory: string;
-  /** Hard cap for one redacted JSON artifact: 64 MiB. */
+  /** Hard cap for one supported artifact body: 64 MiB. */
   readonly maxJsonArtifactBytes: number;
   /** Aggregate hard cap for one Request Journey: 512 MiB. */
   readonly maxJourneyArtifactBytes: number;

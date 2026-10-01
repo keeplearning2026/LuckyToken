@@ -133,11 +133,8 @@ const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
       artifactKind: "client_response_wire",
       state: "captured",
       mediaType: "application/json",
-      // Redaction and pretty-printing may expand the persisted body.
-      capturedBytes: 19,
-      originalBytes: 4,
-      redaction: "applied",
-      truncated: false,
+      capturedBytes: 4,
+      originalBytes: 4,      truncated: false,
     }),
   ]),
   incident: Object.freeze({
@@ -251,7 +248,7 @@ function unavailableDiagnosticsAdapter(): UnifiedDiagnosticsManagement {
   });
 }
 
-describe("Application Control Plane v7 unified diagnostics", () => {
+describe("Application Control Plane v8 unified diagnostics", () => {
   const hosts: RunningControlPlane[] = [];
   const clients: Array<{ close(): Promise<void> }> = [];
   const transport = createNodePipeTransport();
@@ -261,8 +258,8 @@ describe("Application Control Plane v7 unified diagnostics", () => {
     await Promise.all(hosts.splice(0).map((host) => host.close()));
   });
 
-  it("negotiates only v7 and round-trips unified diagnostics reads with typed unavailability", async () => {
-    expect(controlPlaneVersion).toBe(7);
+  it("negotiates only v8 and round-trips unified diagnostics reads with typed unavailability", async () => {
+    expect(controlPlaneVersion).toBe(8);
     const fixture = createDiagnosticsFixture();
     const target = endpoint();
     const host = await startControlPlane({
@@ -283,11 +280,16 @@ describe("Application Control Plane v7 unified diagnostics", () => {
     await expect(connected.hello(2)).resolves.toEqual({
       type: "incompatible",
       requestedVersion: 2,
-      supportedVersions: [7],
+      supportedVersions: [8],
     });
-    await expect(connected.hello(7)).resolves.toMatchObject({
+    await expect(connected.hello(7)).resolves.toEqual({
+      type: "incompatible",
+      requestedVersion: 7,
+      supportedVersions: [8],
+    });
+    await expect(connected.hello(8)).resolves.toMatchObject({
       type: "compatible",
-      contractVersion: 7,
+      contractVersion: 8,
     });
     await expect(connected.queryRequestJourneys({ limit: 10 })).resolves.toEqual({
       outcome: "ok",
@@ -333,13 +335,13 @@ describe("Application Control Plane v7 unified diagnostics", () => {
       encodeRawFrame({
         type: "hello",
         requestId: "v6-raw-hello",
-        contractVersion: 7,
+        contractVersion: 8,
         capability: target.capability,
       }),
     );
     expect(await readRawFrame(raw)).toMatchObject({
       type: "hello_result",
-      result: { type: "compatible", contractVersion: 7 },
+      result: { type: "compatible", contractVersion: 8 },
     });
     for (const [type, requestId] of [
       ["get_diagnostics", "legacy-diagnostics"],
@@ -396,7 +398,7 @@ describe("Application Control Plane v7 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(unavailableClient);
-    await unavailableClient.hello(7);
+    await unavailableClient.hello(8);
     const typedUnavailable = {
       outcome: "unavailable",
       error: {
@@ -449,7 +451,7 @@ describe("Application Control Plane v7 unified diagnostics", () => {
   });
 
   it("round-trips both unified subscriptions and contains one client's listener failure", async () => {
-    expect(controlPlaneVersion).toBe(7);
+    expect(controlPlaneVersion).toBe(8);
     const fixture = createDiagnosticsFixture();
     const host = await startControlPlane({
       endpoint: endpoint(),
@@ -469,8 +471,8 @@ describe("Application Control Plane v7 unified diagnostics", () => {
       pipeConnector: transport,
     });
     clients.push(first, second);
-    await first.hello(7);
-    await second.hello(7);
+    await first.hello(8);
+    await second.hello(8);
 
     const journeyDelivered = deferred<void>();
     const runtimeDelivered = deferred<void>();

@@ -55,7 +55,6 @@ function recordFailedJourney(
     bytes: artifactBytes,
     originalBytes: artifactBytes.byteLength,
     capturedBytes: artifactBytes.byteLength,
-    redaction: "not_required",
     truncated: false,
     location: FAILURE_LOCATION,
   });

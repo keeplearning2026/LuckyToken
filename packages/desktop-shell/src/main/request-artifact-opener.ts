@@ -39,7 +39,7 @@ function validOpenInput(input: DesktopRequestArtifactOpenInput): boolean {
 }
 
 /**
- * Desktop-only workflow for opening one already-sanitized capture. The
+ * Desktop-only workflow for opening one unredacted capture. The
  * diagnostics authority validates the record and managed file path; Electron
  * Main hands that existing file directly to the operating system. The
  * Renderer receives neither the path nor body bytes.

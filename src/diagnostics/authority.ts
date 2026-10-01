@@ -1032,7 +1032,6 @@ export async function createDiagnosticsAuthority(
                   flight.descriptor = Object.freeze({
                     ...flight.descriptor,
                     state: "unavailable",
-                    redaction: "failed",
                     capturedBytes: 0,
                     reason:
                       message.classification ??
@@ -1289,7 +1288,6 @@ export async function createDiagnosticsAuthority(
             ...copiedMeta,
             state: "captured",
             capturedBytes: 0,
-            redaction: "not_required",
             truncated: false,
           }) satisfies Omit<ArtifactObservedObservation, "bytes">;
           const descriptorBytes = safeByteLength(descriptor);
@@ -1325,7 +1323,6 @@ export async function createDiagnosticsAuthority(
             flight.descriptor = Object.freeze({
               ...descriptor,
               state: "unavailable",
-              redaction: "failed",
               reason: "queue_capacity_exhausted",
             });
           }
@@ -1357,7 +1354,6 @@ export async function createDiagnosticsAuthority(
                 truncated: !complete,
                 ...(!complete
                   ? {
-                      redaction: "failed" as const,
                       reason: reason ??
                         flight.descriptor.reason ??
                         "artifact_capture_incomplete",
@@ -1382,7 +1378,6 @@ export async function createDiagnosticsAuthority(
                 flight.descriptor = Object.freeze({
                   ...flight.descriptor,
                   state: "unavailable",
-                  redaction: "failed",
                   capturedBytes: 0,
                   reason: "queue_capacity_exhausted",
                 });
@@ -1456,7 +1451,6 @@ export async function createDiagnosticsAuthority(
                 flight.descriptor = Object.freeze({
                   ...flight.descriptor,
                   state: "unavailable",
-                  redaction: "failed",
                   reason:
                     accepted < bytes.byteLength
                       ? "artifact_size_limit_exceeded"
@@ -1685,7 +1679,6 @@ export async function createDiagnosticsAuthority(
                 flight.descriptor = Object.freeze({
                   ...flight.descriptor,
                   state: "unavailable",
-                  redaction: "failed",
                   reason: "artifact_recorder_not_finished",
                 });
                 state.degraded = true;
@@ -1703,14 +1696,13 @@ export async function createDiagnosticsAuthority(
                   : unavailable
                     ? flight.descriptor.state
                     : truncated
-                    ? "partial"
+                    ? "unavailable"
                     : flight.descriptor.state,
                 capturedBytes:
                   !captureEnabled || unavailable || !flight.finished
                     ? 0
                     : flight.capturedBytes,
                 originalBytes,
-                redaction: flight.descriptor.redaction ?? "not_required",
                 truncated,
                 ...(!captureEnabled
                   ? { reason: captureDisabledReason }

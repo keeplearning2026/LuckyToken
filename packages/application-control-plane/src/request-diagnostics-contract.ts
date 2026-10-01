@@ -211,7 +211,6 @@ export interface ConversionNoticePersistedObservation
 
 export type RequestArtifactState =
   | "captured"
-  | "partial"
   | "unavailable"
   | "not_applicable";
 
@@ -224,10 +223,8 @@ export interface ArtifactPersistedObservation
   readonly mediaType?: string;
   /** Original Client/Provider wire byte count when known. */
   readonly originalBytes?: number;
-  /** Byte count of the persisted sanitized representation. Redaction and
-   * formatting may make this larger than originalBytes. */
+  /** Byte count captured at the observation boundary; preserved after eviction. */
   readonly capturedBytes?: number;
-  readonly redaction?: "not_required" | "applied" | "failed";
   readonly truncated?: boolean;
   readonly integrityHash?: string;
   readonly reason?: string;
@@ -317,10 +314,8 @@ export interface RequestArtifactDescriptor {
   readonly mediaType?: string;
   /** Original Client/Provider wire byte count when known. */
   readonly originalBytes?: number;
-  /** Byte count of the persisted sanitized representation. Redaction and
-   * formatting may make this larger than originalBytes. */
+  /** Byte count captured at the observation boundary; preserved after eviction. */
   readonly capturedBytes?: number;
-  readonly redaction: "not_required" | "applied" | "failed";
   readonly truncated: boolean;
   readonly integrityHash?: string;
   readonly reason?: string;
@@ -405,7 +400,7 @@ export interface RequestArtifactReadResult {
 }
 
 /**
- * Trusted local-management reference to an existing sanitized artifact file.
+ * Trusted local-management reference to an existing unredacted artifact file.
  * This is consumed by Electron Main for OS integration and is never projected
  * into the Renderer diagnostics record.
  */

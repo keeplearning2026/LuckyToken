@@ -820,9 +820,7 @@ describe("Anthropic Provider Native Request Journey", () => {
               state: "captured",
               mediaType: "application/json",
               originalBytes: Buffer.byteLength(expectedOutboundBody),
-              capturedBytes: Buffer.byteLength(
-                JSON.stringify(JSON.parse(expectedOutboundBody), null, 2),
-              ),
+              capturedBytes: Buffer.byteLength(expectedOutboundBody),
               truncated: false,
             }),
             expect.objectContaining({
@@ -834,11 +832,7 @@ describe("Anthropic Provider Native Request Journey", () => {
                 requiredAttemptValue(upstreamBodies, attempt),
               ),
               capturedBytes: Buffer.byteLength(
-                JSON.stringify(
-                  JSON.parse(requiredAttemptValue(upstreamBodies, attempt)),
-                  null,
-                  2,
-                ),
+                requiredAttemptValue(upstreamBodies, attempt),
               ),
               truncated: false,
             }),
@@ -860,9 +854,7 @@ describe("Anthropic Provider Native Request Journey", () => {
             state: "captured",
             mediaType: "application/json",
             originalBytes: Buffer.byteLength(responseBody),
-            capturedBytes: Buffer.byteLength(
-              JSON.stringify(JSON.parse(responseBody), null, 2),
-            ),
+            capturedBytes: Buffer.byteLength(responseBody),
             truncated: false,
           }),
           expect.objectContaining({

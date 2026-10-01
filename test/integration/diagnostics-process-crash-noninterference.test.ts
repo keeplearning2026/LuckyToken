@@ -92,8 +92,8 @@ function protocol(
         const artifact = Buffer.from('{"invalid":');
         context?.journey.observe({
           kind: "artifact_observed",
-          artifactId: "redaction_fault",
-          artifactKind: "redaction_fault",
+          artifactId: "invalid_json",
+          artifactKind: "invalid_json",
           state: "captured",
           mediaType: "application/json",
           bytes: artifact,
@@ -102,7 +102,7 @@ function protocol(
           truncated: false,
           location: {
             phase: "upstream_execution",
-            step: "publish_redaction_fault_artifact",
+            step: "publish_invalid_json_artifact",
           },
         });
       }
@@ -373,7 +373,7 @@ describe("diagnostics child-process crash non-interference", () => {
     await vi.waitFor(() => expect(authority.diagnosticsAvailable()).toBe(true));
   });
 
-  it("contains an artifact rename failure and preserves the successful response", async () => {
+  it.each(["write", "rename"] as const)("contains an artifact %s failure and preserves the successful response", async (fault) => {
     const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-rename-"));
     roots.push(root);
     const runtimeId = "rename-fault-runtime";
@@ -413,12 +413,12 @@ describe("diagnostics child-process crash non-interference", () => {
     const blockedFinalPath = join(
       root,
       "diagnostics",
-      "full-journeys-v4",
+      "full-journeys-v5",
       ".inflight",
       opaque("runtime", runtimeId),
       opaque("request", REQUEST_ID),
       "artifacts",
-      `${readableArtifact(artifactId)}.json`,
+      `${readableArtifact(artifactId)}.${fault === "write" ? "part" : "json"}`,
     );
     await mkdir(blockedFinalPath, { recursive: true });
     const baseline = await startTokenHttpServer({
@@ -458,8 +458,8 @@ describe("diagnostics child-process crash non-interference", () => {
     );
   });
 
-  it("contains a redactor rejection and preserves the successful response", async () => {
-    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-redactor-"));
+  it("preserves invalid JSON evidence and the successful serving response", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-diagnostics-invalid-json-"));
     roots.push(root);
     const authority = await createDiagnosticsAuthority({
       configuration: parseDiagnosticsConfiguration(
@@ -493,9 +493,9 @@ describe("diagnostics child-process crash non-interference", () => {
     const detail = await authority.getRequestJourney({ requestId: REQUEST_ID });
     expect(detail.artifacts).toContainEqual(
       expect.objectContaining({
-        artifactId: "redaction_fault",
-        state: "unavailable",
-        reason: "redaction_invalid_json",
+        artifactId: "invalid_json",
+        state: "captured",
+        truncated: false,
       }),
     );
   });

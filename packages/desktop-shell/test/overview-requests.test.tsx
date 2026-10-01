@@ -43,7 +43,7 @@ function detail(base: RequestJourneySummary): RequestJourneyRecord {
     diagnosis: { evidence: "observed", classification: "provider_timeout", safeMessage: "The provider timed out", origin: "provider", originPrecision: "external_boundary", location },
     admission: { operationCandidate: "model_generation", transport: "http", method: "POST", path: "/v1/messages", acceptedAt: base.createdAt, cancellation: { caller: "active", shutdown: "active" } },
     timeline: [{ runtimeId: base.runtimeId, requestId: base.requestId, sequence: 1, time: base.createdAt, observation: { kind: "profile_attributed", location, profileId: "profile-1", displayName: "Production" } }],
-    artifacts: [{ artifactId: "client_response_wire", artifactKind: "client_response_wire", state: "captured", mediaType: "application/json", capturedBytes: 17, redaction: "applied", truncated: false }],
+    artifacts: [{ artifactId: "client_response_wire", artifactKind: "client_response_wire", state: "captured", mediaType: "application/json", capturedBytes: 17, truncated: false }],
     incident: { primaryFailureId: "failure-1", failures: [{ kind: "failure_detected", failureId: "failure-1", role: "primary", classification: "provider_timeout", origin: "provider", originPrecision: "external_boundary", safeMessage: "The provider timed out", location }] },
     workOutcome: { outcome: "failed", terminalAuthority: "provider_native_handler", location },
     clientPresentation: { status: 504, mediaType: "application/json", location },
@@ -351,7 +351,7 @@ describe("Overview Request Journeys", () => {
     expect(container.textContent).toContain("Upstream execution · Send provider request · Provider native · Attempt 2");
     expect(container.textContent).toContain("Client response body");
     expect(container.textContent).toContain("client-response-wire.json");
-    expect(container.textContent).toContain("Sensitive values redacted");
+    expect(container.textContent).toContain("unredacted capture");
     expect(container.textContent).toContain("Production");
     expect(container.textContent).toContain("What happened");
     expect(container.textContent).toContain("These are stored observations in sequence, not inferred causes.");

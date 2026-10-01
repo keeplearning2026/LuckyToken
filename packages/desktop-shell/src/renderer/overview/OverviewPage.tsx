@@ -329,19 +329,6 @@ function artifactTitle(artifactKind: string): string {
   return ARTIFACT_TITLES[artifactKind] ?? humanizeDiagnosticName(artifactKind);
 }
 
-function artifactRedactionLabel(
-  redaction: RequestJourneyRecord["artifacts"][number]["redaction"],
-): string {
-  switch (redaction) {
-    case "applied":
-      return "Sensitive values redacted";
-    case "failed":
-      return "Redaction failed";
-    case "not_required":
-      return "No redaction needed";
-  }
-}
-
 function ArtifactCaptureList({
   api,
   record,
@@ -398,8 +385,8 @@ function ArtifactCaptureList({
       </header>
       <ul>{group.artifacts.map((artifact) => {
         const state = openStates[artifact.artifactId];
-        const readable = (artifact.state === "captured" || artifact.state === "partial") &&
-          (artifact.capturedBytes ?? 0) > 0;
+        const readable = artifact.state === "captured" &&
+          artifact.capturedBytes !== undefined;
         const fileName = diagnosticArtifactFileName(
           artifact.artifactId,
           artifact.mediaType,
@@ -432,7 +419,7 @@ function ArtifactCaptureList({
               </button> : null}
             </div>
             <code>{fileName}</code>
-            <p>{artifactRedactionLabel(artifact.redaction)}{artifact.truncated ? " · Truncated" : ""}</p>
+            {artifact.truncated ? <p>Truncated</p> : null}
             <small>{[
               artifact.mediaType,
               displayArtifactBytes(artifact.capturedBytes),
@@ -573,7 +560,7 @@ function RequestDetailPanel({ api, record }: { readonly api: TokenDesktopApi; re
       </details>
       <details>
         <summary>Diagnostic captures <span>{record.artifacts.length}</span></summary>
-        <p>Files are grouped by journey stage. Use the magnifier to open one sanitized capture with the system viewer.</p>
+        <p>Files are grouped by journey stage. Use the magnifier to open one unredacted capture with the system viewer.</p>
         <ArtifactCaptureList api={api} record={record} />
       </details>
     </div>

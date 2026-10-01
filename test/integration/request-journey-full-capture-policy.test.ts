@@ -48,6 +48,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     requestId: string,
     marker: string,
     outcome: "success" | "failed" = "success",
+    afterAdmission?: () => void,
   ): void {
     const observer = authority.begin({
       requestId,
@@ -58,6 +59,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       acceptedAt: Date.now(),
       cancellation: { caller: "active", shutdown: "not_bound" },
     });
+    afterAdmission?.();
     const bytes = Buffer.from(JSON.stringify({ marker }), "utf8");
     observer.observe({
       kind: "artifact_observed",
@@ -89,6 +91,8 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       authority,
       "71000000-0000-4000-8000-000000000001",
       "enabled-at-admission",
+      "success",
+      () => { allRequestsEnabled = false; failedRequestsEnabled = false; },
     );
 
     const firstJourney = await authority.getRequestJourney({
@@ -108,7 +112,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       limit: 256 * 1_024,
     });
     expect(Buffer.from(first.dataBase64, "base64").toString("utf8")).toBe(
-      '{\n  "marker": "enabled-at-admission"\n}',
+      '{"marker":"enabled-at-admission"}',
     );
 
     allRequestsEnabled = false;
@@ -181,7 +185,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     );
     expect(
       await readdir(
-        join(root, "diagnostics", "full-journeys-v4", ".inflight"),
+        join(root, "diagnostics", "full-journeys-v5", ".inflight"),
         { recursive: true },
       ),
     ).toEqual([]);
@@ -199,7 +203,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
 
     await authority.getRequestJourney({ requestId });
 
-    const fullJourneyRoot = join(root, "diagnostics", "full-journeys-v4");
+    const fullJourneyRoot = join(root, "diagnostics", "full-journeys-v5");
     const dates = (await readdir(fullJourneyRoot, { withFileTypes: true })).filter(
       (entry) => entry.isDirectory() && entry.name !== ".inflight",
     );
@@ -209,6 +213,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       { withFileTypes: true },
     );
     expect(journeyFolders).toHaveLength(1);
+    expect(journeyFolders[0]!.name).toBe(requestId);
     const journeyDirectory = join(
       fullJourneyRoot,
       dates[0]!.name,
@@ -224,6 +229,7 @@ describe("full-journey capture policy at the diagnostics seam", () => {
       }>;
     };
     expect(manifest.requestId).toBe(requestId);
+    expect(manifest).toHaveProperty("schema", "Token.full-journey.v5");
     expect(manifest.artifacts).toHaveLength(1);
     expect(manifest.artifacts[0]?.artifactId).toBe("client_request_wire");
     expect(manifest.artifacts[0]?.file).toMatch(
@@ -239,13 +245,13 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     });
     expect(
       await readFile(join(journeyDirectory, manifest.artifacts[0]!.file!), "utf8"),
-    ).toBe('{\n  "marker": "folder-artifact"\n}');
+    ).toBe('{"marker":"folder-artifact"}');
     expect(await readdir(join(root, "diagnostics"))).toContain(
-      "diagnostics-v4.sqlite3",
+      "diagnostics-v5.sqlite3",
     );
   });
 
-  it("persists redacted JSON event streams in the isolated process", async () => {
+  it("persists unchanged JSON event streams in the isolated process", async () => {
     const { authority } = await createHarness({
       snapshot: () => Object.freeze({
         allRequestsEnabled: true,
@@ -284,9 +290,9 @@ describe("full-journey capture policy at the diagnostics seam", () => {
     });
     const persisted = Buffer.from(artifact.dataBase64, "base64").toString("utf8");
     expect(persisted).toContain('"delta":"safe"');
-    expect(persisted).toContain('"token":"[REDACTED]"');
+    expect(Buffer.from(persisted)).toEqual(source);
     expect(persisted).toContain("data: [DONE]");
-    expect(persisted).not.toContain("ipc-sse-secret");
+    expect(persisted).toContain("ipc-sse-secret");
   });
 
   it("captures a naturally streamed 64 MiB JSON artifact without awaiting diagnostics acknowledgements", { timeout: 20_000 }, async () => {

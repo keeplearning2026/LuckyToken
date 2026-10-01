@@ -82,7 +82,7 @@ describe("Provider Usage Control Plane", () => {
     clients.push(client);
     await expect(client.hello(controlPlaneVersion)).resolves.toMatchObject({
       type: "compatible",
-      contractVersion: 7,
+      contractVersion: 8,
     });
 
     await expect(

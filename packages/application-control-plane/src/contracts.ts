@@ -28,7 +28,7 @@ import type {
   ProviderUsageCommandResult,
 } from "./provider-usage-contract.js";
 
-export const controlPlaneVersion = 7 as const;
+export const controlPlaneVersion = 8 as const;
 
 export interface ApplicationIdentity {
   readonly id: "Token";

@@ -51,6 +51,7 @@
     "test:release": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:release:inner",
     "test:release:inner": "node --test test/certification/*.test.mjs && vitest run --maxWorkers=4 && npm test --workspace @token/desktop-shell",
     "test:online": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online:inner",
+    "test:online-diagnostics": "node scripts/run-with-codex-test-sandbox.mjs -- node scripts/run-diagnostics-online-certification.mjs",
     "test:online:inner": "npm run build:packages && tsx test/online/run-commandcode.ts",
     "test:online-responses": "node scripts/run-with-codex-test-sandbox.mjs -- npm run test:online-responses:inner",
     "test:online-responses:inner": "npm run build:packages && tsx test/online/run-commandcode-private-responses.ts && tsx test/online/run-commandcode-goat-responses.ts && tsx test/online/run-opencode-go-responses.ts",
