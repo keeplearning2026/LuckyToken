@@ -139,6 +139,12 @@ const COMPACTION_TURN = JSON.stringify({
   ],
 });
 
+function compactionTurn(stream: boolean): string {
+  const body = JSON.parse(COMPACTION_TURN) as Record<string, unknown>;
+  body.stream = stream;
+  return JSON.stringify(body);
+}
+
 describe("Provider Native routed compaction", () => {
   it("summarizes in-lane when the upstream cannot compact and returns one Token item", async () => {
     const model = responsesModel("commandcode-goat");
@@ -218,6 +224,433 @@ describe("Provider Native routed compaction", () => {
         "base64",
       ).toString("utf8"),
     ).toBe("handoff summary");
+  });
+
+  it("parses a non-streaming JSON summarizer response", async () => {
+    const model = responsesModel("commandcode-goat");
+    const upstream: Request[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      upstream.push(new Request(input, init));
+      return new Response(
+        JSON.stringify({
+          id: "resp_upstream",
+          object: "response",
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [
+                { type: "output_text", text: "JSON handoff summary" },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(compactionTurn(false)),
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveLength(1);
+    const forwarded = JSON.parse(await upstream[0]!.text()) as Record<
+      string,
+      unknown
+    >;
+    expect(forwarded.stream).toBe(false);
+    const rendered = (await response.json()) as {
+      output: Record<string, unknown>[];
+    };
+    expect(rendered.output).toHaveLength(1);
+    expect(rendered.output[0]).toMatchObject({ type: "compaction" });
+    const encrypted = String(rendered.output[0]!.encrypted_content);
+    expect(encrypted).toMatch(/^Token1:/u);
+    expect(
+      Buffer.from(
+        encrypted.slice(TOKEN_COMPACTION_PREFIX.length),
+        "base64",
+      ).toString("utf8"),
+    ).toBe("JSON handoff summary");
+  });
+
+  it.each([
+    {
+      description: "a non-completed JSON response",
+      response: {
+        id: "resp_upstream",
+        object: "response",
+        status: "incomplete",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "partial summary" }],
+          },
+        ],
+      },
+    },
+    {
+      description: "a completed JSON response with empty output",
+      response: {
+        id: "resp_upstream",
+        object: "response",
+        status: "completed",
+        output: [],
+      },
+    },
+  ])("rejects $description", async ({ response: responseBody }) => {
+    const model = responsesModel("commandcode-goat");
+    const fetch: FetchFunction = async () =>
+      new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(compactionTurn(false)),
+    );
+
+    expect(response.status).toBe(502);
+  });
+
+  it("uses the completed message item when the upstream omits text deltas", async () => {
+    const model = responsesModel("commandcode-goat");
+    const fetch: FetchFunction = async () =>
+      new Response(
+        sse([
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              type: "message",
+              role: "assistant",
+              content: [
+                { type: "output_text", text: "completed item summary" },
+              ],
+            },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_upstream",
+              status: "completed",
+              output: [],
+            },
+          },
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(COMPACTION_TURN),
+    );
+
+    expect(response.status).toBe(200);
+    const events = sseEvents(await response.text());
+    const compactionItem = events
+      .filter((event) => event.type === "response.output_item.done")
+      .map((event) => event.item)
+      .find(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" &&
+          item !== null &&
+          "type" in item &&
+          item.type === "compaction",
+      );
+    expect(compactionItem).toBeDefined();
+    const encrypted = String(compactionItem!.encrypted_content);
+    expect(
+      Buffer.from(
+        encrypted.slice(TOKEN_COMPACTION_PREFIX.length),
+        "base64",
+      ).toString("utf8"),
+    ).toBe("completed item summary");
+  });
+
+  it("rejects ambiguous flattened namespace history before native dispatch", async () => {
+    const model = responsesModel("commandcode-goat");
+    const upstream: Request[] = [];
+    const fetch: FetchFunction = async (input, init) => {
+      upstream.push(new Request(input, init));
+      return new Response("unexpected dispatch", { status: 200 });
+    };
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(
+        JSON.stringify({
+          model: "commandcode-goat/real-model",
+          stream: true,
+          tools: [
+            {
+              type: "namespace",
+              name: "alpha__beta",
+              tools: [
+                {
+                  type: "function",
+                  name: "gamma",
+                  parameters: { type: "object", properties: {} },
+                },
+              ],
+            },
+            {
+              type: "namespace",
+              name: "alpha",
+              tools: [
+                {
+                  type: "function",
+                  name: "beta__gamma",
+                  parameters: { type: "object", properties: {} },
+                },
+              ],
+            },
+          ],
+          input: [
+            {
+              type: "function_call",
+              call_id: "call_alpha_beta",
+              namespace: "alpha__beta",
+              name: "gamma",
+              arguments: "{}",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_alpha_beta",
+              output: "first",
+            },
+            {
+              type: "function_call",
+              call_id: "call_alpha",
+              namespace: "alpha",
+              name: "beta__gamma",
+              arguments: "{}",
+            },
+            {
+              type: "function_call_output",
+              call_id: "call_alpha",
+              output: "second",
+            },
+            { type: "compaction_trigger" },
+          ],
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    expect(upstream).toHaveLength(0);
+    expect(await response.text()).toContain(
+      "tool name collision after namespace flattening: alpha__beta__gamma",
+    );
+  });
+
+  it.each([
+    {
+      description: "the stream ending after text deltas",
+      frames: [
+        { type: "response.output_text.delta", delta: "partial summary" },
+      ],
+    },
+    {
+      description: "a response.incomplete terminal event",
+      frames: [
+        { type: "response.output_text.delta", delta: "partial summary" },
+        {
+          type: "response.incomplete",
+          response: {
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          },
+        },
+      ],
+    },
+    {
+      description: "a response.failed terminal event",
+      frames: [
+        { type: "response.output_text.delta", delta: "partial summary" },
+        {
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { message: "upstream failure" },
+          },
+        },
+      ],
+    },
+    {
+      description: "text following response.completed",
+      frames: [
+        {
+          type: "response.completed",
+          response: { status: "completed", output: [] },
+        },
+        { type: "response.output_text.delta", delta: "late summary text" },
+      ],
+    },
+  ])(
+    "rejects nonempty deltas without response.completed: $description",
+    async ({ frames }) => {
+      const model = responsesModel("commandcode-goat");
+      const fetch: FetchFunction = async () =>
+        new Response(sse(frames), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+
+      const response = await handleHttpRequest(
+        dependencies(models(model), fetch),
+        request(COMPACTION_TURN),
+      );
+
+      expect(response.status).toBe(502);
+    },
+  );
+
+  it("rejects malformed SSE data even if later frames report completion", async () => {
+    const model = responsesModel("commandcode-goat");
+    const fetch: FetchFunction = async () =>
+      new Response(
+        [
+          `data: ${JSON.stringify({
+            type: "response.output_text.delta",
+            delta: "partial summary",
+          })}`,
+          "",
+          "data: {malformed-json",
+          "",
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: {
+              id: "resp_upstream",
+              status: "completed",
+              output: [
+                {
+                  type: "message",
+                  content: [{ type: "output_text", text: "completed summary" }],
+                },
+              ],
+            },
+          })}`,
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(COMPACTION_TURN),
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.text()).not.toContain('"type":"compaction"');
+  });
+
+  it("parses CRLF-framed summarizer SSE without dropping later deltas", async () => {
+    const model = responsesModel("commandcode-goat");
+    const fetch: FetchFunction = async () =>
+      new Response(
+        sse([
+          { type: "response.output_text.delta", delta: "CRLF " },
+          { type: "response.output_text.delta", delta: "summary" },
+          {
+            type: "response.completed",
+            response: { id: "resp_upstream", status: "completed", output: [] },
+          },
+        ]).replace(/\n/gu, "\r\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(COMPACTION_TURN),
+    );
+
+    expect(response.status).toBe(200);
+    const events = sseEvents(await response.text());
+    const compactionItem = events
+      .filter((event) => event.type === "response.output_item.done")
+      .map((event) => event.item)
+      .find(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" &&
+          item !== null &&
+          "type" in item &&
+          item.type === "compaction",
+      );
+    expect(compactionItem).toBeDefined();
+    const encrypted = String(compactionItem!.encrypted_content);
+    expect(
+      Buffer.from(
+        encrypted.slice(TOKEN_COMPACTION_PREFIX.length),
+        "base64",
+      ).toString("utf8"),
+    ).toBe("CRLF summary");
+  });
+
+  it("joins multiple SSE data lines before parsing the summarizer event", async () => {
+    const model = responsesModel("commandcode-goat");
+    const deltaFrame = JSON.stringify({
+      type: "response.output_text.delta",
+      delta: "multi-line summary",
+    });
+    const splitAt = deltaFrame.indexOf(',"delta":') + 1;
+    const fetch: FetchFunction = async () =>
+      new Response(
+        [
+          `data: ${deltaFrame.slice(0, splitAt)}`,
+          `data: ${deltaFrame.slice(splitAt)}`,
+          "",
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: { id: "resp_upstream", status: "completed", output: [] },
+          })}`,
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+
+    const response = await handleHttpRequest(
+      dependencies(models(model), fetch),
+      request(COMPACTION_TURN),
+    );
+
+    expect(response.status).toBe(200);
+    const events = sseEvents(await response.text());
+    const compactionItem = events
+      .filter((event) => event.type === "response.output_item.done")
+      .map((event) => event.item)
+      .find(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" &&
+          item !== null &&
+          "type" in item &&
+          item.type === "compaction",
+      );
+    expect(compactionItem).toBeDefined();
+    const encrypted = String(compactionItem!.encrypted_content);
+    expect(
+      Buffer.from(
+        encrypted.slice(TOKEN_COMPACTION_PREFIX.length),
+        "base64",
+      ).toString("utf8"),
+    ).toBe("multi-line summary");
   });
 
   it("forwards a certified upstream compaction turn unchanged", async () => {

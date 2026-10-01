@@ -60,6 +60,7 @@ import {
 import { renderResponsesSse } from "../../responses-sse.js";
 import {
   buildCodexRoutedCompactionRequest,
+  CodexRoutedCompactionRequestError,
   CodexRoutedCompactionSummaryError,
   expandTokenCompactionEnvelopes,
   isCodexRoutedCompactionRequest,
@@ -973,6 +974,11 @@ export async function executeSemanticResponses(
       error instanceof InvalidRequest ||
       error instanceof ResponseStateConversionFailure
     ) {
+      return toResponse(
+        renderResponsesError(400, "invalid_request_error", error.message),
+      );
+    }
+    if (error instanceof CodexRoutedCompactionRequestError) {
       return toResponse(
         renderResponsesError(400, "invalid_request_error", error.message),
       );

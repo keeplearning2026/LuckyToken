@@ -134,6 +134,84 @@ describe("Codex Direct Mode Responses routing", () => {
     });
   });
 
+  it("forwards a remote compaction v2 turn and preserves the direct upstream response", async () => {
+    const calls: Request[] = [];
+    const upstreamBody = [
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "compaction",
+          id: "cmp_native",
+          encrypted_content: "native-encrypted",
+        },
+      })}`,
+      "",
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          id: "resp_native",
+          status: "completed",
+          output: [
+            {
+              type: "compaction",
+              id: "cmp_native",
+              encrypted_content: "native-encrypted",
+            },
+          ],
+        },
+      })}`,
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const { runtime } = await start({
+      fetch: async (input, init) => {
+        calls.push(new Request(input, init));
+        return new Response(upstreamBody, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    const rawBody = JSON.stringify({
+      model: "gpt-native",
+      stream: true,
+      instructions: "client instructions",
+      tools: [{ type: "function", name: "keep_me" }],
+      input: [
+        {
+          type: "function_call",
+          call_id: "call_native",
+          namespace: "multi_agent_v1",
+          name: "spawn_agent",
+          arguments: "{}",
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_native",
+          output: "done",
+        },
+        { type: "compaction_trigger" },
+      ],
+    });
+    const response = await runtime.handle(
+      new Request("http://Token.test/v1/responses", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer codex-token",
+          "content-type": "application/json",
+        },
+        body: rawBody,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    await expect(calls[0]!.text()).resolves.toBe(rawBody);
+    await expect(response.text()).resolves.toBe(upstreamBody);
+  });
+
   it("accepts the zstd-compressed request bodies emitted by native Codex", async () => {
     const calls: Request[] = [];
     const { runtime } = await start({

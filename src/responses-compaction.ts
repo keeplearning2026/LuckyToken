@@ -43,6 +43,15 @@ export class CodexRoutedCompactionSummaryError extends Error {
   }
 }
 
+export class CodexRoutedCompactionRequestError extends Error {
+  readonly kind = "CodexRoutedCompactionRequestError" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexRoutedCompactionRequestError";
+  }
+}
+
 /**
  * Summarizer prompts ported from the pi-agent harness
  * (`reference/pi-agent/packages/agent/src/harness/compaction/compaction.ts`).
@@ -111,7 +120,17 @@ function decodeSummary(encryptedContent: string): string | undefined {
   if (!encryptedContent.startsWith(TOKEN_COMPACTION_PREFIX)) return undefined;
   const payload = encryptedContent.slice(TOKEN_COMPACTION_PREFIX.length);
   if (payload.length === 0) return undefined;
-  const decoded = Buffer.from(payload, "base64").toString("utf8").trim();
+  const base64Pattern =
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+  if (!base64Pattern.test(payload)) return undefined;
+  const bytes = Buffer.from(payload, "base64");
+  if (bytes.toString("base64") !== payload) return undefined;
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+  } catch {
+    return undefined;
+  }
   return decoded.length === 0 ? undefined : decoded;
 }
 
@@ -195,6 +214,7 @@ function flattenDeclaredNamespaceHistoryCalls(
   input: readonly unknown[],
   declared: Map<string, Set<string>>,
 ): unknown[] {
+  const namespacedOwners = new Map<string, string>();
   return input.map((item) => {
     if (
       !isRecord(item) ||
@@ -204,19 +224,36 @@ function flattenDeclaredNamespaceHistoryCalls(
     }
     const namespace = item.namespace;
     const name = item.name;
+    if (typeof name !== "string" || name.length === 0) {
+      return item;
+    }
+    const hasNamespace = namespace !== undefined;
     if (
-      typeof namespace !== "string" ||
-      namespace.length === 0 ||
-      typeof name !== "string" ||
-      name.length === 0 ||
-      !declared.get(namespace)?.has(name)
+      hasNamespace &&
+      (typeof namespace !== "string" || namespace.length === 0)
     ) {
       return item;
     }
-    const flattened: Record<string, unknown> = {
-      ...item,
-      name: flattenResponsesNamespaceToolName(namespace, name),
-    };
+    if (
+      hasNamespace &&
+      !declared.get(namespace as string)?.has(name)
+    ) {
+      return item;
+    }
+    if (!hasNamespace) return item;
+    const identity = JSON.stringify([namespace, name]);
+    const flattenedName = flattenResponsesNamespaceToolName(
+      namespace as string,
+      name,
+    );
+    const owner = namespacedOwners.get(flattenedName);
+    if (owner !== undefined && owner !== identity) {
+      throw new CodexRoutedCompactionRequestError(
+        `tool name collision after namespace flattening: ${flattenedName}`,
+      );
+    }
+    namespacedOwners.set(flattenedName, identity);
+    const flattened: Record<string, unknown> = { ...item, name: flattenedName };
     delete flattened.namespace;
     return flattened;
   });
@@ -311,33 +348,92 @@ export function projectRoutedCompactionResponse<T extends { readonly output: rea
 }
 
 /**
- * Collect the assistant text from a routed upstream's Responses SSE.
+ * Collect the assistant text from a routed upstream's Responses JSON or SSE.
  *
  * Shared by the Provider Native lane, which forwards to a Responses-shaped
  * upstream and therefore receives the same wire family this protocol already
- * renders. Deltas win because they are the canonical streaming source; the
- * completed message items are the fallback for gateways that only emit
- * `response.output_item.done`.
+ * renders. A summary is usable only after a completed terminal response;
+ * deltas win because they are the canonical streaming source, with completed
+ * output items as a fallback for gateways that omit deltas.
  */
-export function extractResponsesSseOutputText(
+export function extractResponsesOutputText(
   rawBody: string,
 ): string | undefined {
+  let json: unknown;
+  try {
+    json = JSON.parse(rawBody);
+  } catch {
+    json = undefined;
+  }
+  if (isRecord(json)) {
+    if (json.status !== "completed" || !Array.isArray(json.output)) {
+      return undefined;
+    }
+    const text = outputText(json.output).trim();
+    return text.length === 0 ? undefined : text;
+  }
+
   const deltas: string[] = [];
   const itemTexts: string[] = [];
-  for (const block of rawBody.split("\n\n")) {
-    const dataLine = block
+  let completedOutputTexts: string[] = [];
+  let completed = false;
+  let done = false;
+  let invalidTerminal = false;
+  const normalizedBody = rawBody.replace(/\r\n?/gu, "\n");
+  for (const block of normalizedBody.split("\n\n")) {
+    const payload = block
       .split("\n")
-      .find((line) => line.startsWith("data:"));
-    if (dataLine === undefined) continue;
-    const payload = dataLine.slice("data:".length).trim();
-    if (payload.length === 0 || payload === "[DONE]") continue;
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice("data:".length).replace(/^ /u, ""))
+      .join("\n")
+      .trim();
+    if (payload.length === 0) continue;
+    if (payload === "[DONE]") {
+      if (!completed || done) invalidTerminal = true;
+      done = true;
+      continue;
+    }
+    if (done) {
+      invalidTerminal = true;
+      continue;
+    }
     let frame: unknown;
     try {
       frame = JSON.parse(payload);
     } catch {
+      invalidTerminal = true;
       continue;
     }
-    if (!isRecord(frame)) continue;
+    if (!isRecord(frame)) {
+      invalidTerminal = true;
+      continue;
+    }
+    if (completed) {
+      invalidTerminal = true;
+      continue;
+    }
+    if (
+      frame.type === "response.incomplete" ||
+      frame.type === "response.failed"
+    ) {
+      invalidTerminal = true;
+      continue;
+    }
+    if (frame.type === "response.completed") {
+      const response = frame.response;
+      if (
+        completed ||
+        !isRecord(response) ||
+        response.status !== "completed" ||
+        !Array.isArray(response.output)
+      ) {
+        invalidTerminal = true;
+        continue;
+      }
+      completed = true;
+      completedOutputTexts = collectOutputText(response.output);
+      continue;
+    }
     if (
       frame.type === "response.output_text.delta" &&
       typeof frame.delta === "string"
@@ -351,19 +447,45 @@ export function extractResponsesSseOutputText(
       frame.item.type === "message" &&
       Array.isArray(frame.item.content)
     ) {
-      for (const part of frame.item.content) {
-        if (
-          isRecord(part) &&
-          part.type === "output_text" &&
-          typeof part.text === "string"
-        ) {
-          itemTexts.push(part.text);
-        }
+      itemTexts.push(...collectOutputText([frame.item]));
+    }
+  }
+  if (!completed || invalidTerminal) return undefined;
+  const text = (
+    deltas.length > 0
+      ? deltas.join("")
+      : completedOutputTexts.length > 0
+        ? completedOutputTexts.join("")
+        : itemTexts.join("")
+  ).trim();
+  return text.length === 0 ? undefined : text;
+}
+
+function collectOutputText(output: readonly unknown[]): string[] {
+  const texts: string[] = [];
+  for (const item of output) {
+    if (
+      !isRecord(item) ||
+      item.type !== "message" ||
+      !Array.isArray(item.content)
+    ) {
+      continue;
+    }
+    for (const part of item.content) {
+      if (
+        isRecord(part) &&
+        part.type === "output_text" &&
+        typeof part.text === "string"
+      ) {
+        texts.push(part.text);
       }
     }
   }
-  const text = (deltas.length > 0 ? deltas.join("") : itemTexts.join("")).trim();
-  return text.length === 0 ? undefined : text;
+  return texts;
+}
+
+function outputText(output: readonly unknown[]): string {
+  return collectOutputText(output).join("");
 }
 
 const EMPTY_COMPACTION_USAGE = Object.freeze({

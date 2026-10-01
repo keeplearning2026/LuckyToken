@@ -91,7 +91,7 @@ operations: ["responses", "responses-compaction", "compact"]
 
 | Serving lane | Upstream certified `responses-compaction`? | Compaction turn |
 | --- | --- | --- |
-| Direct Mode | n/a | Untouched by this work; preserved to the Codex-native upstream. |
+| Direct Mode | n/a | Request and response bodies are passed through unchanged; this certifies Token's preservation boundary, not the upstream's compaction support. |
 | Provider Native | yes | Forwarded unchanged; the upstream mints its own opaque compaction item. |
 | Provider Native | no | Stays on the native lane: request is rewritten with the shared helper, sent over the same native transport/auth/retry, the summary is read from the upstream Responses stream, and Token synthesizes the single client-facing compaction item. |
 | Semantic Conversion | n/a | Request is rewritten with the same shared helper, executed through Pi, and the Pi `AssistantMessage` text is projected into the same single compaction item. |
@@ -113,7 +113,7 @@ closures and forbids Direct Mode from reaching either shared helper.
 | `isCodexRoutedCompactionRequest` | Detect the trigger as the last input item. |
 | `buildCodexRoutedCompactionRequest` | Rewrite the compaction turn into a summarizer turn. |
 | `expandTokenCompactionEnvelopes` | Decode replayed `Token1:` items into model-visible summary text. |
-| `extractResponsesSseOutputText` | Read the assistant text from a Responses-shaped upstream stream (native path). |
+| `extractResponsesOutputText` | Read assistant text from a completed Responses JSON or SSE result (native path). |
 | `renderRoutedCompactionClientResponse` | Build the complete client response (SSE or JSON) with exactly one compaction item. |
 | `projectRoutedCompactionResponse` | Replace an ordinary rendered response with the single compaction item (semantic path). |
 | `ROUTED_COMPACTION_SYSTEM_PROMPT`, `ROUTED_COMPACTION_PROMPT` | Summarizer prompt contract, ported from the pi-agent harness. |
@@ -160,8 +160,8 @@ way pi-agent does. Only the prompt contract is shared.
 `buildCodexRoutedCompactionRequest`:
 
 1. removes the `compaction_trigger` and any `additional_tools` input items;
-2. removes `tools`, `tool_choice`, `parallel_tool_calls`, and `text`, after
-   canonicalizing declared namespaced history calls (see below);
+2. canonicalizes declared namespaced history calls, then removes `tools`,
+   `tool_choice`, `parallel_tool_calls`, and `text`;
 3. replaces `instructions` with the summarizer system prompt;
 4. appends one user message carrying the structured handoff prompt;
 5. keeps everything else (model, reasoning, service tier, cache key, stream).
@@ -179,18 +179,25 @@ A Responses namespace declaration certifies a namespaced history call's
 canonical `<namespace>__<child>` replay identity. Without a matching
 declaration, the Responses converter leaves the call namespaced and fails
 closed with `Namespaced tool-call history requires a matching namespace tool
-declaration`. Dropping declarations before preserving that identity therefore
-made compaction fail for histories containing Codex `multi_agent_v1` calls or
-MCP namespace calls.
-
-Before deleting the tool catalog, the rewrite now changes each declared
+declaration`. For the summarizer turn only, the rewrite changes each declared
 `function_call` / `custom_tool_call` into the same canonical flattened name
 used by Responses conversion and removes its `namespace` property. It reads
 declarations from both the top-level `tools` array and `additional_tools`.
-Unmatched calls remain unchanged, so a missing namespace or child still fails
-closed in the ordinary converter. All tool declarations are removed from the
-summarizer request, so preserving history identity does not expose executable
-tools to the summarizer.
+Distinct namespace-child pairs that would flatten to the same name are
+rejected, because the summary context could not distinguish them. A plain call
+whose name already equals a flattened namespace name follows ordinary Responses
+conversion semantics and is not treated as a namespace-pair collision. The call
+ID, arguments, result items, and transcript order stay unchanged.
+
+This is safe for this one turn because the summary model only reads historical
+calls; it cannot execute them, and the compaction response discards the
+summarizer's ordinary output. The flattened name is the Pi history identity
+that normal Responses conversion already produces. The rewrite then removes
+all callable tool declarations. This exception does not apply to ordinary
+Responses requests or either preservation lane's general request handling.
+An unmatched namespaced call remains unchanged: Semantic Conversion rejects it
+with the same missing-declaration error it would produce without compaction
+rewriting.
 
 The rewrite happens at the Responses client-protocol layer in both lanes; it
 is never expressed as a provider payload edit.
@@ -234,20 +241,44 @@ summary can incorporate the previous one.
 | --- | --- |
 | Summarizer produced no text | 502 `api_error`; no item is installed. |
 | Summarizer stopped truncated | 502 `api_error`; no item is installed. |
+| Native summarizer SSE contains malformed event data | 502 `api_error`; partial text is not installed. |
 | Native upstream HTTP error / transport failure | Existing Provider Native recovery and error rendering apply. |
 | Foreign encrypted compaction in `input` | Conversion fails; Token never fabricates bytes. |
 | Envelope malformed or empty | Treated as foreign; conversion fails. |
 
-## 10. Certification and tests
+## 10. Certification matrix and tests
+
+“Complete coverage” here means the remote-compaction-v2 request on
+`POST /v1/responses`. Direct Mode coverage proves request/response body
+pass-through; it does not certify that its upstream supports this operation.
+Tests cover each observable Token boundary below, not just the happy path:
+
+| Dimension | Cases | Required observable |
+| --- | --- | --- |
+| Lane and capability | Direct Mode; Provider Native with and without `responses-compaction`; Semantic Conversion | Direct Mode passes request/response bodies through; certified native request is forwarded unchanged; unsupported native stays native; semantic stays semantic; only unsupported backends use the shared summarizer rewrite. |
+| Request rewrite | top-level and `additional_tools`; simple and namespaced calls; function and custom calls; unrelated tools; input-order variations | Trigger removed; namespaced calls use the canonical flat identity; call IDs, arguments, outputs, and order survive; no callable tool surface reaches the summarizer. |
+| Invalid relationships | missing namespace declaration; missing child; distinct referenced namespace-child pairs flatten to the same name; tool-call/output ID mismatch | Token must not invent a relationship or lose a failure already produced by ordinary conversion. |
+| Upstream result | completed SSE with deltas; completed SSE item fallback; completed JSON; empty text; missing terminal; incomplete/failed terminal; malformed SSE; non-2xx and transport failure | Only a non-empty completed summary becomes a client response; failed or partial summaries install no history and return the lane's error. |
+| Client response | streaming and non-streaming request | SSE/JSON is valid for the requested mode and contains exactly one `compaction` item, with a non-empty `Token1:` envelope and matching completed output. |
+| Replay | valid envelope; empty payload; invalid base64; invalid UTF-8; foreign ciphertext | Only a valid Token envelope becomes model-visible summary text; foreign values are not fabricated or decoded. |
+| Semantic execution | stop, tool-call, length, error, empty text, text plus non-text content | Only a clean stop with usable text is committed as compaction; unsuccessful or truncated execution returns an error before the client installs replacement history. |
+
+Exercise these cases at three levels where applicable: helper unit tests
+prove the rewrite and parser, lane unit tests prove transport routing and
+response synthesis, and online certification proves both CommandCode provider
+paths against their actual wire behavior. A test at one level does not replace
+the others.
 
 Unit coverage:
 
 - `test/unit/provider-native-compaction.test.ts` — native in-lane summarize,
-  namespaced history canonicalization, certified upstream forwarding, and
-  replay decode;
+  namespaced history canonicalization, certified upstream forwarding, replay
+  decode, malformed SSE rejection, and Responses JSON/SSE completion handling;
 - `test/unit/openai-responses-routed-compaction.test.ts` — semantic rewrite,
   namespaced function/custom-call history, missing declarations, single-item
-  response, and replay decode;
+  response, ordinary-conversion parity for flat-name overlap, and replay decode;
+- `test/integration/codex-direct-responses.test.ts` — direct compaction-trigger
+  request and upstream response pass through unchanged;
 - `test/unit/provider-native-responses-projection.test.ts` — alias projection
   preserves the `data: [DONE]` compatibility terminator;
 - `test/unit/responses-native-provider-sender.test.ts` — certification table
@@ -278,8 +309,5 @@ node scripts/run-with-codex-test-sandbox.mjs -- tsx test/online/run-responses-co
 - Codex itself decides remote vs local compaction from the provider identity
   (`is_openai()`, Azure base URLs, Amazon Bedrock). Pointing the built-in
   `openai` provider at Token forces the remote path for every routed model.
-- Direct Mode compaction forwarding is outside this document; one recorded
-  direct-mode setup returned 404 from the Codex-native upstream and is tracked
-  separately.
 - A build/reinstall of Token is required before these paths take effect in an
   installed product.

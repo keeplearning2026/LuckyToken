@@ -9,8 +9,9 @@ import {
 import { renderResponsesError } from "../protocols/openai-responses/error-rendering.js";
 import {
   buildCodexRoutedCompactionRequest,
+  CodexRoutedCompactionRequestError,
   expandTokenCompactionEnvelopes,
-  extractResponsesSseOutputText,
+  extractResponsesOutputText,
   isCodexRoutedCompactionRequest,
   renderRoutedCompactionClientResponse,
   TOKEN_COMPACTION_PREFIX,
@@ -428,8 +429,18 @@ export function createProviderNativeResponses(
     async execute(
       input: Parameters<ProviderResponsesLane["execute"]>[0],
     ): Promise<Response> {
+      let outbound: ProviderNativeOutboundPlan;
+      try {
+        outbound = planProviderNativeOutboundBody(input);
+      } catch (error) {
+        if (!(error instanceof CodexRoutedCompactionRequestError)) throw error;
+        return syntheticErrorResponse(
+          400,
+          "invalid_request_error",
+          error.message,
+        );
+      }
       enterProfileCapture(input.observation, 1);
-      const outbound = planProviderNativeOutboundBody(input);
       let capture: Awaited<
         ReturnType<
           Pick<ProviderAuthBindingAuthority, "capture">["capture"]
@@ -633,7 +644,7 @@ export function createProviderNativeResponses(
                     const summary =
                       upstreamBody === undefined
                         ? undefined
-                        : extractResponsesSseOutputText(upstreamBody);
+                        : extractResponsesOutputText(upstreamBody);
                     if (summary === undefined) {
                       return finishObservedResponse(
                         input.observation,

@@ -67,11 +67,15 @@ be the reason the request stops being valid. After Token's processing:
 
 A rewrite that drops or replaces facts therefore keeps every fact a later Token stage
 still depends on, and canonicalizes it at the rewrite seam instead of leaving the
-failure to a downstream guard. The routed-compaction tool-surface drop is the worked
-example: a retained namespace declaration is the certified replay identity of a
-namespaced history call, so the rewrite retains the referenced declarations (pruned to
-the referenced children) even though the summarizer must not be offered a callable
-tool surface. See `doc/Spec/TokenResponsesRemoteCompactionHandlingSpec.md`.
+failure to a downstream guard. Routed compaction is a narrow exception to retaining
+the original namespace declaration: for each declared namespaced history call whose
+canonical `<namespace>__<child>` name has an unambiguous identity, the rewrite uses
+that same name as Responses conversion, removes the namespace field, then drops all
+callable tools. The summarizer only needs the historical call identity and arguments;
+it never executes or returns those calls. This exception must not change ordinary
+Responses conversion, including histories where an ordinary flat call has the same
+name as a flattened namespace child, and must preserve call/result IDs and ordering.
+See `doc/Spec/TokenResponsesRemoteCompactionHandlingSpec.md`.
 
 ## Semantic Conversion boundary
 
