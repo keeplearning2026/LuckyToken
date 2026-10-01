@@ -1,6 +1,6 @@
 {
   "name": "@token/provider-deepseek-response",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "files": [
@@ -18,6 +18,6 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "0.87.0",
-    "@token/provider-contract": "1.4.1"
+    "@token/provider-contract": "1.5.0"
   }
 }
