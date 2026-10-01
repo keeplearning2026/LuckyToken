@@ -160,7 +160,8 @@ way pi-agent does. Only the prompt contract is shared.
 `buildCodexRoutedCompactionRequest`:
 
 1. removes the `compaction_trigger` and any `additional_tools` input items;
-2. removes `tools`, `tool_choice`, `parallel_tool_calls`, and `text`;
+2. removes `tools`, `tool_choice`, `parallel_tool_calls`, and `text`, after
+   canonicalizing declared namespaced history calls (see below);
 3. replaces `instructions` with the summarizer system prompt;
 4. appends one user message carrying the structured handoff prompt;
 5. keeps everything else (model, reasoning, service tier, cache key, stream).
@@ -171,6 +172,25 @@ Reasons:
 - Codex sends its own base instructions, which are wrong for summarization;
 - removing the tool surface also mirrors the opencodex routed-compaction
   rewrite, so third-party models see one familiar shape.
+
+Exception — namespaced history identity:
+
+A Responses namespace declaration certifies a namespaced history call's
+canonical `<namespace>__<child>` replay identity. Without a matching
+declaration, the Responses converter leaves the call namespaced and fails
+closed with `Namespaced tool-call history requires a matching namespace tool
+declaration`. Dropping declarations before preserving that identity therefore
+made compaction fail for histories containing Codex `multi_agent_v1` calls or
+MCP namespace calls.
+
+Before deleting the tool catalog, the rewrite now changes each declared
+`function_call` / `custom_tool_call` into the same canonical flattened name
+used by Responses conversion and removes its `namespace` property. It reads
+declarations from both the top-level `tools` array and `additional_tools`.
+Unmatched calls remain unchanged, so a missing namespace or child still fails
+closed in the ordinary converter. All tool declarations are removed from the
+summarizer request, so preserving history identity does not expose executable
+tools to the summarizer.
 
 The rewrite happens at the Responses client-protocol layer in both lanes; it
 is never expressed as a provider payload edit.
@@ -223,9 +243,11 @@ summary can incorporate the previous one.
 Unit coverage:
 
 - `test/unit/provider-native-compaction.test.ts` — native in-lane summarize,
-  certified upstream forwarding, and replay decode;
+  namespaced history canonicalization, certified upstream forwarding, and
+  replay decode;
 - `test/unit/openai-responses-routed-compaction.test.ts` — semantic rewrite,
-  single-item response, and replay decode;
+  namespaced function/custom-call history, missing declarations, single-item
+  response, and replay decode;
 - `test/unit/provider-native-responses-projection.test.ts` — alias projection
   preserves the `data: [DONE]` compatibility terminator;
 - `test/unit/responses-native-provider-sender.test.ts` — certification table
@@ -237,6 +259,8 @@ Online certification:
   against the CommandCode API with `deepseek/deepseek-v4.1-flash`:
   - `commandcode-goat` (Provider Native, not certified) must summarize in-lane;
   - `commandcode-private` (Semantic Conversion) must summarize through Pi;
+  - namespaced history identities must survive while tool declarations are
+    absent from both summarizer requests;
   - both must return exactly one `Token1:` item, must not forward the trigger
     or the tool surface, and must decode the envelope on the replay turn.
 

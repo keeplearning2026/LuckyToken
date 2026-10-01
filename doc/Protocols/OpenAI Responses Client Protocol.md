@@ -128,10 +128,12 @@ Recognition does not imply exact Pi mapping. Each known family is classified by 
 
 A routed remote-compaction turn — input ending with `compaction_trigger` — is a
 consumed control, not a dropped hosted item. One wire-level compaction helper owns the
-rewrite (tool surface removed, summarizer system role, structured handoff prompt), the
-`Token1:` envelope, and the single `compaction` output item. Provider Native keeps the
-turn on its own lane when the upstream is not certified to compact itself: it forwards
-the rewritten request over its native transport, extracts the summary from the upstream
+rewrite (declared namespaced history calls are canonicalized before all tool declarations
+are removed, followed by the summarizer system role and structured handoff prompt), the
+`Token1:` envelope, and the single `compaction` output item.
+Provider Native keeps the turn on its own lane when the upstream is not certified to
+compact itself: it forwards the rewritten request over its native transport, extracts
+the summary from the upstream
 Responses stream, and returns the same synthesized client response. Semantic Conversion
 uses the same helper with the summary text that Pi produced. Replayed `Token1:` items
 decode back to model-visible summary text in both lanes; foreign encrypted-only

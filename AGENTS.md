@@ -54,6 +54,25 @@ Client Protocols.
 Keep model-visible semantics separate from credentials, transport, logging, timing,
 request IDs, and other infrastructure state.
 
+## Request processing invariants
+
+Token's own handling of a Client request — decoding, expansion, envelope
+substitution, lane preparation, or a rewrite such as routed compaction — must never
+be the reason the request stops being valid. After Token's processing:
+
+- the result is still a well-formed request for the Client Protocol it claims to
+  speak; and
+- when a lane rejects the processed request, the same request without Token's
+  processing would already have been rejected for that same reason.
+
+A rewrite that drops or replaces facts therefore keeps every fact a later Token stage
+still depends on, and canonicalizes it at the rewrite seam instead of leaving the
+failure to a downstream guard. The routed-compaction tool-surface drop is the worked
+example: a retained namespace declaration is the certified replay identity of a
+namespaced history call, so the rewrite retains the referenced declarations (pruned to
+the referenced children) even though the summarizer must not be offered a callable
+tool surface. See `doc/Spec/TokenResponsesRemoteCompactionHandlingSpec.md`.
+
 ## Semantic Conversion boundary
 
 For Semantic Conversion work read

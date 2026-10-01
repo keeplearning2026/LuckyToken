@@ -32,6 +32,7 @@ import {
   RESPONSES_CONTINUITY_FIELD,
   type WireContinuityAttachment,
 } from "./semantic/reasoning/continuity.js";
+import { flattenResponsesNamespaceToolName } from "./namespace-tool-name.js";
 
 export class InvalidRequest extends Error {
   readonly kind = "InvalidRequest";
@@ -132,12 +133,6 @@ export const TOOL_CHOICE_OMITTED_NOTICE_CODE =
   "openai-responses_tool_choice_omitted";
 export const PARALLEL_TOOL_CALLS_OMITTED_NOTICE_CODE =
   "openai-responses_parallel_tool_calls_omitted";
-
-/** Separator for the reversible Responses-owned namespace flattening scheme.
- *  A flattened name is `<namespace>__<child>`; the separator stays inside the
- *  OpenAI function-name alphabet and the reverse map in render state recovers
- *  the original namespace/child pair for output rendering. */
-export const NAMESPACE_SEPARATOR = "__";
 
 /** Responses-owned marker id for the versioned textSignature envelope.
  *  `phase` is preserved here, never injected into model-visible text. */
@@ -671,7 +666,7 @@ function convertTools(
       );
     }
     const childName = inner.name;
-    const flatName = `${namespace}${NAMESPACE_SEPARATOR}${childName}`;
+    const flatName = flattenResponsesNamespaceToolName(namespace, childName);
     const description =
       typeof inner.description === "string" ? inner.description : "";
     if (inner.type === "function") {
@@ -1886,7 +1881,7 @@ function convertMessages(
         const flattenedName =
           wireNamespace === undefined
             ? undefined
-            : `${wireNamespace}${NAMESPACE_SEPARATOR}${rawName}`;
+            : flattenResponsesNamespaceToolName(wireNamespace, rawName);
         const declaredNamespace =
           flattenedName === undefined ? undefined : namespaceReverse?.[flattenedName];
         const name =
@@ -2968,7 +2963,7 @@ function collectExecutableNames(
             typeof inner.name === "string" &&
             inner.name.length > 0
           ) {
-            const flat = `${name}${NAMESPACE_SEPARATOR}${inner.name}`;
+            const flat = flattenResponsesNamespaceToolName(name, inner.name);
             names.add(flat);
             namespaceReverse[flat] = { namespace: name, child: inner.name };
           }

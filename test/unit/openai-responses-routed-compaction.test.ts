@@ -66,21 +66,21 @@ function sseEvents(body: string): Record<string, unknown>[] {
   return events;
 }
 
-function compressionBody(input: unknown): Request {
+const MARKER_TOOL = {
+  type: "function",
+  name: "marker_tool",
+  description: "must not reach the summarizer",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+} as const;
+
+function compressionBody(input: unknown, tools: unknown[] = [MARKER_TOOL]): Request {
   return new Request("http://Token.test/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model: "third-party/third-party-model",
       stream: true,
-      tools: [
-        {
-          type: "function",
-          name: "marker_tool",
-          description: "must not reach the summarizer",
-          parameters: { type: "object", properties: {}, additionalProperties: false },
-        },
-      ],
+      tools,
       input,
     }),
   });
@@ -181,6 +181,254 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
     );
     expect(calls[0]!.context.tools ?? []).toHaveLength(0);
     expect(JSON.stringify(calls[0]!.context)).not.toContain("marker_tool");
+  });
+
+  it("keeps the canonical replay identity of namespaced history calls", async () => {
+    const models = {
+      getModels: () => [THIRD_PARTY_MODEL],
+    } as unknown as Models;
+    const contexts: Context[] = [];
+    const options: ModelsSimpleStreamOptions[] = [];
+    const executeOperation = vi.fn(
+      async (
+        _models: Models,
+        _model: Model<string>,
+        context: Context,
+        streamOptions: ModelsSimpleStreamOptions,
+      ): Promise<AssistantMessage> => {
+        contexts.push(context);
+        options.push(streamOptions);
+        return assistantMessage("handoff summary text");
+      },
+    );
+    const handler = createOpenAIResponsesHandler({
+      models,
+      executeOperation,
+      stateFile: "unused-routed-compaction-namespace.json",
+      maxRequestBytes: 65_536,
+      now: () => 1,
+      createResponseId: () => "resp_namespace_test",
+    });
+
+    const response = await handler.handle(
+      compressionBody(
+        [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Fix the widget." }],
+          },
+          {
+            type: "function_call",
+            call_id: "call_spawn_1",
+            namespace: "multi_agent_v1",
+            name: "spawn_agent",
+            arguments: "{}",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call_spawn_1",
+            output: "agent started",
+          },
+          {
+            type: "custom_tool_call",
+            call_id: "call_compose_1",
+            namespace: "notes_v1",
+            name: "compose",
+            input: "draft the notes",
+          },
+          {
+            type: "custom_tool_call_output",
+            call_id: "call_compose_1",
+            output: "notes drafted",
+          },
+          {
+            type: "additional_tools",
+            role: "user",
+            tools: [
+              {
+                type: "namespace",
+                name: "multi_agent_v1",
+                tools: [
+                  {
+                    type: "function",
+                    name: "spawn_agent",
+                    parameters: {
+                      type: "object",
+                      properties: {},
+                      additionalProperties: false,
+                    },
+                  },
+                ],
+              },
+              {
+                type: "namespace",
+                name: "remote_notes",
+                description: "Deferred notes tools.",
+                tools: [
+                  {
+                    type: "function",
+                    name: "ping",
+                    parameters: {
+                      type: "object",
+                      properties: {},
+                      additionalProperties: false,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: "function_call",
+            call_id: "call_ping_1",
+            namespace: "remote_notes",
+            name: "ping",
+            arguments: "{}",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call_ping_1",
+            output: "pong",
+          },
+          { type: "compaction_trigger" },
+        ],
+        [
+          MARKER_TOOL,
+          {
+            type: "namespace",
+            name: "multi_agent_v1",
+            description: "Tools for spawning and managing sub-agents.",
+            tools: [
+              {
+                type: "function",
+                name: "spawn_agent",
+                parameters: {
+                  type: "object",
+                  properties: {},
+                  additionalProperties: false,
+                },
+              },
+              {
+                type: "function",
+                name: "close_agent",
+                parameters: {
+                  type: "object",
+                  properties: {},
+                  additionalProperties: false,
+                },
+              },
+            ],
+          },
+          {
+            type: "namespace",
+            name: "notes_v1",
+            description: "Freeform note tools.",
+            tools: [
+              {
+                type: "custom",
+                name: "compose",
+                format: { type: "lark", grammar: "start: /(.+)/" },
+              },
+            ],
+          },
+        ],
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(contexts).toHaveLength(1);
+    const context = contexts[0]!;
+    expect(context.tools ?? []).toEqual([]);
+    expect(options).toHaveLength(1);
+    const toolCalls = context.messages.flatMap((message) =>
+      message.role === "assistant"
+        ? message.content.filter((block) => block.type === "toolCall")
+        : [],
+    );
+    expect(toolCalls.map((toolCall) => toolCall.name)).toEqual([
+      "multi_agent_v1__spawn_agent",
+      "notes_v1__compose",
+      "remote_notes__ping",
+    ]);
+    expect(toolCalls.map((toolCall) => toolCall.namespace)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(JSON.stringify(context)).not.toContain("marker_tool");
+  });
+
+  it("keeps failing closed when namespaced history has no matching declaration or child", async () => {
+    const models = {
+      getModels: () => [THIRD_PARTY_MODEL],
+    } as unknown as Models;
+    const executeOperation = vi.fn(
+      async (): Promise<AssistantMessage> => assistantMessage("unused"),
+    );
+    const handler = createOpenAIResponsesHandler({
+      models,
+      executeOperation,
+      stateFile: "unused-routed-compaction-unmatched.json",
+      maxRequestBytes: 65_536,
+      now: () => 1,
+      createResponseId: () => "resp_unmatched_namespace",
+    });
+
+    const unmatchedHistory = [
+      {
+        type: "function_call",
+        call_id: "call_spawn_2",
+        namespace: "multi_agent_v1",
+        name: "spawn_agent",
+        arguments: "{}",
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_spawn_2",
+        output: "agent started",
+      },
+    ];
+    const wrongChildDeclaration = {
+      type: "namespace",
+      name: "multi_agent_v1",
+      tools: [
+        {
+          type: "function",
+          name: "close_agent",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+    const unmatchedDeclarations = [
+      [MARKER_TOOL],
+      [MARKER_TOOL, wrongChildDeclaration],
+    ];
+    for (const tools of unmatchedDeclarations) {
+      const response = await handler.handle(
+        compressionBody(
+          [...unmatchedHistory, { type: "compaction_trigger" }],
+          tools,
+        ),
+      );
+
+      expect(response.status).toBe(400);
+      expect(executeOperation).not.toHaveBeenCalled();
+      expect(await response.text()).toContain(
+        "Namespaced tool-call history requires a matching namespace tool declaration",
+      );
+
+      // Conversion transparency: the rewrite must not invent the rejection.
+      // The same history without the trigger already fails for the same reason.
+      const ordinaryTurn = await handler.handle(
+        compressionBody(unmatchedHistory, tools),
+      );
+      expect(ordinaryTurn.status).toBe(400);
+      expect(await ordinaryTurn.text()).toContain(
+        "Namespaced tool-call history requires a matching namespace tool declaration",
+      );
+    }
+    expect(executeOperation).not.toHaveBeenCalled();
   });
 
   it("replays a Token compaction item as model-visible summary text", async () => {

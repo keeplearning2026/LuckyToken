@@ -99,6 +99,22 @@ const COMPACTION_TURN = JSON.stringify({
       name: "marker_tool",
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
+    {
+      type: "namespace",
+      name: "multi_agent_v1",
+      tools: [
+        {
+          type: "function",
+          name: "spawn_agent",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        },
+        {
+          type: "function",
+          name: "close_agent",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        },
+      ],
+    },
   ],
   instructions: "You are the coding agent.",
   input: [
@@ -106,6 +122,18 @@ const COMPACTION_TURN = JSON.stringify({
       type: "message",
       role: "user",
       content: [{ type: "input_text", text: "Fix the widget." }],
+    },
+    {
+      type: "function_call",
+      call_id: "call_spawn_1",
+      namespace: "multi_agent_v1",
+      name: "spawn_agent",
+      arguments: "{}",
+    },
+    {
+      type: "function_call_output",
+      call_id: "call_spawn_1",
+      output: "agent started",
     },
     { type: "compaction_trigger" },
   ],
@@ -153,6 +181,19 @@ describe("Provider Native routed compaction", () => {
     expect(
       forwardedInput.some((item) => item.type === "compaction_trigger"),
     ).toBe(false);
+    expect(
+      forwardedInput.find((item) => item.type === "function_call"),
+    ).toMatchObject({
+      name: "multi_agent_v1__spawn_agent",
+      call_id: "call_spawn_1",
+    });
+    expect(
+      forwardedInput.some(
+        (item) =>
+          item.type === "function_call" && item.namespace !== undefined,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(forwardedInput)).not.toContain("close_agent");
     expect(JSON.stringify(forwardedInput.at(-1))).toContain("## Goal");
 
     const events = sseEvents(await response.text());

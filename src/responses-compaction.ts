@@ -21,6 +21,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
+import { flattenResponsesNamespaceToolName } from "./protocols/openai-responses/namespace-tool-name.js";
 import { renderResponsesSse } from "./responses-sse.js";
 
 interface CompactionOutputItem {
@@ -147,16 +148,97 @@ export function expandTokenCompactionEnvelopes(body: unknown): unknown {
   };
 }
 
+/** Collect declared namespace/child identities from both Responses locations. */
+function declaredNamespaceChildren(
+  body: Record<string, unknown>,
+): Map<string, Set<string>> {
+  const declared = new Map<string, Set<string>>();
+  const candidates: unknown[] = [];
+  if (Array.isArray(body.tools)) candidates.push(...body.tools);
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (!isRecord(item) || item.type !== "additional_tools") continue;
+      if (Array.isArray(item.tools)) candidates.push(...item.tools);
+    }
+  }
+  for (const candidate of candidates) {
+    if (!isRecord(candidate) || candidate.type !== "namespace") continue;
+    const namespace = candidate.name;
+    if (
+      typeof namespace !== "string" ||
+      namespace.length === 0 ||
+      !Array.isArray(candidate.tools)
+    ) {
+      continue;
+    }
+    const children = declared.get(namespace) ?? new Set<string>();
+    for (const child of candidate.tools) {
+      if (
+        isRecord(child) &&
+        typeof child.name === "string" &&
+        child.name.length > 0
+      ) {
+        children.add(child.name);
+      }
+    }
+    declared.set(namespace, children);
+  }
+  return declared;
+}
+
+/**
+ * Preserve a declared namespaced call's canonical Pi history identity before
+ * removing tools from the summarizer request. Undeclared calls stay untouched
+ * so the normal Responses converter still rejects them.
+ */
+function flattenDeclaredNamespaceHistoryCalls(
+  input: readonly unknown[],
+  declared: Map<string, Set<string>>,
+): unknown[] {
+  return input.map((item) => {
+    if (
+      !isRecord(item) ||
+      (item.type !== "function_call" && item.type !== "custom_tool_call")
+    ) {
+      return item;
+    }
+    const namespace = item.namespace;
+    const name = item.name;
+    if (
+      typeof namespace !== "string" ||
+      namespace.length === 0 ||
+      typeof name !== "string" ||
+      name.length === 0 ||
+      !declared.get(namespace)?.has(name)
+    ) {
+      return item;
+    }
+    const flattened: Record<string, unknown> = {
+      ...item,
+      name: flattenResponsesNamespaceToolName(namespace, name),
+    };
+    delete flattened.namespace;
+    return flattened;
+  });
+}
+
 /**
  * Rewrite one compaction turn into a routed summarization turn: drop the
- * trigger and the whole tool surface, replace the client instructions with
- * the summarizer system role, and append the structured handoff prompt.
+ * trigger and tool surface, canonicalize declared namespaced history calls,
+ * replace client instructions with the summarizer system role, and append the
+ * structured handoff prompt. The canonical name matches the one produced by
+ * Responses request conversion; unmatched namespace calls remain unchanged and
+ * fail closed there.
  * The original `stream` mode is preserved because it selects the
  * client-facing response encoding, not the internal execution style.
  */
 export function buildCodexRoutedCompactionRequest(body: unknown): unknown {
   if (!isRecord(body) || !Array.isArray(body.input)) return body;
-  const input = body.input.filter(
+  const declared = declaredNamespaceChildren(body);
+  const input = flattenDeclaredNamespaceHistoryCalls(
+    body.input,
+    declared,
+  ).filter(
     (item) =>
       !(
         isRecord(item) &&

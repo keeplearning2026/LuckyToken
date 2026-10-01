@@ -78,6 +78,23 @@ function decodeBody(
   return new TextDecoder().decode(bytes);
 }
 
+function hasTopLevelToolSurface(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return true;
+    }
+    const tools = (parsed as { tools?: unknown }).tools;
+    return Array.isArray(tools) && tools.length > 0;
+  } catch {
+    return true;
+  }
+}
+
 function createCapturingFetch(): {
   readonly fetch: FetchFunction;
   readonly exchanges: CapturedExchange[];
@@ -300,6 +317,31 @@ async function main(): Promise<void> {
               additionalProperties: false,
             },
           },
+          {
+            type: "namespace",
+            name: "multi_agent_v1",
+            description: "Tools for spawning and managing sub-agents.",
+            tools: [
+              {
+                type: "function",
+                name: "spawn_agent",
+                parameters: {
+                  type: "object",
+                  properties: {},
+                  additionalProperties: false,
+                },
+              },
+              {
+                type: "function",
+                name: "close_agent",
+                parameters: {
+                  type: "object",
+                  properties: {},
+                  additionalProperties: false,
+                },
+              },
+            ],
+          },
         ],
         input: [
           {
@@ -311,6 +353,18 @@ async function main(): Promise<void> {
                 text: `Remember the number 41 for the next request. Probe marker ${marker}.`,
               },
             ],
+          },
+          {
+            type: "function_call",
+            call_id: "call_spawn_online_1",
+            namespace: "multi_agent_v1",
+            name: "spawn_agent",
+            arguments: "{}",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call_spawn_online_1",
+            output: "agent started",
           },
           { type: "compaction_trigger" },
         ],
@@ -365,6 +419,21 @@ async function main(): Promise<void> {
         }
         if (exchange.body.includes("marker_tool")) {
           failures.push(`${selector}: tool surface reached the summarizer`);
+        }
+        if (hasTopLevelToolSurface(exchange.body)) {
+          failures.push(
+            `${selector}: tool declarations reached the summarizer`,
+          );
+        }
+        if (exchange.body.includes('"namespace":"multi_agent_v1"')) {
+          failures.push(
+            `${selector}: namespaced call identity was not canonicalized`,
+          );
+        }
+        if (!exchange.body.includes("multi_agent_v1__spawn_agent")) {
+          failures.push(
+            `${selector}: namespaced history lost its canonical identity`,
+          );
         }
         if (!exchange.body.includes("context summarization assistant")) {
           failures.push(
