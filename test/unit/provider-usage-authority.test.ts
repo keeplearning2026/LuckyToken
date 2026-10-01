@@ -47,7 +47,8 @@ function sameCapture(
   }
   if (a.facts.kind === "external" && b.facts.kind === "external") {
     return (
-      a.facts.accountId === b.facts.accountId &&
+      a.facts.canonicalPath === b.facts.canonicalPath &&
+      a.facts.identityKey === b.facts.identityKey &&
       a.facts.tokenRevision === b.facts.tokenRevision &&
       a.facts.authType === b.facts.authType
     );
@@ -68,7 +69,7 @@ function createBinding(initial: ProviderAuthBindingCapture) {
     capture: async () => current,
     publishIfCurrent: async (
       capture: ProviderAuthBindingCapture,
-      publish: (assertCurrent: () => void) => Promise<void> | void,
+      publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
     ) => {
       beforePublish?.();
       beforePublish = undefined;
@@ -76,7 +77,7 @@ function createBinding(initial: ProviderAuthBindingCapture) {
       const assertCurrent = () => {
         if (!sameCapture(capture, current)) throw new Error("stale");
       };
-      await publish(assertCurrent);
+      await publish(assertCurrent, capture.facts);
       return sameCapture(capture, current);
     },
     runBound: async <T>(
@@ -896,9 +897,9 @@ describe("ProviderUsageAuthority", () => {
       },
       publishIfCurrent: async (
         _capture: ProviderAuthBindingCapture,
-        publish: (assertCurrent: () => void) => Promise<void> | void,
+        publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
       ) => {
-        await publish(() => undefined);
+        await publish(() => undefined, capture.facts);
         return true;
       },
       runBound: async <T>(
@@ -1084,9 +1085,9 @@ describe("ProviderUsageAuthority", () => {
       capture: async (providerId: string) => captures.get(providerId)!,
       publishIfCurrent: async (
         _capture: ProviderAuthBindingCapture,
-        publish: (assertCurrent: () => void) => Promise<void> | void,
+        publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
       ) => {
-        await publish(() => undefined);
+        await publish(() => undefined, _capture.facts);
         return true;
       },
       runBound: async <T>(
@@ -1154,11 +1155,11 @@ describe("ProviderUsageAuthority", () => {
       capture: async (providerId: string) => captures.get(providerId)!,
       publishIfCurrent: async (
         capture: ProviderAuthBindingCapture,
-        publish: (assertCurrent: () => void) => Promise<void> | void,
+        publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
       ) => {
         const current = captures.get(capture.facts.providerId);
         if (current === undefined || !sameCapture(capture, current)) return false;
-        await publish(() => undefined);
+        await publish(() => undefined, capture.facts);
         return sameCapture(capture, captures.get(capture.facts.providerId)!);
       },
       runBound: async <T>(
@@ -1249,9 +1250,9 @@ describe("ProviderUsageAuthority", () => {
       capture: async (providerId: string) => captures.get(providerId)!,
       publishIfCurrent: async (
         _capture: ProviderAuthBindingCapture,
-        publish: (assertCurrent: () => void) => Promise<void> | void,
+        publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
       ) => {
-        await publish(() => undefined);
+        await publish(() => undefined, _capture.facts);
         return true;
       },
       runBound: async <T>(

@@ -12,7 +12,7 @@ import {
   createConfiguredTokenDataPlane,
   createSeededCredentialRecordStore,
 } from "../support/configured-data-plane.js";
-import { commandCodeProviderImportModule } from "../support/commandcode-provider-package.js";
+import { bundledProviderImportModule } from "../support/bundled-provider-packages.js";
 
 function commandCodeText(text: string): Response {
   return new Response(
@@ -188,7 +188,7 @@ describe("configured serving composition", () => {
       config,
       credentialRecordStore,
       fetch,
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       createMessageId: () => "msg_configured",
       createSessionId: () => "00000000-0000-4000-8000-000000000250",
       now: () => 1_786_400_000_000,
@@ -284,7 +284,7 @@ describe("configured serving composition", () => {
       config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch,
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       createMessageId: () => "msg_image",
       createSessionId: () => "00000000-0000-4000-8000-000000000252",
       now: () => 1_786_400_000_000,
@@ -357,7 +357,7 @@ describe("configured serving composition", () => {
       config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch,
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       createMessageId: () => "msg_models",
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
@@ -399,7 +399,7 @@ describe("configured serving composition", () => {
         upstream = new Request(input, init);
         return commandCodeText("project-free");
       },
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       createMessageId: () => "msg_project_free",
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
@@ -540,7 +540,7 @@ describe("configured serving composition", () => {
       config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch: async () => commandCodeText("responses served"),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       createMessageId: () => "msg_anthropic",
       createSessionId: () => "00000000-0000-4000-8000-000000000251",
       now: () => 1_786_400_000_000,
@@ -604,7 +604,7 @@ describe("configured serving composition", () => {
       config: await loadTokenCliConfig(configPath),
       credentialRecordStore,
       fetch: async () => commandCodeText("continued after restart"),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       createSessionId: () => "00000000-0000-4000-8000-000000000252",
       now: () => 1_786_400_000_001,
     });

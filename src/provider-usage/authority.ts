@@ -3,6 +3,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import {
   type ProviderAuthBindingAuthority,
   type ProviderAuthBindingCapture,
+  type ProviderAuthBindingFacts,
   ProviderAuthBindingError,
 } from "../credentials/profile-contract.js";
 import {
@@ -51,20 +52,18 @@ export interface CreateProviderUsageAuthorityOptions {
   readonly refreshTimeoutMs?: number | (() => number);
 }
 
-function bindingIdentity(capture: ProviderAuthBindingCapture): string {
-  const facts = capture.facts;
+function bindingIdentity(facts: ProviderAuthBindingFacts): string {
   if (facts.kind === "ambient") return `${facts.providerId}\u0000ambient`;
   if (facts.kind === "external") {
-    return `${facts.providerId}\u0000external\u0000${facts.accountId}\u0000${facts.tokenRevision}`;
+    return JSON.stringify([facts.providerId, "external", facts.authType, facts.canonicalPath, facts.identityKey, facts.tokenRevision]);
   }
   return `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
 }
 
-function bindingAccountKey(capture: ProviderAuthBindingCapture): string {
-  const facts = capture.facts;
+function bindingSourceKey(facts: ProviderAuthBindingFacts): string {
   if (facts.kind === "ambient") return `${facts.providerId}\u0000ambient`;
   if (facts.kind === "external") {
-    return `${facts.providerId}\u0000external\u0000${facts.accountId}`;
+    return JSON.stringify([facts.providerId, "external", facts.authType, facts.canonicalPath, facts.identityKey]);
   }
   return `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
 }
@@ -76,15 +75,15 @@ function inflightIdentity(
   const facts = capture.facts;
   const binding =
     facts.kind !== "managed"
-      ? bindingIdentity(capture)
-      : `${bindingIdentity(capture)}\u0000${facts.selectionGeneration}`;
+      ? bindingIdentity(capture.facts)
+      : `${bindingIdentity(capture.facts)}\u0000${facts.selectionGeneration}`;
   return `${binding}\u0000${destinationKey}`;
 }
 
 function bindingContext(capture: ProviderAuthBindingCapture): ProviderUsageBindingContext {
   if (capture.facts.kind === "ambient") return Object.freeze({ kind: "ambient" });
   if (capture.facts.kind === "external") {
-    return Object.freeze({ kind: "external", authType: "oauth" });
+    return Object.freeze({ kind: "external", authType: capture.facts.authType });
   }
   return Object.freeze({ kind: "managed", authType: capture.facts.authType });
 }
@@ -119,7 +118,7 @@ function classifyBindingFailure(
     return failure === undefined ? "upstream" : "auth";
   }
   switch (failure?.externalReason) {
-    case "account_changed":
+    case "identity_changed":
       return "account_change";
     case "timeout":
       return "timeout";
@@ -241,8 +240,8 @@ export function createProviderUsageAuthority(
       return Object.freeze({ state: "unobserved", providerId });
     }
     const slot = cache.get(providerId);
-    const identity = bindingIdentity(capture);
-    const accountKey = bindingAccountKey(capture);
+    const identity = bindingIdentity(capture.facts);
+    const accountKey = bindingSourceKey(capture.facts);
     const matchingSlot =
       slot !== undefined && slot.destinationKey === key &&
       (slot.bindingIdentity === identity || slot.accountKey === accountKey)
@@ -313,14 +312,14 @@ export function createProviderUsageAuthority(
    * observation for the same account and destination is preserved so the
    * last-known windows stay displayed as stale. */
   const recordUnavailable = (
-    capture: ProviderAuthBindingCapture,
+    facts: ProviderAuthBindingFacts,
     destination: string,
     reason: ProviderUsageUnavailableReason,
   ): void => {
-    if (closed || capture.facts.kind !== "external") return;
-    const identity = bindingIdentity(capture);
-    const accountKey = bindingAccountKey(capture);
-    const previous = cache.get(capture.facts.providerId);
+    if (closed || facts.kind !== "external") return;
+    const identity = bindingIdentity(facts);
+    const accountKey = bindingSourceKey(facts);
+    const previous = cache.get(facts.providerId);
     const observation =
       previous !== undefined &&
       previous.destinationKey === destination &&
@@ -328,7 +327,7 @@ export function createProviderUsageAuthority(
         ? previous.observation
         : undefined;
     cache.set(
-      capture.facts.providerId,
+      facts.providerId,
       Object.freeze({
         bindingIdentity: identity,
         accountKey,
@@ -385,7 +384,7 @@ export function createProviderUsageAuthority(
     if (
       capture.facts.kind === "external" &&
       current?.destinationKey === destination &&
-      current.unavailable?.bindingIdentity === bindingIdentity(capture) &&
+      current.unavailable?.bindingIdentity === bindingIdentity(capture.facts) &&
       current.unavailable.reason === "terminal"
     ) {
       // Documented terminal evidence stops automatic network attempts for
@@ -410,10 +409,10 @@ export function createProviderUsageAuthority(
       const fail = async (reason: ProviderUsageUnavailableReason): Promise<ProviderUsageRefreshResult> => {
         if (capture.facts.kind === "external") {
           let committed = false;
-          const current = await options.binding.publishIfCurrent(capture, (assertCurrent) => {
+          const current = await options.binding.publishIfCurrent(capture, (assertCurrent, publicationFacts) => {
             if (closed || destinationKey(servedBaseUrls(providerId)) !== destination) return;
             assertCurrent();
-            recordUnavailable(capture, destination, reason);
+            recordUnavailable(publicationFacts, destination, reason);
             committed = true;
           });
           if (!current || !committed) return Object.freeze({ providerId, outcome: "superseded" });
@@ -474,11 +473,12 @@ export function createProviderUsageAuthority(
         return Object.freeze({ providerId, outcome: "superseded" });
       }
       let committed = false;
-      const current = await options.binding.publishIfCurrent(capture, () => {
+      const current = await options.binding.publishIfCurrent(capture, (assertCurrent, publicationFacts) => {
         if (destinationKey(servedBaseUrls(providerId)) !== destination) return;
+        assertCurrent();
         cache.set(providerId, Object.freeze({
-          bindingIdentity: bindingIdentity(capture),
-          accountKey: bindingAccountKey(capture),
+          bindingIdentity: bindingIdentity(publicationFacts),
+          accountKey: bindingSourceKey(publicationFacts),
           destinationKey: destination,
           observation,
         }));
@@ -547,14 +547,15 @@ export function createProviderUsageAuthority(
       budgets: facts.budgets,
     });
     let committed = false;
-    const current = await options.binding.publishIfCurrent(capture, () => {
+    const current = await options.binding.publishIfCurrent(capture, (assertCurrent, publicationFacts) => {
       if (closed) return;
       if (destinationKey(servedBaseUrls(providerId)) !== destination) return;
+      assertCurrent();
       cache.set(
         providerId,
         Object.freeze({
-          bindingIdentity: bindingIdentity(capture),
-          accountKey: bindingAccountKey(capture),
+          bindingIdentity: bindingIdentity(publicationFacts),
+          accountKey: bindingSourceKey(publicationFacts),
           destinationKey: destination,
           observation,
         }),

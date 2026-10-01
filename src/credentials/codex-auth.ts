@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
@@ -18,7 +16,6 @@ export const CODEX_ACCOUNT_CLAIM_KEY = "https://api.openai.com/auth" as const;
 
 /** Refresh trigger thresholds, matching the Codex AuthManager. */
 export const EXTERNAL_AUTH_REFRESH_WINDOW_MS = 5 * 60_000;
-export const EXTERNAL_AUTH_STALE_LAST_REFRESH_MS = 8 * 24 * 60 * 60_000;
 
 /** The Codex-owned document path. This is never the Token Pi credential
  * store's obsolete single-slot `auth.json`; it lives under `<CODEX_HOME>` and
@@ -33,28 +30,6 @@ export interface CodexExternalAuthCredential {
   readonly expiresAt: number;
 }
 
-export type CodexExternalAuthRead =
-  | {
-      readonly state: "ok";
-      /** Resolved, canonical path actually read. */
-      readonly canonicalPath: string;
-      /** Content hash of the document bytes. */
-      readonly tokenRevision: string;
-      readonly accountId: string;
-      /** Undefined when `exp` is missing or unparseable; the caller must
-       * delegate a Codex-native refresh and re-read rather than treat it as
-       * live. */
-      readonly expiresAt?: number;
-      readonly lastRefreshAt?: number;
-      /** Token material; never projected outside the credential owner. */
-      readonly credential?: CodexExternalAuthCredential;
-    }
-  | {
-      readonly state: "missing" | "invalid" | "unreadable";
-      readonly canonicalPath: string;
-      readonly reason: string;
-    };
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -62,12 +37,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function usableText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
-    : undefined;
-}
-
-function errorCode(error: unknown): string | undefined {
-  return typeof error === "object" && error !== null && "code" in error
-    ? String((error as { readonly code?: unknown }).code)
     : undefined;
 }
 
@@ -202,111 +171,4 @@ export function parseCodexExternalAuth(raw: string): ParseCodexExternalAuthResul
       ...(lastRefreshAt === undefined ? {} : { lastRefreshAt }),
     }),
   });
-}
-
-/** Resolve the canonical path of the external document without following a
- * missing path into a different location. Missing paths still resolve to the
- * requested location so the caller can report a stable identity. */
-export async function canonicalCodexAuthPath(authPath: string): Promise<string> {
-  try {
-    const info = await lstat(authPath);
-    if (info.isDirectory()) return authPath;
-    return await realpath(authPath);
-  } catch {
-    return authPath;
-  }
-}
-
-export interface ReadCodexExternalAuthOptions {
-  /** Override to read a specific already-resolved path. Production resolves
-   * the canonical path first. */
-  readonly canonicalPath?: string;
-}
-
-export async function readCodexExternalAuth(
-  authPath: string,
-  options: ReadCodexExternalAuthOptions = {},
-): Promise<CodexExternalAuthRead> {
-  const canonicalPath =
-    options.canonicalPath ?? (await canonicalCodexAuthPath(authPath));
-  let raw: string;
-  try {
-    const info = await lstat(canonicalPath);
-    if (info.isDirectory()) {
-      return Object.freeze({
-        state: "unreadable",
-        canonicalPath,
-        reason: "Codex auth path is a directory",
-      });
-    }
-    raw = await readFile(canonicalPath, "utf8");
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === "ENOENT") {
-      return Object.freeze({
-        state: "missing",
-        canonicalPath,
-        reason: "Codex auth document is absent",
-      });
-    }
-    return Object.freeze({
-      state: "unreadable",
-      canonicalPath,
-      reason: "Codex auth document could not be read",
-    });
-  }
-  const tokenRevision = createHash("sha256").update(raw, "utf8").digest("hex");
-  const parsed = parseCodexExternalAuth(raw);
-  if (parsed.state === "invalid") {
-    return Object.freeze({
-      state: "invalid",
-      canonicalPath,
-      reason: parsed.reason,
-    });
-  }
-  return Object.freeze({
-    state: "ok",
-    canonicalPath,
-    tokenRevision,
-    accountId: parsed.auth.accountId,
-    ...(parsed.auth.expiresAt === undefined
-      ? {}
-      : { expiresAt: parsed.auth.expiresAt }),
-    ...(parsed.auth.lastRefreshAt === undefined
-      ? {}
-      : { lastRefreshAt: parsed.auth.lastRefreshAt }),
-    ...(parsed.auth.credential === undefined
-      ? {}
-      : { credential: parsed.auth.credential }),
-  });
-}
-
-/**
- * Freshness trigger (plan section 3.2 item 1): access token expires within
- * five minutes, or expiry is unparseable and `last_refresh` is older than
- * eight days.
- */
-export function needsCodexRefresh(
-  read: Extract<CodexExternalAuthRead, { readonly state: "ok" }>,
-  now: number,
-): boolean {
-  if (read.expiresAt === undefined) {
-    return (
-      read.lastRefreshAt === undefined ||
-      now - read.lastRefreshAt > EXTERNAL_AUTH_STALE_LAST_REFRESH_MS
-    );
-  }
-  return read.expiresAt - now <= EXTERNAL_AUTH_REFRESH_WINDOW_MS;
-}
-
-/** Sufficient validity is Token's own added constraint; Pi's five-minute
- * window is only a refresh trigger, not a validity guarantee. */
-export function hasSufficientValidity(
-  read: Extract<CodexExternalAuthRead, { readonly state: "ok" }>,
-  now: number,
-  minimumValidityMs: number,
-): read is Extract<CodexExternalAuthRead, { readonly state: "ok" }> & {
-  readonly credential: CodexExternalAuthCredential;
-} {
-  return read.expiresAt !== undefined && read.expiresAt - now > minimumValidityMs;
 }

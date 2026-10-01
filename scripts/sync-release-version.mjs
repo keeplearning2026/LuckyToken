@@ -25,6 +25,7 @@ const manifestPaths = [
   "packages/provider-contract/package.json",
   "packages/provider-commandcode-goat/package.json",
   "packages/provider-commandcode-private/package.json",
+  "packages/provider-deepseek-response/package.json",
   "packages/desktop-shell/package.json",
 ];
 

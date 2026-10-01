@@ -40,6 +40,11 @@ export const bundledProviderPackages: readonly BundledProviderPackage[] =
       providerId: "commandcode-goat",
       configuration: Object.freeze({}),
     }),
+    Object.freeze({
+      specifier: "@token/provider-deepseek-response",
+      providerId: "deepseek-response",
+      configuration: Object.freeze({}),
+    }),
   ]);
 
 /** The bundled package specifiers, as a set for cheap membership checks. */

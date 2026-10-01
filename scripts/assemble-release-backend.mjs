@@ -82,6 +82,10 @@ export async function assembleReleaseBackend({
       name: "@token/provider-commandcode-goat",
     },
     {
+      directory: "packages/provider-deepseek-response",
+      name: "@token/provider-deepseek-response",
+    },
+    {
       directory: "packages/application-control-plane",
       name: "@token/application-control-plane",
     },

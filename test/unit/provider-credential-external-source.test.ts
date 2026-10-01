@@ -11,8 +11,8 @@ import { ProviderAuthBindingError } from "../../src/credentials/profile-contract
 import type {
   ExternalCredentialResolution,
   ExternalCredentialSource,
+  ExternalCredentialRead,
 } from "../../src/credentials/external-credential-source.js";
-import type { CodexExternalAuthRead } from "../../src/credentials/external-auth.js";
 
 const PROVIDER_ID = "openai-codex";
 
@@ -26,11 +26,12 @@ const provider = Object.freeze({
 }) as unknown as Provider;
 
 function externalSource(options: {
-  readonly read: () => CodexExternalAuthRead;
+  readonly read: () => ExternalCredentialRead;
   readonly resolve?: () => ExternalCredentialResolution;
   readonly onResolve?: () => void;
 }): ExternalCredentialSource {
   return Object.freeze({
+    authType: "oauth", authMethodLabel: "Codex (ChatGPT)", displayName: "Codex login",
     async read() {
       return options.read();
     },
@@ -41,11 +42,12 @@ function externalSource(options: {
           state: "ok",
           canonicalPath: "auth.json",
           tokenRevision: "revision-1",
-          accountId: "acct-a",
+          identityKey: "acct-a",
           credential: {
-            accessToken: "access-token",
-            refreshToken: "refresh-token",
-            expiresAt: Date.now() + 3600_000,
+            type: "oauth",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 3600_000,
           },
           refreshed: false,
         }
@@ -54,18 +56,12 @@ function externalSource(options: {
   });
 }
 
-function readOk(revision = "revision-1", accountId = "acct-a"): CodexExternalAuthRead {
+function readOk(revision = "revision-1", accountId = "acct-a"): ExternalCredentialRead {
   return Object.freeze({
     state: "ok",
     canonicalPath: "auth.json",
     tokenRevision: revision,
-    accountId,
-    expiresAt: Date.now() + 3600_000,
-    credential: Object.freeze({
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.now() + 3600_000,
-    }),
+    identityKey: accountId,
   });
 }
 
@@ -84,7 +80,7 @@ function createAuthority(source: ExternalCredentialSource | undefined) {
       return () => `id-${++counter}`;
     })(),
     now: () => Date.now(),
-    ...(source === undefined ? {} : { externalSource: source }),
+    ...(source === undefined ? {} : { externalSources: { [PROVIDER_ID]: source } }),
   });
   return Object.freeze({ composition, recordStore });
 }
@@ -101,7 +97,7 @@ describe("external Codex credential binding", () => {
       providerId: PROVIDER_ID,
       authType: "oauth",
       canonicalPath: "auth.json",
-      accountId: "acct-a",
+      identityKey: "acct-a",
       tokenRevision: "revision-1",
     });
     const credential = await composition.binding.runBound(capture, () =>
@@ -162,11 +158,12 @@ describe("external Codex credential binding", () => {
         state: "ok",
         canonicalPath: "auth.json",
         tokenRevision: "revision-2",
-        accountId,
+        identityKey: accountId,
         credential: {
-          accessToken: "access-token",
-          refreshToken: "refresh-token",
-          expiresAt: Date.now() + 3600_000,
+          type: "oauth",
+            access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 3600_000,
         },
         refreshed: false,
       }),
@@ -278,7 +275,7 @@ describe("external Codex credential binding", () => {
           reason: "verification_failed",
           detail: "identity_changed",
         },
-        expected: "account_changed",
+        expected: "identity_changed",
       },
     ];
     for (const testCase of cases) {

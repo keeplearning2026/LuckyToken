@@ -32,6 +32,7 @@ import type {
 import type { PublicModelSource } from "../../src/public-model-seam.js";
 import type { PublicModelAuthority } from "../../src/public-models/authority.js";
 import { resolveModel } from "../../src/model-resolution.js";
+import { bundledProviderSpecifiers } from "../../src/providers/bundled.js";
 import { loadBundledProviderConfigurations } from "../../src/providers/bundled-configuration.js";
 import type { ConfigValueAdapters } from "../../src/providers/config-value.js";
 import { loadModelsJson } from "../../src/providers/models-json.js";
@@ -42,6 +43,22 @@ import {
 } from "../../src/providers/runtime.js";
 import type { CodexNativeCatalogSource } from "../../src/integrations/codex/native-catalog-source.js";
 import type { SettingsRegistry } from "../../src/settings/catalog.js";
+import { bundledProviderImportModule } from "./bundled-provider-packages.js";
+
+const bundledProviderImports = bundledProviderImportModule();
+
+/**
+ * Test harness composition: bundled Provider Packages resolve through the
+ * neutral bundled assembler; every other specifier stays with the caller.
+ */
+function withBundledProviderPackages(
+  userImportModule: ImportProviderModule,
+): ImportProviderModule {
+  return async (specifier: string) =>
+    bundledProviderSpecifiers.has(specifier)
+      ? bundledProviderImports(specifier)
+      : userImportModule(specifier);
+}
 
 export interface TestConfiguredDataPlaneOptions {
   readonly config: TokenCliConfig;
@@ -135,14 +152,7 @@ export async function createConfiguredPiModels(
       : { modelsStore: options.modelsStore }),
     ...(options.importModule === undefined
       ? {}
-      : {
-          importModule: (specifier: string) =>
-            specifier === "@token/provider-commandcode-private"
-              ? import("@token/provider-commandcode-private")
-              : specifier === "@token/provider-commandcode-goat"
-                ? import("@token/provider-commandcode-goat")
-              : options.importModule!(specifier),
-        }),
+      : { importModule: withBundledProviderPackages(options.importModule) }),
     ...(options.createUuid === undefined
       ? {}
       : { createUuid: options.createUuid }),
@@ -326,14 +336,7 @@ export async function createConfiguredTokenDataPlane(
         : { authContext: options.authContext }),
       ...(options.importModule === undefined
         ? {}
-        : {
-            importModule: (specifier: string) =>
-              specifier === "@token/provider-commandcode-private"
-                ? import("@token/provider-commandcode-private")
-                : specifier === "@token/provider-commandcode-goat"
-                  ? import("@token/provider-commandcode-goat")
-                : options.importModule!(specifier),
-          }),
+        : { importModule: withBundledProviderPackages(options.importModule) }),
       ...(options.onInvalidModelsJson === undefined
         ? {}
         : { onInvalidModelsJson: options.onInvalidModelsJson }),

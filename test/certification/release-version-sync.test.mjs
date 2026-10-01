@@ -25,6 +25,7 @@ test("release version is single-sourced and every shipped surface agrees", async
     "packages/provider-contract/package.json",
     "packages/provider-commandcode-goat/package.json",
     "packages/provider-commandcode-private/package.json",
+    "packages/provider-deepseek-response/package.json",
     "packages/desktop-shell/package.json",
   ];
   const dependencySections = [

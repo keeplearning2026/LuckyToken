@@ -29,6 +29,7 @@ const PROVIDER_ID = "openai-codex";
 const DESTINATION = "https://chatgpt.com/backend-api";
 
 interface ExternalFileState {
+  readonly canonicalPath?: string;
   readonly accountId: string;
   readonly tokenRevision: string;
 }
@@ -48,8 +49,8 @@ function externalCapture(
       authType: "oauth" as const,
       authMethodLabel: "Codex (ChatGPT)",
       displayName: "Codex login",
-      canonicalPath: "fixture-codex-home/auth.json",
-      accountId: file.accountId,
+      canonicalPath: file.canonicalPath ?? "fixture-codex-home/auth.json",
+      identityKey: file.accountId,
       tokenRevision: file.tokenRevision,
     }),
   });
@@ -68,23 +69,24 @@ function createExternalBinding(initial: ExternalFileState) {
     },
     async publishIfCurrent(
       capture: ExternalCapture,
-      publish: (assertCurrent: () => void) => Promise<void> | void,
+      publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
     ): Promise<boolean> {
       const resolved = resolvedRevisions.get(capture);
       const matches = (): boolean =>
-        file.accountId === capture.facts.accountId &&
+        (file.canonicalPath ?? "fixture-codex-home/auth.json") === capture.facts.canonicalPath &&
+        file.accountId === capture.facts.identityKey &&
         file.tokenRevision === resolved;
       if (!matches()) return false;
       await publish(() => {
         if (!matches()) throw new Error("superseded external revision");
-      });
+      }, Object.freeze({ ...capture.facts, tokenRevision: resolved! }));
       return matches();
     },
     async runBound<T>(
       capture: ExternalCapture,
       operation: () => Promise<T>,
     ): Promise<T> {
-      if (file.accountId !== capture.facts.accountId) {
+      if (file.accountId !== capture.facts.identityKey) {
         throw new Error("stale external binding");
       }
       return operation();
@@ -169,7 +171,7 @@ afterEach(() => {
 });
 
 describe("Provider usage external Codex state", () => {
-  it.each(["account", "revision"])("does not let a late failure replace newer %s usage", async (change) => {
+  it.each(["account", "revision", "path"])("does not let a late failure replace newer %s usage", async (change) => {
     const bindings = createExternalBinding({ accountId: "acct-a", tokenRevision: "r1" });
     const models = createModels({ getAuth: async () => oauthAuth });
     let finishOld!: (result: ProviderUsageProbeResult) => void;
@@ -185,7 +187,8 @@ describe("Provider usage external Codex state", () => {
     try {
       const old = authority.refresh(PROVIDER_ID);
       await entered;
-      bindings.setFile({ ...(change === "account" ? { accountId: "acct-b" } : {}), tokenRevision: "r2" });
+      bindings.setFile({ ...(change === "account" ? { accountId: "acct-b" } : {}),
+        ...(change === "path" ? { canonicalPath: "different-home/auth.json" } : { tokenRevision: "r2" }) });
       expect((await authority.refresh(PROVIDER_ID)).refresh.outcome).toBe("succeeded");
       finishOld({ state: "unavailable", reason: "network" });
       expect((await old).refresh.outcome).toBe("superseded");
@@ -542,9 +545,9 @@ describe("Provider usage external Codex state", () => {
       capture: async () => capture,
       publishIfCurrent: async (
         _capture: ProviderAuthBindingCapture,
-        publish: (assertCurrent: () => void) => Promise<void> | void,
+        publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
       ) => {
-        await publish(() => undefined);
+        await publish(() => undefined, _capture.facts);
         return true;
       },
       runBound: async <T>(

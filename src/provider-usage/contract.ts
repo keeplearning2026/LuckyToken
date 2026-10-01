@@ -68,16 +68,16 @@ export type ProviderUsageUnsupportedReason =
  * - `auth`: the credential was missing or unusable for the resource request.
  *   Managed and ambient bindings keep this class unchanged.
  * - `timeout`: the authority's own bounded refresh deadline elapsed.
- * - `temporary`: a bounded transient failure of the external Codex source.
+ * - `temporary`: a bounded transient failure of an externally owned source.
  *   The credential boundary reports read/parse failures, an unavailable
  *   delegation, and post-refresh verification failures (including
  *   insufficient validity after a delegated refresh) as one
  *   `external_unavailable` outcome, so they all stay transient here and never
  *   become a permanent reconnect state.
- * - `account_change`: the Codex-owned document no longer belongs to the
- *   account captured for the request; last-known usage is never carried over.
- * - `insufficient_validity`: the resource request received a credential that
- *   does not satisfy the account-claim contract, so it cannot be used.
+ * - `account_change`: the external document no longer matches the
+ *   principal/grant and path captured for the request; last-known usage is never carried over.
+ * - `insufficient_validity`: the credential does not meet the source
+ *   freshness requirement, so it cannot be dispatched.
  * - `terminal`: an explicit structured rejection of a credential the external
  *   boundary had already resolved and verified, with a known terminal code
  *   in the bounded response body. Bare HTTP 401/403 is insufficient. Only this evidence stops automatic network attempts, and
@@ -125,10 +125,10 @@ export type ProviderUsageBindingContext =
       readonly authType: "api_key" | "oauth";
     }
   | {
-      /** Codex-owned external ChatGPT credential consumed through the shared
-       * binding path. Freshness is delegated to Codex, never to Pi OAuth. */
+      /** Externally owned Provider credential consumed through the binding.
+       * Only its source owner may refresh it; never Pi OAuth. */
       readonly kind: "external";
-      readonly authType: "oauth";
+      readonly authType: "api_key" | "oauth";
     }
   | {
       readonly kind: "ambient";

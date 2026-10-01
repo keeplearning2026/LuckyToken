@@ -236,9 +236,12 @@ Request selection mirrors Pi's stored-wins/otherwise-ambient contract exactly: w
 ### 6.6.1 Codex-owned external credential (`openai-codex` only)
 
 `openai-codex` additionally recognizes the Codex-owned `<CODEX_HOME>/auth.json`
-document as a first-class **external OAuth source**. This is the only Provider
-whose external source carries a delegated refresh contract, and it does not
-change the general external-source rules above for any other Provider.
+document as a first-class **external OAuth source**. Codex is the currently
+shipped adapter with a delegated refresh contract. The Provider-neutral
+[credential-file boundary](TokenExternalProviderCredentialSourcesSpec.md)
+also accepts explicitly supplied API-key and other login-file adapters;
+each adapter owns its format, identity evidence and refresh protocol. The
+general external-source ownership and managed-precedence rules still apply.
 
 - Ownership. Codex writes and refreshes the document. Token reads it, may
   request an in-place refresh through a bounded one-shot `codex app-server`
@@ -250,9 +253,9 @@ change the general external-source rules above for any other Provider.
   the external document is missing, invalid, unreadable, or cannot be made
   sufficiently fresh, the request fails closed with a Codex-refresh prompt
   instead of falling back to Pi refresh, ambient resolution, or another lane.
-- Freshness. The refresh trigger is the Codex threshold: the access token
-  expires within five minutes, or its expiry is unparseable and `last_refresh`
-  is older than eight days. Freshness is enforced inside the private binding
+- Freshness. The valid-token refresh trigger is the Codex five-minute
+  threshold. Unparseable expiry never proves sufficient validity: Token
+  requires delegated refresh and verified expiry even with recent `last_refresh`. Freshness is enforced inside the private binding
   boundary; a near-expiry external credential is never handed to Pi, and RPC
   success is never accepted without a re-read that proves the same canonical
   path, the same account identity, an advanced revision, and more than the

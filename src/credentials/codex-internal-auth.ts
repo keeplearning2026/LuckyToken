@@ -1,5 +1,5 @@
 import type { Credential } from "@earendil-works/pi-ai";
-import { parseCodexExternalAuth, resolveCodexAccountIdentity } from "./external-auth.js";
+import { parseCodexExternalAuth, resolveCodexAccountIdentity } from "./codex-auth.js";
 
 /** The public Pi credential lacks Codex's refresh timestamp/id_token. Keep
  * those facts unknown, rather than manufacturing them or changing the JWT. */

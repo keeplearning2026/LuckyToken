@@ -16,7 +16,7 @@ import {
   readBoundedJson,
   toFiniteNumber,
 } from "../wire.js";
-import { resolveCodexAccountIdentity } from "../../credentials/external-auth.js";
+import { resolveCodexAccountIdentity } from "../../credentials/codex-auth.js";
 
 const PROVIDER_ID = "openai-codex";
 const ORIGIN = "https://chatgpt.com";

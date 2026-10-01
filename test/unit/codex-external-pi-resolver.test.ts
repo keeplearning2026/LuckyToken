@@ -6,8 +6,8 @@ import { createInMemoryProviderCredentialRecordStore } from "../../src/credentia
 import type {
   ExternalCredentialResolution,
   ExternalCredentialSource,
+  ExternalCredentialRead,
 } from "../../src/credentials/external-credential-source.js";
-import type { CodexExternalAuthRead } from "../../src/credentials/external-auth.js";
 import { createBrowserOAuthProvider } from "../support/auth-login-fixture.js";
 
 const PROVIDER_ID = "openai-codex";
@@ -41,7 +41,8 @@ function resolverFixture(options: {
     },
   };
   const source: ExternalCredentialSource = Object.freeze({
-    async read(): Promise<CodexExternalAuthRead> {
+    authType: "oauth", authMethodLabel: "Codex (ChatGPT)", displayName: "Codex login",
+    async read(): Promise<ExternalCredentialRead> {
       if (options.resolution.state !== "ok") {
         return Object.freeze({
           state: "invalid",
@@ -53,9 +54,7 @@ function resolverFixture(options: {
         state: "ok",
         canonicalPath: options.resolution.canonicalPath,
         tokenRevision: options.resolution.tokenRevision,
-        accountId: options.resolution.accountId,
-        expiresAt: options.resolution.credential.expiresAt,
-        credential: options.resolution.credential,
+        identityKey: options.resolution.identityKey,
       });
     },
     async resolve(): Promise<ExternalCredentialResolution> {
@@ -69,7 +68,7 @@ function resolverFixture(options: {
     providers: () => [provider],
     createId: () => "id",
     now: options.now,
-    externalSource: source,
+    externalSources: { [PROVIDER_ID]: source },
   });
   const models = createModels({ credentials: composition.credentialStore });
   models.setProvider(provider);
@@ -93,11 +92,12 @@ function resolution(options: {
     state: "ok",
     canonicalPath: "auth.json",
     tokenRevision: options.tokenRevision ?? "revision-1",
-    accountId: "acct-a",
+    identityKey: "acct-a",
     credential: Object.freeze({
-      accessToken: options.accessToken ?? "external-access",
-      refreshToken: "external-refresh",
-      expiresAt: options.expiresAt,
+      type: "oauth",
+      access: options.accessToken ?? "external-access",
+      refresh: "external-refresh",
+      expires: options.expiresAt,
     }),
     refreshed: false,
   });

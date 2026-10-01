@@ -8,7 +8,7 @@ import type {
   CodexAppServerRefresher,
   CodexRefreshDelegationOutcome,
 } from "../../src/credentials/codex-app-server-refresh.js";
-import { createExternalCredentialSource } from "../../src/credentials/external-credential-source.js";
+import { createCodexExternalCredentialSource } from "../../src/credentials/codex-external-credential-source.js";
 
 const roots: string[] = [];
 
@@ -75,18 +75,54 @@ function countingRefresher(
 }
 
 describe("external credential resolution boundary", () => {
+  it.each([
+    [240_000, false], [300_000, false], [300_001, true], [360_000, true],
+  ])("enforces the real resolution window at %s milliseconds", async (validFor, live) => {
+    const { authPath } = await fixture();
+    const now = 1_800_000_000_000;
+    const access = [encode({ alg: "none" }), encode({ exp: (now + validFor) / 1000,
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-a" } }), "sig"].join(".");
+    await writeFile(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens: {
+      access_token: access, refresh_token: "synthetic-refresh", account_id: "acct-a",
+    } }));
+    const { refresher, calls } = countingRefresher({ outcome: "unavailable", reason: "no_runtime" });
+    const source = createCodexExternalCredentialSource({ authPath, refresher, now: () => now,
+      minimumValidityMs: 60_000 });
+    expect((await source.resolve()).state).toBe(live ? "ok" : "unavailable");
+    expect(calls()).toBe(live ? 0 : 1);
+  });
+
+  it("requires stronger adapter validity and delegates unknown expiry regardless of last_refresh", async () => {
+    const { authPath } = await fixture();
+    const { refresher, calls } = countingRefresher({ outcome: "unavailable", reason: "no_runtime" });
+    await writeFile(authPath, document({ expiresInSeconds: 360, accountId: "acct-a" }));
+    const source = createCodexExternalCredentialSource({ authPath, refresher, minimumValidityMs: 600_000 });
+    expect((await source.resolve()).state).toBe("unavailable");
+    expect(calls()).toBe(1);
+    for (const last_refresh of [new Date().toISOString(), new Date(0).toISOString()]) {
+      await writeFile(authPath, JSON.stringify({ auth_mode: "chatgpt", last_refresh, tokens: {
+        access_token: [encode({ alg: "none" }), encode({
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct-a" } }), "sig"].join("."),
+        refresh_token: "synthetic-refresh", account_id: "acct-a",
+      } }));
+      expect(await source.read()).toMatchObject({ state: "ok", identityKey: "acct-a" });
+      expect(await source.resolve()).toMatchObject({ state: "unavailable", reason: "refresh_unavailable" });
+    }
+    expect(calls()).toBe(3);
+  });
+
   it("resolves a fresh credential without delegating", async () => {
     const { authPath } = await fixture();
     await writeFile(authPath, document({ expiresInSeconds: 3600, accountId: "acct-a" }));
     const { refresher, calls } = countingRefresher();
-    const source = createExternalCredentialSource({ authPath, refresher });
+    const source = createCodexExternalCredentialSource({ authPath, refresher });
 
     const resolution = await source.resolve();
 
     expect(resolution.state).toBe("ok");
     if (resolution.state !== "ok") return;
     expect(resolution.refreshed).toBe(false);
-    expect(resolution.accountId).toBe("acct-a");
+    expect(resolution.identityKey).toBe("acct-a");
     expect(calls()).toBe(0);
   });
 
@@ -102,7 +138,7 @@ describe("external credential resolution boundary", () => {
       );
       return { outcome: "completed" };
     };
-    const source = createExternalCredentialSource({
+    const source = createCodexExternalCredentialSource({
       authPath,
       refresher: { ...refresher, refresh: delegate },
       retryDelayMs: 0,
@@ -118,7 +154,7 @@ describe("external credential resolution boundary", () => {
   it("fails closed when delegation is unavailable", async () => {
     const { authPath } = await fixture();
     await writeFile(authPath, document({ expiresInSeconds: 60, accountId: "acct-a" }));
-    const source = createExternalCredentialSource({
+    const source = createCodexExternalCredentialSource({
       authPath,
       refresher: countingRefresher({ outcome: "unavailable", reason: "no_runtime" })
         .refresher,
@@ -160,7 +196,7 @@ describe("external credential resolution boundary", () => {
     for (const testCase of cases) {
       const { authPath } = await fixture();
       await writeFile(authPath, document({ expiresInSeconds: 60, accountId: "acct-a" }));
-      const source = createExternalCredentialSource({
+      const source = createCodexExternalCredentialSource({
         authPath,
         refresher: {
           inflightCount: () => 0,
@@ -181,7 +217,7 @@ describe("external credential resolution boundary", () => {
   it("retries a transient invalid document within its bounded budget", async () => {
     const { authPath } = await fixture();
     await writeFile(authPath, "{");
-    const source = createExternalCredentialSource({
+    const source = createCodexExternalCredentialSource({
       authPath,
       refresher: countingRefresher().refresher,
       retryDelayMs: 20,
@@ -197,7 +233,7 @@ describe("external credential resolution boundary", () => {
   it("reports a missing document without delegating", async () => {
     const { authPath } = await fixture();
     const { refresher, calls } = countingRefresher();
-    const source = createExternalCredentialSource({ authPath, refresher });
+    const source = createCodexExternalCredentialSource({ authPath, refresher });
 
     await expect(source.resolve()).resolves.toMatchObject({
       state: "unavailable",
@@ -210,7 +246,7 @@ describe("external credential resolution boundary", () => {
     const { authPath } = await fixture();
     await writeFile(authPath, document({ expiresInSeconds: 3600, accountId: "acct-a" }));
     const before = await readFile(authPath, "utf8");
-    const source = createExternalCredentialSource({
+    const source = createCodexExternalCredentialSource({
       authPath,
       refresher: countingRefresher().refresher,
     });
@@ -227,7 +263,7 @@ describe("external credential resolution boundary", () => {
     const { authPath } = await fixture();
     // Empty file, then truncated JSON, then a complete document.
     await writeFile(authPath, "");
-    const source = createExternalCredentialSource({
+    const source = createCodexExternalCredentialSource({
       authPath,
       refresher: countingRefresher().refresher,
       retryDelayMs: 20,

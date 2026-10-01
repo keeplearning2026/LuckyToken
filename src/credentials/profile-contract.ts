@@ -39,15 +39,14 @@ export interface ProviderCredentialStateProjection {
     readonly message: string;
   };
   /** External auth source presentation. `internal` credentials are managed
-   * Profiles; `external` is the read-only Codex-owned `auth.json` source
-   * consumed by Provider Native Responses, Semantic Conversion, and usage.
-   * `connected` means a valid ChatGPT credential was read and verified. */
+   * Profiles; explicitly supplied external file sources are consumed by
+   * Provider Native, Semantic Conversion and usage through the binding.
+   * `connected` means a valid source document was read locally. */
   readonly ambient?: {
     readonly kind: "external";
     readonly status: "connected" | "configured" | "unknown";
-    /** Backend-projected label for a verified external source (for the Codex
-     * source this is exactly "Codex login"). The Renderer displays this value
-     * and never derives a source label itself. */
+    /** Backend-projected label for a locally verified external source. The
+     * Renderer displays this value and never derives a source label itself. */
     readonly displayName?: string;
     readonly message: string;
   };
@@ -180,16 +179,16 @@ export type ProviderAuthBindingFacts =
   | {
       readonly kind: "external";
       readonly providerId: string;
-      readonly authType: "oauth";
+      readonly authType: AuthType;
       readonly authMethodLabel: string;
       readonly displayName: string;
-      /** Canonical, resolved path of the Codex-owned document. Never written
-       * by Token; used as the single-flight key for delegated freshness. */
+      /** Canonical, resolved path of the externally owned file. Never written
+       * by Token; source identity and delegated freshness are bound to it. */
       readonly canonicalPath: string;
-      /** ChatGPT account identity parsed from the nested access-token claim.
-       * Publication guards and usage cache identity use this value; it is
-       * never projected to Renderer or logs. */
-      readonly accountId: string;
+      /** Adapter-owned non-secret principal/grant identity. Publication guards
+       * and usage caches use it with the path and revision; it is never
+       * projected to Renderer or logs. */
+      readonly identityKey: string;
       /** Content hash of the token document. Changes only when content
        * changes; no write counter. */
       readonly tokenRevision: string;
@@ -264,7 +263,7 @@ export type ProviderAuthBindingExternalReason =
   | "timeout"
   | "verification_failed"
   | "insufficient_validity"
-  | "account_changed";
+  | "identity_changed";
 
 export class ProviderAuthBindingError extends Error {
   readonly outcome:
@@ -272,12 +271,12 @@ export class ProviderAuthBindingError extends Error {
     | "no_active_profile"
     | "stale_binding"
     | "storage_failure"
-    /** The Codex-owned external credential is missing, invalid, unreadable,
+    /** The externally owned credential is missing, invalid, unreadable,
      * or could not be made sufficiently fresh. The caller must not fall back
      * to Pi OAuth refresh, another source, or a different lane. */
     | "external_unavailable"
     /** Pi asked to mutate an external credential. Token never executes Pi's
-     * refresh callback for the Codex-owned document. */
+     * refresh callback for an externally owned document. */
     | "external_read_only";
   readonly externalReason?: ProviderAuthBindingExternalReason;
 
@@ -304,11 +303,12 @@ export interface ProviderAuthBindingAuthority {
   createReconnectBinding(input: CreateReconnectBindingInput): Promise<CredentialLoginBinding>;
   advanceAfterFinal429(input: AdvanceAfterFinal429Input): Promise<AdvanceAfterFinal429Result>;
   /** Run publication only while this exact binding remains the current
-   * Provider selection/incarnation. The callback must assert the supplied
+   * Provider selection/incarnation. Facts describe the revision actually
+   * resolved, not just the earlier capture. The callback must assert the
    * lease immediately before each irreversible publication boundary. */
   publishIfCurrent(
     capture: ProviderAuthBindingCapture,
-    publish: (assertCurrent: () => void) => Promise<void> | void,
+    publish: (assertCurrent: () => void, facts: ProviderAuthBindingFacts) => Promise<void> | void,
   ): Promise<boolean>;
   runBound<T>(
     binding: CredentialLoginBinding | ProviderAuthBindingCapture,

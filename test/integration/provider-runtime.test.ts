@@ -17,6 +17,7 @@ import { createBundledProviderConfigurations } from "../../src/providers/bundled
 import {
   bundledProviderIds,
   bundledProviderPackages,
+  bundledProviderSpecifiers,
 } from "../../src/providers/bundled.js";
 import {
   assertUserProviderPackages,
@@ -26,8 +27,9 @@ import {
 import {
   COMMANDCODE_GOAT_PROVIDER_PACKAGE,
   COMMANDCODE_PROVIDER_PACKAGE,
-  commandCodeProviderImportModule,
 } from "../support/commandcode-provider-package.js";
+import { bundledProviderImportModule } from "../support/bundled-provider-packages.js";
+import { DEEPSEEK_RESPONSE_PROVIDER_PACKAGE } from "../support/deepseek-response-provider-package.js";
 
 const roots: string[] = [];
 
@@ -87,7 +89,7 @@ describe("Provider Runtime composition", () => {
       validateCatalog: async (_content, selected) => { expect(selected?.command).toBe(snapshot.runtimeIdentity?.command); } });
     await source.withSnapshot(snapshot, async () => {
       const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath: join(root, "models.json"),
-        nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule() });
+        nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: bundledProviderImportModule() });
       expect((await integration.reconcile("enable")).observedState).toBe("managed");
       source.invalidate();
       await runtime.automaticModelOverlay.refresh(snapshot);
@@ -108,7 +110,7 @@ describe("Provider Runtime composition", () => {
       ] }) });
     const warnings: string[][] = [];
     const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath: join(root, "models.json"),
-      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule(),
+      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: bundledProviderImportModule(),
       onAutomaticModelOverlayWarnings: (batch) => { warnings.push([...batch]); } });
     expect(warnings.flat().some((warning) => warning.includes("conservative"))).toBe(true);
     await runtime.automaticModelOverlay.refresh();
@@ -124,7 +126,7 @@ describe("Provider Runtime composition", () => {
         { slug: `gpt-6.${++acquisition}-fixture`, display_name: "Native fixture", visibility: "list", supported_in_api: true },
       ] }) });
     const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath: join(root, "models.json"),
-      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule() });
+      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: bundledProviderImportModule() });
     const snapshot = await source.load();
     await runtime.automaticModelOverlay.refresh(snapshot);
     expect(runtime.models.getModels("openai-codex").filter((model) => model.id.endsWith("-fixture")).map((model) => model.id)).toEqual([snapshot.entries[0]!.slug]);
@@ -138,7 +140,7 @@ describe("Provider Runtime composition", () => {
     const source = createCodexNativeCatalogSource({ codexHome: root, discoverCommands: async () => ["fixture"],
       runVersion: async () => "codex-cli 0.159.2", runBundledCatalog: async () => JSON.stringify({ models: [] }) });
     const runtime = await createProviderRuntime({ piDirectory: root, codexHome: root, modelsJsonPath,
-      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: commandCodeProviderImportModule() });
+      nativeCatalogSource: source, userProviderPackages: {}, fetch: async () => { throw new Error("No network"); }, importModule: bundledProviderImportModule() });
     const dynamic: Model<"pi-messages"> = { id: "dynamic", provider: "radius", api: "pi-messages", name: "Dynamic", baseUrl: "https://radius.invalid/v1",
       reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 4096, maxTokens: 1024 };
     await runtime.catalog.restoreProvider("radius", { models: [dynamic], checkedAt: 1 });
@@ -163,7 +165,7 @@ describe("Provider Runtime composition", () => {
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
       authContext: { env: async () => undefined, fileExists: async () => false },
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => `runtime-id-${++nextId}`,
     });
@@ -210,7 +212,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000001",
     });
@@ -274,7 +276,7 @@ describe("Provider Runtime composition", () => {
       ),
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000099",
     });
@@ -306,7 +308,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000098",
     });
@@ -323,7 +325,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000002",
     });
@@ -368,7 +370,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000003",
     });
@@ -387,7 +389,7 @@ describe("Provider Runtime composition", () => {
 
   it("P3b: an external user Provider Package is classified user", async () => {
     const { modelsJsonPath } = await fixture();
-    const importBundledProvider = commandCodeProviderImportModule();
+    const importBundledProvider = bundledProviderImportModule();
     const runtime = await createProviderRuntime({
       piDirectory: join(await mkdtemp(join(tmpdir(), "pi-")), "pi"),
       modelsJsonPath,
@@ -396,10 +398,7 @@ describe("Provider Runtime composition", () => {
       },
       fetch: vi.fn(async () => new Response()),
       importModule: async (specifier) => {
-        if (
-          specifier === COMMANDCODE_PROVIDER_PACKAGE ||
-          specifier === COMMANDCODE_GOAT_PROVIDER_PACKAGE
-        ) {
+        if (bundledProviderSpecifiers.has(specifier)) {
           return (await importBundledProvider(specifier)) as object;
         }
         if (specifier === "@user/test-provider") {
@@ -432,6 +431,7 @@ describe("Provider Runtime composition", () => {
   it.each([
     COMMANDCODE_PROVIDER_PACKAGE,
     COMMANDCODE_GOAT_PROVIDER_PACKAGE,
+    DEEPSEEK_RESPONSE_PROVIDER_PACKAGE,
   ])("P4: rejects user configuration claiming bundled package %s", (specifier) => {
     expect(() =>
       assertUserProviderPackages({
@@ -441,6 +441,7 @@ describe("Provider Runtime composition", () => {
     expect(bundledProviderPackages.length).toBeGreaterThan(0);
     expect(bundledProviderIds.has("commandcode-private")).toBe(true);
     expect(bundledProviderIds.has("commandcode-goat")).toBe(true);
+    expect(bundledProviderIds.has("deepseek-response")).toBe(true);
   });
 
   it("keeps Private and Goat credentials in independent Pi Provider slots", async () => {
@@ -450,7 +451,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000010",
     });
@@ -510,7 +511,7 @@ describe("Provider Runtime composition", () => {
         modelsJsonPath,
         userProviderPackages: {},
         fetch: vi.fn(async () => new Response()),
-        importModule: commandCodeProviderImportModule(),
+        importModule: bundledProviderImportModule(),
         now: () => 1,
         createUuid: () => "00000000-0000-4000-8000-000000000006",
       }),
@@ -537,7 +538,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000005",
     });
@@ -588,7 +589,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000007",
     });
@@ -643,7 +644,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000008",
     });
@@ -681,7 +682,7 @@ describe("Provider Runtime composition", () => {
       modelsJsonPath,
       userProviderPackages: {},
       fetch: vi.fn(async () => new Response()),
-      importModule: commandCodeProviderImportModule(),
+      importModule: bundledProviderImportModule(),
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000009",
     });

@@ -5,14 +5,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  EXTERNAL_AUTH_REFRESH_WINDOW_MS,
-  EXTERNAL_AUTH_STALE_LAST_REFRESH_MS,
-  hasSufficientValidity,
-  needsCodexRefresh,
   parseCodexExternalAuth,
-  readCodexExternalAuth,
   resolveCodexAccountIdentity,
-} from "../../src/credentials/external-auth.js";
+} from "../../src/credentials/codex-auth.js";
+
+import { createCodexExternalCredentialSource } from "../../src/credentials/codex-external-credential-source.js";
 
 const roots: string[] = [];
 
@@ -149,91 +146,37 @@ describe("Codex external auth document parsing", () => {
   });
 });
 
-describe("Codex external freshness triggers", () => {
-  const now = 1_800_000_000_000;
-
-  function readOk(options: {
-    readonly expiresAt?: number;
-    readonly lastRefreshAt?: number;
-  }) {
-    return Object.freeze({
-      state: "ok" as const,
-      canonicalPath: "auth.json",
-      tokenRevision: "revision",
-      accountId: "acct",
-      ...(options.expiresAt === undefined ? {} : { expiresAt: options.expiresAt }),
-      ...(options.lastRefreshAt === undefined
-        ? {}
-        : { lastRefreshAt: options.lastRefreshAt }),
-    });
-  }
-
-  it("triggers inside the five-minute window and not outside it", () => {
-    expect(needsCodexRefresh(readOk({ expiresAt: now + 4 * 60_000 }), now)).toBe(true);
-    expect(needsCodexRefresh(readOk({ expiresAt: now + 6 * 60_000 }), now)).toBe(false);
-  });
-
-  it("uses the eight-day last_refresh rule when expiry is unparseable", () => {
-    expect(
-      needsCodexRefresh(
-        readOk({ lastRefreshAt: now - EXTERNAL_AUTH_STALE_LAST_REFRESH_MS - 1 }),
-        now,
-      ),
-    ).toBe(true);
-    expect(
-      needsCodexRefresh(
-        readOk({ lastRefreshAt: now - EXTERNAL_AUTH_STALE_LAST_REFRESH_MS + 60_000 }),
-        now,
-      ),
-    ).toBe(false);
-    expect(needsCodexRefresh(readOk({}), now)).toBe(true);
-  });
-
-  it("requires more than the minimum validity", () => {
-    expect(
-      hasSufficientValidity(
-        readOk({ expiresAt: now + EXTERNAL_AUTH_REFRESH_WINDOW_MS + 1 }),
-        now,
-        EXTERNAL_AUTH_REFRESH_WINDOW_MS,
-      ),
-    ).toBe(true);
-    expect(
-      hasSufficientValidity(
-        readOk({ expiresAt: now + EXTERNAL_AUTH_REFRESH_WINDOW_MS }),
-        now,
-        EXTERNAL_AUTH_REFRESH_WINDOW_MS,
-      ),
-    ).toBe(false);
-  });
-});
-
 describe("Codex external auth reads", () => {
   it("distinguishes missing, invalid, unreadable, and ok", async () => {
     const root = await home();
     const authPath = join(root, "auth.json");
-    await expect(readCodexExternalAuth(authPath)).resolves.toMatchObject({
+    const source = createCodexExternalCredentialSource({ authPath,
+      refresher: { inflightCount: () => 0,
+        refresh: async () => { throw new Error("Identity reads must not refresh"); } },
+    });
+    await expect(source.read()).resolves.toMatchObject({
       state: "missing",
     });
     await writeFile(authPath, "{", "utf8");
-    await expect(readCodexExternalAuth(authPath)).resolves.toMatchObject({
+    await expect(source.read()).resolves.toMatchObject({
       state: "invalid",
     });
     await rm(authPath, { force: true });
     await mkdir(authPath, { recursive: true });
-    await expect(readCodexExternalAuth(authPath)).resolves.toMatchObject({
+    await expect(source.read()).resolves.toMatchObject({
       state: "unreadable",
     });
     await rm(authPath, { recursive: true, force: true });
     await writeFile(authPath, chatGptDocument(), "utf8");
-    const read = await readCodexExternalAuth(authPath);
+    const read = await source.read();
     expect(read.state).toBe("ok");
     if (read.state !== "ok") return;
-    const repeated = await readCodexExternalAuth(authPath);
+    const repeated = await source.read();
     expect(repeated.state).toBe("ok");
     if (repeated.state !== "ok") return;
     expect(repeated.tokenRevision).toBe(read.tokenRevision);
     await writeFile(authPath, `${chatGptDocument()}\n`, "utf8");
-    const changed = await readCodexExternalAuth(authPath);
+    const changed = await source.read();
     expect(changed.state).toBe("ok");
     if (changed.state !== "ok") return;
     expect(changed.tokenRevision).not.toBe(read.tokenRevision);

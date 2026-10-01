@@ -41,6 +41,7 @@ import {
   type ManagedProviderAuthBindingCapture,
   type ProviderAuthBindingAuthority,
   type ProviderAuthBindingCapture,
+  type ProviderAuthBindingFacts,
   type ProviderAuthBindingExternalReason,
   type ProviderCredentialStateProjection,
   type ReorderProfilesInput,
@@ -50,11 +51,6 @@ import {
   type SetProviderSwitchPolicyInput,
   type UpdateProfileMetadataInput,
 } from "./profile-contract.js";
-import {
-  EXTERNAL_AUTH_DISPLAY_NAME,
-  EXTERNAL_AUTH_PROVIDER_ID,
-  EXTERNAL_AUTH_PROVIDER_LABEL,
-} from "./external-auth.js";
 import type {
   ExternalCredentialResolution,
   ExternalCredentialSource,
@@ -78,7 +74,8 @@ interface ExternalBindingScope {
   readonly kind: "external";
   readonly providerId: string;
   readonly canonicalPath: string;
-  readonly accountId: string;
+  readonly identityKey: string;
+  readonly authType: AuthType;
   /** Revision of the credential the bound operation actually resolved.
    * Publication guards compare against it so a late response from a
    * superseded revision cannot publish. */
@@ -390,9 +387,9 @@ export function createProviderCredentialProfiles(options: {
   readonly createId: () => string;
   readonly now: () => number;
   readonly ambientStatus?: (providerId: string) => "configured" | "unknown";
-  /** The Codex-owned external credential source for `openai-codex`. When
-   * absent, `openai-codex` keeps the previous managed/ambient behavior. */
-  readonly externalSource?: ExternalCredentialSource;
+  /** Explicit externally owned sources, keyed by Provider id. No source
+   * discovery or persisted selection; managed Profiles remain authoritative. */
+  readonly externalSources?: Readonly<Record<string, ExternalCredentialSource>>;
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -401,6 +398,7 @@ export function createProviderCredentialProfiles(options: {
     readonly lastSucceededAt?: number;
   }[];
 }): ProviderCredentialProfilesComposition {
+  const externalSources = Object.freeze({ ...options.externalSources });
   const scope = new AsyncLocalStorage<BindingScope>();
   const capturedScopes = new WeakMap<
     ProviderAuthBindingCapture,
@@ -465,9 +463,11 @@ export function createProviderCredentialProfiles(options: {
   const externalSourceFor = (
     providerId: string,
   ): ExternalCredentialSource | undefined =>
-    providerId === EXTERNAL_AUTH_PROVIDER_ID ? options.externalSource : undefined;
+    Object.hasOwn(externalSources, providerId) ? externalSources[providerId] : undefined;
 
   const externalCapture = (
+    providerId: string,
+    source: ExternalCredentialSource,
     read: Extract<
       Awaited<ReturnType<ExternalCredentialSource["read"]>>,
       { readonly state: "ok" }
@@ -475,20 +475,21 @@ export function createProviderCredentialProfiles(options: {
   ): ProviderAuthBindingCapture => {
     const externalScope: ExternalBindingScope = Object.freeze({
       kind: "external",
-      providerId: EXTERNAL_AUTH_PROVIDER_ID,
+      providerId,
       canonicalPath: read.canonicalPath,
-      accountId: read.accountId,
+      identityKey: read.identityKey,
+      authType: source.authType,
       resolved: { revision: read.tokenRevision },
     });
     const capture: ProviderAuthBindingCapture = Object.freeze({
       facts: Object.freeze({
         kind: "external",
-        providerId: EXTERNAL_AUTH_PROVIDER_ID,
-        authType: "oauth",
-        authMethodLabel: EXTERNAL_AUTH_PROVIDER_LABEL,
-        displayName: EXTERNAL_AUTH_DISPLAY_NAME,
+        providerId,
+        authType: source.authType,
+        authMethodLabel: source.authMethodLabel,
+        displayName: source.displayName,
         canonicalPath: read.canonicalPath,
-        accountId: read.accountId,
+        identityKey: read.identityKey,
         tokenRevision: read.tokenRevision,
       }),
     });
@@ -512,7 +513,7 @@ export function createProviderCredentialProfiles(options: {
         return resolution.detail === "insufficient_validity"
           ? "insufficient_validity"
           : resolution.detail === "identity_changed"
-            ? "account_changed"
+            ? "identity_changed"
             : "verification_failed";
     }
   };
@@ -525,7 +526,7 @@ export function createProviderCredentialProfiles(options: {
     if (source === undefined) {
       throw new ProviderAuthBindingError(
         "external_unavailable",
-        "External Codex credentials are not configured",
+        "External Provider credentials are not configured",
       );
     }
     let resolution: ExternalCredentialResolution;
@@ -536,29 +537,26 @@ export function createProviderCredentialProfiles(options: {
     } catch {
       throw new ProviderAuthBindingError(
         "external_unavailable",
-        "External Codex credential could not be resolved",
+        "External Provider credential could not be resolved",
       );
     }
     if (resolution.state !== "ok") {
       throw new ProviderAuthBindingError(
         "external_unavailable",
-        "External Codex credential is unavailable; refresh it through Codex",
+        "External Provider credential is unavailable; update it through its owner",
         { externalReason: externalFailureReason(resolution) },
       );
     }
-    if (resolution.accountId !== binding.accountId) {
+    if (resolution.identityKey !== binding.identityKey ||
+      resolution.canonicalPath !== binding.canonicalPath ||
+      resolution.credential.type !== binding.authType) {
       throw new ProviderAuthBindingError(
         "stale_binding",
-        "External Codex credential account changed since capture",
-        { externalReason: "account_changed" },
+        "External Provider credential identity changed since capture",
+        { externalReason: "identity_changed" },
       );
     }
-    const credential: Credential = Object.freeze({
-      type: "oauth",
-      access: resolution.credential.accessToken,
-      refresh: resolution.credential.refreshToken,
-      expires: resolution.credential.expiresAt,
-    });
+    const credential = resolution.credential;
     binding.resolved.revision = resolution.tokenRevision;
     trackCredentialSecrets(credential);
     return credential;
@@ -614,7 +612,7 @@ export function createProviderCredentialProfiles(options: {
     );
   };
 
-  /** Local, side-effect-free presentation of the Codex-owned external source.
+  /** Local, side-effect-free presentation of an externally owned source.
    * Never contacts a Provider; it only reads the local document state. */
   const externalStatus = async (
     providerId: string,
@@ -635,32 +633,32 @@ export function createProviderCredentialProfiles(options: {
         return Object.freeze({
           kind: "external" as const,
           status: "connected" as const,
-          displayName: EXTERNAL_AUTH_DISPLAY_NAME,
-          message: "Codex login is connected and refreshed in place by Codex",
+          displayName: source.displayName,
+          message: "External credentials are connected; updates are owned by their source",
         });
       }
       if (read.state === "missing") {
         return Object.freeze({
           kind: "external" as const,
           status: "unknown" as const,
-          displayName: EXTERNAL_AUTH_DISPLAY_NAME,
+          displayName: source.displayName,
           message:
-            "Codex login is not available; sign in through Codex to use this Provider",
+            "External credentials are not available; configure them through their source owner",
         });
       }
       return Object.freeze({
         kind: "external" as const,
         status: "configured" as const,
-        displayName: EXTERNAL_AUTH_DISPLAY_NAME,
+        displayName: source.displayName,
         message:
-          "Codex login is present but temporarily unreadable; retry or refresh through Codex",
+          "External credentials are present but temporarily unreadable; retry or update through their source owner",
       });
     } catch {
       return Object.freeze({
         kind: "external" as const,
         status: "unknown" as const,
-        displayName: EXTERNAL_AUTH_DISPLAY_NAME,
-        message: "Codex login state is unknown",
+        displayName: source.displayName,
+        message: "External credential state is unknown",
       });
     }
   };
@@ -813,7 +811,7 @@ export function createProviderCredentialProfiles(options: {
       }
       if (binding.kind === "external") {
         return Object.freeze([
-          { providerId: binding.providerId, type: "oauth" },
+          { providerId: binding.providerId, type: binding.authType },
         ]);
       }
       return Object.freeze([]);
@@ -835,10 +833,10 @@ export function createProviderCredentialProfiles(options: {
       }
       if (binding.kind === "external") {
         // Freshness lives in `read`; Pi's refresh callback is never executed
-        // for the Codex-owned document.
+        // for an externally owned document.
         throw new ProviderAuthBindingError(
           "external_read_only",
-          "External Codex credentials are refreshed only through Codex",
+          "External Provider credentials can only be updated through their source owner",
         );
       }
       if (binding.kind === "managed") {
@@ -1493,13 +1491,13 @@ export function createProviderCredentialProfiles(options: {
           } catch {
             throw new ProviderAuthBindingError(
               "external_unavailable",
-              "External Codex credential state could not be read",
+              "External Provider credential state could not be read",
             );
           }
           if (read.state === "ok") {
-            // An empty-file/invalid document may be an app-server write window;
+            // An empty-file/invalid document may be an owner write window;
             // it is a bounded transient state, never an ambient fallback.
-            return externalCapture(read);
+            return externalCapture(providerId, externalSource, read);
           }
           throw new ProviderAuthBindingError(
             "external_unavailable",
@@ -1570,7 +1568,7 @@ export function createProviderCredentialProfiles(options: {
           input.expectedRevision === NO_PROVIDER_RECORD_REVISION
         ) {
           const read = await externalSource.read();
-          if (read.state === "ok") return externalCapture(read);
+          if (read.state === "ok") return externalCapture(input.providerId, externalSource, read);
           throw new ProviderAuthBindingError(
             "external_unavailable",
             read.reason,
@@ -1862,7 +1860,7 @@ export function createProviderCredentialProfiles(options: {
 
     async publishIfCurrent(
       capture: ProviderAuthBindingCapture,
-      publish: (assertCurrent: () => void) => Promise<void> | void,
+      publish: (assertCurrent: () => void, facts: ProviderAuthBindingFacts) => Promise<void> | void,
     ): Promise<boolean> {
       const captured = capturedScopes.get(capture);
       if (captured === undefined || providerFor(captured.providerId) === undefined) {
@@ -1894,7 +1892,7 @@ export function createProviderCredentialProfiles(options: {
                 })()
               : current === undefined || current.profiles.length === 0;
             if (currentMatches && captured.kind === "external") {
-              // Publication remains bound to the same external account while
+              // Publication remains bound to the same external source identity while
               // the Provider record is still external-only. The token
               // revision must equal the revision this capture actually
               // resolved, so a late response from a superseded revision is
@@ -1909,7 +1907,9 @@ export function createProviderCredentialProfiles(options: {
               }
               if (
                 read.state !== "ok" ||
-                read.accountId !== captured.accountId ||
+                read.identityKey !== captured.identityKey ||
+                read.canonicalPath !== captured.canonicalPath ||
+                source.authType !== captured.authType ||
                 read.tokenRevision !== captured.resolved.revision
               ) {
                 return false;
@@ -1917,7 +1917,10 @@ export function createProviderCredentialProfiles(options: {
             }
           if (!currentMatches) return false;
           assertOwned();
-          await publish(assertOwned);
+          const publicationFacts = captured.kind === "external" && capture.facts.kind === "external"
+            ? Object.freeze({ ...capture.facts, tokenRevision: captured.resolved.revision })
+            : capture.facts;
+          await publish(assertOwned, publicationFacts);
           return true;
         },
       );

@@ -1,5 +1,6 @@
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { bundledProviderIds } from "../../src/providers/bundled.js";
 
 import { createConfiguredPiModels } from "../support/configured-data-plane.js";
 
@@ -15,10 +16,7 @@ describe("configured Provider Package runtime", () => {
         now: () => 1,
         createUuid: () => "00000000-0000-4000-8000-000000000007",
       });
-    expect(externalProviderIds).toEqual([
-      "commandcode-private",
-      "commandcode-goat",
-    ]);
+    expect(externalProviderIds).toEqual([...bundledProviderIds]);
     await expect(catalog.checkAuth("commandcode-private")).resolves.toBeUndefined();
     await expect(catalog.checkAuth("commandcode-goat")).resolves.toBeUndefined();
     const model = models.getModel(

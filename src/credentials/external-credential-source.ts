@@ -1,198 +1,168 @@
-import {
-  canonicalCodexAuthPath,
-  hasSufficientValidity,
-  needsCodexRefresh,
-  readCodexExternalAuth,
-  EXTERNAL_AUTH_REFRESH_WINDOW_MS,
-  type CodexExternalAuthCredential,
-  type CodexExternalAuthRead,
-} from "./external-auth.js";
-import type { CodexAppServerRefresher } from "./codex-app-server-refresh.js";
+import type { AuthType, Credential } from "@earendil-works/pi-ai";
+import { readExternalCredentialFile } from "./external-credential-file.js";
+import { createKeyedSingleFlight } from "./keyed-single-flight.js";
 
-/**
- * The single external-credential binding path (plan section 3.2 item 6).
- *
- * Session streaming, Native responses and compact, Semantic Conversion,
- * catalog/recheck, and usage all resolve the Codex-owned `auth.json` through
- * this boundary. Freshness is enforced here: `resolve` returns a credential
- * only with more than the minimum validity, delegating an in-place refresh to
- * Codex when the trigger fires. It never calls Pi OAuth refresh.
- */
+/** Pi refreshes inside this window. External sources resolve outside it
+ * through their owner; Pi's writer never receives a stale credential. */
+export const MINIMUM_EXTERNAL_OAUTH_VALIDITY_MS = 5 * 60_000;
 
-export const EXTERNAL_CREDENTIAL_MINIMUM_VALIDITY_MS =
-  EXTERNAL_AUTH_REFRESH_WINDOW_MS;
-
+export interface ExternalCredentialIdentity {
+  readonly canonicalPath: string;
+  /** Adapter-owned non-secret grant/principal identity. Never a raw key. */
+  readonly identityKey: string;
+  readonly tokenRevision: string;
+}
+export type ExternalCredentialRead =
+  | ({ readonly state: "ok" } & ExternalCredentialIdentity)
+  | { readonly state: "missing" | "invalid" | "unreadable";
+      readonly canonicalPath: string; readonly reason: string };
 export type ExternalCredentialUnavailableReason =
-  | "missing"
-  | "invalid"
-  | "unreadable"
-  | "refresh_unavailable"
-  | "verification_failed";
-
+  | "missing" | "invalid" | "unreadable" | "refresh_unavailable" | "verification_failed";
 export type ExternalCredentialResolution =
-  | {
-      readonly state: "ok";
-      readonly canonicalPath: string;
-      readonly tokenRevision: string;
-      readonly accountId: string;
-      readonly credential: CodexExternalAuthCredential;
-      readonly refreshed: boolean;
-    }
-  | {
-      readonly state: "unavailable";
-      readonly canonicalPath: string;
-      readonly reason: ExternalCredentialUnavailableReason;
-      readonly detail: string;
-    };
+  | ({ readonly state: "ok"; readonly credential: Credential;
+       readonly refreshed: boolean } & ExternalCredentialIdentity)
+  | { readonly state: "unavailable"; readonly canonicalPath: string;
+      readonly reason: ExternalCredentialUnavailableReason; readonly detail: string };
 
 export interface ExternalCredentialSource {
-  /** Capture identity without resolving the secret. */
-  read(options?: { readonly signal?: AbortSignal }): Promise<CodexExternalAuthRead>;
-  /** Capture identity → ensure freshness → resolve the request-local secret. */
-  resolve(options?: {
-    readonly signal?: AbortSignal;
-  }): Promise<ExternalCredentialResolution>;
+  readonly authType: AuthType;
+  readonly authMethodLabel: string;
+  readonly displayName: string;
+  /** Local identity capture: no secrets, delegation or network. */
+  read(options?: { readonly signal?: AbortSignal }): Promise<ExternalCredentialRead>;
+  /** Resolve a fresh request-local Pi credential; never persist in Token. */
+  resolve(options?: { readonly signal?: AbortSignal }): Promise<ExternalCredentialResolution>;
 }
-
+export interface ExternalCredentialDocument {
+  readonly identityKey: string;
+  /** A parser may recognize an identity while its credential is unusable. */
+  readonly credential?: Credential;
+}
+export type ExternalCredentialDecode =
+  | { readonly state: "ok"; readonly document: ExternalCredentialDocument }
+  | { readonly state: "invalid"; readonly reason: string };
 export interface CreateExternalCredentialSourceOptions {
-  /** `<CODEX_HOME>/auth.json`. Token never writes or deletes it. */
-  readonly authPath: string;
-  readonly refresher: CodexAppServerRefresher;
+  readonly path: string;
+  readonly authType: AuthType;
+  readonly authMethodLabel: string;
+  readonly displayName: string;
+  /** Provider format and identity rules. Reasons must be bounded static
+   * descriptions, never contents or parser exception text. */
+  readonly decode: (raw: string) => ExternalCredentialDecode;
+  /** Optional stronger provider constraint; cannot lower Pi's window. */
+  readonly isUsable?: (document: ExternalCredentialDocument, now: number) => boolean;
+  /** Owner-native in-place refresh with its own bounded timeout. Missing
+   * delegation fails closed. No secret or waiter signal is passed here. */
+  readonly refresh?: (input: { readonly canonicalPath: string }) => Promise<
+    { readonly outcome: "completed" } | { readonly outcome: "unavailable"; readonly reason: string }>;
   readonly now?: () => number;
-  /** Token's own sufficient-validity constraint. */
-  readonly minimumValidityMs?: number;
-  /** Bounded retry budget for transient invalid/unreadable read states. */
   readonly readAttempts?: number;
   readonly retryDelayMs?: number;
 }
-
-const DEFAULT_READ_ATTEMPTS = 3;
-const DEFAULT_RETRY_DELAY_MS = 25;
-
-const wait = (milliseconds: number): Promise<void> =>
-  new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
-
-function unavailable(
-  canonicalPath: string,
-  reason: ExternalCredentialUnavailableReason,
-  detail: string,
-): ExternalCredentialResolution {
+type DocumentRead =
+  | ({ readonly state: "ok"; readonly document: ExternalCredentialDocument } & ExternalCredentialIdentity)
+  | Exclude<ExternalCredentialRead, { readonly state: "ok" }>;
+function unavailable(canonicalPath: string, reason: ExternalCredentialUnavailableReason,
+  detail: string): ExternalCredentialResolution {
   return Object.freeze({ state: "unavailable", canonicalPath, reason, detail });
 }
 
+/** Provider-neutral lifecycle for externally owned credential files. */
 export function createExternalCredentialSource(
   options: CreateExternalCredentialSourceOptions,
 ): ExternalCredentialSource {
-  const now = options.now ?? Date.now;
-  const minimumValidityMs =
-    options.minimumValidityMs ?? EXTERNAL_CREDENTIAL_MINIMUM_VALIDITY_MS;
-  const readAttempts = Math.max(1, options.readAttempts ?? DEFAULT_READ_ATTEMPTS);
-  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-
-  /** Transient read/parse states and app-server non-atomic-write windows get a
-   * bounded retry; a missing credential does not. */
-  const readWithRetry = async (
-    signal?: AbortSignal,
-  ): Promise<CodexExternalAuthRead> => {
-    const canonicalPath = await canonicalCodexAuthPath(options.authPath);
-    let latest: CodexExternalAuthRead | undefined;
-    for (let attempt = 0; attempt < readAttempts; attempt += 1) {
-      signal?.throwIfAborted();
-      latest = await readCodexExternalAuth(canonicalPath, { canonicalPath });
-      if (latest.state === "ok" || latest.state === "missing") return latest;
-      if (attempt + 1 < readAttempts) await wait(retryDelayMs * (attempt + 1));
+  for (const [label, maximum] of [[options.displayName, 64], [options.authMethodLabel, 128]] as const) {
+    if (label.length === 0 || label.trim() !== label || Array.from(label).length > maximum) {
+      throw new Error("External credential source label is invalid");
     }
-    return latest!;
+  }
+  const now = options.now ?? Date.now;
+  const attempts = options.readAttempts ?? 3;
+  const delay = options.retryDelayMs ?? 25;
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 16 ||
+    !Number.isFinite(delay) || delay < 0 || delay > 1000) {
+    throw new Error("External credential read retry budget is invalid");
+  }
+  const freshness = createKeyedSingleFlight<ExternalCredentialResolution>();
+  const isUsable = (document: ExternalCredentialDocument): boolean => {
+    const credential = document.credential;
+    const time = now();
+    return credential !== undefined && credential.type === options.authType &&
+      (credential.type !== "oauth" ||
+        (Number.isFinite(credential.expires) && credential.expires - time > MINIMUM_EXTERNAL_OAUTH_VALIDITY_MS)) &&
+      (options.isUsable?.(document, time) ?? true);
   };
-
-  return Object.freeze({
-    read(options?: { readonly signal?: AbortSignal }): Promise<CodexExternalAuthRead> {
-      return readWithRetry(options?.signal);
-    },
-
-    async resolve(resolveOptions?: {
-      readonly signal?: AbortSignal;
-    }): Promise<ExternalCredentialResolution> {
-      const signal = resolveOptions?.signal;
+  const readDocument = async (signal?: AbortSignal): Promise<DocumentRead> => {
+    for (let attempt = 0; ; attempt += 1) {
       signal?.throwIfAborted();
-      const first = await readWithRetry(signal);
-      if (first.state !== "ok") {
-        return unavailable(
-          first.canonicalPath,
-          first.state,
-          first.reason,
-        );
+      const file = await readExternalCredentialFile(options.path);
+      let read: DocumentRead;
+      if (file.state !== "ok") read = file;
+      else {
+        let parsed: ExternalCredentialDecode;
+        try { parsed = options.decode(file.raw); }
+        catch { parsed = { state: "invalid", reason: "Credential document could not be decoded" }; }
+        if (parsed.state === "invalid") {
+          read = { state: "invalid", canonicalPath: file.canonicalPath, reason: parsed.reason };
+        } else if (parsed.document.identityKey.length === 0 ||
+          (parsed.document.credential !== undefined && parsed.document.credential.type !== options.authType)) {
+          read = { state: "invalid", canonicalPath: file.canonicalPath, reason: "Credential identity or auth type is invalid" };
+        } else {
+          read = { state: "ok", canonicalPath: file.canonicalPath, tokenRevision: file.tokenRevision,
+            identityKey: parsed.document.identityKey, document: parsed.document };
+        }
       }
-
-      const currentTime = now();
-      if (
-        hasSufficientValidity(first, currentTime, minimumValidityMs) &&
-        !needsCodexRefresh(first, currentTime)
-      ) {
-        return Object.freeze({
-          state: "ok",
-          canonicalPath: first.canonicalPath,
-          tokenRevision: first.tokenRevision,
-          accountId: first.accountId,
-          credential: first.credential,
-          refreshed: false,
-        });
+      if (read.state === "ok" || read.state === "missing" || attempt + 1 >= attempts) return read;
+      await new Promise<void>((done) => setTimeout(done, delay * (attempt + 1)));
+    }
+  };
+  const success = (read: Extract<DocumentRead, { readonly state: "ok" }>,
+    refreshed: boolean): ExternalCredentialResolution => Object.freeze({
+    state: "ok", canonicalPath: read.canonicalPath, identityKey: read.identityKey,
+    tokenRevision: read.tokenRevision, credential: read.document.credential!, refreshed,
+  });
+  return Object.freeze({
+    authType: options.authType, authMethodLabel: options.authMethodLabel, displayName: options.displayName,
+    async read(readOptions?: { readonly signal?: AbortSignal }): Promise<ExternalCredentialRead> {
+      const read = await readDocument(readOptions?.signal);
+      if (read.state !== "ok") return read;
+      return Object.freeze({ state: "ok", canonicalPath: read.canonicalPath,
+        identityKey: read.identityKey, tokenRevision: read.tokenRevision });
+    },
+    async resolve(resolveOptions?: { readonly signal?: AbortSignal }): Promise<ExternalCredentialResolution> {
+      const signal = resolveOptions?.signal;
+      const first = await readDocument(signal);
+      signal?.throwIfAborted();
+      if (first.state !== "ok") return unavailable(first.canonicalPath, first.state, first.reason);
+      if (isUsable(first.document)) return success(first, false);
+      const result = await freshness.run(first.canonicalPath, async () => {
+        // A previous refresh may have finished while this waiter was reading.
+        const latest = await readDocument();
+        if (latest.state !== "ok") return unavailable(first.canonicalPath, "verification_failed", latest.state);
+        if (latest.canonicalPath !== first.canonicalPath || latest.identityKey !== first.identityKey) {
+          return unavailable(first.canonicalPath, "verification_failed", "identity_changed");
+        }
+        if (isUsable(latest.document)) return success(latest, latest.tokenRevision !== first.tokenRevision);
+        if (options.refresh === undefined) return unavailable(first.canonicalPath, "refresh_unavailable", "not_supported");
+        let delegated: Awaited<ReturnType<NonNullable<typeof options.refresh>>>;
+        try { delegated = await options.refresh({ canonicalPath: latest.canonicalPath }); }
+        catch { return unavailable(first.canonicalPath, "refresh_unavailable", "delegate_failed"); }
+        if (delegated.outcome !== "completed") return unavailable(first.canonicalPath, "refresh_unavailable", delegated.reason);
+        const second = await readDocument();
+        if (second.state !== "ok") return unavailable(first.canonicalPath, "verification_failed", second.state);
+        if (second.canonicalPath !== latest.canonicalPath || second.identityKey !== latest.identityKey) {
+          return unavailable(first.canonicalPath, "verification_failed", "identity_changed");
+        }
+        if (second.tokenRevision === latest.tokenRevision) return unavailable(first.canonicalPath, "verification_failed", "revision_unchanged");
+        if (!isUsable(second.document)) return unavailable(first.canonicalPath, "verification_failed", "insufficient_validity");
+        return success(second, true);
+      }, signal);
+      // Shared work may belong to another principal that raced this caller.
+      if (result.state === "ok" &&
+        (result.canonicalPath !== first.canonicalPath || result.identityKey !== first.identityKey)) {
+        return unavailable(first.canonicalPath, "verification_failed", "identity_changed");
       }
-
-      const delegation = await options.refresher.refresh({
-        canonicalPath: first.canonicalPath,
-        ...(signal === undefined ? {} : { signal }),
-      });
-      if (delegation.outcome !== "completed") {
-        return unavailable(
-          first.canonicalPath,
-          "refresh_unavailable",
-          delegation.reason,
-        );
-      }
-
-      // Every waiter re-reads and re-validates after the shared run; RPC
-      // success alone is never accepted.
-      const second = await readWithRetry(signal);
-      if (second.state !== "ok") {
-        return unavailable(
-          first.canonicalPath,
-          "verification_failed",
-          second.state,
-        );
-      }
-      if (
-        second.canonicalPath !== first.canonicalPath ||
-        second.accountId !== first.accountId
-      ) {
-        return unavailable(
-          first.canonicalPath,
-          "verification_failed",
-          "identity_changed",
-        );
-      }
-      if (second.tokenRevision === first.tokenRevision) {
-        return unavailable(
-          first.canonicalPath,
-          "verification_failed",
-          "revision_unchanged",
-        );
-      }
-      if (!hasSufficientValidity(second, now(), minimumValidityMs)) {
-        return unavailable(
-          first.canonicalPath,
-          "verification_failed",
-          "insufficient_validity",
-        );
-      }
-      return Object.freeze({
-        state: "ok",
-        canonicalPath: second.canonicalPath,
-        tokenRevision: second.tokenRevision,
-        accountId: second.accountId,
-        credential: second.credential,
-        refreshed: true,
-      });
+      return result;
     },
   });
 }

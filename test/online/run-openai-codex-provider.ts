@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -9,15 +9,14 @@ import { closeOpenAICodexWebSocketSessions } from "@earendil-works/pi-ai/api/ope
 
 import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createProviderUsageAuthority } from "../../src/provider-usage/authority.js";
+import type { ProviderUsageAuthority } from "../../src/provider-usage/contract.js";
 import { createBuiltInProviderUsageProbes } from "../../src/provider-usage/registry.js";
-import { createExternalCredentialSource } from "../../src/credentials/external-credential-source.js";
+import { createCodexExternalCredentialSource } from "../../src/credentials/codex-external-credential-source.js";
 import { createCodexAppServerRefresher } from "../../src/credentials/codex-app-server-refresh.js";
-import {
-  codexExternalAuthPath,
-  needsCodexRefresh,
-  parseCodexExternalAuth,
-  readCodexExternalAuth,
-} from "../../src/credentials/external-auth.js";
+import type { ExternalCredentialSource } from "../../src/credentials/external-credential-source.js";
+import { codexExternalAuthPath } from "../../src/credentials/codex-auth.js";
+import { createProviderRuntime } from "../../src/providers/runtime.js";
+import { loadBundledProviderConfigurations } from "../../src/providers/bundled-configuration.js";
 import {
   createCodexNativeCatalogSource,
 } from "../../src/integrations/codex/native-catalog-source.js";
@@ -38,10 +37,11 @@ const PROVIDER_ID = "openai-codex";
  *
  * The Codex home is `TOKEN_CODEX_TEST_AUTH_HOME` when set (dedicated test
  * login), otherwise the local Codex home (`CODEX_HOME` or `~/.codex`). The
- * document is only ever read: the suite never copies it, and a refresh runs
- * only through the Codex-native delegation this feature implements. When no
- * ChatGPT login is available the suite records a skip instead of mocking
- * anything.
+ * file stays at its original path. An explicitly injected generic source
+ * supplies its identity and request-local Pi credentials to both lanes and
+ * usage. Only an owner-native refresh may modify it. Model discovery and
+ * synthetic app-server probes use a new temporary CODEX_HOME; no real auth
+ * is copied. Missing login records skip rather than mocked online coverage.
  */
 /**
  * Delegation mechanics against the real Codex app-server, in a temp home with
@@ -79,7 +79,7 @@ async function probeDelegationMechanics(
     })}\n`,
     "utf8",
   );
-  const source = createExternalCredentialSource({
+  const source = createCodexExternalCredentialSource({
     authPath,
     refresher: createCodexAppServerRefresher({ codexHome: probeHome }),
   });
@@ -102,37 +102,49 @@ async function run(): Promise<void> {
   const loginSource =
     dedicatedHome === undefined || dedicatedHome.length === 0 ? "local" : "dedicated";
   const authPath = codexExternalAuthPath(codexHome);
-  let raw: string;
-  try {
-    raw = await readFile(authPath, "utf8");
-  } catch {
+  const fileSource = createCodexExternalCredentialSource({ authPath,
+    refresher: createCodexAppServerRefresher({ codexHome }) });
+  const initial = await fileSource.read();
+  if (initial.state !== "ok") {
     process.stdout.write(`${JSON.stringify({
       result: "skip",
-      reason: "codex_login_unavailable",
+      reason: initial.state === "invalid" ? "codex_login_not_chatgpt" : "codex_login_unavailable",
       codexHome,
       loginSource,
       env: DEDICATED_CODEX_AUTH_HOME_ENV,
+      detail: initial.state,
     })}\n`);
     return;
   }
-  const parsed = parseCodexExternalAuth(raw);
-  if (parsed.state !== "ok") {
-    process.stdout.write(`${JSON.stringify({
-      result: "skip",
-      reason: "codex_login_not_chatgpt",
-      codexHome,
-      loginSource,
-      detail: parsed.reason,
-    })}\n`);
-    return;
-  }
-  // The external credential source, the Codex-delegated refresh, and the Codex
-  // CLI all observe this one home.
-  process.env.CODEX_HOME = codexHome;
-
+  const authBefore = await stat(authPath);
+  const sourceCalls = { identityReads: 0, resolutions: 0, refreshedResolutions: 0 };
+  // Observe only bounded facts. Never retain or print a returned credential.
+  const externalSource: ExternalCredentialSource = Object.freeze({ ...fileSource,
+    async read(options?: { readonly signal?: AbortSignal }) {
+      sourceCalls.identityReads += 1;
+      const read = await fileSource.read(options);
+      if (read.state === "ok") assert.deepEqual(Object.keys(read).sort(),
+        ["canonicalPath", "identityKey", "state", "tokenRevision"], "generic read must contain identity facts only");
+      return read;
+    },
+    async resolve(options?: { readonly signal?: AbortSignal }) {
+      sourceCalls.resolutions += 1;
+      const result = await fileSource.resolve(options);
+      if (result.state === "ok") {
+        assert.equal(result.canonicalPath, initial.canonicalPath, "credential must stay at its canonical path");
+        assert.equal(result.identityKey, initial.identityKey, "credential must stay on the captured principal");
+        assert.equal(result.credential.type, "oauth");
+        if (result.refreshed) sourceCalls.refreshedResolutions += 1;
+      }
+      return result;
+    },
+  });
   const root = await mkdtemp(join(tmpdir(), "Token-openai-codex-online-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = root;
   let server: Awaited<ReturnType<typeof startTokenHttpServer>> | undefined;
   let composition: Awaited<ReturnType<typeof createConfiguredTokenDataPlane>> | undefined;
+  let usage: ProviderUsageAuthority | undefined;
   try {
     const stateDirectory = join(root, ".Token");
     const piDirectory = join(stateDirectory, "pi");
@@ -153,7 +165,7 @@ async function run(): Promise<void> {
       "utf8",
     );
     const config = await loadTokenCliConfig(configPath);
-    const nativeCatalogSource = createCodexNativeCatalogSource({ codexHome });
+    const nativeCatalogSource = createCodexNativeCatalogSource({ codexHome: root });
     const piIds = new Set(
       (builtinProviders().find((builtin) => builtin.id === PROVIDER_ID)?.getModels() ?? [])
         .map((model) => model.id),
@@ -176,12 +188,20 @@ async function run(): Promise<void> {
       providerId: PROVIDER_ID,
       modelId: laneProbeModel,
     });
-    composition = await nativeCatalogSource.withSnapshot(nativeSnapshot, () => createConfiguredTokenDataPlane({
+    const bundled = await loadBundledProviderConfigurations(join(stateDirectory, "commandcode-models.json"));
+    const providerRuntime = await nativeCatalogSource.withSnapshot(nativeSnapshot, () => createProviderRuntime({
+      piDirectory, modelsJsonPath: config.pi.modelsJson, codexHome: root,
+      bundledProviderConfigurations: bundled.configurations, userProviderPackages: config.providerPackages,
+      fetch: globalThis.fetch, nativeCatalogSource,
+      externalCredentialSources: { [PROVIDER_ID]: externalSource },
+    }));
+    composition = await createConfiguredTokenDataPlane({
       config,
       fetch: globalThis.fetch,
       nativeCatalogSource,
+      providerRuntime,
       publicModelAuthority,
-    }));
+    });
     await reconcileOnlinePublicModels(
       publicModelAuthority,
       composition.catalog.models,
@@ -213,7 +233,7 @@ async function run(): Promise<void> {
       assert.ok(servedIds.has(id), `served catalog must keep Pi model ${id}`);
     }
 
-    const usage = createProviderUsageAuthority({
+    usage = createProviderUsageAuthority({
       models: composition.catalog.models,
       binding: composition.providerAuthBindings,
       probes: createBuiltInProviderUsageProbes(globalThis.fetch),
@@ -233,7 +253,7 @@ async function run(): Promise<void> {
     const semanticMessages = await probeSemanticMessages(server.origin, laneAlias);
     // A documented entitlement rejection records incomplete coverage. It
     // cannot certify either lane or produce a passing suite.
-    const credentialAfterProbes = await readCodexExternalAuth(authPath);
+    const credentialAfterProbes = await externalSource.read();
     const credentialStayedUsable = credentialAfterProbes.state === "ok";
     // A rejected probe must never push the shared credential into a terminal
     // usage state (plan section 6 evidence rules).
@@ -261,30 +281,15 @@ async function run(): Promise<void> {
     assert.equal(delegationMechanics.outcome, "verification_failed:revision_unchanged",
       "the synthetic delegation must complete the handshake and fail closed on unchanged credentials");
 
-    const before = await readCodexExternalAuth(authPath);
-    assert.equal(before.state, "ok");
-    let rotation: "observed" | "not_required" | "delegation_failed" = "not_required";
-    if (before.state === "ok" && needsCodexRefresh(before, Date.now())) {
-      const source = createExternalCredentialSource({
-        authPath,
-        refresher: createCodexAppServerRefresher({ codexHome }),
-      });
-      const resolution = await source.resolve();
-      if (resolution.state !== "ok") {
-        rotation = "delegation_failed";
-      } else {
-        const after = await readCodexExternalAuth(authPath);
-        assert.equal(after.state, "ok");
-        if (after.state === "ok") {
-          assert.notEqual(
-            after.tokenRevision,
-            before.tokenRevision,
-            "an allowed Codex refresh must advance the document revision",
-          );
-          rotation = "observed";
-        }
-      }
-    }
+    const final = await externalSource.read();
+    assert.equal(final.state, "ok", "credential must remain readable after every consumer");
+    assert.ok(final.state === "ok");
+    assert.equal(final.canonicalPath, initial.canonicalPath);
+    assert.equal(final.identityKey, initial.identityKey);
+    assert.ok(sourceCalls.resolutions >= 4, "usage and both lanes must resolve the same injected source");
+    const authAfter = await stat(authPath);
+    const rotation = sourceCalls.refreshedResolutions > 0 ? "observed" : "not_required";
+    if (rotation === "observed") assert.notEqual(final.tokenRevision, initial.tokenRevision);
 
     const gate = codexOnlineGate({ usage: usageResult.refresh.outcome, native: nativeResponses,
       semantic: semanticMessages, rotation, usable: credentialStayedUsable, nonTerminal: credentialStayedNonTerminal });
@@ -306,13 +311,23 @@ async function run(): Promise<void> {
       credentialStayedUsable,
       credentialStayedNonTerminal,
       delegationMechanics,
+      credentialBoundary: { kind: "external", authType: externalSource.authType, ...sourceCalls,
+        identityOnlyReads: true, canonicalPathStayedSame: true },
+      authFile: { contentUnchanged: final.tokenRevision === initial.tokenRevision,
+        mtimeUnchanged: authAfter.mtimeMs === authBefore.mtimeMs,
+        sizeBefore: authBefore.size, sizeAfter: authAfter.size,
+        sha256Before: initial.tokenRevision, sha256After: final.tokenRevision },
+      testState: { temporaryCodexHome: true, copiedAuth: false },
     })}\n`);
   } finally {
+    await usage?.close().catch(() => undefined);
     await server?.close().catch(() => undefined);
     await composition?.close().catch(() => undefined);
     // This dedicated probe process owns all its Pi sessions. The public
     // adapter caches WebSockets for reuse; release them before process exit.
     closeOpenAICodexWebSocketSessions();
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
     await rm(root, { recursive: true, force: true });
   }
 }

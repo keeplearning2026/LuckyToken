@@ -293,6 +293,32 @@ test("both CommandCode integrations are bundled product Providers", async () => 
   );
 });
 
+test("the DeepSeek Responses integration is a bundled product Provider", async () => {
+  const bundled = await readFile(
+    path.join(repositoryRoot, "src", "providers", "bundled.ts"),
+    "utf8",
+  );
+  assert.match(
+    bundled,
+    /@token\/provider-deepseek-response/u,
+    "bundled metadata must carry the DeepSeek Responses package specifier",
+  );
+  assert.match(
+    bundled,
+    /providerId:\s*"deepseek-response"/u,
+    "bundled metadata must reserve the deepseek-response Provider id",
+  );
+  const assemble = await readFile(
+    path.join(repositoryRoot, "scripts", "assemble-release-backend.mjs"),
+    "utf8",
+  );
+  assert.match(
+    assemble,
+    /provider-deepseek-response/u,
+    "release assembly must pack the bundled DeepSeek Responses package",
+  );
+});
+
 test("the packaged Electron activation journey is a release blocker", async () => {
   const rootManifest = JSON.parse(
     await readFile(path.join(repositoryRoot, "package.json"), "utf8"),

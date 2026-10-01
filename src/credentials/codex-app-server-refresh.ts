@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
+import { createKeyedSingleFlight } from "./keyed-single-flight.js";
 
 import {
   codexCliInvocation,
@@ -288,7 +289,7 @@ export function createCodexAppServerRefresher(
         windowsVerbatimArguments: undefined,
       }) as ChildProcessWithoutNullStreams);
 
-  const inflight = new Map<string, Promise<CodexRefreshDelegationOutcome>>();
+  const inflight = createKeyedSingleFlight<CodexRefreshDelegationOutcome>();
 
   const run = async (): Promise<CodexRefreshDelegationOutcome> => {
     const commands = await discover().catch(() => Object.freeze([]));
@@ -317,42 +318,18 @@ export function createCodexAppServerRefresher(
 
   return Object.freeze({
     inflightCount(): number {
-      return inflight.size;
+      return inflight.size();
     },
     async refresh(input: {
       readonly canonicalPath: string;
       readonly signal?: AbortSignal;
     }): Promise<CodexRefreshDelegationOutcome> {
-      if (input.signal?.aborted === true) {
-        return Object.freeze({ outcome: "unavailable", reason: "timeout" });
+      try {
+        return await inflight.run(input.canonicalPath, run, input.signal);
+      } catch {
+        return Object.freeze({ outcome: "unavailable",
+          reason: input.signal?.aborted === true ? "timeout" : "spawn_failed" });
       }
-      let shared = inflight.get(input.canonicalPath);
-      if (shared === undefined) {
-        shared = run().finally(() => {
-          if (inflight.get(input.canonicalPath) === shared) {
-            inflight.delete(input.canonicalPath);
-          }
-        });
-        inflight.set(input.canonicalPath, shared);
-      }
-      if (input.signal === undefined) return shared;
-      const signal = input.signal;
-      const pending = shared;
-      return new Promise<CodexRefreshDelegationOutcome>((resolveWait) => {
-        let settled = false;
-        const finish = (value: CodexRefreshDelegationOutcome): void => {
-          if (settled) return;
-          settled = true;
-          signal.removeEventListener("abort", onAbort);
-          resolveWait(value);
-        };
-        const onAbort = (): void =>
-          finish(Object.freeze({ outcome: "unavailable", reason: "timeout" }));
-        signal.addEventListener("abort", onAbort, { once: true });
-        void pending.then(finish, () =>
-          finish(Object.freeze({ outcome: "unavailable", reason: "spawn_failed" })),
-        );
-      });
     },
   });
 }

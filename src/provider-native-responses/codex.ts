@@ -2,7 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { arch, platform, release } from "node:os";
 import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
 
-import { resolveCodexAccountIdentity } from "../credentials/external-auth.js";
+import { resolveCodexAccountIdentity } from "../credentials/codex-auth.js";
 import { resolveRequestModel } from "../providers/request-composition.js";
 import {
   applyHeaders,

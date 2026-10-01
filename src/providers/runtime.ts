@@ -41,10 +41,10 @@ import type {
 } from "../credentials/profile-contract.js";
 import { createProviderCredentialProfiles } from "../credentials/profile-authority.js";
 import { createCodexAppServerRefresher } from "../credentials/codex-app-server-refresh.js";
-import { codexExternalAuthPath } from "../credentials/external-auth.js";
-import {
-  createExternalCredentialSource,
-  type ExternalCredentialSource,
+import { createCodexExternalCredentialSource } from "../credentials/codex-external-credential-source.js";
+import { codexExternalAuthPath } from "../credentials/codex-auth.js";
+import type {
+  ExternalCredentialSource,
 } from "../credentials/external-credential-source.js";
 import {
   createFileProviderCredentialRecordStore,
@@ -137,8 +137,9 @@ export interface CreateProviderRuntimeOptions {
   /** Shared Codex native acquisition. When present, one snapshot generation
    * feeds the automatic `openai-codex` model overlay. */
   readonly nativeCatalogSource?: CodexNativeCatalogSource;
-  /** Test/composition seam for the external credential boundary. */
-  readonly externalCredentialSource?: ExternalCredentialSource;
+  /** Explicit provider-owned file sources. The Codex adapter is supplied by
+   * default; callers can provide other adapters or replace it at composition. */
+  readonly externalCredentialSources?: Readonly<Record<string, ExternalCredentialSource>>;
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -217,13 +218,15 @@ export async function createProviderRuntime(
   const now = options.now ?? Date.now;
   const createUuid = options.createUuid ?? randomUUID;
   const codexHome = options.codexHome ?? resolveCodexHome();
-  const externalSource =
-    options.externalCredentialSource ??
-    createExternalCredentialSource({
-      authPath: codexExternalAuthPath(codexHome),
-      refresher: createCodexAppServerRefresher({ codexHome }),
-      now,
-    });
+  const externalSources = {
+    "openai-codex": options.externalCredentialSources?.["openai-codex"] ??
+      createCodexExternalCredentialSource({
+        authPath: codexExternalAuthPath(codexHome),
+        refresher: createCodexAppServerRefresher({ codexHome }),
+        now,
+      }),
+    ...options.externalCredentialSources,
+  };
   const recordStore =
     options.credentialRecordStore ??
     createFileProviderCredentialRecordStore({
@@ -239,7 +242,7 @@ export async function createProviderRuntime(
     providers: () => currentProviders(),
     createId: createUuid,
     now,
-    externalSource,
+    externalSources,
     ambientStatus: (providerId) =>
       modelsJson?.providers[providerId]?.apiKey === undefined
         ? "unknown"

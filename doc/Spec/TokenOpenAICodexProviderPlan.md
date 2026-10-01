@@ -830,7 +830,7 @@ Merge points:
 
 Implemented modules:
 
-- Credentials — `src/credentials/external-auth.ts` (Codex ChatGPT payload
+- Credentials — `src/credentials/codex-auth.ts` (Codex ChatGPT payload
   parser, claim-intersection contract, five-minute/eight-day freshness trigger,
   content-hash `tokenRevision`), `src/credentials/codex-app-server-refresh.ts`
   (bounded one-shot app-server handshake, shared single-flight keyed by

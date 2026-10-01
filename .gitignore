@@ -8,6 +8,7 @@ packages/desktop-shell/.electron-out/
 packages/desktop-shell/out/
 CommandcodeAPIKey.txt
 OpenCodeAPIkey.txt
+deepseekAPIkey.txt
 .Token/
 **/auth.json
 .online-artifacts/
