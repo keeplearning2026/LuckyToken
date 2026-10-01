@@ -1086,8 +1086,168 @@ describe("Providers Profile product slice", () => {
 
     const status = container.querySelector('[aria-label="Codex login"]');
     expect(status).not.toBeNull();
+    expect(container.textContent).toContain("Codex login");
     expect(container.textContent).not.toContain("Not connected");
     expect(container.querySelector(".status-dot.good")).not.toBeNull();
+  });
+
+  it("groups a verified external Codex login under Connected", async () => {
+    await render({
+      profiles: externalConnectedProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: { providers: [{ providerId: "aws-provider", state: "unobserved" }] },
+      }),
+    });
+
+    const groups = [...container.querySelectorAll(".provider-group")];
+    const connected = groups.find(
+      (group) =>
+        group.querySelector(".provider-group-title")?.textContent === "Connected",
+    );
+    expect(connected).toBeDefined();
+    expect(connected?.textContent).toContain("AWS Provider");
+    expect(
+      groups.some(
+        (group) =>
+          group.querySelector(".provider-group-title")?.textContent === "Available",
+      ),
+    ).toBe(false);
+  });
+
+  it("lists a verified external Codex login as a read-only credential source", async () => {
+    await render({
+      profiles: externalConnectedProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: { providers: [{ providerId: "aws-provider", state: "unobserved" }] },
+      }),
+    });
+
+    await clickAria("Manage AWS Provider credentials");
+
+    const dialog = container.querySelector(
+      '[role="dialog"][aria-label="AWS Provider profiles"]',
+    );
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain("AWS Provider · 1 profile");
+    expect(dialog?.textContent).toContain("Codex login");
+    expect(dialog?.textContent).toContain("External · read-only · connected");
+    expect(dialog?.textContent).toContain(
+      "Codex login is connected and refreshed in place by Codex",
+    );
+    expect(dialog?.querySelector('[aria-label^="More actions for"]')).toBeNull();
+    expect(dialog?.querySelector('input[type="radio"]')).toBeNull();
+  });
+
+  it("keeps an absent external login out of Connected and the Profile list", async () => {
+    const connected = externalConnectedProfiles();
+    await render({
+      profiles: {
+        ...connected,
+        state: {
+          providers: connected.state.providers.map((provider) => ({
+            ...provider,
+            ambient: {
+              kind: "external" as const,
+              status: "unknown" as const,
+              displayName: "Codex login" as const,
+              message:
+                "External credentials are not available; configure them through their source owner",
+            },
+          })),
+        },
+      },
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: { providers: [{ providerId: "aws-provider", state: "unobserved" }] },
+      }),
+    });
+
+    expect(
+      container.querySelector('button[aria-label="Manage AWS Provider credentials"]'),
+    ).toBeNull();
+    expect(container.querySelector('[aria-label="Codex login"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Not connected"]')).not.toBeNull();
+    const groups = [...container.querySelectorAll(".provider-group")];
+    expect(
+      groups.some(
+        (group) =>
+          group.querySelector(".provider-group-title")?.textContent === "Connected",
+      ),
+    ).toBe(false);
+  });
+
+  it("counts a present but unreadable external login as a Profile needing attention", async () => {
+    const connected = externalConnectedProfiles();
+    await render({
+      profiles: {
+        ...connected,
+        state: {
+          providers: connected.state.providers.map((provider) => ({
+            ...provider,
+            ambient: {
+              kind: "external" as const,
+              status: "configured" as const,
+              displayName: "Codex login" as const,
+              message:
+                "External credentials are present but temporarily unreadable; retry or update through their source owner",
+            },
+          })),
+        },
+      },
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: { providers: [{ providerId: "aws-provider", state: "unobserved" }] },
+      }),
+    });
+
+    const groups = [...container.querySelectorAll(".provider-group")];
+    expect(
+      groups.some(
+        (group) =>
+          group.querySelector(".provider-group-title")?.textContent === "Connected",
+      ),
+    ).toBe(false);
+    expect(
+      container.querySelector('[aria-label="Codex login needs attention"]'),
+    ).not.toBeNull();
+
+    await clickAria("Manage AWS Provider credentials");
+
+    const dialog = container.querySelector(
+      '[role="dialog"][aria-label="AWS Provider profiles"]',
+    );
+    expect(dialog?.textContent).toContain("AWS Provider · 1 profile");
+    expect(dialog?.textContent).toContain("External · read-only · configured");
+    expect(dialog?.querySelector('input[type="radio"]')).toBeNull();
+  });
+
+  it("keeps publication available for a verified external Codex login", async () => {
+    const models = publicModels();
+    await render({
+      profiles: externalConnectedProfiles(),
+      executePublicModels: async () => ({
+        ...models,
+        state: {
+          ...models.state,
+          providers: models.state.providers.map((provider) => ({
+            ...provider,
+            on: false,
+          })),
+        },
+      }),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: { providers: [{ providerId: "aws-provider", state: "unobserved" }] },
+      }),
+    });
+
+    const publish = container.querySelector(
+      'button[aria-label="Publish AWS Provider"]',
+    );
+    expect(publish).not.toBeNull();
+    expect(publish?.hasAttribute("disabled")).toBe(false);
   });
 
   it("hides unavailable usage for a connected account type", async () => {

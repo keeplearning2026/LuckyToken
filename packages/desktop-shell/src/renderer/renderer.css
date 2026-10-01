@@ -444,6 +444,8 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .model-card-title > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .secondary-card-meta { min-width: 0; display: flex; align-items: center; gap: 7px; overflow: hidden; color: var(--text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .secondary-card-meta .status-dot { width: 8px; height: 8px; }
+.external-source-card { grid-template-columns: 34px minmax(0, 1fr); }
+.external-source-mark { align-self: stretch; display: grid; place-items: center; color: var(--text-tertiary); }
 .profile-active-choice { display: grid; place-items: center; width: 34px; height: 34px; }
 .profile-active-choice input { width: 20px; height: 20px; margin: 0; accent-color: var(--green); }
 .profile-menu-wrap { display: grid; place-items: center; }

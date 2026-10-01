@@ -80,6 +80,61 @@ describe("Provider usage presentation", () => {
     });
   });
 
+  it("names the external source from the Backend-projected label in failure prompts", () => {
+    expect(
+      projectProviderCardUsage(
+        {
+          providerId: "openai-codex",
+          state: "unavailable",
+          reason: "terminal",
+        },
+        0,
+        { externalSource: { label: "Codex login" } },
+      ),
+    ).toMatchObject({
+      status:
+        "Codex login was rejected. Refresh it through its source, then try again.",
+      refreshable: true,
+    });
+
+    expect(
+      providerUsageRefreshNotice(
+        {
+          providerId: "openai-codex",
+          outcome: "unavailable",
+          reason: "account_change",
+        },
+        { externalSource: { label: "Work login" } },
+      ),
+    ).toBe(
+      "Work login changed accounts. Refresh it through its source, then try again.",
+    );
+  });
+
+  it("falls back to a generic source name and keeps managed failures generic", () => {
+    expect(
+      projectProviderCardUsage(
+        {
+          providerId: "openai-codex",
+          state: "unavailable",
+          reason: "temporary",
+        },
+        0,
+        { externalSource: {} },
+      ).status,
+    ).toBe(
+      "The external sign-in is temporarily unreadable. Refresh it through its source, then try again.",
+    );
+
+    expect(
+      providerUsageRefreshNotice({
+        providerId: "openai-codex",
+        outcome: "unavailable",
+        reason: "terminal",
+      }),
+    ).toBe("Provider usage could not be refreshed.");
+  });
+
   it("groups every currency balance under one Balance label", () => {
     expect(
       projectProviderCardUsage(

@@ -23,6 +23,7 @@ import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { ProviderIcon } from "./ProviderIcon.js";
 import {
   projectProviderCardUsage,
+  type ProviderUsagePresentationOptions,
   providerUsageRefreshFailureNotice,
   providerUsageRefreshNotice,
 } from "./provider-usage-presentation.js";
@@ -86,20 +87,47 @@ function providerUsageBindingKey(provider: ProviderProfiles): string {
   ]);
 }
 
-/** Whether this Provider has any source the usage card can speak for: a
- * managed Profile, or a verified external Codex login. */
-function providerHasUsageSource(provider: ProviderProfiles | undefined): boolean {
+/** Whether this Provider has a credential source: any managed Profile, or a
+ * Backend-verified external login. Drives the Connected group and whether the
+ * usage card has a source it can speak for. */
+function providerHasCredentialSource(
+  provider: ProviderProfiles | undefined,
+): boolean {
   if (provider === undefined) return false;
   return provider.profiles.length > 0 ||
     provider.ambient?.status === "connected";
 }
 
-function providerUsesExternalUsageSource(
+/** A Profile exists only when the external source is present: verified
+ * (`connected`) or present but unreadable (`configured`). No local signal
+ * (`unknown`) leaves the Provider Not connected with no Profile. */
+function presentExternalProfile(
+  ambient: ProviderProfiles["ambient"],
+): NonNullable<ProviderProfiles["ambient"]> | undefined {
+  return ambient === undefined ||
+    ambient.displayName === undefined ||
+    ambient.status === "unknown"
+    ? undefined
+    : ambient;
+}
+
+/** Usage presentation input for the credential source serving this Provider.
+ *  The external source label stays Backend-projected; the Renderer never
+ *  derives a source name itself. */
+function providerUsagePresentationOptions(
   provider: ProviderProfiles | undefined,
-): boolean {
-  return provider !== undefined &&
-    provider.profiles.length === 0 &&
-    provider.ambient?.status === "connected";
+): ProviderUsagePresentationOptions {
+  if (
+    provider === undefined ||
+    provider.profiles.length > 0 ||
+    provider.ambient?.status !== "connected"
+  ) {
+    return Object.freeze({});
+  }
+  const label = provider.ambient.displayName;
+  return Object.freeze({
+    externalSource: Object.freeze(label === undefined ? {} : { label }),
+  });
 }
 
 function modelNameFromInternalAlias(
@@ -689,11 +717,10 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           [providerId]: row,
         }));
       }
-      const refreshNotice = providerUsageRefreshNotice(result.refresh, {
-        externalSource: providerUsesExternalUsageSource(
-          profileByProvider.get(providerId),
-        ),
-      });
+      const refreshNotice = providerUsageRefreshNotice(
+        result.refresh,
+        providerUsagePresentationOptions(profileByProvider.get(providerId)),
+      );
       if (refreshNotice !== undefined) setNotice(refreshNotice);
     } catch {
       if ((usageEpochByProvider.current.get(providerId) ?? 0) === expectedEpoch) {
@@ -1051,17 +1078,13 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
   const favoriteFirst = (left: ProviderOption, right: ProviderOption): number =>
     Number(publicProviderById.get(right.providerId)?.favorite ?? false) -
     Number(publicProviderById.get(left.providerId)?.favorite ?? false);
+  const hasCredentialSource = (provider: ProviderOption): boolean =>
+    providerHasCredentialSource(profileByProvider.get(provider.providerId));
   const connected = visible
-    .filter(
-      (provider) =>
-        (profileByProvider.get(provider.providerId)?.profiles.length ?? 0) > 0,
-    )
+    .filter(hasCredentialSource)
     .sort(favoriteFirst);
   const available = visible
-    .filter(
-      (provider) =>
-        (profileByProvider.get(provider.providerId)?.profiles.length ?? 0) === 0,
-    )
+    .filter((provider) => !hasCredentialSource(provider))
     .sort(favoriteFirst);
 
   const selectedModelsProvider =
@@ -1076,6 +1099,14 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     profilesProviderId === undefined
       ? undefined
       : profileByProvider.get(profilesProviderId);
+  // An externally owned login is a Profile in the product presentation: it is
+  // counted and listed, but stays read-only because Token does not own it.
+  const selectedExternalSource = presentExternalProfile(
+    selectedProfilesState?.ambient,
+  );
+  const selectedProfilesCount =
+    (selectedProfilesState?.profiles.length ?? 0) +
+    (selectedExternalSource === undefined ? 0 : 1);
   const profileActions =
     profileActionsId === undefined
       ? undefined
@@ -1163,40 +1194,68 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       catalogFailed ||
       managed?.recordError !== undefined ||
       managed?.implementationAvailable === false;
-    // A verified external Codex login is a connected source even though it has
-    // no managed Profile. The Backend projects the bounded label; the
-    // Renderer never derives a source name itself.
-    const externalLoginLabel =
-      (managed?.profiles.length ?? 0) === 0 &&
-      managed?.ambient?.status === "connected"
-        ? managed.ambient.displayName
-        : undefined;
+    const hasManagedProfiles = (managed?.profiles.length ?? 0) > 0;
+    // The Backend projects every externally owned source through the same
+    // bounded ambient shape; the Renderer never derives or names one itself.
+    const externalSource = hasManagedProfiles ? undefined : managed?.ambient;
+    const externalProfile = presentExternalProfile(externalSource);
+    const externalSourceLabel = externalProfile?.displayName;
+    const externalConnected =
+      externalProfile?.status === "connected" && externalSourceLabel !== undefined;
+    const externalStatusLabel =
+      externalSourceLabel === undefined
+        ? undefined
+        : externalConnected
+          ? externalSourceLabel
+          : `${externalSourceLabel} needs attention`;
     const statusTone = hasError
       ? "error"
       : active?.health === "ready"
         ? "good"
-        : externalLoginLabel !== undefined
+        : externalConnected
           ? "good"
-          : active?.health === "reconnect_required"
-          ? "error"
-          : (managed?.profiles.length ?? 0) > 0
+          : externalSourceLabel !== undefined
             ? "warning"
-            : "neutral";
+            : active?.health === "reconnect_required"
+              ? "error"
+              : hasManagedProfiles
+                ? "warning"
+                : "neutral";
     const statusLabel = hasError
       ? "Provider error"
       : active?.health === "ready"
         ? "Provider available"
-        : externalLoginLabel !== undefined
-          ? externalLoginLabel
-          : active?.health === "reconnect_required"
+        : externalStatusLabel ??
+          (active?.health === "reconnect_required"
             ? "Reconnect required"
-            : (managed?.profiles.length ?? 0) > 0
+            : hasManagedProfiles
               ? "Select or verify a Profile"
-              : "Not connected";
+              : "Not connected");
+    // One card row for every credential source: a managed Profile and a
+    // verified external login differ only in label, description and title.
+    const credentialSummary = hasManagedProfiles
+      ? {
+          label: active?.displayName ?? "Select a Profile",
+          actionLabel: `Manage ${provider.name} profiles`,
+          description: active === undefined
+            ? `Select an active Profile. ${statusLabel}`
+            : `Active Profile: ${active.displayName}. ${statusLabel}`,
+          title: active === undefined
+            ? "Select an active Profile"
+            : `Active Profile: ${active.displayName}`,
+        }
+      : externalSourceLabel === undefined
+        ? undefined
+        : {
+            label: externalSourceLabel,
+            actionLabel: `Manage ${provider.name} credentials`,
+            description: `External Profile: ${externalSourceLabel}. ${statusLabel}`,
+            title: "Manage credentials",
+          };
     const usagePresentation = projectProviderCardUsage(
       providerUsageById[provider.providerId],
       Date.now(),
-      { externalSource: providerUsesExternalUsageSource(managed) },
+      providerUsagePresentationOptions(managed),
     );
     const usageText = [
       ...usagePresentation.primary,
@@ -1207,7 +1266,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     // The card is shown whenever the Provider has a usage source (a managed
     // Profile or a verified external Codex login) and something to say: the
     // WHAM windows, the "not refreshed" cue, or the bounded external prompt.
-    const showUsage = providerHasUsageSource(managed) &&
+    const showUsage = providerHasCredentialSource(managed) &&
       (usagePresentation.primary.length > 0 ||
         usagePresentation.secondary.length > 0 ||
         usagePresentation.status !== undefined);
@@ -1243,7 +1302,9 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               aria-pressed={providerOn}
               disabled={
                 publicProvider === undefined ||
-                (!providerOn && active === undefined)
+                (!providerOn &&
+                  active === undefined &&
+                  !externalConnected)
               }
               onClick={() => void setProviderOn(provider.providerId, !providerOn)}
               title="Publish this Provider in model discovery."
@@ -1253,40 +1314,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           </div>
         </div>
 
-        {(managed?.profiles.length ?? 0) > 0 ? (
-          <button
-            type="button"
-            className="provider-profile-summary"
-            aria-label={`Manage ${provider.name} profiles`}
-            aria-description={active === undefined
-              ? `Select an active Profile. ${statusLabel}`
-              : `Active Profile: ${active.displayName}. ${statusLabel}`}
-            title={active === undefined ? "Select an active Profile" : `Active Profile: ${active.displayName}`}
-            onClick={() => {
-              setProfileActionsId(undefined);
-              setProfilesProviderId(provider.providerId);
-            }}
-          >
-            <span
-              className={`status-dot ${statusTone}`}
-              role="img"
-              aria-label={statusLabel}
-              title={statusLabel}
-            />
-            <span className="provider-profile-name">
-              {active?.displayName ?? "Select a Profile"}
-            </span>
-            <span aria-hidden="true" className="metric-separator">·</span>
-            <span
-              className="provider-model-ratio"
-              aria-label={`${publishedModels} published, ${availableModels} currently available`}
-              title={`${publishedModels} published · ${availableModels} currently available`}
-            >
-              {publishedModels}/{availableModels}
-            </span>
-            <ChevronRight size={18} aria-hidden="true" />
-          </button>
-        ) : (
+        {credentialSummary === undefined ? (
           <div className="provider-metrics">
             <span
               className={`status-dot ${statusTone}`}
@@ -1302,6 +1330,35 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               {publishedModels}/{availableModels}
             </span>
           </div>
+        ) : (
+          <button
+            type="button"
+            className="provider-profile-summary"
+            aria-label={credentialSummary.actionLabel}
+            aria-description={credentialSummary.description}
+            title={credentialSummary.title}
+            onClick={() => {
+              setProfileActionsId(undefined);
+              setProfilesProviderId(provider.providerId);
+            }}
+          >
+            <span
+              className={`status-dot ${statusTone}`}
+              role="img"
+              aria-label={statusLabel}
+              title={statusLabel}
+            />
+            <span className="provider-profile-name">{credentialSummary.label}</span>
+            <span aria-hidden="true" className="metric-separator">·</span>
+            <span
+              className="provider-model-ratio"
+              aria-label={`${publishedModels} published, ${availableModels} currently available`}
+              title={`${publishedModels} published · ${availableModels} currently available`}
+            >
+              {publishedModels}/{availableModels}
+            </span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
         )}
 
         {showUsage ? <div
@@ -1550,8 +1607,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               <div>
                 <h3>Profiles</h3>
                 <p>
-                  {selectedProfilesProvider.name} · {selectedProfilesState.profiles.length}{" "}
-                  {selectedProfilesState.profiles.length === 1 ? "profile" : "profiles"}
+                  {selectedProfilesProvider.name} · {selectedProfilesCount}{" "}
+                  {selectedProfilesCount === 1 ? "profile" : "profiles"}
                 </p>
               </div>
               <button
@@ -1569,7 +1626,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
             </div>
 
             <div className="secondary-card-modal-body">
-              {selectedProfilesState.profiles.length === 0 ? (
+              {selectedProfilesState.profiles.length === 0 &&
+              selectedExternalSource === undefined ? (
                 <p>No Profiles have been added to this Provider.</p>
               ) : (
                 <ul className="secondary-card-list profile-card-list">
@@ -1754,6 +1812,34 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                         </li>
                       );
                     })}
+                  {selectedExternalSource === undefined ? null : (
+                    <li className="secondary-card external-source-card">
+                      <span className="external-source-mark" aria-hidden="true">
+                        <UserRoundCheck size={20} />
+                      </span>
+                      <div className="secondary-card-copy">
+                        <strong>{selectedExternalSource.displayName}</strong>
+                        <span className="secondary-card-meta">
+                          <span
+                            className={`status-dot ${
+                              selectedExternalSource.status === "connected"
+                                ? "good"
+                                : selectedExternalSource.status === "configured"
+                                  ? "warning"
+                                  : "neutral"
+                            }`}
+                            role="img"
+                            aria-label={selectedExternalSource.status}
+                            title={selectedExternalSource.status}
+                          />
+                          External · read-only · {selectedExternalSource.status}
+                        </span>
+                        <span className="secondary-card-meta">
+                          {selectedExternalSource.message}
+                        </span>
+                      </div>
+                    </li>
+                  )}
                 </ul>
               )}
             </div>

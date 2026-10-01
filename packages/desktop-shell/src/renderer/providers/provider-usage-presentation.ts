@@ -27,12 +27,16 @@ export interface ProviderCardUsagePresentation {
 }
 
 export interface ProviderUsagePresentationOptions {
-  /** True when this Provider is served by the verified external Codex login
-   * (`ambient.status === "connected"`). The bounded unavailable/transient
-   * state then carries the "refresh through Codex" prompt; managed bindings
-   * keep their previous presentation. */
-  readonly externalSource?: boolean;
+  /** The externally owned source serving this Provider
+   * (`ambient.status === "connected"`). `label` is the Backend-projected
+   * display name when one exists; the prompt never derives a source name
+   * locally. Managed bindings keep the generic failure notice. */
+  readonly externalSource?: {
+    readonly label?: string;
+  };
 }
+
+const GENERIC_EXTERNAL_SOURCE_LABEL = "The external sign-in";
 
 export function providerUsageRefreshFailureNotice(): string {
   return "Provider usage could not be refreshed.";
@@ -41,20 +45,21 @@ export function providerUsageRefreshFailureNotice(): string {
 /** One bounded, actionable message per failure class (plan section 6). */
 function unavailableUsagePrompt(
   reason: ProviderUsageUnavailableReason,
+  sourceLabel: string,
 ): string {
   switch (reason) {
     case "terminal":
-      return "Codex sign-in was rejected. Refresh through Codex, then try again.";
+      return `${sourceLabel} was rejected. Refresh it through its source, then try again.`;
     case "account_change":
-      return "Codex sign-in changed accounts. Refresh through Codex, then try again.";
+      return `${sourceLabel} changed accounts. Refresh it through its source, then try again.`;
     case "insufficient_validity":
-      return "Codex sign-in no longer satisfies the account contract. Refresh through Codex, then try again.";
+      return `${sourceLabel} no longer satisfies the account contract. Refresh it through its source, then try again.`;
     case "temporary":
-      return "Codex sign-in is temporarily unreadable. Refresh through Codex, then try again.";
+      return `${sourceLabel} is temporarily unreadable. Refresh it through its source, then try again.`;
     case "timeout":
       return "Usage refresh timed out. Try again.";
     case "auth":
-      return "Sign in to Codex, then try again.";
+      return `${sourceLabel} is no longer valid. Sign in through its source, then try again.`;
     case "network":
     case "upstream":
       return "Usage is temporarily unavailable. Try again.";
@@ -68,9 +73,12 @@ export function providerUsageRefreshNotice(
   options: ProviderUsagePresentationOptions = {},
 ): string | undefined {
   if (refresh?.outcome === "unavailable") {
-    return options.externalSource === true
-      ? unavailableUsagePrompt(refresh.reason)
-      : providerUsageRefreshFailureNotice();
+    return options.externalSource === undefined
+      ? providerUsageRefreshFailureNotice()
+      : unavailableUsagePrompt(
+          refresh.reason,
+          options.externalSource.label ?? GENERIC_EXTERNAL_SOURCE_LABEL,
+        );
   }
   if (refresh?.outcome === "unsupported") {
     return refresh.reason === "destination"
@@ -155,9 +163,14 @@ export function projectProviderCardUsage(
     return Object.freeze({
       primary: Object.freeze([]),
       secondary: Object.freeze([]),
-      ...(options.externalSource === true
-        ? { status: unavailableUsagePrompt(provider.reason) }
-        : {}),
+      ...(options.externalSource === undefined
+        ? {}
+        : {
+            status: unavailableUsagePrompt(
+              provider.reason,
+              options.externalSource.label ?? GENERIC_EXTERNAL_SOURCE_LABEL,
+            ),
+          }),
       refreshable: true,
     });
   }
