@@ -24,6 +24,16 @@ import type {
 
 const STATE_SCHEMA = "Token-codex-integration-v4" as const;
 
+/**
+ * Current Codex CLI releases run a shared app-server daemon by default and
+ * resolve the model catalog when that daemon starts. Restarting only the TUI
+ * therefore keeps serving the previous catalog, so the notice names the
+ * refresh command. Token never restarts the daemon itself because that
+ * interrupts unrelated Codex CLI work.
+ */
+const CODEX_DAEMON_REFRESH_NOTICE =
+  'For Codex CLI, run "codex app-server daemon restart" to reload its background service.';
+
 export type CodexIntegrationObservedState =
   | "native"
   | "managed"
@@ -165,8 +175,8 @@ function integrationEffect(
   const message = projection.message ?? (
     projection.restartRequired
       ? restoring
-        ? "Codex configuration restored. Restart Codex to apply the change."
-        : "Codex synced. Restart Codex to load the updated model catalog."
+        ? `Codex configuration restored. Restart Codex to apply the change. ${CODEX_DAEMON_REFRESH_NOTICE}`
+        : `Codex synced. Restart Codex to load the updated model catalog. ${CODEX_DAEMON_REFRESH_NOTICE}`
       : undefined
   );
   return Object.freeze({

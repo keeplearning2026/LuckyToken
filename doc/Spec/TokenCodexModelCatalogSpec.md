@@ -256,7 +256,7 @@ No hash or automatic config preimage is required by this contract.
 
 The bundled installed catalog remains the preferred source. The existing read-only `models_cache.json` fallback may preserve availability when the executable cannot be queried, but it never defines the routed parser contract. Any catalog built from the fallback must still pass the exact installed CLI preflight before injection.
 
-Token must never write or invalidate `models_cache.json` under this contract. A Codex restart is the explicit refresh mechanism.
+Token must never write or invalidate `models_cache.json` under this contract. A Codex restart is the explicit refresh mechanism. Current Codex CLI releases additionally run a shared app-server daemon by default and resolve the model catalog when that daemon starts, so restarting only the TUI keeps serving the catalog the daemon loaded earlier. Codex CLI users refresh an already-running daemon with `codex app-server daemon restart` or avoid it with `codex --no-daemon`. Token never restarts the shared daemon itself because that interrupts unrelated Codex CLI work.
 
 ### 6.2 Routed rows
 
@@ -294,7 +294,7 @@ Generation is deterministic and the Token-owned file is atomically rewritten on 
 5. Atomically publish `<CODEX_HOME>/token-model-catalog.json`.
 6. Parse the current TOML and converge the three root fields and `[features].standalone_web_search = true` with a formatting-preserving TOML patch, preserving unrelated keys, tables, comments, and line endings.
 7. Publish `config.toml` with compare-before-rename: immediately before rename, re-read the file and refuse with `conflict` if its bytes no longer match the admitted input; then read the committed file back.
-8. Report `restartRequired: true`; never claim that an already-running Codex process reloaded the catalog.
+8. Report `restartRequired: true` and include the Codex CLI background-service refresh command in the Client-owned notice, because the shared app-server daemon caches the catalog at startup. Never claim that an already-running Codex process reloaded the catalog, and never restart the shared daemon automatically.
 
 The catalog path stored in TOML must resolve exactly to the Token-owned file inside the resolved Codex home. An absolute path is used so behavior does not depend on the launching process's working directory.
 

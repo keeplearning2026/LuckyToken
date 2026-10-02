@@ -227,12 +227,14 @@ describe("Codex integration authority", () => {
       observedState: "managed",
       modelCount: 1,
       changed: true,
-      message: "Codex synced. Restart Codex to load the updated model catalog.",
+      message:
+        'Codex synced. Restart Codex to load the updated model catalog. For Codex CLI, run "codex app-server daemon restart" to reload its background service.',
     });
     expect(restored).toMatchObject({
       observedState: "native",
       modelCount: 0,
-      message: "Codex configuration restored. Restart Codex to apply the change.",
+      message:
+        'Codex configuration restored. Restart Codex to apply the change. For Codex CLI, run "codex app-server daemon restart" to reload its background service.',
     });
   });
 

@@ -506,7 +506,8 @@ describe("desktop command-router shell", () => {
                 modelCount: 1,
                 warnings: ["A malformed native Codex model entry was skipped."],
                 changed: true,
-                message: "Codex synced. Restart Codex to load the updated model catalog.",
+                message:
+                  'Codex synced. Restart Codex to load the updated model catalog. For Codex CLI, run "codex app-server daemon restart" to reload its background service.',
               },
             },
           ],
@@ -650,7 +651,7 @@ describe("desktop command-router shell", () => {
     expect(executeAgentIntegrations).toHaveBeenCalledWith({ command: "sync" });
     expect(container.querySelector('button[aria-label="Sync Agent integrations"]')?.classList.contains("dirty")).toBe(false);
     expect(container.textContent).toContain(
-      "Codex synced. Restart Codex to load the updated model catalog.",
+      'Codex synced. Restart Codex to load the updated model catalog. For Codex CLI, run "codex app-server daemon restart" to reload its background service.',
     );
     expect(container.textContent).toContain(
       "A malformed native Codex model entry was skipped.",
@@ -871,7 +872,8 @@ describe("desktop command-router shell", () => {
                 modelCount: 0,
                 warnings: [],
                 changed: true,
-                message: "Codex configuration restored. Restart Codex to apply the change.",
+                message:
+                  'Codex configuration restored. Restart Codex to apply the change. For Codex CLI, run "codex app-server daemon restart" to reload its background service.',
               },
             },
           ],
@@ -904,7 +906,7 @@ describe("desktop command-router shell", () => {
     });
 
     expect(container.textContent).toContain(
-      "Codex configuration restored. Restart Codex to apply the change.",
+      'Codex configuration restored. Restart Codex to apply the change. For Codex CLI, run "codex app-server daemon restart" to reload its background service.',
     );
   });
 });
