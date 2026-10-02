@@ -178,6 +178,11 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
         !profile.enabled
       ) {
         outcome = "invalid";
+      } else if (profile.health === "reconnect_required") {
+        // There is no usable credential to check. The binding authority would
+        // reject this Profile before running the Provider check, so report the
+        // actionable state directly instead of misclassifying it as conflict.
+        outcome = "reconnect_required";
       }
     }
 
@@ -191,13 +196,15 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
             ? "Credential Profile storage is unavailable"
             : outcome === "unavailable"
               ? "Provider credential recheck is unavailable"
-              : outcome === "conflict"
-                ? "Credential Profiles changed; re-query and retry"
-                : outcome === "unknown_profile"
-                  ? "Credential Profile is unknown"
-                  : outcome === "unknown_provider"
-                    ? "Provider is unknown"
-                    : "Only the enabled active Profile can be rechecked",
+              : outcome === "reconnect_required"
+                ? "Provider authentication must be reconnected"
+                : outcome === "conflict"
+                  ? "Credential Profiles changed; re-query and retry"
+                  : outcome === "unknown_profile"
+                    ? "Credential Profile is unknown"
+                    : outcome === "unknown_provider"
+                      ? "Provider is unknown"
+                      : "Only the enabled active Profile can be rechecked",
       });
     }
 

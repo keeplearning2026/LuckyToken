@@ -228,6 +228,20 @@ describe("shared local Codex acquisition", () => {
     expect(invalid.state.providers[0]!.profiles[0]!.health).toBe("reconnect_required");
     expect(invalid.state.providers[0]!.profiles[0]!.credentialId).not.toBe(current.credentialId);
     expect(postLogin).toHaveBeenCalledOnce();
+    const unavailable = invalid.state.providers[0]!.profiles[0]!;
+    const rechecked = await handlers.credentials({
+      command: "recheck", providerId, credentialId: unavailable.credentialId,
+      expectedRevision: invalid.state.providers[0]!.revision!,
+    });
+    expect(rechecked).toMatchObject({
+      outcome: "reconnect_required",
+      error: "Provider authentication must be reconnected",
+    });
+    expect(rechecked.state.providers[0]!.profiles[0]).toMatchObject({
+      credentialId: unavailable.credentialId,
+      health: "reconnect_required",
+    });
+    expect(recheck).toHaveBeenCalledOnce();
   }));
 
   it("does not publish an in-flight old refresh into the reconstructed Profile", async () => isolated(async (root, authPath) => {
