@@ -55,7 +55,7 @@ describe("ProviderAuthBindingAuthority", () => {
       const state = await profiles.management.query([provider.id]);
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision: state.providers[0]!.revision!,
@@ -181,7 +181,7 @@ describe("ProviderAuthBindingAuthority", () => {
 
     const login = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Managed production",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -195,7 +195,7 @@ describe("ProviderAuthBindingAuthority", () => {
 
     const managed = await profiles.binding.capture(provider.id);
     expect(managed.facts).toEqual({
-      kind: "managed",
+      kind: "managed", carrierOwner: "managed",
       providerId: provider.id,
       credentialId: "credential-managed",
       authType: "api_key",
@@ -275,7 +275,7 @@ describe("ProviderAuthBindingAuthority", () => {
     models.setProvider(provider);
     const login = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "oauth",
+      acquisitionKind: "oauth",
       displayName: "OAuth account",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -390,7 +390,7 @@ describe("ProviderAuthBindingAuthority", () => {
       models.setProvider(provider);
       const login = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "oauth",
+        acquisitionKind: "oauth",
         displayName: "Removable account",
         useNow: false,
         expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -444,7 +444,7 @@ describe("ProviderAuthBindingAuthority", () => {
     models.setProvider(provider);
     const firstLogin = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Stable identity",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -552,7 +552,7 @@ describe("ProviderAuthBindingAuthority", () => {
     models.setProvider(provider);
     const login = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "oauth",
+      acquisitionKind: "oauth",
       displayName: "Expired account",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -641,7 +641,7 @@ describe("ProviderAuthBindingAuthority", () => {
     models.setProvider(provider);
     const login = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "oauth",
+      acquisitionKind: "oauth",
       displayName: "Temporary outage",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -688,7 +688,7 @@ describe("ProviderAuthBindingAuthority", () => {
     models.setProvider(provider);
     const login = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Will be disabled",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -753,7 +753,7 @@ describe("ProviderAuthBindingAuthority", () => {
     ] as const) {
       const login = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision,
@@ -795,7 +795,7 @@ describe("ProviderAuthBindingAuthority", () => {
       outcome: "switched",
       capture: {
         facts: {
-          kind: "managed",
+          kind: "managed", carrierOwner: "managed",
           providerId: provider.id,
           credentialId: "credential-b",
           authType: "api_key",
@@ -844,7 +844,7 @@ describe("ProviderAuthBindingAuthority", () => {
       const state = (await profiles.management.query([provider.id])).providers[0]!;
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision: state.revision!,

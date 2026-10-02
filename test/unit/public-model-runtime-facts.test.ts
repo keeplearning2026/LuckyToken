@@ -37,6 +37,7 @@ function selectionProfile(
   return Object.freeze({
     credentialId: "managed-profile",
     authType: "oauth" as const,
+    acquisitionKind: "oauth" as const,
     authMethodLabel: "Fixture account",
     displayName: "Managed Profile",
     enabled: true,

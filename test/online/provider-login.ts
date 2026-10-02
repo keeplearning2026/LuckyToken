@@ -33,7 +33,7 @@ export async function loginOnlineProvider(
   }
   const binding = await input.providerAuthBindings.createLoginBinding({
     providerId: input.providerId,
-    authType: input.authType,
+    acquisitionKind: input.authType,
     displayName: input.displayName,
     useNow: true,
     expectedRevision: provider.revision ?? NO_PROVIDER_RECORD_REVISION,

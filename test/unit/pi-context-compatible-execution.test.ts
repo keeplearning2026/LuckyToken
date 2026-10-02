@@ -210,7 +210,7 @@ describe("Pi Context compatible execution", () => {
   it("runs compatibility once outside a two-attempt Profile 429 retry", async () => {
     const primary: ManagedProviderAuthBindingCapture = Object.freeze({
       facts: Object.freeze({
-        kind: "managed" as const,
+        kind: "managed" as const, carrierOwner: "managed" as const,
         providerId: "fixture-provider",
         credentialId: "primary",
         authType: "api_key" as const,

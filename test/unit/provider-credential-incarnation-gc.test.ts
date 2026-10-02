@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 import {
   createFileProviderCredentialRecordStore,
   createInMemoryProviderCredentialRecordStore,
-  credentialIncarnationReference,
+  managedCredentialReference,
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
   type PersistedProviderCredentialRecordV2,
@@ -55,7 +55,7 @@ function recordFor(input: {
       priority: 0,
       createdAt: 1,
       updatedAt: 1,
-      kind: "incarnation", incarnation: credentialIncarnationReference(
+      kind: "reference", reference: managedCredentialReference(
         providerId,
         credentialId,
         input.credentialGeneration,
@@ -322,9 +322,11 @@ describe("Provider credential orphan collection", () => {
             priority: 0,
             createdAt: 1,
             updatedAt: 1,
-            incarnation: {
-              relativePath: "../../outside-secret.json",
-              tokenRevision: "0".repeat(64),
+            kind: "reference",
+            reference: {
+              path: "../../outside-secret.json",
+              owner: "managed",
+              revision: "0".repeat(64),
             },
           }],
         }),

@@ -34,6 +34,7 @@ function selectionProfile(
   return Object.freeze({
     credentialId: "managed-profile",
     authType: "oauth" as const,
+    acquisitionKind: "oauth" as const,
     authMethodLabel: "Fixture account",
     displayName: "Managed Profile",
     enabled: true,
@@ -165,6 +166,7 @@ describe("operational attention authority", () => {
         profiles: [{
           credentialId: "credential-a",
           authType: "oauth",
+          acquisitionKind: "oauth",
           authMethodLabel: "Fixture account",
           displayName: "Production",
           enabled: true,

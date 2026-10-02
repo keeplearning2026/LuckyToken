@@ -1,4 +1,4 @@
-import { readExternalCredentialFile } from "../../src/credentials/external-credential-file.js";
+import { readCredentialDocumentFile } from "../../src/credentials/credential-document.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,7 +151,7 @@ describe("Codex external auth reads", () => {
   it("distinguishes missing, invalid, unreadable, and ok", async () => {
     const root = await home();
     const authPath = join(root, "auth.json");
-    const source = { read: () => readExternalCredentialFile(authPath) };
+    const source = { read: () => readCredentialDocumentFile(authPath) };
     await expect(source.read()).resolves.toMatchObject({
       state: "missing",
     });
@@ -172,11 +172,11 @@ describe("Codex external auth reads", () => {
     const repeated = await source.read();
     expect(repeated.state).toBe("ok");
     if (repeated.state !== "ok") return;
-    expect(repeated.tokenRevision).toBe(read.tokenRevision);
+    expect(repeated.revision).toBe(read.revision);
     await writeFile(authPath, `${chatGptDocument()}\n`, "utf8");
     const changed = await source.read();
     expect(changed.state).toBe("ok");
     if (changed.state !== "ok") return;
-    expect(changed.tokenRevision).not.toBe(read.tokenRevision);
+    expect(changed.revision).not.toBe(read.revision);
   });
 });

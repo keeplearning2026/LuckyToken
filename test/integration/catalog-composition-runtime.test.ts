@@ -197,7 +197,7 @@ describe("catalog composition runtime", () => {
     });
     const login = await providerAuthBindings.createLoginBinding({
       providerId: "login-pkg",
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Login fixture",
       useNow: true,
       expectedRevision: "absent",

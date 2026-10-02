@@ -18,6 +18,7 @@ const state = {
     profiles: [{
       credentialId: "credential-a",
       authType: "api_key",
+      acquisitionKind: "api_key",
       authMethodLabel: "Fixture API key",
       displayName: "Production",
       identityHint: "•••• 1234",
@@ -63,14 +64,14 @@ describe("Credential Profile public wire", () => {
     expect(decodeProviderProfileAuthCommand({
       command: "login",
       providerId: "fixture-provider",
-      authType: "api_key",
+      acquisitionKind: "local_oauth",
       displayName: "Production",
       useNow: true,
       expectedRevision: "absent",
     })).toEqual({
       command: "login",
       providerId: "fixture-provider",
-      authType: "api_key",
+      acquisitionKind: "local_oauth",
       displayName: "Production",
       useNow: true,
       expectedRevision: "absent",
@@ -120,6 +121,21 @@ describe("Credential Profile public wire", () => {
         }],
       },
     })).toBeUndefined();
+    for (const internal of [
+      { strategyId: "codex_local" },
+      { reference: { path: "credentials/id/generation.auth.json", owner: "managed" } },
+      { path: "auth.json" },
+    ]) {
+      expect(decodeCredentialProfilesCommandResult({
+        outcome: "ok",
+        state: {
+          providers: [{
+            ...state.providers[0],
+            profiles: [{ ...state.providers[0].profiles[0], ...internal }],
+          }],
+        },
+      })).toBeUndefined();
+    }
     expect(decodeProviderProfileAuthCommandResult({
       outcome: "ok",
       state,

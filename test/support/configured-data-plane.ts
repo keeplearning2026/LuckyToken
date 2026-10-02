@@ -447,12 +447,11 @@ export async function createSeededCredentialRecordStore(
             priority: 0,
             createdAt: 1,
             updatedAt: 1,
-            ...credentialProfileCarrier(
-              entry.providerId,
+            ...credentialProfileCarrier(entry.providerId, {
               credentialId,
               credentialGeneration,
-              entry.credential,
-            ),
+              credential: entry.credential,
+            }),
           }],
         },
         value: undefined,

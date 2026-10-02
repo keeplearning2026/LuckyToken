@@ -20,7 +20,15 @@ import {
   ProviderCredentialRecordSyntaxError,
 } from "./profile-record-store.js";
 
-import { codexLocalProfileDisplayName } from "./codex-local-profile-name.js";
+import {
+  LOCAL_LOGIN_DUPLICATE_MESSAGE,
+  LOCAL_LOGIN_FAILURE_MESSAGE,
+  LocalAcquisitionError,
+  acquisitionKindOf,
+  defaultAcquisitionKind,
+  type AcquisitionKind,
+  type LocalAcquisitionStrategy,
+} from "./acquisition.js";
 
 import {
   CredentialProfileOperationError,
@@ -44,7 +52,6 @@ import {
   type ProviderAuthBindingAuthority,
   type ProviderAuthBindingCapture,
   type ProviderAuthBindingFacts,
-  type ProviderAuthBindingExternalReason,
   type ProviderCredentialStateProjection,
   type ReorderProfilesInput,
   type RemoveProfileInput,
@@ -53,35 +60,19 @@ import {
   type SetProviderSwitchPolicyInput,
   type UpdateProfileMetadataInput,
 } from "./profile-contract.js";
-import type {
-  ExternalCredentialResolution,
-  ExternalCredentialSource,
-} from "./external-credential-source.js";
-
 export { NO_PROVIDER_RECORD_REVISION } from "./profile-record-store.js";
 export * from "./profile-contract.js";
 
 interface ManagedBindingScope {
   readonly kind: "managed";
   readonly providerId: string;
+  readonly carrierOwner: "managed" | "external";
   readonly credentialId: string;
   readonly authType: AuthType;
   readonly authMethodLabel: string;
   readonly displayName: string;
   readonly credentialGeneration: string;
   readonly selectionGeneration: string;
-}
-
-interface ExternalBindingScope {
-  readonly kind: "external";
-  readonly providerId: string;
-  readonly canonicalPath: string;
-  readonly identityKey: string;
-  readonly authType: AuthType;
-  /** Revision of the credential the bound operation actually resolved.
-   * Publication guards compare against it so a late response from a
-   * superseded revision cannot publish. */
-  readonly resolved: { revision: string };
 }
 
 interface AmbientBindingScope {
@@ -92,7 +83,6 @@ interface AmbientBindingScope {
 type BindingScope =
   | CredentialLoginBinding
   | ManagedBindingScope
-  | ExternalBindingScope
   | AmbientBindingScope;
 
 /** Internal composition result. Consumers receive only `management` or
@@ -238,21 +228,20 @@ function validateCredential(credential: Credential | undefined, authType: AuthTy
 
 function projectProfile(
   profile: PersistedCredentialProfileV2,
-  runtimeHealth: CredentialHealth | undefined,
+  acquisitionKind: AcquisitionKind,
+  health: CredentialHealth,
   usage?: { readonly lastUsedAt: number; readonly lastSucceededAt?: number },
 ): CredentialProfileProjection {
   return Object.freeze({
     credentialId: profile.credentialId,
     authType: profile.authType,
+    acquisitionKind,
     authMethodLabel: profile.authMethodLabel,
     displayName: profile.displayName,
     ...(profile.note === undefined ? {} : { note: profile.note }),
     ...(profile.identityHint === undefined ? {} : { identityHint: profile.identityHint }),
     enabled: profile.enabled,
-    health: profile.enabled
-      ? (profile.kind === "unavailable" ? "reconnect_required" :
-        runtimeHealth ?? (usage?.lastSucceededAt === undefined ? "not_yet_verified" : "ready"))
-      : "disabled",
+    health: profile.enabled ? health : "disabled",
     priority: profile.priority,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
@@ -266,15 +255,14 @@ function projectProfile(
 function projectRecord(
   record: PersistedProviderCredentialRecordV2,
   implementationAvailable: boolean,
-  ambientStatus: "configured" | "unknown",
-  healthFor?: (credentialId: string) => CredentialHealth | undefined,
+  acquisitionKindFor: (profile: PersistedCredentialProfileV2) => AcquisitionKind,
+  healthFor: (profile: PersistedCredentialProfileV2) => CredentialHealth,
   usageFor?: (
     credentialId: string,
   ) => { readonly lastUsedAt: number; readonly lastSucceededAt?: number } | undefined,
-  ambientOverride?: {
+  ambient?: {
     readonly kind: "external";
-    readonly status: "connected" | "configured" | "unknown";
-    readonly displayName?: string;
+    readonly status: "configured" | "unknown";
     readonly message: string;
   },
 ): ProviderCredentialStateProjection {
@@ -287,20 +275,15 @@ function projectRecord(
       ? {}
       : { activeCredentialId: record.activeCredentialId }),
     switchPolicy: Object.freeze({ ...record.switchPolicy }),
-    ...(record.profiles.length === 0
-      ? { ambient: Object.freeze(ambientOverride ?? {
-          kind: "external" as const,
-          status: ambientStatus,
-          message: ambientStatus === "configured"
-            ? "External auth is configured and resolved when the Provider is used"
-            : "External auth is resolved only when the Provider is used",
-        }) }
+    ...(record.profiles.length === 0 && ambient !== undefined
+      ? { ambient: Object.freeze(ambient) }
       : {}),
     profiles: Object.freeze(
       record.profiles.map((profile) =>
         projectProfile(
           profile,
-          healthFor?.(profile.credentialId),
+          acquisitionKindFor(profile),
+          healthFor(profile),
           usageFor?.(profile.credentialId),
         ),
       ),
@@ -368,8 +351,8 @@ export function createProviderCredentialProfiles(options: {
   readonly createId: () => string;
   readonly now: () => number;
   readonly ambientStatus?: (providerId: string) => "configured" | "unknown";
-  /** Explicit externally owned sources, available only without Profiles. */
-  readonly externalSources?: Readonly<Record<string, ExternalCredentialSource>>;
+  /** Closed set of Provider-registered local acquisition strategies. */
+  readonly acquisitionStrategies?: readonly LocalAcquisitionStrategy[];
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -378,11 +361,11 @@ export function createProviderCredentialProfiles(options: {
     readonly lastSucceededAt?: number;
   }[];
 }): ProviderCredentialProfilesComposition {
-  const externalSources = Object.freeze({ ...options.externalSources });
+  const acquisitionStrategies = Object.freeze([...(options.acquisitionStrategies ?? [])]);
   const scope = new AsyncLocalStorage<BindingScope>();
   const capturedScopes = new WeakMap<
     ProviderAuthBindingCapture,
-    ManagedBindingScope | ExternalBindingScope | AmbientBindingScope
+    ManagedBindingScope | AmbientBindingScope
   >();
   const runtimeHealth = new Map<
     string,
@@ -392,6 +375,10 @@ export function createProviderCredentialProfiles(options: {
       cooldownUntil?: number;
     }
   >();
+  /** Last observed reference availability, refreshed by every projection.
+   * Kept separate from `runtimeHealth` so a recovered external document
+   * clears the unavailable state without erasing Provider refresh evidence. */
+  const referenceHealth = new Map<string, "available" | "unavailable">();
 
   const healthKey = (providerId: string, credentialId: string): string =>
     `${providerId}\u0000${credentialId}`;
@@ -419,6 +406,20 @@ export function createProviderCredentialProfiles(options: {
   const providerFor = (providerId: string): Provider | undefined =>
     options.providers().find((provider) => provider.id === providerId);
 
+  const strategyFor = (
+    providerId: string,
+    strategyId: string,
+  ): LocalAcquisitionStrategy | undefined =>
+    acquisitionStrategies.find(
+      (strategy) =>
+        strategy.strategyId === strategyId && strategy.providerId === providerId,
+    );
+
+  const acquisitionKindFor = (
+    profile: PersistedCredentialProfileV2,
+  ): AcquisitionKind =>
+    acquisitionKindOf(profile.strategyId, profile.authType, acquisitionStrategies);
+
   const managedCapture = (
     record: PersistedProviderCredentialRecordV2,
     active: PersistedCredentialProfileV2,
@@ -426,6 +427,7 @@ export function createProviderCredentialProfiles(options: {
     const managedScope: ManagedBindingScope = Object.freeze({
       kind: "managed",
       providerId: record.providerId,
+      carrierOwner: active.kind === "reference" ? active.reference.owner : "managed",
       credentialId: active.credentialId,
       authType: active.authType,
       authMethodLabel: active.authMethodLabel,
@@ -440,112 +442,10 @@ export function createProviderCredentialProfiles(options: {
     return capture;
   };
 
-  const externalSourceFor = (
-    providerId: string,
-  ): ExternalCredentialSource | undefined =>
-    Object.hasOwn(externalSources, providerId) ? externalSources[providerId] : undefined;
-
-  const externalCapture = (
-    providerId: string,
-    source: ExternalCredentialSource,
-    read: Extract<
-      Awaited<ReturnType<ExternalCredentialSource["read"]>>,
-      { readonly state: "ok" }
-    >,
-  ): ProviderAuthBindingCapture => {
-    const externalScope: ExternalBindingScope = Object.freeze({
-      kind: "external",
-      providerId,
-      canonicalPath: read.canonicalPath,
-      identityKey: read.identityKey,
-      authType: source.authType,
-      resolved: { revision: read.tokenRevision },
-    });
-    const capture: ProviderAuthBindingCapture = Object.freeze({
-      facts: Object.freeze({
-        kind: "external",
-        providerId,
-        authType: source.authType,
-        authMethodLabel: source.authMethodLabel,
-        displayName: source.displayName,
-        canonicalPath: read.canonicalPath,
-        identityKey: read.identityKey,
-        tokenRevision: read.tokenRevision,
-      }),
-    });
-    capturedScopes.set(capture, externalScope);
-    return capture;
-  };
-
-  /** Resolve one request-local external credential through the freshness
-   * boundary, or fail closed. Never falls back to Pi OAuth refresh. */
-  const externalFailureReason = (
-    resolution: Extract<ExternalCredentialResolution, { readonly state: "unavailable" }>,
-  ): ProviderAuthBindingExternalReason => {
-    switch (resolution.reason) {
-      case "missing":
-      case "invalid":
-      case "unreadable":
-        return resolution.reason;
-      case "refresh_unavailable":
-        return resolution.detail === "timeout" ? "timeout" : "refresh_unavailable";
-      case "verification_failed":
-        return resolution.detail === "insufficient_validity"
-          ? "insufficient_validity"
-          : resolution.detail === "identity_changed"
-            ? "identity_changed"
-            : "verification_failed";
-    }
-  };
-
-  const resolveExternalCredential = async (
-    binding: ExternalBindingScope,
-    signal?: AbortSignal,
-  ): Promise<Credential> => {
-    const source = externalSourceFor(binding.providerId);
-    if (source === undefined) {
-      throw new ProviderAuthBindingError(
-        "external_unavailable",
-        "External Provider credentials are not configured",
-      );
-    }
-    let resolution: ExternalCredentialResolution;
-    try {
-      resolution = await source.resolve(
-        signal === undefined ? {} : { signal },
-      );
-    } catch {
-      throw new ProviderAuthBindingError(
-        "external_unavailable",
-        "External Provider credential could not be resolved",
-      );
-    }
-    if (resolution.state !== "ok") {
-      throw new ProviderAuthBindingError(
-        "external_unavailable",
-        "External Provider credential is unavailable; update it through its owner",
-        { externalReason: externalFailureReason(resolution) },
-      );
-    }
-    if (resolution.identityKey !== binding.identityKey ||
-      resolution.canonicalPath !== binding.canonicalPath ||
-      resolution.credential.type !== binding.authType) {
-      throw new ProviderAuthBindingError(
-        "stale_binding",
-        "External Provider credential identity changed since capture",
-        { externalReason: "identity_changed" },
-      );
-    }
-    const credential = resolution.credential;
-    binding.resolved.revision = resolution.tokenRevision;
-    trackCredentialSecrets(credential);
-    return credential;
-  };
-
-  /** Read every referenced incarnation document. Only referenced paths are
+  /** Read every referenced credential document. Only referenced paths are
    * read; unreferenced files are never adopted. Failures are best effort
    * because this feeds metadata secret checks and known-secret scrubbing. */
-  const loadIncarnationCredentials = async (
+  const loadReferencedCredentials = async (
     record: PersistedProviderCredentialRecordV2 | undefined,
   ): Promise<readonly Credential[]> => {
     if (record === undefined) return Object.freeze([]);
@@ -562,85 +462,110 @@ export function createProviderCredentialProfiles(options: {
           credentials.push(read.credential);
         }
       } catch {
-        // A missing/unreadable incarnation is a bounded per-Profile state.
+        // A missing/unreadable referenced document is a bounded per-Profile state.
       }
     }
     return Object.freeze(credentials);
   };
 
-  const projectProviderRecord = (
+  /** Minimum remaining OAuth validity for an externally owned document.
+   * Token never refreshes it, so a document inside Pi's own five-minute
+   * window is reported as reconnect-required instead of being used. */
+  const OAUTH_MINIMUM_VALIDITY_MS = 5 * 60_000;
+
+  const isInsufficientlyFresh = (
+    profile: PersistedCredentialProfileV2,
+    credential: Credential,
+  ): boolean =>
+    profile.kind === "reference" &&
+    profile.reference.owner === "external" &&
+    credential.type === "oauth" &&
+    credential.expires - options.now() < OAUTH_MINIMUM_VALIDITY_MS;
+
+  /** Read one referenced Profile document through the store. Never falls
+   * back to another file, another Profile or an ambient credential. */
+  const readProfileCredential = async (
+    providerId: string,
+    profile: PersistedCredentialProfileV2,
+  ): Promise<
+    | { readonly state: "ok"; readonly credential: Credential; readonly revision: string }
+    | { readonly state: "unavailable" }
+  > => {
+    if (profile.kind !== "reference") return Object.freeze({ state: "unavailable" });
+    try {
+      const read = await options.recordStore.readCredential(
+        providerId,
+        profile.credentialId,
+        profile.credentialGeneration,
+      );
+      if (read.state !== "ok" || isInsufficientlyFresh(profile, read.credential)) {
+        return Object.freeze({ state: "unavailable" });
+      }
+      trackCredentialSecrets(read.credential);
+      return Object.freeze({
+        state: "ok",
+        credential: read.credential,
+        revision: read.tokenRevision,
+      });
+    } catch {
+      return Object.freeze({ state: "unavailable" });
+    }
+  };
+
+  const projectProviderRecord = async (
     record: PersistedProviderCredentialRecordV2,
     implementationAvailable: boolean,
-    ambientOverride?: {
-      readonly kind: "external";
-      readonly status: "connected" | "configured" | "unknown";
-      readonly message: string;
-    },
-  ): ProviderCredentialStateProjection => {
+  ): Promise<ProviderCredentialStateProjection> => {
     const usage = new Map(
       (options.credentialUsage?.(
         record.profiles.map((profile) => profile.credentialId),
       ) ?? []).map((entry) => [entry.credentialId, entry] as const),
     );
+    const health = new Map<string, CredentialHealth>();
+    for (const profile of record.profiles) {
+      const runtime = projectedRuntimeHealth(record.providerId, profile.credentialId);
+      if (runtime !== undefined) {
+        health.set(profile.credentialId, runtime);
+        continue;
+      }
+      const resolved = await readProfileCredential(record.providerId, profile);
+      if (resolved.state !== "ok") {
+        referenceHealth.set(
+          healthKey(record.providerId, profile.credentialId),
+          "unavailable",
+        );
+        health.set(profile.credentialId, "reconnect_required");
+        continue;
+      }
+      referenceHealth.set(
+        healthKey(record.providerId, profile.credentialId),
+        "available",
+      );
+      health.set(
+        profile.credentialId,
+        usage.get(profile.credentialId)?.lastSucceededAt === undefined
+          ? "not_yet_verified"
+          : "ready",
+      );
+    }
+    const ambientStatus = options.ambientStatus?.(record.providerId) ?? "unknown";
     return projectRecord(
       record,
       implementationAvailable,
-      options.ambientStatus?.(record.providerId) ?? "unknown",
-      (credentialId) => projectedRuntimeHealth(record.providerId, credentialId),
+      acquisitionKindFor,
+      (profile) => health.get(profile.credentialId) ?? "not_yet_verified",
       (credentialId) => usage.get(credentialId),
-      ambientOverride,
+      record.profiles.length === 0
+        ? {
+            kind: "external" as const,
+            status: ambientStatus,
+            message:
+              ambientStatus === "configured"
+                ? "External auth is configured and resolved when the Provider is used"
+                : "External auth is resolved only when the Provider is used",
+          }
+        : undefined,
     );
-  };
-
-  /** Local, side-effect-free presentation of an externally owned source.
-   * Never contacts a Provider; it only reads the local document state. */
-  const externalStatus = async (
-    providerId: string,
-  ): Promise<
-    | {
-        readonly kind: "external";
-        readonly status: "connected" | "configured" | "unknown";
-        readonly displayName?: string;
-        readonly message: string;
-      }
-    | undefined
-  > => {
-    const source = externalSourceFor(providerId);
-    if (source === undefined) return undefined;
-    try {
-      const read = await source.read();
-      if (read.state === "ok") {
-        return Object.freeze({
-          kind: "external" as const,
-          status: "connected" as const,
-          displayName: source.displayName,
-          message: "External credentials are connected; updates are owned by their source",
-        });
-      }
-      if (read.state === "missing") {
-        return Object.freeze({
-          kind: "external" as const,
-          status: "unknown" as const,
-          displayName: source.displayName,
-          message:
-            "External credentials are not available; configure them through their source owner",
-        });
-      }
-      return Object.freeze({
-        kind: "external" as const,
-        status: "configured" as const,
-        displayName: source.displayName,
-        message:
-          "External credentials are present but temporarily unreadable; retry or update through their source owner",
-      });
-    } catch {
-      return Object.freeze({
-        kind: "external" as const,
-        status: "unknown" as const,
-        displayName: source.displayName,
-        message: "External credential state is unknown",
-      });
-    }
   };
 
   const mutateProfile = async (
@@ -700,7 +625,7 @@ export function createProviderCredentialProfiles(options: {
       }
       return Object.freeze({
         outcome: "ok",
-        provider: projectProviderRecord(
+        provider: await projectProviderRecord(
           result.record,
           providerFor(input.providerId) !== undefined,
         ),
@@ -726,9 +651,6 @@ export function createProviderCredentialProfiles(options: {
       if (binding.kind === "ambient" || binding.kind === "login") {
         return undefined;
       }
-      if (binding.kind === "external") {
-        return resolveExternalCredential(binding, operationOptions?.signal);
-      }
       let record: PersistedProviderCredentialRecordV2 | undefined;
       try {
         record = await options.recordStore.read(providerId);
@@ -752,32 +674,17 @@ export function createProviderCredentialProfiles(options: {
           "The bound Provider credential is no longer current",
         );
       }
-      // The record references the committed incarnation; only that referenced
-      // document is read. A missing or invalid document fails closed and never
-      // falls back to another file.
-      let incarnation: Awaited<
-        ReturnType<ProviderCredentialRecordStore["readCredential"]>
-      >;
-      try {
-        incarnation = await options.recordStore.readCredential(
-          providerId,
-          binding.credentialId,
-          binding.credentialGeneration,
-        );
-      } catch {
-        throw new ProviderAuthBindingError(
-          "storage_failure",
-          "Bound Provider credential document could not be read",
-        );
-      }
-      if (incarnation.state !== "ok") {
+      // The record references the committed document; only that referenced
+      // document is read. A missing, invalid or insufficiently fresh document
+      // fails closed and never falls back to another file or Profile.
+      const resolved = await readProfileCredential(providerId, profile);
+      if (resolved.state !== "ok") {
         throw new ProviderAuthBindingError(
           "stale_binding",
           "The bound Provider credential document is unavailable",
         );
       }
-      trackCredentialSecrets(incarnation.credential);
-      return structuredClone(incarnation.credential);
+      return structuredClone(resolved.credential);
     },
 
     async list(operationOptions?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
@@ -788,11 +695,6 @@ export function createProviderCredentialProfiles(options: {
       }
       if (binding.kind === "managed") {
         return Object.freeze([{ providerId: binding.providerId, type: binding.authType }]);
-      }
-      if (binding.kind === "external") {
-        return Object.freeze([
-          { providerId: binding.providerId, type: binding.authType },
-        ]);
       }
       return Object.freeze([]);
     },
@@ -811,13 +713,28 @@ export function createProviderCredentialProfiles(options: {
       if (binding.kind === "ambient") {
         throw new Error("Ambient Provider authentication is not Token-managed");
       }
-      if (binding.kind === "external") {
-        // Freshness lives in `read`; Pi's refresh callback is never executed
-        // for an externally owned document.
-        throw new ProviderAuthBindingError(
-          "external_read_only",
-          "External Provider credentials can only be updated through their source owner",
+      if (binding.kind === "managed" && binding.carrierOwner === "external") {
+        // The source owner is the only writer. Pi's refresh callback is never
+        // executed; the request continues with the owner's current document.
+        const record = await options.recordStore.read(providerId);
+        const profile = record?.profiles.find(
+          (candidate) => candidate.credentialId === binding.credentialId,
         );
+        if (profile === undefined) {
+          throw new ProviderAuthBindingError(
+            "stale_binding",
+            "The bound Provider credential is no longer current",
+          );
+        }
+        const resolved = await readProfileCredential(providerId, profile);
+        if (resolved.state !== "ok") {
+          throw new ProviderAuthBindingError(
+            "external_unavailable",
+            "External Provider credential is unavailable; update it through its owner",
+            { externalReason: "missing" },
+          );
+        }
+        return structuredClone(resolved.credential);
       }
       if (binding.kind === "managed") {
         const key = healthKey(providerId, binding.credentialId);
@@ -884,12 +801,11 @@ export function createProviderCredentialProfiles(options: {
 
       const timestamp = options.now();
       const hint = identityHint(credential);
-      const carrier = credentialProfileCarrier(
-        providerId,
-        binding.credentialId,
-        binding.credentialGeneration,
+      const carrier = credentialProfileCarrier(providerId, {
+        credentialId: binding.credentialId,
+        credentialGeneration: binding.credentialGeneration,
         credential,
-      );
+      });
       const profile: PersistedCredentialProfileV2 = {
         credentialId: binding.credentialId,
         credentialGeneration: binding.credentialGeneration,
@@ -912,7 +828,7 @@ export function createProviderCredentialProfiles(options: {
         );
       }
 
-      // Existing incarnations participate in the known-secret metadata check;
+      // Existing referenced documents participate in the known-secret metadata check;
       // the referenced documents are read before the commit (the mutation
       // callback itself is synchronous).
       let existingRecord: PersistedProviderCredentialRecordV2 | undefined;
@@ -921,7 +837,7 @@ export function createProviderCredentialProfiles(options: {
       } catch {
         existingRecord = undefined;
       }
-      const existingCredentials = await loadIncarnationCredentials(existingRecord);
+      const existingCredentials = await loadReferencedCredentials(existingRecord);
       const allCredentialsForCheck = Object.freeze([
         ...existingCredentials,
         credential,
@@ -959,8 +875,8 @@ export function createProviderCredentialProfiles(options: {
                 "Credential Profile authentication method changed",
               );
             }
-            const { kind, inline, incarnation, ...metadata } = withoutIdentityHint(target);
-            void kind; void inline; void incarnation;
+            const { kind, reference, ...metadata } = withoutIdentityHint(target);
+            void kind; void reference;
             const replacement: PersistedCredentialProfileV2 = {
               ...metadata,
               credentialGeneration: binding.credentialGeneration,
@@ -1101,26 +1017,15 @@ export function createProviderCredentialProfiles(options: {
         }
         if (record === undefined) {
           if (providerFor(providerId) !== undefined) {
-            const externalSource = externalSourceFor(providerId);
-            if (externalSource !== undefined) {
-              const status = (await externalStatus(providerId))!;
-              projections.push(Object.freeze({
-                providerId,
-                implementationAvailable: true,
-                revision: NO_PROVIDER_RECORD_REVISION,
-                ambient: status,
-                profiles: Object.freeze([]),
-              }));
-              continue;
-            }
+            const ambientStatus = options.ambientStatus?.(providerId) ?? "unknown";
             projections.push(Object.freeze({
               providerId,
               implementationAvailable: true,
               revision: NO_PROVIDER_RECORD_REVISION,
               ambient: Object.freeze({
                 kind: "external",
-                status: options.ambientStatus?.(providerId) ?? "unknown",
-                message: options.ambientStatus?.(providerId) === "configured"
+                status: ambientStatus,
+                message: ambientStatus === "configured"
                   ? "External auth is configured and resolved when the Provider is used"
                   : "External auth is resolved only when the Provider is used",
               }),
@@ -1129,13 +1034,10 @@ export function createProviderCredentialProfiles(options: {
           }
           continue;
         }
-        await loadIncarnationCredentials(record);
-        projections.push(projectProviderRecord(
+        await loadReferencedCredentials(record);
+        projections.push(await projectProviderRecord(
           record,
           providerFor(providerId) !== undefined,
-          record.profiles.length === 0
-            ? await externalStatus(providerId)
-            : undefined,
         ));
       }
       latestProjection = Object.freeze({ providers: Object.freeze(projections) });
@@ -1151,7 +1053,7 @@ export function createProviderCredentialProfiles(options: {
       }
       try {
         const secretRecord = await options.recordStore.read(input.providerId);
-        const secretCredentials = await loadIncarnationCredentials(secretRecord);
+        const secretCredentials = await loadReferencedCredentials(secretRecord);
         const result = await options.recordStore.modifyManagement(
           input.providerId,
           input.expectedRevision,
@@ -1167,10 +1069,7 @@ export function createProviderCredentialProfiles(options: {
             }
             const target = current.profiles[profileIndex]!;
             const normalizedName = input.displayName.trim();
-            const effectiveName =
-              target.acquisition === "codex_local" && normalizedName !== target.displayName
-                ? codexLocalProfileDisplayName(normalizedName)
-                : normalizedName;
+            const effectiveName = normalizedName;
             if (!validDisplayName(effectiveName)) {
               return { kind: "unchanged", value: "invalid_name" as const };
             }
@@ -1216,14 +1115,14 @@ export function createProviderCredentialProfiles(options: {
           if (result.value === "invalid_name") {
             return Object.freeze({
               outcome: "invalid",
-              error: "Profile name is too long after adding the LOCAL CODEX label",
+              error: "Profile name is outside the supported bounds",
             });
           }
           return Object.freeze({ outcome: result.value });
         }
         return Object.freeze({
           outcome: "ok",
-          provider: projectProviderRecord(
+          provider: await projectProviderRecord(
             result.record!,
             providerFor(input.providerId) !== undefined,
           ),
@@ -1364,7 +1263,7 @@ export function createProviderCredentialProfiles(options: {
         }
         return Object.freeze({
           outcome: "ok",
-          provider: projectProviderRecord(
+          provider: await projectProviderRecord(
             result.record!,
             providerFor(input.providerId) !== undefined,
           ),
@@ -1443,7 +1342,7 @@ export function createProviderCredentialProfiles(options: {
         }
         return Object.freeze({
           outcome: "ok",
-          provider: projectProviderRecord(
+          provider: await projectProviderRecord(
             result.record,
             providerFor(input.providerId) !== undefined,
           ),
@@ -1476,33 +1375,6 @@ export function createProviderCredentialProfiles(options: {
       }
 
       if (record === undefined || record.profiles.length === 0) {
-        const externalSource = externalSourceFor(providerId);
-        if (externalSource !== undefined) {
-          let read: Awaited<ReturnType<ExternalCredentialSource["read"]>>;
-          try {
-            read = await externalSource.read();
-          } catch {
-            throw new ProviderAuthBindingError(
-              "external_unavailable",
-              "External Provider credential state could not be read",
-            );
-          }
-          if (read.state === "ok") {
-            // An empty-file/invalid document may be an owner write window;
-            // it is a bounded transient state, never an ambient fallback.
-            return externalCapture(providerId, externalSource, read);
-          }
-          throw new ProviderAuthBindingError(
-            "external_unavailable",
-            read.reason,
-            {
-              externalReason:
-                read.state === "missing" || read.state === "invalid" || read.state === "unreadable"
-                  ? read.state
-                  : "verification_failed",
-            },
-          );
-        }
         const ambientScope: AmbientBindingScope = Object.freeze({
           kind: "ambient",
           providerId,
@@ -1525,7 +1397,7 @@ export function createProviderCredentialProfiles(options: {
       if (
         active === undefined ||
         !active.enabled ||
-        active.kind === "unavailable" ||
+        referenceHealth.get(healthKey(providerId, active.credentialId)) === "unavailable" ||
         activeHealth?.terminal === "reconnect_required" ||
         (activeHealth?.cooldownUntil !== undefined && activeHealth.cooldownUntil > options.now())
       ) {
@@ -1555,20 +1427,6 @@ export function createProviderCredentialProfiles(options: {
           "Provider credential state could not be read",
         );
       }
-      if (record === undefined || record.profiles.length === 0) {
-        const externalSource = externalSourceFor(input.providerId);
-        if (
-          externalSource !== undefined &&
-          input.expectedRevision === NO_PROVIDER_RECORD_REVISION
-        ) {
-          const read = await externalSource.read();
-          if (read.state === "ok") return externalCapture(input.providerId, externalSource, read);
-          throw new ProviderAuthBindingError(
-            "external_unavailable",
-            read.reason,
-          );
-        }
-      }
       if (record?.revision !== input.expectedRevision) {
         throw new ProviderAuthBindingError(
           "stale_binding",
@@ -1581,7 +1439,7 @@ export function createProviderCredentialProfiles(options: {
       if (
         active === undefined ||
         !active.enabled ||
-        active.kind === "unavailable" ||
+        referenceHealth.get(healthKey(input.providerId, active.credentialId)) === "unavailable" ||
         record.activeCredentialId !== active.credentialId
       ) {
         throw new ProviderAuthBindingError(
@@ -1600,7 +1458,21 @@ export function createProviderCredentialProfiles(options: {
           "Provider implementation is unavailable",
         );
       }
-      if (!providerSupportsLogin(provider, input.authType)) {
+      const strategy = input.acquisitionKind === "local_oauth"
+        ? acquisitionStrategies.find(
+            (candidate) => candidate.providerId === input.providerId,
+          )
+        : undefined;
+      if (input.acquisitionKind === "local_oauth" && strategy === undefined) {
+        throw new CredentialProfileOperationError(
+          "unavailable",
+          "This Provider has no local login method",
+        );
+      }
+      const authType: AuthType = strategy === undefined
+        ? input.acquisitionKind === "api_key" ? "api_key" : "oauth"
+        : strategy.authType;
+      if (strategy === undefined && !providerSupportsLogin(provider, authType)) {
         throw new CredentialProfileOperationError(
           "unavailable",
           "Provider authentication method cannot be added interactively",
@@ -1628,6 +1500,18 @@ export function createProviderCredentialProfiles(options: {
         );
       }
       if (
+        strategy !== undefined &&
+        strategy.singleton &&
+        current?.profiles.some(
+          (profile) => profile.strategyId === strategy.strategyId,
+        ) === true
+      ) {
+        throw new CredentialProfileOperationError(
+          "duplicate",
+          LOCAL_LOGIN_DUPLICATE_MESSAGE,
+        );
+      }
+      if (
         current?.profiles.some(
           (profile) =>
             profile.displayName.toLocaleLowerCase() ===
@@ -1642,8 +1526,10 @@ export function createProviderCredentialProfiles(options: {
       return Object.freeze({
         kind: "login",
         mode: "add",
+        ...(strategy === undefined ? {} : { strategyId: strategy.strategyId }),
+        acquisitionKind: strategy?.acquisitionKind ?? defaultAcquisitionKind(authType),
         providerId: input.providerId,
-        authType: input.authType,
+        authType,
         displayName: input.displayName.trim(),
         ...(input.note === undefined ? {} : { note: input.note }),
         useNow: input.useNow,
@@ -1687,7 +1573,16 @@ export function createProviderCredentialProfiles(options: {
           "Credential Profile is missing",
         );
       }
-      if (!providerSupportsLogin(provider, profile.authType)) {
+      const strategy = profile.strategyId === undefined
+        ? undefined
+        : strategyFor(input.providerId, profile.strategyId);
+      if (profile.strategyId !== undefined && strategy === undefined) {
+        throw new CredentialProfileOperationError(
+          "unavailable",
+          "The Profile acquisition method is no longer available",
+        );
+      }
+      if (strategy === undefined && !providerSupportsLogin(provider, profile.authType)) {
         throw new CredentialProfileOperationError(
           "unavailable",
           "Provider authentication method cannot be reconnected interactively",
@@ -1696,7 +1591,8 @@ export function createProviderCredentialProfiles(options: {
       return Object.freeze({
         kind: "login",
         mode: "reconnect",
-        ...(profile.acquisition === undefined ? {} : { acquisition: profile.acquisition }),
+        ...(strategy === undefined ? {} : { strategyId: strategy.strategyId }),
+        acquisitionKind: acquisitionKindFor(profile),
         providerId: input.providerId,
         authType: profile.authType,
         displayName: profile.displayName,
@@ -1706,6 +1602,233 @@ export function createProviderCredentialProfiles(options: {
         credentialId: profile.credentialId,
         credentialGeneration: options.createId(),
       });
+    },
+
+    async acquireLocal(
+      binding: CredentialLoginBinding,
+      signal?: AbortSignal,
+    ): Promise<{
+      readonly credentialId: string;
+      readonly credentialGeneration: string;
+    }> {
+      signal?.throwIfAborted();
+      if (
+        binding.acquisitionKind !== "local_oauth" ||
+        binding.strategyId === undefined
+      ) {
+        throw new CredentialProfileOperationError(
+          "invalid",
+          "Credential Profile acquisition does not match its strategy",
+        );
+      }
+      const strategy = strategyFor(binding.providerId, binding.strategyId);
+      if (strategy === undefined) {
+        throw new CredentialProfileOperationError(
+          "unavailable",
+          "The Profile acquisition method is no longer available",
+        );
+      }
+      const provider = providerFor(binding.providerId);
+      const authMethodLabel =
+        strategy.label() ??
+        (provider === undefined
+          ? undefined
+          : providerAuthLabel(provider, binding.authType));
+      if (authMethodLabel === undefined) {
+        throw new CredentialProfileOperationError(
+          "unavailable",
+          "Provider authentication method is no longer available",
+        );
+      }
+      if (!validDisplayName(binding.displayName)) {
+        throw new CredentialProfileOperationError(
+          "invalid",
+          "Profile display name is outside the supported bounds",
+        );
+      }
+
+      // The singleton check, the bounded source read and the record commit all
+      // run inside the Provider lock, so a concurrent click cannot create a
+      // second local Profile and a failed read publishes nothing.
+      const result = await options.recordStore.rebuildCredential(
+        binding.providerId,
+        binding.credentialId,
+        binding.expectedRevision,
+        async (current) => {
+          signal?.throwIfAborted();
+          if (binding.mode === "add") {
+            if (
+              strategy.singleton &&
+              current?.profiles.some(
+                (profile) => profile.strategyId === strategy.strategyId,
+              ) === true
+            ) {
+              throw new CredentialProfileOperationError(
+                "duplicate",
+                LOCAL_LOGIN_DUPLICATE_MESSAGE,
+              );
+            }
+          } else {
+            const target = current?.profiles.find(
+              (profile) => profile.credentialId === binding.credentialId,
+            );
+            if (
+              target === undefined ||
+              target.strategyId !== strategy.strategyId
+            ) {
+              throw new CredentialProfileOperationError(
+                "unknown_profile",
+                "Credential Profile is missing",
+              );
+            }
+          }
+
+          const grant = await strategy.acquire(signal);
+          if (grant === null) {
+            throw new LocalAcquisitionError(LOCAL_LOGIN_FAILURE_MESSAGE);
+          }
+          const timestamp = options.now();
+          const hint = identityHint(grant.credential);
+          const carrier = credentialProfileCarrier(binding.providerId, {
+            credentialId: binding.credentialId,
+            credentialGeneration: binding.credentialGeneration,
+            credential: null,
+            externalReference: grant.reference,
+          });
+          const publication = {
+            credentialId: binding.credentialId,
+            credentialGeneration: binding.credentialGeneration,
+            credential: null,
+            externalReference: grant.reference,
+          };
+          const value = {
+            credentialId: binding.credentialId,
+            credentialGeneration: binding.credentialGeneration,
+          };
+
+          if (binding.mode === "reconnect") {
+            const profileIndex = current!.profiles.findIndex(
+              (profile) => profile.credentialId === binding.credentialId,
+            );
+            const target = current!.profiles[profileIndex]!;
+            const replacement: PersistedCredentialProfileV2 = {
+              credentialId: target.credentialId,
+              credentialGeneration: binding.credentialGeneration,
+              authType: target.authType,
+              authMethodLabel,
+              displayName: target.displayName,
+              ...(target.note === undefined ? {} : { note: target.note }),
+              ...(target.strategyId === undefined
+                ? {}
+                : { strategyId: target.strategyId }),
+              ...(hint === undefined ? {} : { identityHint: hint }),
+              enabled: target.enabled,
+              priority: target.priority,
+              createdAt: target.createdAt,
+              updatedAt: timestamp,
+              ...carrier,
+            };
+            const profiles = [...current!.profiles];
+            profiles[profileIndex] = replacement;
+            if (
+              metadataContainsSecret(
+                replacement.displayName,
+                replacement.note,
+                [grant.credential],
+              )
+            ) {
+              throw new CredentialProfileOperationError(
+                "invalid",
+                "Profile metadata must not contain stored credential secrets",
+              );
+            }
+            const shouldActivate =
+              binding.useNow &&
+              current!.activeCredentialId !== binding.credentialId;
+            return {
+              publication,
+              record: {
+                ...current!,
+                ...(shouldActivate
+                  ? {
+                      activeCredentialId: binding.credentialId,
+                      selectionGeneration: options.createId(),
+                    }
+                  : {}),
+                profiles,
+              },
+              value,
+            };
+          }
+
+          const profiles = [...(current?.profiles ?? [])];
+          if (
+            profiles.some(
+              (profile) =>
+                profile.displayName.toLocaleLowerCase() ===
+                binding.displayName.toLocaleLowerCase(),
+            )
+          ) {
+            throw new CredentialProfileOperationError(
+              "duplicate",
+              "A Profile with this name already exists for the Provider",
+            );
+          }
+          const profile: PersistedCredentialProfileV2 = {
+            strategyId: strategy.strategyId,
+            credentialId: binding.credentialId,
+            credentialGeneration: binding.credentialGeneration,
+            authType: binding.authType,
+            authMethodLabel,
+            displayName: binding.displayName,
+            ...(binding.note === undefined ? {} : { note: binding.note }),
+            ...(hint === undefined ? {} : { identityHint: hint }),
+            enabled: true,
+            priority: profiles.length,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            ...carrier,
+          };
+          if (
+            metadataContainsSecret(profile.displayName, profile.note, [
+              grant.credential,
+            ])
+          ) {
+            throw new CredentialProfileOperationError(
+              "invalid",
+              "Profile metadata must not contain stored credential secrets",
+            );
+          }
+          const record =
+            current === undefined
+              ? createInitialRecord({
+                  providerId: binding.providerId,
+                  selectionGeneration: options.createId(),
+                  profile,
+                })
+              : {
+                  ...current,
+                  ...(current.profiles.length === 0 || binding.useNow
+                    ? {
+                        activeCredentialId: binding.credentialId,
+                        selectionGeneration: options.createId(),
+                      }
+                    : {}),
+                  profiles: [...profiles, profile],
+                };
+          return { publication, record, value };
+        },
+      );
+      if (result.kind === "revision_conflict") {
+        throw new CredentialProfileOperationError(
+          "conflict",
+          "Credential Profile state changed; re-query and retry",
+        );
+      }
+      if (binding.mode === "reconnect") {
+        runtimeHealth.delete(healthKey(binding.providerId, binding.credentialId));
+      }
+      return result.value;
     },
 
     async advanceAfterFinal429(
@@ -1763,7 +1886,9 @@ export function createProviderCredentialProfiles(options: {
                 if (
                   profile.authType !== failed.authType ||
                   !profile.enabled ||
-                  profile.kind === "unavailable" ||
+                  referenceHealth.get(
+                    healthKey(current.providerId, profile.credentialId),
+                  ) === "unavailable" ||
                   attempted.has(profile.credentialId)
                 ) {
                   return false;
@@ -1800,6 +1925,10 @@ export function createProviderCredentialProfiles(options: {
                 outcome: "switched" as const,
                 target: {
                   providerId: current.providerId,
+                  carrierOwner:
+                    target.kind === "reference"
+                      ? target.reference.owner
+                      : "managed",
                   credentialId: target.credentialId,
                   authType: target.authType,
                   authMethodLabel: target.authMethodLabel,
@@ -1843,6 +1972,7 @@ export function createProviderCredentialProfiles(options: {
         facts: Object.freeze({
           kind: "managed",
           providerId: targetScope.providerId,
+          carrierOwner: targetScope.carrierOwner,
           credentialId: targetScope.credentialId,
           authType: targetScope.authType,
           authMethodLabel: targetScope.authMethodLabel,
@@ -1888,36 +2018,9 @@ export function createProviderCredentialProfiles(options: {
                     );
                 })()
               : current === undefined || current.profiles.length === 0;
-            if (currentMatches && captured.kind === "external") {
-              // Publication remains bound to the same external source identity while
-              // the Provider record is still external-only. The token
-              // revision must equal the revision this capture actually
-              // resolved, so a late response from a superseded revision is
-              // rejected.
-              const source = externalSourceFor(captured.providerId);
-              if (source === undefined) return false;
-              let read: Awaited<ReturnType<ExternalCredentialSource["read"]>>;
-              try {
-                read = await source.read();
-              } catch {
-                return false;
-              }
-              if (
-                read.state !== "ok" ||
-                read.identityKey !== captured.identityKey ||
-                read.canonicalPath !== captured.canonicalPath ||
-                source.authType !== captured.authType ||
-                read.tokenRevision !== captured.resolved.revision
-              ) {
-                return false;
-              }
-            }
           if (!currentMatches) return false;
           assertOwned();
-          const publicationFacts = captured.kind === "external" && capture.facts.kind === "external"
-            ? Object.freeze({ ...capture.facts, tokenRevision: captured.resolved.revision })
-            : capture.facts;
-          await publish(assertOwned, publicationFacts);
+          await publish(assertOwned, capture.facts);
           return true;
         },
       );

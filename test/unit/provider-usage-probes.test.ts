@@ -39,7 +39,7 @@ function context(
   return Object.freeze({
     providerId,
     effectiveBaseUrl,
-    binding: Object.freeze({ kind: "managed" as const, authType }),
+    binding: Object.freeze({ kind: "managed" as const, carrierOwner: "managed" as const, authType }),
   });
 }
 

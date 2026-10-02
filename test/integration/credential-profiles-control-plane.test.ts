@@ -79,10 +79,13 @@ describe("Credential Profiles Control Plane", () => {
           providerId: provider.id,
           name: "Fixture Provider",
           source: "pi_builtin",
-          authMethods: [{
+          acquisitionOptions: [{
+            kind: "api_key",
+            label: "Fixture API key",
+            icon: "key",
             authType: "api_key",
-            authMethodLabel: "Fixture API key",
             interactive: true,
+            state: "available",
           }],
         }],
       },
@@ -91,7 +94,7 @@ describe("Credential Profiles Control Plane", () => {
     const first = await handlers.auth({
       command: "login",
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Production",
       note: "Primary release credential",
       useNow: false,
@@ -115,7 +118,7 @@ describe("Credential Profiles Control Plane", () => {
     });
     expect(postLoginCaptures).toEqual([
       expect.objectContaining({
-        kind: "managed",
+        kind: "managed", carrierOwner: "managed",
         credentialId: "credential-a",
         credentialGeneration: "credential-generation-a",
         selectionGeneration: "selection-generation-a",
@@ -125,7 +128,7 @@ describe("Credential Profiles Control Plane", () => {
     const second = await handlers.auth({
       command: "login",
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Backup",
       useNow: false,
       expectedRevision: "revision-a",
@@ -229,7 +232,7 @@ describe("Credential Profiles Control Plane", () => {
     const login = await client.executeProviderProfileAuthCommand({
       command: "login",
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Production",
       useNow: true,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -285,7 +288,7 @@ describe("Credential Profiles Control Plane", () => {
     ] as const) {
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision,
@@ -309,7 +312,7 @@ describe("Credential Profiles Control Plane", () => {
       recheckProvider: async (providerId, capture) => {
         rechecked.push(providerId);
         expect(capture.facts).toMatchObject({
-          kind: "managed",
+          kind: "managed", carrierOwner: "managed",
           credentialId: "credential-a",
           credentialGeneration: "credential-generation-a",
           selectionGeneration: "selection-generation-a",

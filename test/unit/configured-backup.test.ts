@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -128,12 +129,11 @@ describe("configured backup contract versions", () => {
                 priority: 0,
                 createdAt: 1,
                 updatedAt: 1,
-                ...credentialProfileCarrier(
-                  "provider-a",
-                  "credential-a",
-                  "generation-a",
+                ...credentialProfileCarrier("provider-a", {
+                  credentialId: "credential-a",
+                  credentialGeneration: "generation-a",
                   credential,
-                ),
+                }),
               },
             ],
           },
@@ -163,9 +163,28 @@ describe("configured backup contract versions", () => {
           await readFile(join(directory, "provider-a.json"))
         ).toString("base64"),
       });
-      expect(snapshot.providers[0]?.incarnations).toEqual([]);
+      const documentBytes = await readFile(join(
+        root,
+        "credentials",
+        "provider-a",
+        "credential-a",
+        "generation-a.auth.json",
+      ));
+      expect(snapshot.providers[0]?.incarnations).toEqual([
+        {
+          relativePath: "provider-a/credential-a/generation-a.auth.json",
+          tokenRevision: createHash("sha256").update(documentBytes).digest("hex"),
+          content: documentBytes.toString("base64"),
+        },
+      ]);
       const recordDocument = JSON.parse(Buffer.from(snapshot.providers[0]!.record, "base64").toString("utf8"));
-      expect(recordDocument.profiles[0]).toMatchObject({ kind: "inline", inline: credential });
+      expect(recordDocument.profiles[0]).toMatchObject({
+        kind: "reference",
+        reference: {
+          path: "provider-a/credential-a/generation-a.auth.json",
+          owner: "managed",
+        },
+      });
       expect(JSON.stringify(snapshot)).not.toContain("obsolete-auth-canary");
       expect(recordDocument.profiles[0]).not.toHaveProperty("incarnation");
     } finally {

@@ -1,5 +1,7 @@
 import type { AuthType } from "@earendil-works/pi-ai";
 
+import type { AcquisitionKind } from "./acquisition.js";
+
 export type CredentialHealth =
   | "ready"
   | "not_yet_verified"
@@ -11,6 +13,8 @@ export type CredentialHealth =
 export interface CredentialProfileProjection {
   readonly credentialId: string;
   readonly authType: AuthType;
+  /** Public acquisition kind. `strategyId`, path and owner stay private. */
+  readonly acquisitionKind: AcquisitionKind;
   readonly authMethodLabel: string;
   readonly displayName: string;
   readonly note?: string;
@@ -132,7 +136,7 @@ export interface CredentialProfileManagement {
 
 export interface CreateLoginBindingInput {
   readonly providerId: string;
-  readonly authType: AuthType;
+  readonly acquisitionKind: AcquisitionKind;
   readonly displayName: string;
   readonly note?: string;
   readonly useNow: boolean;
@@ -140,8 +144,10 @@ export interface CreateLoginBindingInput {
 }
 
 export interface CredentialLoginBinding {
-  /** Backend-only acquisition strategy; never projected to the Control Plane DTO. */
-  readonly acquisition?: "codex_local";
+  /** Backend-only acquisition strategy id; never projected to the Control
+   * Plane DTO or Renderer. */
+  readonly strategyId?: string;
+  readonly acquisitionKind: AcquisitionKind;
   readonly kind: "login";
   readonly mode: "add" | "reconnect";
   readonly providerId: string;
@@ -171,6 +177,9 @@ export type ProviderAuthBindingFacts =
   | {
       readonly kind: "managed";
       readonly providerId: string;
+      /** Document ownership of the bound Profile credential. Pi's `modify`
+       * never writes an external document. */
+      readonly carrierOwner: "managed" | "external";
       readonly credentialId: string;
       readonly authType: AuthType;
       readonly authMethodLabel: string;
@@ -303,9 +312,19 @@ export interface ProviderAuthBindingAuthority {
   ): Promise<ProviderAuthBindingCapture>;
   createLoginBinding(input: CreateLoginBindingInput): Promise<CredentialLoginBinding>;
   createReconnectBinding(input: CreateReconnectBindingInput): Promise<CredentialLoginBinding>;
+  /** Run one Provider-registered local acquisition. The singleton check, the
+   * bounded source read and the record commit share the Provider lock.
+   * Returns the actual new Profile id and credential generation. */
+  acquireLocal(
+    binding: CredentialLoginBinding,
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly credentialId: string;
+    readonly credentialGeneration: string;
+  }>;
   advanceAfterFinal429(input: AdvanceAfterFinal429Input): Promise<AdvanceAfterFinal429Result>;
   /** Run publication only while this exact binding remains the current
-   * Provider selection/incarnation. Facts describe the revision actually
+   * Provider selection/credential reference. Facts describe the revision actually
    * resolved, not just the earlier capture. The callback must assert the
    * lease immediately before each irreversible publication boundary. */
   publishIfCurrent(

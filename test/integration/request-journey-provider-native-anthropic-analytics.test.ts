@@ -136,7 +136,7 @@ function anthropicModel(): Model<string> {
 function managedCapture(): ManagedProviderAuthBindingCapture {
   return Object.freeze({
     facts: Object.freeze({
-      kind: "managed" as const,
+      kind: "managed" as const, carrierOwner: "managed" as const,
       providerId: "anthropic",
       credentialId: PROFILE_ID,
       authType: "api_key" as const,

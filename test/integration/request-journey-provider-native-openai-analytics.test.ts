@@ -231,7 +231,7 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
           const model = openAIModel(upstreamOrigin);
           const capture: ProviderAuthBindingCapture = Object.freeze({
             facts: Object.freeze({
-              kind: "managed" as const,
+              kind: "managed" as const, carrierOwner: "managed" as const,
               providerId: "openai",
               credentialId: PROFILE_ID,
               authType: "api_key" as const,

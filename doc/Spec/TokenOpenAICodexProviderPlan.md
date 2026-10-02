@@ -1,47 +1,86 @@
 # Token OpenAI Codex Provider Plan: Ordinary Profiles and Native Model Catalog
 
-Status: current implementation contract, revised 2026-10-01. This replaces the former Codex external-selector/delegated-refresh design. Provider Native, Semantic Conversion and Direct Mode remain independent.
+Status: current implementation contract, revised 2026-10-02. Authoritative
+model: [Provider Credential Core Model](TokenProviderCredentialCoreModelPlan.md).
+Provider Native, Semantic Conversion and Direct Mode remain independent.
 
 ## 1. Decisions
 
-All Profiles have the same data model, list, selected ID and PROFILE ACTIONS. Acquisition is private Backend metadata. Local Codex auto-login imports an ordinary OAuth Profile; it never supplies a runtime external binding. The obsolete Codex external adapter, reserved selection value, special card and app-server refresher are removed.
+All Profiles have the same data model, list, selected ID and PROFILE ACTIONS.
+Acquisition is private Backend metadata. Local Codex login is the first
+`local_oauth` acquisition strategy and forms an ordinary Profile that
+references the Codex-owned `auth.json`; it never supplies a runtime external
+binding. The obsolete Codex external adapter, reserved selection value,
+special card, app-server refresher and startup auto-login are removed.
 
-`integrations.codex.autoLoginOnStartup` is boolean, default true, restart-required, under Settings → `.codex agent`. Backend startup invokes acquisition after Provider registration and before initial authentication/catalog checks. Off skips acquisition completely, preserving existing items and avoiding any auth-file read. Reconnect is explicit and unaffected by the switch. Settings opening, Renderer remount and Data Plane restart do not acquire credentials; removal in a running Backend does not immediately recreate an item.
+`integrations.codex.localLogin` is boolean, default true, hot-apply, under
+Settings → `.codex agent`. It gates the visibility of the local login entry on
+the Provider card only. It never creates, removes or refreshes a Profile, and
+explicit Reconnect is always available for an existing local Profile.
 
 ## 2. Shared acquisition
 
-`src/credentials/codex-local-login.ts` owns one operation used by startup and local Reconnect:
+`src/credentials/acquisition.ts` registers one closed local strategy
+(`strategyId: "codex_local"`, public kind `local_oauth`, singleton). Login and
+local Reconnect call the same Profile-authority operation:
 
-1. Stage removal of all `acquisition: "codex_local"` Profiles in the Provider record.
-2. Read the current source using the bounded regular-file reader and ChatGPT parser.
-3. Create a fresh ordinary Profile and, when valid, a Token-owned credential incarnation.
-4. Commit the complete updated record once, publishing the list atomically.
+1. Check the singleton condition inside the Provider lock.
+2. Read the current source with the bounded reader and the ChatGPT parser.
+3. Create or replace the Profile reference and commit the record once.
 
-The store's narrow `rebuildCredential` transaction locks the new credential ID then the Provider record, matching publication and GC lock order. Its async preparation callback performs the source read under the Provider lock. It uses internal write primitives, never nested public locked methods. Failed storage publication leaves the previous committed record intact; an unreferenced newly written incarnation is collected after the existing grace period.
+The store's narrow `rebuildCredential` transaction locks the credential ID
+then the Provider record, matching publication and GC lock order. Its async
+preparation callback performs the source read under the Provider lock, so a
+concurrent click cannot create a second local Profile and a failed read
+commits nothing.
 
-Each operation generates a fresh credential ID and generation, the smallest unused `Profile N` base with the ` (LOCAL CODEX)` display suffix, no note, default enabled state and an appended priority. Renaming a local Profile appends the same suffix only when the submitted name differs from the current display name; an unchanged name is preserved without duplication. No account or token comparison and no old metadata/credential preservation apply. Siblings retain their metadata and order. If the removed item was selected, select the fresh item; otherwise preserve the selected sibling. A new record selects the item; an existing unselected record remains unselected. Reconnect validates the old target ID and expected revision before removal/read, and returns the actual new ID/generation privately for post-login checks.
+Add creates one new Profile with the submitted name/note, default enabled
+state and an appended priority; a new Provider record selects it, an existing
+record keeps its current selection unless the user chose "use now". Reconnect
+validates the target ID and expected revision, keeps the Profile identity,
+name, note, enabled state and priority, and replaces only the credential
+generation, reference and health. Rename is fully generic: the public
+`acquisitionKind` marks the row, with no display-name suffix. Siblings retain
+their metadata and order.
 
 ## 3. Credential contract
 
 Only the ChatGPT branch is supported: `auth_mode == "chatgpt"` with access and refresh tokens and a finite JWT expiry. The nested `https://api.openai.com/auth.chatgpt_account_id` claim is required; optional top-level and `tokens.account_id` values must match. No JWT or Provider-header widening applies.
 
-Missing, unreadable, directory, oversized, empty, invalid JSON, unsupported auth mode or unparseable credential input still creates one ordinary Profile with `kind: "unavailable"`. It carries no token or incarnation reference and projects ordinary `reconnect_required` health. Selected unavailable Profiles fail closed, and disabled/unavailable items are excluded from automatic 429 switching. Acquisition never keeps old token material in the live record.
+Missing, unreadable, directory, oversized, empty, invalid JSON, unsupported
+auth mode or unparseable credential input fails the login and creates no
+Profile; an existing local Profile is left untouched. An existing Profile
+whose referenced document later becomes unresolved projects ordinary
+`reconnect_required` health, fails closed in authentication, usage, Public
+Models and attention, and is excluded from automatic 429 switching.
 
-Parseable expired OAuth is imported unchanged. Acquisition performs no network login or refresh. Subsequent requests, Recheck, catalog checks and usage resolve the selected owned incarnation through ordinary Pi OAuth; refresh uses the existing per-credential lock and revision/publication guards. Token never rewrites, deletes or refreshes the original Codex auth.json. Changes to that source do not affect the imported Profile until the next explicit acquisition.
+Parseable expired OAuth is referenced unchanged. Acquisition performs no
+network login or refresh. Token never rewrites, deletes or refreshes the
+original Codex auth.json, and Recheck checks the existing reference instead of
+re-reading the source. A later read observes the owner-refreshed content.
 
-SchemaVersion remains 2. Optional private `acquisition?: "codex_local"` is valid only for Codex OAuth, with at most one such Profile per Provider. It never enters public DTOs, Renderer, logs or Pi semantic state. `CredentialProfileCarrier` adds `unavailable`, and publication accepts `Credential | null`; existing ordinary records remain valid with one current validator and no migration/dual reader.
+SchemaVersion remains 2. The private `strategyId?: "codex_local"` is valid only
+for Codex OAuth, with at most one such Profile per Provider. It never enters
+public DTOs, Renderer, logs or Pi semantic state. `CredentialProfileCarrier` is
+`unavailable | reference`; references carry `{ path, owner, revision? }`, where
+Codex local login is `external` and manual login is `managed`.
 
-Rename/note, Enable/Disable, Remove, ordering and selection use ordinary implementations. Recheck uses existing credential material and does not read the source. Manual Profile Reconnect uses Provider login; local acquisition Reconnect calls the same shared operation as startup. Public outcomes remain ordinary Profile state. Automatic switching remains bounded to the same Provider, auth branch and lane, with no acquisition filter.
+Rename/note, Enable/Disable, Remove, ordering and selection use ordinary
+implementations. Manual Profile Reconnect uses Provider login; local
+acquisition Reconnect calls the same shared operation as local login. Public
+outcomes remain ordinary Profile state. Automatic switching remains bounded to
+the same Provider, auth branch and lane, with no acquisition filter.
 
 ### 3.5 Generations
 
 Separate authoritative facts:
 
-- `incarnation.relativePath`: the Token-owned credential file reference.
+- `reference.path` / `reference.owner`: the credential document reference.
 - `selectionGeneration`: changes only when the selected Profile ID changes.
-- `credentialGeneration`: the logical incarnation. Changes on login, reconnect,
-  replace, or delete. A normal token rotation does **not** change it.
-- `tokenRevision`: a content hash of the token document. It changes when the
+- `credentialGeneration`: the logical credential. Changes on login/reconnect
+  (which replaces the reference) or delete. A normal managed token rotation
+  does **not** change it.
+- `reference.revision`: a content hash of the token document. It changes when the
   content changes; rewriting identical bytes intentionally leaves it
   unchanged. No separate write counter is defined.
 
@@ -53,42 +92,47 @@ resolved.
 
 ### 3.6 Internal storage, commit, recovery, and backup
 
-- Layout:
+- Layout (managed documents):
   `<Token state>/credentials/<providerId>/<credentialId>/<credentialGeneration>.auth.json`,
-  one file per committed logical incarnation, plus the Provider record that
-  references the active incarnation. The record remains the authority for
+  one file per committed logical credential, plus the Provider record that
+  references it. The record remains the authority for
   identity, selection, generations, and the active path; the file is the token
-  material.
-- Normal rotation (same incarnation): under the per-credential lock, write the
+  material. Externally owned references point at the source path instead and
+  are never written, rotated or collected by Token.
+- Normal managed rotation: under the per-credential lock, write the
   referenced file via tmp+rename+fsync, then publish the record update with the
-  new `tokenRevision`. If the record update fails, the file is newer but
+  new `reference.revision`. If the record update fails, the file is newer but
   uncommitted; the next read may reconcile it **only because the record still
-  references the same incarnation path**.
-- Add/reconnect/replace (new incarnation): while holding the same
+  references the same path**.
+- Add/reconnect/replace (managed): while holding the same
   per-credential lock, write the new generation's file at its unique path
   first, then switch the record reference and `credentialGeneration` in one
   record commit. That record commit is the visibility point. A crash before it
   leaves the new file unreferenced; a crash after it makes the new file
-  authoritative. Recovery must never adopt an unreferenced file by hash, and
-  an old capture must never consume the new grant.
-- Crash recovery: only the referenced incarnation path is reconciled. If the
-  record references incarnation G1, files of G2 are ignored (and later
-  collected); a referenced but missing/invalid file marks the credential
-  unavailable and never falls back to another file or payload.
+  authoritative. Local Codex reconnect writes nothing: it commits a fresh
+  generation whose external reference records the owner's current revision.
+  Recovery must never adopt an unreferenced file by hash, and an old capture
+  must never consume the new grant.
+- Crash recovery: only the referenced document is reconciled. If the record
+  references generation G1, files of G2 are ignored and later collected; a
+  referenced but missing/invalid document marks the credential unavailable
+  and never falls back to another file or payload.
 - Delete: remove the record reference (the commit point), then let orphan
-  collection delete the file after a grace period. Deletion resolves the
+  collection delete a managed file after a grace period. External files are
+  never deleted. Deletion resolves the
   canonical path and refuses Windows reparse points/symlinks and paths outside
   the credential directory; the ownership string alone is not trusted.
 - Orphan collection and publication are mutually exclusive: GC acquires the
-  same per-credential lock used by incarnation publication, then under the
+  same per-credential lock used by managed publication, then under the
   record lock re-checks that the file is still unreferenced before deleting.
   The lock order is credential lock → record lock, matching publication; a
   writer between file write and record commit holds the credential lock, so GC
   cannot delete its file. Grace alone is never sufficient evidence that a
   writer has stopped.
 - Backup: ordinary backup continues to exclude secrets entirely. A full
-  sensitive backup must capture the record and every referenced credential file
-  consistently (hash-verify after read, retry on mismatch). External files are
+  sensitive backup must capture the record and every referenced managed
+  credential file consistently (hash-verify after read, retry on mismatch);
+  references to external files are captured as references only. External files are
   never copied or included, only their reference; restore reconciles by
   revision and never silently reattaches an external path.
 

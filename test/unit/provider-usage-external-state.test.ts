@@ -531,7 +531,7 @@ describe("Provider usage external Codex state", () => {
   it("keeps managed bindings free of persisted failure state", async () => {
     const capture: ProviderAuthBindingCapture = Object.freeze({
       facts: Object.freeze({
-        kind: "managed" as const,
+        kind: "managed" as const, carrierOwner: "managed" as const,
         providerId: PROVIDER_ID,
         credentialId: "credential-a",
         authType: "oauth" as const,

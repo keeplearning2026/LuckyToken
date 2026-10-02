@@ -94,6 +94,9 @@ export {
   type StatusSnapshot,
 } from "./contracts.js";
 export type {
+  CredentialProfileAcquisitionIcon,
+  CredentialProfileAcquisitionKind,
+  CredentialProfileAcquisitionOptionProjection,
   CredentialProfileAuthType,
   CredentialProfileHealth,
   CredentialProfileOptionsProjection,
@@ -103,7 +106,6 @@ export type {
   CredentialProfilesCommandOutcome,
   CredentialProfilesCommandResult,
   CredentialProfilesProjectionV1,
-  ProviderCredentialAuthMethodProjection,
   ProviderCredentialOptionProjection,
   ProviderCredentialProfilesProjectionV1,
   ProviderProfileAuthCommand,

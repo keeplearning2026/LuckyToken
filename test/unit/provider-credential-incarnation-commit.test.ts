@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 import {
   createFileProviderCredentialRecordStore,
   createInMemoryProviderCredentialRecordStore,
-  credentialIncarnationReference,
+  managedCredentialReference,
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
   type PersistedProviderCredentialRecordV2,
@@ -62,7 +62,7 @@ function recordFor(input: {
       priority: 0,
       createdAt: 1,
       updatedAt: 1,
-      kind: "incarnation", incarnation: credentialIncarnationReference(
+      kind: "reference", reference: managedCredentialReference(
         providerId,
         input.credentialId,
         input.credentialGeneration,
@@ -117,11 +117,11 @@ async function assertRecordFileConsistency(
     );
     expect(read.state).toBe("ok");
     if (read.state !== "ok") continue;
-    expect(read.tokenRevision).toBe(profile.incarnation!.tokenRevision);
+    expect(read.tokenRevision).toBe(profile.reference!.revision);
     const bytes = await readFile(
-      join(piDirectory, "credentials", profile.incarnation!.relativePath),
+      join(piDirectory, "credentials", profile.reference!.path),
     );
-    expect(hashFile(bytes)).toBe(profile.incarnation!.tokenRevision);
+    expect(hashFile(bytes)).toBe(profile.reference!.revision);
   }
 }
 
@@ -238,7 +238,7 @@ describe("Provider credential incarnation commit protocol", () => {
       const profile = record!.profiles[0]!;
       expect(profile.credentialGeneration).toBe("generation-2");
       const bytes = await readFile(incarnationPath(piDirectory, credentialId, "generation-2"));
-      expect(profile.incarnation!.tokenRevision).toBe(hashFile(bytes));
+      expect(profile.reference!.revision).toBe(hashFile(bytes));
       expect(JSON.parse(bytes.toString("utf8"))).toEqual({ auth_mode: "chatgpt", tokens: {
         access_token: credentialB.access, refresh_token: credentialB.refresh, account_id: "acct-test",
       }, last_refresh: null });
@@ -452,7 +452,7 @@ describe("Provider credential incarnation commit protocol", () => {
       expect(JSON.parse(bytes.toString("utf8"))).toMatchObject({
         tokens: { access_token: syntheticCodexAccess("access-rotated") },
       });
-      expect(record?.profiles[0]!.incarnation!.tokenRevision).toBe(hashFile(bytes));
+      expect(record?.profiles[0]!.reference!.revision).toBe(hashFile(bytes));
 
       const declined = await store.modifyCredential(
         providerId,
@@ -529,7 +529,7 @@ describe("Provider credential incarnation commit protocol", () => {
       });
       await recoveredStore.readCredential(providerId, credentialId, "generation-1");
       const recoveredRecord = await recoveredStore.read(providerId);
-      expect(recoveredRecord?.profiles[0]!.incarnation!.tokenRevision).toBe(hashFile(bytes));
+      expect(recoveredRecord?.profiles[0]!.reference!.revision).toBe(hashFile(bytes));
       expect(recoveredRecord?.revision).toBe("revision-1");
 
       // A later successful rotation commits the reconciled revision.
@@ -790,7 +790,7 @@ describe("Provider credential incarnation commit protocol", () => {
     expect(record.revision).toBe("revision-1");
     expect(record.profiles[0]!.credentialGeneration).toBe("generation-1");
     if (resolved.state !== "ok") throw new Error("Missing credential");
-    expect(record.profiles[0]!.incarnation!.tokenRevision).toBe(resolved.tokenRevision);
+    expect(record.profiles[0]!.reference!.revision).toBe(resolved.tokenRevision);
   });
 
   it("keeps the in-memory store on the same commit contract", async () => {

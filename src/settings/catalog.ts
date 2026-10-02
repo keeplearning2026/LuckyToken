@@ -246,12 +246,12 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     applyMode: "hot-apply",
   }),
   Object.freeze({
-    key: "integrations.codex.autoLoginOnStartup",
+    key: "integrations.codex.localLogin",
     type: "boolean",
     default: true,
     validation: Object.freeze({ type: "boolean" }),
     sensitivity: "public",
-    applyMode: "restart-required",
+    applyMode: "hot-apply",
   }),
   Object.freeze({
     key: "integrations.claude.model",

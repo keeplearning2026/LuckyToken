@@ -224,20 +224,24 @@ export async function runProfileCli(args: readonly string[]): Promise<void> {
       return;
     }
     if (action === "add") {
-      const authType = credentialId;
+      const acquisitionKind = credentialId;
       const displayName = value;
       if (
         providerId === undefined ||
-        (authType !== "api_key" && authType !== "oauth") ||
+        (acquisitionKind !== "api_key" &&
+          acquisitionKind !== "oauth" &&
+          acquisitionKind !== "local_oauth") ||
         displayName === undefined ||
         parsed.positional.length !== 4
       ) {
-        throw new Error("profiles add requires <provider> <api_key|oauth> <name>");
+        throw new Error(
+          "profiles add requires <provider> <api_key|oauth|local_oauth> <name>",
+        );
       }
       const result = await runInteractiveAuth(client, {
         command: "login",
         providerId,
-        authType,
+        acquisitionKind,
         displayName,
         ...(parsed.note === undefined ? {} : { note: parsed.note }),
         useNow: parsed.useNow,

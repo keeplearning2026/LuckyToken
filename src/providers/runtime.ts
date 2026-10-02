@@ -40,11 +40,11 @@ import type {
   ProviderAuthBindingCapture,
 } from "../credentials/profile-contract.js";
 import { createProviderCredentialProfiles } from "../credentials/profile-authority.js";
-import { createCodexLocalLogin } from "../credentials/codex-local-login.js";
+import {
+  createCodexLocalAcquisitionStrategy,
+  type LocalAcquisitionStrategy,
+} from "../credentials/acquisition.js";
 import { codexExternalAuthPath } from "../credentials/codex-auth.js";
-import type {
-  ExternalCredentialSource,
-} from "../credentials/external-credential-source.js";
 import {
   createFileProviderCredentialRecordStore,
   type ProviderCredentialRecordStore,
@@ -85,6 +85,16 @@ export type ProviderSource =
   | "token_bundled"
   | "user";
 
+/** One Provider-registered local acquisition method, projected for the
+ * Control Plane option list without its internal read implementation. */
+export interface ProviderRuntimeLocalAcquisitionMethod {
+  readonly providerId: string;
+  readonly strategyId: string;
+  readonly label: () => string | undefined;
+  readonly icon: LocalAcquisitionStrategy["icon"];
+  readonly authType: LocalAcquisitionStrategy["authType"];
+}
+
 /** One Codex native-model overlay generation (plan sections 4.6–4.8). */
 export interface AutomaticModelOverlayHandle {
   /** The candidate set currently published to the served catalog. */
@@ -99,8 +109,8 @@ export interface AutomaticModelOverlayHandle {
 
 /** The narrow Provider Runtime seam (Spec §7.3). */
 export interface ProviderRuntime {
-  readonly loginFromLocalCodex: ReturnType<typeof createCodexLocalLogin>;
   readonly models: Models;
+  readonly localAcquisitionMethods: readonly ProviderRuntimeLocalAcquisitionMethod[];
   readonly credentialManagement: CredentialProfileManagement;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly automaticModelOverlay: AutomaticModelOverlayHandle;
@@ -111,7 +121,6 @@ export interface ProviderRuntime {
 }
 
 export interface CreateProviderRuntimeOptions {
-  readonly codexAutoLoginOnStartup?: boolean;
   readonly piDirectory: string;
   readonly modelsJsonPath: string;
   /** Product-owned configurations for the Token bundled Provider Packages.
@@ -137,8 +146,9 @@ export interface CreateProviderRuntimeOptions {
   /** Shared Codex native acquisition. When present, one snapshot generation
    * feeds the automatic `openai-codex` model overlay. */
   readonly nativeCatalogSource?: CodexNativeCatalogSource;
-  /** Explicit file sources for other compositions; no default Codex binding. */
-  readonly externalCredentialSources?: Readonly<Record<string, ExternalCredentialSource>>;
+  /** Explicit closed set of local acquisition strategies. Defaults to the
+   * one Codex local strategy bound to `codexHome`. */
+  readonly localAcquisitionStrategies?: readonly LocalAcquisitionStrategy[];
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -217,7 +227,18 @@ export async function createProviderRuntime(
   const now = options.now ?? Date.now;
   const createUuid = options.createUuid ?? randomUUID;
   const codexHome = options.codexHome ?? resolveCodexHome();
-  const externalSources = options.externalCredentialSources ?? {};
+  let currentProviders: () => readonly Provider[] = () => Object.freeze([]);
+  const acquisitionStrategies: readonly LocalAcquisitionStrategy[] = Object.freeze([
+    ...(options.localAcquisitionStrategies ?? [
+      createCodexLocalAcquisitionStrategy({
+        authPath: codexExternalAuthPath(codexHome),
+        label: () =>
+          currentProviders().find(
+            (provider) => provider.id === "openai-codex",
+          )?.auth.oauth?.name,
+      }),
+    ]),
+  ]);
   const recordStore =
     options.credentialRecordStore ??
     createFileProviderCredentialRecordStore({
@@ -227,13 +248,12 @@ export async function createProviderRuntime(
         ? {}
         : { onLockDegraded: options.onCredentialStoreDegraded }),
     });
-  let currentProviders: () => readonly Provider[] = () => Object.freeze([]);
   const profileState = createProviderCredentialProfiles({
     recordStore,
     providers: () => currentProviders(),
     createId: createUuid,
     now,
-    externalSources,
+    acquisitionStrategies,
     ambientStatus: (providerId) =>
       modelsJson?.providers[providerId]?.apiKey === undefined
         ? "unknown"
@@ -380,21 +400,14 @@ export async function createProviderRuntime(
   // in-flight invocations keep their captured Model objects.
   const served = createCatalogSnapshotModels(facade);
   currentProviders = () => served.getProviders();
-  const loginFromLocalCodex = createCodexLocalLogin({
-    store: recordStore, authPath: codexExternalAuthPath(codexHome),
-    createId: createUuid, now,
-    authMethodLabel: () => currentProviders().find((provider) => provider.id === "openai-codex")!.auth.oauth!.name,
-  });
-  if (options.codexAutoLoginOnStartup !== false) {
-    await loginFromLocalCodex();
-  }
   await served.refresh({ allowNetwork: false });
   served.capture();
   await profileState.management.query();
 
   // Startup orphan maintenance: the record is authoritative, so an
-  // unreferenced incarnation is collected only after the store's grace period
-  // and only while holding the per-credential lock. Failures are bounded
+  // unreferenced managed credential document is collected only after the
+  // store's grace period and only while holding the per-credential lock.
+  // External references are never collection candidates. Failures are bounded
   // maintenance noise and never block startup.
   void (async () => {
     try {
@@ -515,8 +528,18 @@ export async function createProviderRuntime(
 
   return Object.freeze({
     models: served,
+    localAcquisitionMethods: Object.freeze(
+      acquisitionStrategies.map((strategy) =>
+        Object.freeze({
+          providerId: strategy.providerId,
+          strategyId: strategy.strategyId,
+          label: strategy.label,
+          icon: strategy.icon,
+          authType: strategy.authType,
+        }),
+      ),
+    ),
     credentialManagement: profileState.management,
-    loginFromLocalCodex,
     providerAuthBindings: profileState.binding,
     automaticModelOverlay: automaticModelOverlayHandle,
     scrubCredentialText: (value: string) => profileState.scrub(value),

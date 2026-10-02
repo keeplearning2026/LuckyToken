@@ -156,6 +156,7 @@ describe("Operational Attention for the external Codex source", () => {
         Object.freeze({
           credentialId: "credential-a",
           authType: "oauth" as const,
+          acquisitionKind: "oauth" as const,
           authMethodLabel: "Fixture account",
           displayName: "Production",
           enabled: true,

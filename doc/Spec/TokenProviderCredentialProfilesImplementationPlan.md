@@ -255,7 +255,7 @@ The request rule is:
 3. when the Provider has zero managed Profiles, capture `AmbientBinding` and preserve Pi's existing ambient auth behavior;
 4. removing the last managed Profile makes a later operation eligible for `AmbientBinding`; the mutation itself does not probe, refresh, or claim live ambient effectiveness.
 
-`AmbientBinding` contains only `kind` and `providerId`. It has no `credentialId`, does not belong to the Profile pool, is not persisted as a selection, does not participate in Profile 429 switching, and produces no Profile attribution. No persisted `externalCredentialId`, external selector, or second active mode is introduced.
+`AmbientBinding` contains only `kind` and `providerId`. It has no `credentialId`, does not belong to the Profile pool, is not persisted as a selection, does not participate in Profile 429 switching, and produces no Profile attribution. No second active mode is introduced; externally owned credentials are ordinary Profiles whose `reference.owner` is `external`. See [Provider Credential Core Model](TokenProviderCredentialCoreModelPlan.md).
 
 ---
 
@@ -573,7 +573,10 @@ Implementation responsibilities:
 - `ProvidersPage.tsx` owns Provider selection and high-level page refresh only;
 - a credential-management feature Module owns the selected Provider's sanitized rows, filters, mutation drafts, confirmations, conflicts, and re-query after mutation;
 - the existing auth interaction UI is extracted as a reusable login/reconnect Module without moving Provider auth logic into Renderer;
-- every add, reconnect, 429-setting, search, row, and confirmation label uses Backend-projected `authMethodLabel`; manual add default display names remain neutral `Profile N` suggestions, while the local Codex auto-login Profile carries the Token-owned ` (LOCAL CODEX)` display suffix;
+- every add, reconnect, 429-setting, search, row, and confirmation label uses Backend-projected acquisition options (`acquisitionOptions[].label`) and Profile
+  facts; manual add default display names remain neutral `Profile N`
+  suggestions, and each Profile row renders its public `acquisitionKind`
+  instead of a name suffix;
 - destructive confirmations distinguish local `Remove from Token` from OAuth `Disconnect from Token`, use the Provider-declared auth label, and never claim remote revocation;
 - closing/reopening the view performs a fresh query and reconstructs all state from Backend authority;
 - management remains usable when the Data Plane listener is stopped or failed.

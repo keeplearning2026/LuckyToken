@@ -8,7 +8,7 @@ import {
 
 const capture: ProviderAuthBindingCapture = Object.freeze({
   facts: Object.freeze({
-    kind: "managed" as const,
+    kind: "managed" as const, carrierOwner: "managed" as const,
     providerId: "anthropic",
     credentialId: "credential-a",
     authType: "api_key" as const,

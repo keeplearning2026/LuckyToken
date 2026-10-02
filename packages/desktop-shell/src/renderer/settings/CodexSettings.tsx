@@ -10,22 +10,22 @@ export function CodexSettings({ api }: { readonly api: TokenDesktopApi }) {
   const [searchModelError, setSearchModelError] = useState(false);
   const [searchModelBusy, setSearchModelBusy] = useState(false);
   const [searchModelLoaded, setSearchModelLoaded] = useState(false);
-  const [autoLogin, setAutoLogin] = useState(true);
-  const [autoLoginLoaded, setAutoLoginLoaded] = useState(false);
-  const [autoLoginBusy, setAutoLoginBusy] = useState(false);
-  const [autoLoginNotice, setAutoLoginNotice] = useState<string>();
+  const [localLogin, setLocalLogin] = useState(true);
+  const [localLoginLoaded, setLocalLoginLoaded] = useState(false);
+  const [localLoginBusy, setLocalLoginBusy] = useState(false);
+  const [localLoginNotice, setLocalLoginNotice] = useState<string>();
 
   useEffect(() => {
     let active = true;
     void api.control.executeSettings({ command: "query", keys: [
-      "integrations.codex.searchModel", "integrations.codex.autoLoginOnStartup",
+      "integrations.codex.searchModel", "integrations.codex.localLogin",
     ] }).then((settings) => {
       if (!active) return;
       const searchModel = settings.settings["integrations.codex.searchModel"]?.value;
-      const startup = settings.settings["integrations.codex.autoLoginOnStartup"]?.value;
-      if (typeof startup === "boolean") {
-        setAutoLogin(startup);
-        setAutoLoginLoaded(true);
+      const local = settings.settings["integrations.codex.localLogin"]?.value;
+      if (typeof local === "boolean") {
+        setLocalLogin(local);
+        setLocalLoginLoaded(true);
       }
       if (typeof searchModel === "string") {
         setSearchModelDraft(searchModel);
@@ -66,24 +66,24 @@ export function CodexSettings({ api }: { readonly api: TokenDesktopApi }) {
 
   return <section className="page-stack" aria-label="Codex search settings">
     <label className="field-row">
-      <span>启动时自动登录本地 Codex</span>
-      <input type="checkbox" aria-label="启动时自动登录本地 Codex"
-        checked={autoLogin} disabled={!autoLoginLoaded || autoLoginBusy}
+      <span>显示本地 Codex 登录入口</span>
+      <input type="checkbox" aria-label="显示本地 Codex 登录入口"
+        checked={localLogin} disabled={!localLoginLoaded || localLoginBusy}
         onChange={(event) => {
           const value = event.currentTarget.checked;
-          setAutoLoginBusy(true);
+          setLocalLoginBusy(true);
           void api.control.executeSettings({
-            command: "set", key: "integrations.codex.autoLoginOnStartup", value,
+            command: "set", key: "integrations.codex.localLogin", value,
           }).then((result) => {
             if (result.outcome === "pending" || result.outcome === "applied") {
-              setAutoLogin(value);
-              setAutoLoginNotice("已保存，下次启动生效。");
-            } else setAutoLoginNotice(result.error ?? "设置未能保存。");
-          }, () => setAutoLoginNotice("设置未能保存。"))
-            .finally(() => setAutoLoginBusy(false));
+              setLocalLogin(value);
+              setLocalLoginNotice("已保存并立即生效。");
+            } else setLocalLoginNotice(result.error ?? "设置未能保存。");
+          }, () => setLocalLoginNotice("设置未能保存。"))
+            .finally(() => setLocalLoginBusy(false));
         }} />
     </label>
-    {autoLoginNotice === undefined ? null : <p className="setting-state" role="status">{autoLoginNotice}</p>}
+    {localLoginNotice === undefined ? null : <p className="setting-state" role="status">{localLoginNotice}</p>}
     <h4 className="settings-subsection-title">Search request model <SettingHelp label="Search request model">Token sends /v1/alpha/search directly to Codex and replaces only the request model. Default: gpt-6-luna.</SettingHelp></h4>
     <label className="field-row">
       <span>Upstream model</span>

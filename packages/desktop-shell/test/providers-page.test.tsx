@@ -24,16 +24,22 @@ const providerOptions = {
       providerId: "aws-provider",
       name: "AWS Provider",
       source: "pi_builtin" as const,
-      authMethods: [
+      acquisitionOptions: [
         {
+          kind: "api_key" as const,
+          label: "AWS credentials or bearer token",
+          icon: "key" as const,
           authType: "api_key" as const,
-          authMethodLabel: "AWS credentials or bearer token",
           interactive: true,
+          state: "available" as const,
         },
         {
+          kind: "oauth" as const,
+          label: "AWS organization sign-in",
+          icon: "account" as const,
           authType: "oauth" as const,
-          authMethodLabel: "AWS organization sign-in",
           interactive: true,
+          state: "available" as const,
         },
       ],
     },
@@ -75,6 +81,7 @@ const managedProfiles = () => ({
           {
             credentialId: "credential-a",
             authType: "api_key" as const,
+            acquisitionKind: "api_key" as const,
             authMethodLabel: "AWS credentials or bearer token",
             displayName: "Production role",
             note: "Release traffic",
@@ -88,6 +95,7 @@ const managedProfiles = () => ({
           {
             credentialId: "credential-b",
             authType: "oauth" as const,
+            acquisitionKind: "oauth" as const,
             authMethodLabel: "AWS organization sign-in",
             displayName: "Incident account",
             enabled: true,
@@ -385,8 +393,8 @@ describe("Providers Profile product slice", () => {
     });
 
     expect(container.querySelectorAll("[data-profile-id]")).toHaveLength(2);
-    expect(container.textContent).toContain("API key");
-    expect(container.textContent).toContain("OAuth account");
+    expect(container.textContent).toContain("AWS credentials or bearer token");
+    expect(container.textContent).toContain("AWS organization sign-in");
     expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(2);
     expect(container.textContent).not.toContain("Use now");
     expect(container.textContent).not.toContain("Earlier");
@@ -740,8 +748,8 @@ describe("Providers Profile product slice", () => {
 
     expect(container.textContent).toContain("Production role");
     expect(container.textContent).toContain("Incident account");
-    expect(container.textContent).toContain("API key");
-    expect(container.textContent).toContain("OAuth account");
+    expect(container.textContent).toContain("AWS credentials or bearer token");
+    expect(container.textContent).toContain("AWS organization sign-in");
     expect(container.textContent).toContain("reconnect required");
     expect(container.textContent).not.toContain("Use API key");
     expect(container.textContent).not.toContain("Account 1");
@@ -822,7 +830,7 @@ describe("Providers Profile product slice", () => {
       {
         command: "login",
         providerId: "aws-provider",
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName: "Production role",
         note: "Release traffic",
         useNow: true,
@@ -1516,8 +1524,8 @@ describe("Providers Profile product slice", () => {
 
     expect(titledButtons.map((entry) => entry.getAttribute("title"))).toEqual(
       expect.arrayContaining([
-        "Add API key",
-        "Add OAuth account",
+        "Add AWS credentials or bearer token",
+        "Add AWS organization sign-in",
         "Manage models",
       ]),
     );

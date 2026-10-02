@@ -693,7 +693,7 @@ describe("Provider Native Responses HTTP retry", () => {
   it("stops after three outer Profile attempts independently of inner transport retry", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2, 3, 4].map((index) => ({
       facts: {
-        kind: "managed",
+        kind: "managed", carrierOwner: "managed",
         providerId: "openai",
         credentialId: `credential-${index}`,
         authType: "api_key",
@@ -741,7 +741,7 @@ describe("Provider Native Responses HTTP retry", () => {
   it("rebuilds SDK identity, timeout, and auth after a 429 Profile switch", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2].map((index) => ({
       facts: {
-        kind: "managed",
+        kind: "managed", carrierOwner: "managed",
         providerId: "openai",
         credentialId: `credential-${index}`,
         authType: "api_key",

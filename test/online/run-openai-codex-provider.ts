@@ -1,8 +1,9 @@
-import { readExternalCredentialFile } from "../../src/credentials/external-credential-file.js";
+import { readCredentialDocumentFile } from "../../src/credentials/credential-document.js";
 import { parseCodexInternalAuth } from "../../src/credentials/codex-internal-auth.js";
 import {
   createFileProviderCredentialRecordStore,
   credentialProfileCarrier,
+  NO_PROVIDER_RECORD_REVISION,
 } from "../../src/credentials/profile-record-store.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -47,7 +48,7 @@ async function run(): Promise<void> {
   const loginSource =
     dedicatedHome === undefined || dedicatedHome.length === 0 ? "local" : "dedicated";
   const authPath = codexExternalAuthPath(codexHome);
-  const initial = await readExternalCredentialFile(authPath);
+  const initial = await readCredentialDocumentFile(authPath);
   if (initial.state !== "ok") {
     process.stdout.write(`${JSON.stringify({
       result: "skip",
@@ -136,16 +137,31 @@ async function run(): Promise<void> {
       port: 0,
     });
 
+    const localLogin = await composition.providerAuthBindings.createLoginBinding({
+      providerId: PROVIDER_ID,
+      acquisitionKind: "local_oauth",
+      displayName: "Local Codex",
+      useNow: true,
+      expectedRevision: NO_PROVIDER_RECORD_REVISION,
+    });
+    await composition.providerAuthBindings.acquireLocal(localLogin);
+
     const projection = await composition.credentialManagement.query([PROVIDER_ID]);
     const provider = projection.providers.find(
       (candidate) => candidate.providerId === PROVIDER_ID,
     );
-    assert.equal(provider?.profiles.length, 1, "startup must create one ordinary Profile");
+    assert.equal(provider?.profiles.length, 1, "local login must create one ordinary Profile");
     assert.equal(provider?.activeCredentialId, provider?.profiles[0]?.credentialId);
-    assert.equal(provider?.ambient, undefined, "imported credentials have no external presentation");
-    assert.ok(!JSON.stringify(provider).includes("acquisition"));
+    assert.equal(provider?.profiles[0]?.acquisitionKind, "local_oauth");
+    assert.equal(provider?.ambient, undefined, "referenced credentials have no ambient presentation");
+    assert.ok(!JSON.stringify(provider).includes("strategyId"));
+    assert.ok(!JSON.stringify(provider).includes("codex_local"));
     const importedRecord = (await credentialRecordStore.read(PROVIDER_ID))!;
     const imported = importedRecord.profiles[0]!;
+    assert.equal(imported.kind, "reference");
+    assert.ok(imported.kind === "reference");
+    assert.equal(imported.reference.owner, "external");
+    assert.ok(imported.reference.path.endsWith("auth.json"));
 
     const servedIds = new Set(
       composition.catalog.models.getModels(PROVIDER_ID).map((model) => model.id),
@@ -192,7 +208,11 @@ async function run(): Promise<void> {
           credentialId: siblingId, credentialGeneration: siblingGeneration, authType: "oauth",
           authMethodLabel: imported.authMethodLabel, displayName: "Profile 2",
           enabled: true, priority: 1, createdAt: Date.now(), updatedAt: Date.now(),
-          ...credentialProfileCarrier(PROVIDER_ID, siblingId, siblingGeneration, owned.credential),
+          ...credentialProfileCarrier(PROVIDER_ID, {
+            credentialId: siblingId,
+            credentialGeneration: siblingGeneration,
+            credential: owned.credential,
+          }),
         },
       ] },
     }));
@@ -239,16 +259,20 @@ async function run(): Promise<void> {
       credentialStayedNonTerminal,
       "lane rejections must not make the external credential terminal",
     );
-    const final = await readExternalCredentialFile(authPath);
+    const final = await readCredentialDocumentFile(authPath);
     assert.equal(final.state, "ok", "source must remain readable after every consumer");
     assert.ok(final.state === "ok");
-    assert.equal(final.tokenRevision, initial.tokenRevision, "Token must not rewrite the original auth.json");
+    assert.equal(final.revision, initial.revision, "Token must not rewrite the original auth.json");
     const authAfter = await stat(authPath);
     const after = (await credentialRecordStore.read(PROVIDER_ID))!.profiles.find(
       (item) => item.credentialId === imported.credentialId,
     )!;
-    const rotation = imported.kind === "incarnation" && after.kind === "incarnation" &&
-      imported.incarnation.tokenRevision !== after.incarnation.tokenRevision ? "observed" : "not_required";
+    const rotation =
+      imported.kind === "reference" &&
+      after.kind === "reference" &&
+      imported.reference.revision !== after.reference.revision
+        ? "observed"
+        : "not_required";
 
     const initialGate = codexOnlineGate({ usage: usageResult.refresh.outcome, native: nativeResponses,
       semantic: semanticMessages, rotation, usable: credentialStayedUsable, nonTerminal: credentialStayedNonTerminal });
@@ -274,10 +298,10 @@ async function run(): Promise<void> {
       credentialStayedUsable,
       credentialStayedNonTerminal,
       credentialBoundary: { kind: "managed", authType: "oauth", sourceReadOnly: true },
-      authFile: { contentUnchanged: final.tokenRevision === initial.tokenRevision,
+      authFile: { contentUnchanged: final.revision === initial.revision,
         mtimeUnchanged: authAfter.mtimeMs === authBefore.mtimeMs,
         sizeBefore: authBefore.size, sizeAfter: authAfter.size,
-        sha256Before: initial.tokenRevision, sha256After: final.tokenRevision },
+        sha256Before: initial.revision, sha256After: final.revision },
       testState: { temporaryCodexHome: true, importedCredential: true },
     })}\n`);
   } finally {

@@ -1,457 +1,350 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { describe, expect, it, vi } from "vitest";
 
-import { createCodexLocalLogin } from "../../src/credentials/codex-local-login.js";
-import { parseCodexInternalAuth } from "../../src/credentials/codex-internal-auth.js";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { describe, expect, it } from "vitest";
+
+import {
+  createCodexLocalAcquisitionStrategy,
+  LocalAcquisitionError,
+  type LocalAcquisitionStrategy,
+} from "../../src/credentials/acquisition.js";
 import { createProviderCredentialProfiles } from "../../src/credentials/profile-authority.js";
-import { createCredentialProfilesControlPlaneHandlers } from "../../src/credentials/profile-control-plane.js";
 import {
   createFileProviderCredentialRecordStore,
   createInMemoryProviderCredentialRecordStore,
-  credentialProfileCarrier,
+  NO_PROVIDER_RECORD_REVISION,
   type ProviderCredentialRecordStore,
-  type PersistedCredentialProfileV2,
 } from "../../src/credentials/profile-record-store.js";
-import { createProviderRuntime } from "../../src/providers/runtime.js";
-import { loadBundledProviderConfigurations } from "../../src/providers/bundled-configuration.js";
 
 const providerId = "openai-codex";
 const provider = builtinProviders().find((item) => item.id === providerId)!;
-function document(account = "account-a", expires = Date.now() + 3600_000) {
-  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  const access = [encode({ alg: "none" }), encode({
-    exp: Math.floor(expires / 1000),
-    "https://api.openai.com/auth": { chatgpt_account_id: account },
-  }), "signature"].join(".");
-  return JSON.stringify({ auth_mode: "chatgpt", tokens: {
-    access_token: access, refresh_token: `refresh-${account}`, account_id: account,
-  } });
+
+function syntheticDocument(
+  account = "account-a",
+  expires = Date.now() + 3_600_000,
+): string {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const access = [
+    encode({ alg: "none" }),
+    encode({
+      exp: Math.floor(expires / 1000),
+      "https://api.openai.com/auth": { chatgpt_account_id: account },
+    }),
+    "signature",
+  ].join(".");
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: {
+      access_token: access,
+      refresh_token: `refresh-${account}`,
+      account_id: account,
+    },
+  });
 }
 
 async function isolated(
   operation: (root: string, authPath: string) => Promise<void>,
-) {
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "Token-local-login-"));
-  try { await operation(root, join(root, "auth.json")); }
-  finally { await rm(root, { recursive: true, force: true }); }
+  try {
+    await operation(root, join(root, "auth.json"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
-function fixture(store: ProviderCredentialRecordStore, authPath: string) {
-  const profiles = createProviderCredentialProfiles({
-    recordStore: store, providers: () => [provider], createId: randomUUID, now: Date.now,
-  });
-  const login = createCodexLocalLogin({
-    store, authPath, createId: randomUUID, now: Date.now,
-    authMethodLabel: () => provider.auth.oauth!.name,
-  });
-  return { ...profiles, login };
-}
-const memory = () => createInMemoryProviderCredentialRecordStore({ createRevision: randomUUID });
-
-/** Add a manual sibling and rename the local Profile to exercise renamed/local states. */
-async function addManualSibling(
+function fixture(
   store: ProviderCredentialRecordStore,
-  displayName = "Profile 1",
-) {
-  const current = (await store.read(providerId))!;
-  const id = randomUUID();
-  const generation = randomUUID();
-  const other: PersistedCredentialProfileV2 = {
-    credentialId: id, credentialGeneration: generation, displayName,
-    authType: "oauth", authMethodLabel: provider.auth.oauth!.name,
-    enabled: true, priority: 1, createdAt: 1, updatedAt: 1, kind: "unavailable",
-  };
-  await store.publishCredential(providerId, current.revision, {
-    credentialId: id, credentialGeneration: generation, credential: null,
-  }, () => ({ kind: "commit", value: undefined, record: { ...current, profiles: [
-    ...current.profiles, other,
-  ].map((item) => item.acquisition === "codex_local" ? { ...item, displayName: "Old local" } : item) } }));
-  return id;
+  authPath: string,
+  acquisition?: { reads: number },
+): ReturnType<typeof createProviderCredentialProfiles> {
+  const base = createCodexLocalAcquisitionStrategy({
+    authPath,
+    label: () => provider.auth.oauth!.name,
+  });
+  const strategy: LocalAcquisitionStrategy =
+    acquisition === undefined
+      ? base
+      : Object.freeze({
+          ...base,
+          async acquire(signal?: AbortSignal) {
+            acquisition.reads += 1;
+            return base.acquire(signal);
+          },
+        });
+  return createProviderCredentialProfiles({
+    recordStore: store,
+    providers: () => [provider],
+    createId: randomUUID,
+    now: Date.now,
+    acquisitionStrategies: [strategy],
+  });
 }
 
-describe("shared local Codex acquisition", () => {
+const memory = () =>
+  createInMemoryProviderCredentialRecordStore({ createRevision: randomUUID });
+
+async function addLocal(
+  profiles: ReturnType<typeof createProviderCredentialProfiles>,
+  overrides: {
+    readonly displayName?: string;
+    readonly useNow?: boolean;
+    readonly expectedRevision?: string;
+  } = {},
+) {
+  const binding = await profiles.binding.createLoginBinding({
+    providerId,
+    acquisitionKind: "local_oauth",
+    displayName: overrides.displayName ?? "Profile 1",
+    useNow: overrides.useNow ?? true,
+    expectedRevision:
+      overrides.expectedRevision ?? NO_PROVIDER_RECORD_REVISION,
+  });
+  return profiles.binding.acquireLocal(binding);
+}
+
+describe("local Codex acquisition", () => {
   for (const storage of ["memory", "file"] as const) {
-    it(`${storage}: rebuilds every invocation, retains siblings and selection, and publishes no source metadata`, async () => isolated(async (root, authPath) => {
-      const store = storage === "memory" ? memory() :
-        createFileProviderCredentialRecordStore({ piDirectory: join(root, "pi"), createRevision: randomUUID });
-      const state = fixture(store, authPath);
-      await writeFile(authPath, document());
-      const first = await state.login();
-      const other = await addManualSibling(store);
-      let record = (await store.read(providerId))!;
-      await state.management.updateMetadata({
-        providerId, credentialId: first.credentialId, expectedRevision: record.revision,
-        displayName: "Renamed", note: "old note",
-      });
-      record = (await store.read(providerId))!;
-      expect(record.profiles.find((item) => item.credentialId === first.credentialId))
-        .toMatchObject({ displayName: "Renamed (LOCAL CODEX)" });
-      const second = await state.login({ credentialId: first.credentialId, expectedRevision: record.revision });
-      record = (await store.read(providerId))!;
-      expect(record.activeCredentialId).toBe(second.credentialId);
-      expect(record.profiles.map((item) => item.credentialId)).toEqual([other, second.credentialId]);
-      expect(record.profiles[1]).toMatchObject({ displayName: "Profile 2 (LOCAL CODEX)", enabled: true, priority: 2 });
-      expect(record.profiles[1]).not.toHaveProperty("note");
-      expect(second.credentialGeneration).not.toBe(first.credentialGeneration);
-      await state.management.activate({ providerId, credentialId: other, expectedRevision: record.revision });
-      const selected = (await store.read(providerId))!;
-      await state.login();
-      record = (await store.read(providerId))!;
-      expect(record.activeCredentialId).toBe(other);
-      expect(record.selectionGeneration).toBe(selected.selectionGeneration);
-      await state.management.setEnabled({
-        providerId, credentialId: other, expectedRevision: record.revision, enabled: false,
-      });
-      await state.login();
-      expect((await store.read(providerId))!.activeCredentialId).toBeUndefined();
-      const dto = await state.management.query();
-      expect(JSON.stringify(dto)).not.toContain("acquisition");
-      expect(JSON.stringify(dto)).not.toContain("codex_local");
-      expect(dto.providers[0]!.profiles).toHaveLength(2);
-      expect(JSON.parse(await readFile(authPath, "utf8")).tokens.refresh_token).toBe("refresh-account-a");
-    }));
+    it(`${storage}: forms one ordinary Profile that references the external document`, async () =>
+      isolated(async (root, authPath) => {
+        const store =
+          storage === "memory"
+            ? memory()
+            : createFileProviderCredentialRecordStore({
+                piDirectory: join(root, "pi"),
+                createRevision: randomUUID,
+              });
+        const profiles = fixture(store, authPath);
+        await writeFile(authPath, syntheticDocument(), "utf8");
+
+        const published = await addLocal(profiles);
+        const record = (await store.read(providerId))!;
+        expect(record.activeCredentialId).toBe(published.credentialId);
+        expect(record.profiles).toHaveLength(1);
+        const profile = record.profiles[0]!;
+        expect(profile).toMatchObject({
+          credentialId: published.credentialId,
+          credentialGeneration: published.credentialGeneration,
+          strategyId: "codex_local",
+          displayName: "Profile 1",
+          enabled: true,
+        });
+        expect(profile.kind).toBe("reference");
+        if (profile.kind !== "reference") return;
+        expect(profile.reference.owner).toBe("external");
+        expect(profile.reference.revision).toMatch(/^[0-9a-f]{64}$/u);
+
+        const read = await store.readCredential(
+          providerId,
+          published.credentialId,
+          published.credentialGeneration,
+        );
+        expect(read.state).toBe("ok");
+        if (read.state !== "ok") return;
+        expect(read.credential).toMatchObject({ type: "oauth" });
+        expect(JSON.parse(await readFile(authPath, "utf8")).tokens.refresh_token)
+          .toBe("refresh-account-a");
+
+        const projection = await profiles.management.query();
+        const projected = projection.providers[0]!.profiles[0]!;
+        expect(projected.acquisitionKind).toBe("local_oauth");
+        expect(projected.health).not.toBe("reconnect_required");
+        expect(JSON.stringify(projection)).not.toContain("codex_local");
+        expect(JSON.stringify(projection)).not.toContain("strategyId");
+        expect(JSON.stringify(projection)).not.toContain(authPath.split(/[\\/]/u).pop()!);
+      }));
   }
 
-  it("appends the LOCAL CODEX label only when a local Profile name changes", async () => isolated(async (_root, authPath) => {
-    const store = memory();
-    const state = fixture(store, authPath);
-    await writeFile(authPath, document());
-    const local = await state.login();
-    expect((await store.read(providerId))!.profiles[0])
-      .toMatchObject({ displayName: "Profile 1 (LOCAL CODEX)" });
-    const manual = await addManualSibling(store);
-    let record = (await store.read(providerId))!;
-    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
-      .toMatchObject({ displayName: "Old local" });
-    const renamed = await state.management.updateMetadata({
-      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
-      displayName: "Work", note: "first note",
-    });
-    expect(renamed.outcome).toBe("ok");
-    record = (await store.read(providerId))!;
-    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
-      .toMatchObject({ displayName: "Work (LOCAL CODEX)", note: "first note" });
-    const unchanged = await state.management.updateMetadata({
-      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
-      displayName: "Work (LOCAL CODEX)", note: "second note",
-    });
-    expect(unchanged.outcome).toBe("ok");
-    record = (await store.read(providerId))!;
-    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
-      .toMatchObject({ displayName: "Work (LOCAL CODEX)", note: "second note" });
-    const manualRename = await state.management.updateMetadata({
-      providerId, credentialId: manual, expectedRevision: record.revision,
-      displayName: "Manual",
-    });
-    expect(manualRename.outcome).toBe("ok");
-    record = (await store.read(providerId))!;
-    expect(record.profiles.find((item) => item.credentialId === manual))
-      .toMatchObject({ displayName: "Manual" });
-    const doubled = await state.management.updateMetadata({
-      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
-      displayName: "Work (LOCAL CODEX) 2",
-    });
-    expect(doubled.outcome).toBe("ok");
-    record = (await store.read(providerId))!;
-    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
-      .toMatchObject({ displayName: "Work (LOCAL CODEX) 2 (LOCAL CODEX)" });
-    const tooLong = await state.management.updateMetadata({
-      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
-      displayName: "x".repeat(51),
-    });
-    expect(tooLong).toMatchObject({
-      outcome: "invalid",
-      error: "Profile name is too long after adding the LOCAL CODEX label",
-    });
-  }));
-
-  it("skips a base already used by a suffixed manual sibling", async () => isolated(async (_root, authPath) => {
-    const store = memory();
-    const state = fixture(store, authPath);
-    await writeFile(authPath, document());
-    await state.login();
-    await addManualSibling(store, "Profile 1 (LOCAL CODEX)");
-    const next = await state.login();
-    const record = (await store.read(providerId))!;
-    expect(record.profiles.find((item) => item.credentialId === next.credentialId))
-      .toMatchObject({ displayName: "Profile 2 (LOCAL CODEX)" });
-  }));
-
-  for (const input of ["missing", "directory", "empty", "json", "mode", "oversize", "expiry"] as const) {
-    it(`replaces previous credentials with unavailable for ${input}`, async () => isolated(async (_root, authPath) => {
+  it("fails without a Profile when the local document is missing, invalid or unsupported", async () =>
+    isolated(async (root, authPath) => {
       const store = memory();
-      const state = fixture(store, authPath);
-      await writeFile(authPath, document());
-      const previous = await state.login();
-      await rm(authPath);
-      if (input === "directory") await mkdir(authPath);
-      else if (input !== "missing") {
-        const raw = input === "empty" ? "" : input === "json" ? "{" :
-          input === "mode" ? '{"auth_mode":"apikey","OPENAI_API_KEY":"canary"}' :
-            input === "oversize" ? "a".repeat(1024 * 1024 + 1) : document().replace(/"access_token":"[^"]+"/u, '"access_token":"no-expiry"');
-        await writeFile(authPath, raw);
-      }
-      const next = await state.login();
-      const record = (await store.read(providerId))!;
-      expect(record.profiles).toHaveLength(1);
-      expect(record.profiles[0]).toMatchObject({ credentialId: next.credentialId, kind: "unavailable" });
-      expect(next.credentialId).not.toBe(previous.credentialId);
-      expect(record.profiles[0]).not.toHaveProperty("incarnation");
-      expect(await store.readCredential(providerId, previous.credentialId, previous.credentialGeneration)).toEqual({ state: "missing" });
-      expect((await state.management.query()).providers[0]!.profiles[0]!.health).toBe("reconnect_required");
-      await expect(state.binding.capture(providerId)).rejects.toMatchObject({ outcome: "no_active_profile" });
+      const profiles = fixture(store, authPath);
+
+      await expect(addLocal(profiles)).rejects.toBeInstanceOf(LocalAcquisitionError);
+      expect(await store.read(providerId)).toBeUndefined();
+
+      await writeFile(authPath, "", "utf8");
+      await expect(addLocal(profiles)).rejects.toBeInstanceOf(LocalAcquisitionError);
+      expect(await store.read(providerId)).toBeUndefined();
+
+      await writeFile(authPath, "{truncated", "utf8");
+      await expect(addLocal(profiles)).rejects.toBeInstanceOf(LocalAcquisitionError);
+      expect(await store.read(providerId)).toBeUndefined();
+
+      await writeFile(
+        authPath,
+        JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "synthetic" }),
+        "utf8",
+      );
+      await expect(addLocal(profiles)).rejects.toBeInstanceOf(LocalAcquisitionError);
+      expect(await store.read(providerId)).toBeUndefined();
     }));
-  }
 
-  it("serializes concurrent invocations and rejects a stale reconnect before rebuilding", async () => isolated(async (_root, authPath) => {
-    await writeFile(authPath, document());
-    const store = memory();
-    const state = fixture(store, authPath);
-    await state.login();
-    const old = (await store.read(providerId))!;
-    const outcomes = await Promise.all(Array.from({ length: 8 }, () => state.login()));
-    const current = (await store.read(providerId))!;
-    expect(current.profiles).toHaveLength(1);
-    expect(current.profiles[0]!.credentialId).toBe(outcomes[7]!.credentialId);
-    await expect(state.login({ credentialId: old.profiles[0]!.credentialId, expectedRevision: old.revision }))
-      .rejects.toMatchObject({ outcome: "conflict" });
-    expect(await store.read(providerId)).toEqual(current);
-  }));
+  it("blocks a second local login without reading the source", async () =>
+    isolated(async (_root, authPath) => {
+      const store = memory();
+      const acquisition = { reads: 0 };
+      const profiles = fixture(store, authPath, acquisition);
+      await writeFile(authPath, syntheticDocument(), "utf8");
 
-  it("imports expired grants unchanged and refreshes only the owned incarnation", async () => isolated(async (root, authPath) => {
-    const raw = document("account-a", Date.now() - 3600_000);
-    await writeFile(authPath, raw);
-    const store = createFileProviderCredentialRecordStore({ piDirectory: join(root, "pi"), createRevision: randomUUID });
-    const state = fixture(store, authPath);
-    const imported = await state.login();
-    const old = await store.readCredential(providerId, imported.credentialId, imported.credentialGeneration);
-    expect(old.state).toBe("ok");
-    if (old.state !== "ok" || old.credential.type !== "oauth") throw new Error("Missing imported credential");
-    expect(old.credential.expires).toBeLessThan(Date.now());
-    const expiry = Math.floor((Date.now() + 3600_000) / 1000) * 1000;
-    const refreshed = { ...old.credential, expires: expiry,
-      access: JSON.parse(document("account-a", expiry)).tokens.access_token as string, refresh: "rotated-refresh" };
-    await store.modifyCredential(providerId, imported.credentialId, imported.credentialGeneration, async () => refreshed);
-    expect(await store.readCredential(providerId, imported.credentialId, imported.credentialGeneration))
-      .toMatchObject({ state: "ok", credential: refreshed });
-    expect(await readFile(authPath, "utf8")).toBe(raw);
-  }));
+      const first = await addLocal(profiles);
+      const revision = (await store.read(providerId))!.revision;
+      await expect(
+        addLocal(profiles, { expectedRevision: revision, displayName: "Profile 2" }),
+      ).rejects.toMatchObject({ outcome: "duplicate" });
+      expect(acquisition.reads).toBe(1);
+      const record = (await store.read(providerId))!;
+      expect(record.profiles.map((item) => item.credentialId)).toEqual([
+        first.credentialId,
+      ]);
+    }));
 
-  it("leaves the committed record intact when publication fails, then GC collects its orphan", async () => isolated(async (root, authPath) => {
-    let fail = false;
-    const store = createFileProviderCredentialRecordStore({
-      piDirectory: join(root, "pi"), createRevision: randomUUID,
-      hooks: { afterIncarnationPublication: () => { if (fail) throw new Error("Injected publication failure"); } },
-    });
-    const state = fixture(store, authPath);
-    await writeFile(authPath, document());
-    await state.login();
-    const committed = await store.read(providerId);
-    fail = true;
-    await expect(state.login()).rejects.toThrow("Injected publication failure");
-    expect(await store.read(providerId)).toEqual(committed);
-    expect(await store.collectOrphans(providerId, { graceMs: 0, now: () => Date.now() + 1_000 })).toHaveLength(1);
-  }));
+  it("reconnect keeps the Profile identity and replaces its credential revision", async () =>
+    isolated(async (_root, authPath) => {
+      const store = memory();
+      const profiles = fixture(store, authPath);
+      await writeFile(authPath, syntheticDocument(), "utf8");
+      const first = await addLocal(profiles);
 
-  it("Reconnect uses the shared module and schedules the new capture; Recheck keeps the owned credential", async () => isolated(async (_root, authPath) => {
-    const store = memory();
-    const state = fixture(store, authPath);
-    await writeFile(authPath, document());
-    const first = await state.login();
-    await writeFile(authPath, document("account-b"));
-    const login = vi.fn(async () => { throw new Error("Local Reconnect must not run interactive login"); });
-    const postLogin = vi.fn();
-    const recheck = vi.fn(async () => "succeeded" as const);
-    const handlers = createCredentialProfilesControlPlaneHandlers({
-      models: { getProviders: () => [provider], login },
-      management: state.management, binding: state.binding,
-      loginFromLocalCodex: state.login, postLoginProvider: postLogin, recheckProvider: recheck,
-    });
-    const before = (await store.read(providerId))!;
-    await handlers.credentials({ command: "recheck", providerId, credentialId: first.credentialId, expectedRevision: before.revision });
-    expect(recheck).toHaveBeenCalledOnce();
-    const unchanged = await store.readCredential(providerId, first.credentialId, first.credentialGeneration);
-    expect(unchanged.state === "ok" && unchanged.credential.type === "oauth" && unchanged.credential.refresh).toBe("refresh-account-a");
-    const result = await handlers.auth({
-      command: "reconnect", providerId, credentialId: first.credentialId,
-      expectedRevision: before.revision, useNow: false,
-    }, { signal: new AbortController().signal, notify: async () => undefined,
-      prompt: async () => "" });
-    expect(result.outcome).toBe("ok");
-    expect(login).not.toHaveBeenCalled();
-    expect(postLogin).toHaveBeenCalledOnce();
-    const next = result.state.providers[0]!.profiles[0]!;
-    expect(next.credentialId).not.toBe(first.credentialId);
-    expect(postLogin.mock.calls[0]![1].facts.credentialId).toBe(next.credentialId);
-    const current = (await store.read(providerId))!.profiles[0]!;
-    expect(await store.readCredential(providerId, current.credentialId, current.credentialGeneration))
-      .toMatchObject({ credential: { refresh: "refresh-account-b" } });
-    await rm(authPath);
-    const invalid = await handlers.auth({
-      command: "reconnect", providerId, credentialId: current.credentialId,
-      expectedRevision: (await store.read(providerId))!.revision, useNow: false,
-    }, { signal: new AbortController().signal, notify: async () => undefined, prompt: async () => "" });
-    expect(invalid.outcome).toBe("unavailable");
-    expect(invalid.state.providers[0]!.profiles[0]!.health).toBe("reconnect_required");
-    expect(invalid.state.providers[0]!.profiles[0]!.credentialId).not.toBe(current.credentialId);
-    expect(postLogin).toHaveBeenCalledOnce();
-    const unavailable = invalid.state.providers[0]!.profiles[0]!;
-    const rechecked = await handlers.credentials({
-      command: "recheck", providerId, credentialId: unavailable.credentialId,
-      expectedRevision: invalid.state.providers[0]!.revision!,
-    });
-    expect(rechecked).toMatchObject({
-      outcome: "reconnect_required",
-      error: "Provider authentication must be reconnected",
-    });
-    expect(rechecked.state.providers[0]!.profiles[0]).toMatchObject({
-      credentialId: unavailable.credentialId,
-      health: "reconnect_required",
-    });
-    expect(recheck).toHaveBeenCalledOnce();
-  }));
-
-  it("does not publish an in-flight old refresh into the reconstructed Profile", async () => isolated(async (root, authPath) => {
-    await writeFile(authPath, document());
-    const store = createFileProviderCredentialRecordStore({
-      piDirectory: join(root, "pi"), createRevision: randomUUID,
-    });
-    const state = fixture(store, authPath);
-    const previous = await state.login();
-    let release!: () => void;
-    let entered!: () => void;
-    const waiting = new Promise<void>((resolve) => { release = resolve; });
-    const paused = new Promise<void>((resolve) => { entered = resolve; });
-    const rotation = store.modifyCredential(providerId, previous.credentialId,
-      previous.credentialGeneration, async (credential) => {
-        entered(); await waiting; return credential;
+      const before = (await store.read(providerId))!;
+      await profiles.management.updateMetadata({
+        providerId,
+        credentialId: first.credentialId,
+        expectedRevision: before.revision,
+        displayName: "Renamed",
+        note: "kept note",
       });
-    let collection: Promise<readonly string[]> | undefined;
-    try {
-      await paused;
-      await writeFile(authPath, document("account-b"));
-      const next = await state.login();
-      expect(next.credentialId).not.toBe(previous.credentialId);
-      collection = store.collectOrphans(providerId, { graceMs: 0, now: () => Date.now() + 1_000 });
-    } finally { release(); }
-    expect(await rotation).toBeUndefined();
-    expect(await collection).toHaveLength(1);
-    const current = (await store.read(providerId))!.profiles[0]!;
-    expect(await store.readCredential(providerId, current.credentialId, current.credentialGeneration))
-      .toMatchObject({ credential: { refresh: "refresh-account-b" } });
-  }));
+      const renamed = (await store.read(providerId))!;
 
-  it("normalizes an overflowing priority without changing sibling order or metadata", async () => isolated(async (_root, authPath) => {
-    const store = memory();
-    const state = fixture(store, authPath);
-    await state.login();
-    const other = await addManualSibling(store);
-    await state.management.setPriority({
-      providerId, credentialId: other, priority: Number.MAX_SAFE_INTEGER,
-      expectedRevision: (await store.read(providerId))!.revision,
-    });
-    await state.login();
-    const profiles = (await store.read(providerId))!.profiles;
-    expect(profiles.map((item) => item.priority)).toEqual([0, 1]);
-    expect(profiles[0]).toMatchObject({ credentialId: other, displayName: "Profile 1" });
-  }));
+      await writeFile(authPath, syntheticDocument("account-b"), "utf8");
+      const binding = await profiles.binding.createReconnectBinding({
+        providerId,
+        credentialId: first.credentialId,
+        useNow: false,
+        expectedRevision: renamed.revision,
+      });
+      const published = await profiles.binding.acquireLocal(binding);
 
-  it("includes local acquisition in ordinary 429 switching and rejects old publication", async () => isolated(async (_root, authPath) => {
-    await writeFile(authPath, document());
-    const store = memory();
-    const state = fixture(store, authPath);
-    const local = await state.login();
-    const oldCapture = await state.binding.capture(providerId);
-    const id = randomUUID();
-    const generation = randomUUID();
-    const credential = parseCodexInternalAuth(document("account-b"))!;
-    const current = (await store.read(providerId))!;
-    await store.publishCredential(providerId, current.revision, {
-      credentialId: id, credentialGeneration: generation, credential,
-    }, () => ({ kind: "commit", value: undefined, record: {
-      ...current, activeCredentialId: id, selectionGeneration: randomUUID(),
-      switchPolicy: { apiKeyOn429: false, oauthOn429: true },
-      profiles: [...current.profiles, {
-        credentialId: id, credentialGeneration: generation, authType: "oauth",
-        authMethodLabel: provider.auth.oauth!.name, displayName: "Manual",
-        enabled: true, priority: 1, createdAt: 1, updatedAt: 1,
-        ...credentialProfileCarrier(providerId, id, generation, credential),
-      }],
-    } }));
-    const manual = await state.binding.capture(providerId);
-    if (manual.facts.kind !== "managed") throw new Error("Missing managed capture");
-    const switched = await state.binding.advanceAfterFinal429({
-      capture: manual as Parameters<typeof state.binding.advanceAfterFinal429>[0]["capture"],
-      attemptedCredentialIds: [id],
-    });
-    expect(switched.outcome).toBe("switched");
-    expect((await store.read(providerId))!.activeCredentialId).toBe(local.credentialId);
-    expect(await state.binding.publishIfCurrent(manual, () => { throw new Error("Stale publication"); })).toBe(false);
-    expect(await state.binding.publishIfCurrent(oldCapture, () => { throw new Error("ABA publication"); })).toBe(false);
-    await rm(authPath);
-    const capture = await state.binding.capture(providerId);
-    expect(await state.binding.runBound(capture, () => state.credentialStore.read(providerId)))
-      .toMatchObject({ refresh: "refresh-account-a" });
-    await state.login();
-    expect(await state.binding.publishIfCurrent(capture, () => { throw new Error("Deleted publication"); })).toBe(false);
-    await expect(state.binding.capture(providerId)).rejects.toMatchObject({ outcome: "no_active_profile" });
-    expect((await store.read(providerId))!.profiles).toHaveLength(2);
-  }));
+      expect(published.credentialId).toBe(first.credentialId);
+      expect(published.credentialGeneration).not.toBe(first.credentialGeneration);
+      const after = (await store.read(providerId))!;
+      expect(after.profiles).toHaveLength(1);
+      expect(after.profiles[0]).toMatchObject({
+        credentialId: first.credentialId,
+        credentialGeneration: published.credentialGeneration,
+        displayName: "Renamed",
+        note: "kept note",
+        enabled: true,
+        strategyId: "codex_local",
+      });
+      expect(after.activeCredentialId).toBe(first.credentialId);
+      expect(after.selectionGeneration).toBe(renamed.selectionGeneration);
+      if (after.profiles[0]!.kind !== "reference") return;
+      expect(after.profiles[0]!.reference.revision).not.toBe(
+        renamed.profiles[0]!.kind === "reference"
+          ? renamed.profiles[0]!.reference.revision
+          : undefined,
+      );
+    }));
 
-  it("serializes independent file stores and never exposes the staged empty list", async () => isolated(async (root, authPath) => {
-    await writeFile(authPath, document());
-    const options = { piDirectory: join(root, "pi"), createRevision: randomUUID };
-    const store = createFileProviderCredentialRecordStore(options);
-    const secondStore = createFileProviderCredentialRecordStore(options);
-    const first = fixture(store, authPath);
-    const second = fixture(secondStore, authPath);
-    await Promise.all([first.login(), second.login(), first.login(), second.login()]);
-    const record = (await store.read(providerId))!;
-    expect(record.profiles).toHaveLength(1);
-    let release!: () => void;
-    let entered!: () => void;
-    const waiting = new Promise<void>((resolve) => { release = resolve; });
-    const paused = new Promise<void>((resolve) => { entered = resolve; });
-    const pausedStore = createFileProviderCredentialRecordStore({ ...options,
-      hooks: { afterIncarnationPublication: async () => { entered(); await waiting; } },
-    });
-    const operation = fixture(pausedStore, authPath).login();
-    try {
-      await paused;
-      expect(await secondStore.read(providerId)).toEqual(record);
-    } finally { release(); await operation; }
-    const next = (await store.read(providerId))!;
-    expect(next.profiles).toHaveLength(1);
-    expect(next.profiles[0]!.credentialId).not.toBe(record.profiles[0]!.credentialId);
-  }));
+  it("reconnect failure leaves the existing Profile reconnecting", async () =>
+    isolated(async (_root, authPath) => {
+      const store = memory();
+      const profiles = fixture(store, authPath);
+      await writeFile(authPath, syntheticDocument(), "utf8");
+      const first = await addLocal(profiles);
+      const before = (await store.read(providerId))!;
 
-  it("startup defaults on, off preserves the record, and explicit reconnect ignores the switch", async () => isolated(async (root, authPath) => {
-    const original = document();
-    await writeFile(authPath, original);
-    const store = memory();
-    const options = {
-      piDirectory: join(root, "pi"), modelsJsonPath: join(root, "models.json"), codexHome: root,
-      credentialRecordStore: store,
-      bundledProviderConfigurations: (await loadBundledProviderConfigurations(join(root, "bundled.json"))).configurations,
-      userProviderPackages: {},
-      fetch: vi.fn(() => { throw new Error("Startup must not use network"); }),
-    };
-    await createProviderRuntime(options);
-    const first = (await store.read(providerId))!;
-    await writeFile(authPath, "{");
-    const runtime = await createProviderRuntime({ ...options, codexAutoLoginOnStartup: false });
-    expect(await store.read(providerId)).toEqual(first);
-    const capture = await runtime.providerAuthBindings.capture(providerId);
-    const model = runtime.models.getModels(providerId)[0]!;
-    const resolved = await runtime.providerAuthBindings.runBound(capture, () => runtime.models.getAuth(model));
-    expect(resolved?.auth.apiKey).toBe(JSON.parse(original).tokens.access_token);
-    await runtime.loginFromLocalCodex({ credentialId: first.profiles[0]!.credentialId, expectedRevision: first.revision });
-    expect((await store.read(providerId))!.profiles[0]!.kind).toBe("unavailable");
-    await createProviderRuntime(options);
-    expect((await store.read(providerId))!.profiles).toHaveLength(1);
-  }));
+      await rm(authPath, { force: true });
+      const binding = await profiles.binding.createReconnectBinding({
+        providerId,
+        credentialId: first.credentialId,
+        useNow: false,
+        expectedRevision: before.revision,
+      });
+      await expect(profiles.binding.acquireLocal(binding)).rejects.toBeInstanceOf(
+        LocalAcquisitionError,
+      );
+      const after = (await store.read(providerId))!;
+      expect(after.revision).toBe(before.revision);
+      expect(after.profiles[0]!.credentialGeneration).toBe(first.credentialGeneration);
+
+      const projected = await profiles.management.query([providerId]);
+      expect(
+        projected.providers[0]!.profiles[0]!.health,
+      ).toBe("reconnect_required");
+
+      await writeFile(authPath, syntheticDocument(), "utf8");
+      const recovered = await profiles.management.query([providerId]);
+      expect(recovered.providers[0]!.profiles[0]!.health).not.toBe(
+        "reconnect_required",
+      );
+    }));
+
+  it("rejects an unsupported auth mode without an ambient fallback", async () =>
+    isolated(async (_root, authPath) => {
+      const store = memory();
+      const profiles = fixture(store, authPath);
+      await mkdir(authPath, { recursive: true });
+      await expect(addLocal(profiles)).rejects.toBeInstanceOf(LocalAcquisitionError);
+      expect(await store.read(providerId)).toBeUndefined();
+    }));
+
+  it("serves Pi from the external document and never lets refresh write it", async () =>
+    isolated(async (_root, authPath) => {
+      const store = memory();
+      const profiles = fixture(store, authPath);
+      await writeFile(authPath, syntheticDocument(), "utf8");
+      const published = await addLocal(profiles);
+      const capture = await profiles.binding.capture(providerId);
+
+      const read = await profiles.binding.runBound(capture, () =>
+        profiles.credentialStore.read(providerId),
+      );
+      expect(read).toMatchObject({ type: "oauth" });
+
+      let callbackRan = false;
+      const modified = await profiles.binding.runBound(capture, () =>
+        profiles.credentialStore.modify(providerId, async () => {
+          callbackRan = true;
+          return { type: "oauth", access: "rotated", refresh: "rotated", expires: Date.now() + 3_600_000 };
+        }),
+      );
+      expect(callbackRan).toBe(false);
+      expect(modified).toEqual(read);
+      expect(JSON.parse(await readFile(authPath, "utf8"))).toEqual(
+        JSON.parse(syntheticDocument()),
+      );
+      const record = (await store.read(providerId))!;
+      expect(record.profiles[0]!.kind).toBe("reference");
+      if (record.profiles[0]!.kind !== "reference") return;
+      expect(record.profiles[0]!.reference.revision).toBe(
+        createHash("sha256").update(await readFile(authPath)).digest("hex"),
+      );
+      expect(record.profiles[0]!.credentialGeneration).toBe(
+        published.credentialGeneration,
+      );
+
+      // Less than five minutes remain and Token cannot refresh the owner's
+      // document, so the read fails closed instead of handing over a dying
+      // token.
+      await writeFile(authPath, syntheticDocument("account-a", Date.now() + 60_000), "utf8");
+      await profiles.management.query([providerId]);
+      await expect(
+        profiles.binding.runBound(capture, () =>
+          profiles.credentialStore.read(providerId),
+        ),
+      ).rejects.toMatchObject({ outcome: "stale_binding" });
+
+      await rm(authPath, { force: true });
+      await expect(
+        profiles.binding.runBound(capture, () =>
+          profiles.credentialStore.read(providerId),
+        ),
+      ).rejects.toMatchObject({ outcome: "stale_binding" });
+    }));
 });

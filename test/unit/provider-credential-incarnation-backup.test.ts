@@ -18,7 +18,7 @@ import { configuredCredentialProfileBackupSnapshot } from "../../src/backup/conf
 import type { TokenCliConfig } from "../../src/cli-config.js";
 import {
   createFileProviderCredentialRecordStore,
-  credentialIncarnationReference,
+  managedCredentialReference,
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
   type PersistedProviderCredentialRecordV2,
@@ -74,7 +74,7 @@ function recordFor(input: {
       priority: 0,
       createdAt: 1,
       updatedAt: 1,
-      kind: "incarnation", incarnation: credentialIncarnationReference(
+      kind: "reference", reference: managedCredentialReference(
         providerId,
         credentialId,
         input.credentialGeneration,
@@ -116,13 +116,13 @@ function assertConsistentPair(provider: SnapshotProvider): void {
   expect(provider.incarnations).toHaveLength(record.profiles.length);
   for (const profile of record.profiles) {
     const incarnation = provider.incarnations.find(
-      (candidate) => candidate.relativePath === profile.incarnation!.relativePath,
+      (candidate) => candidate.relativePath === profile.reference!.path,
     );
     expect(incarnation).toBeDefined();
     const bytes = Buffer.from(incarnation!.content, "base64");
     expect(createHash("sha256").update(bytes).digest("hex"))
-      .toBe(profile.incarnation!.tokenRevision);
-    expect(incarnation!.tokenRevision).toBe(profile.incarnation!.tokenRevision);
+      .toBe(profile.reference!.revision);
+    expect(incarnation!.tokenRevision).toBe(profile.reference!.revision);
   }
 }
 
@@ -200,7 +200,7 @@ describe("sensitive Provider credential profile snapshot", () => {
       });
       expect(provider.incarnations).toEqual([{
         relativePath: `${providerId}/${credentialId}/generation-1.auth.json`,
-        tokenRevision: recorded.profiles[0]!.incarnation!.tokenRevision,
+        tokenRevision: recorded.profiles[0]!.reference!.revision,
         content: expect.any(String),
       }]);
       assertConsistentPair(provider);
@@ -302,13 +302,13 @@ describe("sensitive Provider credential profile snapshot", () => {
       expect(JSON.parse(incarnation.bytes.toString("utf8"))).toMatchObject({
         tokens: { access_token: syntheticCodexAccess("access-rotated") },
       });
-      expect(record.profiles[0]!.incarnation!.tokenRevision)
+      expect(record.profiles[0]!.reference!.revision)
         .toBe(createHash("sha256").update(incarnation.bytes).digest("hex"));
       await expect(readFile(
         join(
           piDirectory,
           "credentials",
-          record.profiles[0]!.incarnation!.relativePath,
+          record.profiles[0]!.reference!.path,
         ),
       )).resolves.toEqual(incarnation.bytes);
     } finally {

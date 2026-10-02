@@ -211,16 +211,27 @@ async function captureCredentialProfileSnapshot(
       recordBytes.toString("utf8"),
       providerId,
     );
-    if (record.profiles.some((profile) => profile.kind === "incarnation")) {
+    if (
+      record.profiles.some(
+        (profile) =>
+          profile.kind === "reference" &&
+          profile.reference.owner === "managed",
+      )
+    ) {
       // Recovery uses the store's credential → record locking and adopts only
-      // the still-referenced incarnation. Then capture the reconciled record.
+      // the still-referenced managed document. Then capture the reconciled
+      // record. Externally owned references are never read or adopted here.
       const store = createFileProviderCredentialRecordStore({ piDirectory: dirname(directory),
         createRevision: () => { throw new Error("Backup recovery cannot change management identity"); } });
       for (const profile of record.profiles) {
         signal.throwIfAborted();
-        if (profile.kind === "incarnation") {
+        if (profile.kind === "reference" && profile.reference.owner === "managed") {
           const read = await store.readCredential(providerId, profile.credentialId, profile.credentialGeneration);
-          if (read.state === "invalid" || read.state === "unreadable") throw new Error("Credential backup refused an unsafe or unreadable incarnation");
+          if (read.state === "invalid" || read.state === "unreadable") {
+            throw new Error(
+              "Credential backup refused an unsafe or unreadable credential document",
+            );
+          }
         }
       }
       recordBytes = await readFile(join(directory, entry.name));
@@ -233,15 +244,21 @@ async function captureCredentialProfileSnapshot(
     }> = [];
     for (const profile of record.profiles) {
       signal.throwIfAborted();
-      if (profile.kind !== "incarnation") continue;
+      if (
+        profile.kind !== "reference" ||
+        profile.reference.owner !== "managed" ||
+        profile.reference.revision === undefined
+      ) {
+        continue;
+      }
       const content = await readReferencedIncarnation(
         credentialDirectory,
-        profile.incarnation.relativePath,
-        profile.incarnation.tokenRevision,
+        profile.reference.path,
+        profile.reference.revision,
       );
       incarnations.push({
-        relativePath: profile.incarnation.relativePath,
-        tokenRevision: profile.incarnation.tokenRevision,
+        relativePath: profile.reference.path,
+        tokenRevision: profile.reference.revision,
         content,
       });
     }
@@ -259,10 +276,9 @@ async function captureCredentialProfileSnapshot(
 }
 
 /** Sensitive credential snapshot: captures each Provider record together with
- * every incarnation document it references, re-verifying the content hash and
- * retrying a torn read. Orphan documents are not captured, and external Codex
- * documents are never copied — the record only references Token-owned
- * incarnations. */
+ * every managed document it references, re-verifying the content hash and
+ * retrying a torn read. Orphan documents are not captured, and externally
+ * owned documents are never read or copied. */
 export function configuredCredentialProfileBackupSnapshot(
   config: TokenCliConfig,
 ): BackupSnapshotSource {

@@ -119,7 +119,7 @@ describe("Anthropic Provider Native lane", () => {
   it("rebuilds Anthropic SDK identity, timeout, and auth after a 429 Profile switch", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2].map((index) => ({
       facts: {
-        kind: "managed",
+        kind: "managed", carrierOwner: "managed",
         providerId: "anthropic",
         credentialId: `credential-${index}`,
         authType: "api_key",
@@ -196,7 +196,7 @@ describe("Anthropic Provider Native lane", () => {
   it("stops after three outer Profile attempts even if a binding Adapter keeps switching", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2, 3, 4].map((index) => ({
       facts: {
-        kind: "managed",
+        kind: "managed", carrierOwner: "managed",
         providerId: "fixture",
         credentialId: `credential-${index}`,
         authType: "api_key",
@@ -286,7 +286,7 @@ describe("Anthropic Provider Native lane", () => {
       "https://effective.example.com/gateway",
     );
     expect(observed[0]?.capture.facts).toMatchObject({
-      kind: "managed",
+      kind: "managed", carrierOwner: "managed",
       authType: "api_key",
     });
     expect(observed[0]?.response).toMatchObject({

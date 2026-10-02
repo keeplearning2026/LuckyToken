@@ -12,6 +12,8 @@
 
 This document defines the target product contract. It is a PRD, not an implementation specification. It fixes the Provider-isolated authority and request behavior; exact file paths, package boundaries, and wire schemas must still be decided from source evidence during implementation design.
 
+> Core model update (2026-10-01): the authoritative acquisition/profile/Pi-boundary contract is now [TokenProviderCredentialCoreModelPlan.md](./TokenProviderCredentialCoreModelPlan.md). Local Codex login is an explicit `local_oauth` acquisition kind, gated by `integrations.codex.localLogin` (default true); there is no startup auto-login, no forced new-ID rebuild, and no `(LOCAL CODEX)` name suffix. `acquisitionKind` is public; the internal strategy id, credential path, owner and refresh implementation remain private.
+
 ---
 
 # 1. Executive summary
@@ -110,7 +112,7 @@ Users must be able to see, name, disable, and remove every Token-managed credent
 
 ## 5.2 Stable identity, editable presentation
 
-Routing and lifecycle operations use an immutable `credentialId`. A user may rename a profile or edit its note without changing active identity, health history, request attribution, or selection behavior. A local Codex Profile keeps its ` (LOCAL CODEX)` display suffix when renamed.
+Routing and lifecycle operations use an immutable `credentialId`. A user may rename a profile or edit its note without changing active identity, health history, request attribution, or selection behavior. A local Codex Profile is identified by its public `acquisitionKind`; rename is generic and does not alter or append a source suffix.
 
 ## 5.3 No secret redisplay
 
@@ -227,19 +229,17 @@ Provider-specific error text does not become a new generic state. Backend maps o
 
 ## 6.6 Acquisition and ambient authentication
 
-All Profiles share one model, list, selection field and action interface. Credential acquisition is private Backend metadata; the only public source marker is the ` (LOCAL CODEX)` display-name suffix on the local Codex auto-login Profile. External, read-only and other acquisition categories remain unexposed. Ambient environment or command sources are not enumerable Profiles and remain eligible only when no Profiles exist, never as fallback for unavailable or unselected Profiles.
+All Profiles share one model, list, selection field and action interface. Acquisition exposes only the generic `acquisitionKind` (`api_key` / `oauth` / `local_oauth`); the internal strategy id, credential path, owner and refresh implementation remain private. Ambient environment or command sources are not enumerable Profiles and remain eligible only when no Profiles exist, never as fallback for unavailable or unselected Profiles.
 
-### 6.6.1 Shared local Codex acquisition
+### 6.6.1 Local Codex acquisition
 
-`integrations.codex.autoLoginOnStartup` is boolean, default true and restart-required, under Settings → `.codex agent`. On Backend Application startup, after Provider registration and before authentication/catalog checks, the shared acquisition operation stages deletion of existing `acquisition: "codex_local"` items, reads `<CODEX_HOME>/auth.json` through the bounded file reader and ChatGPT parser, then creates one fresh ordinary Profile and commits the complete record once. Reconnect of that Profile calls the same operation after validating the target ID and revision. Renderer mounting, settings queries, Data Plane restart and in-session removal do not invoke acquisition. Disabling the setting skips the operation entirely; explicit Reconnect remains available.
+`integrations.codex.localLogin` is boolean, default true and hot-apply, under Settings → `.codex agent`. It controls whether the Codex `local_oauth` acquisition option is offered; it does not run at startup and does not create, remove or refresh a Profile. All three login methods are explicit user actions. The local option is singleton per Provider: when a `local_oauth` Profile already exists, the add path returns `duplicate` and the UI reminds the user to Reconnect or Remove; it never re-reads the source for a new add. Reconnect re-reads the referenced source for the existing Profile and replaces its credential generation in place.
 
-Every invocation creates a random credential ID and generation, the smallest unused `Profile N` base with the ` (LOCAL CODEX)` display suffix, no note, enabled true, and appends the Profile after retained siblings. A changed display name receives the same suffix on rename; an unchanged name is preserved as-is. No account comparison, duplicate-token rejection or old identity preservation applies to this operation. If the removed local item was selected, selection transfers to the new item; other selected IDs remain unchanged. A new Provider record selects the new item, while an existing unselected record remains unselected.
+Local login references the external `<CODEX_HOME>/auth.json`; Token treats it as external/read-only and never copies, writes or refreshes it. Missing, unreadable, empty, oversized, invalid or unsupported documents fail the login; an existing local Profile stays in `reconnect_required` until the owner refreshes the file and Reconnect succeeds. No account comparison or old-token retention applies. Login creates a Profile; Reconnect keeps the existing Profile identity and metadata. 429/usage/selection use the unified Profile state, not the acquisition kind.
 
-Valid material is copied as a parsed Pi OAuth credential into a Token-owned incarnation. Expired but parseable OAuth is imported unchanged and refreshes later through ordinary Pi OAuth; acquisition does not use network login or refresh. Missing, unreadable, empty, oversized, invalid or unsupported documents still create one Profile with `kind: "unavailable"`, no credential material or fabricated file reference, and ordinary `reconnect_required` health. No old token survives in the live record. Old incarnations follow the existing GC grace rule.
+Schema remains 2. The public projection exposes `acquisitionKind`; the internal persisted strategy id, credential reference and owner never enter public DTOs, Renderer, logs or Pi semantic state. The current validator is the only accepted contract; obsolete carriers and old local Profiles are not migrated or dual-read.
 
-Schema remains 2. `acquisition?: "codex_local"` is optional private persisted metadata, permitted only for Codex OAuth, with at most one such item per Provider. It never enters public DTOs, Renderer, logs or Pi semantic state. The general carrier additionally supports `unavailable`; publication accepts `Credential | null`. The single current validator continues to accept existing ordinary schema-2 records; no migration or dual reader exists.
-
-Rename/note, Recheck, Disable/Enable, Remove, order and selection share ordinary implementations; renaming the local Codex auto-login Profile appends the Token-owned ` (LOCAL CODEX)` display suffix when the name changes and preserves the current name otherwise. Recheck checks the existing owned credential and models, without reading the local login. Reconnect returns the fresh ID/generation privately so post-login checks never target the deleted item. Manual and HTTP 429 switching do not inspect acquisition; disabled and unavailable Profiles cannot become automatic candidates. Selected unavailable credentials fail closed in authentication, usage, Public Models and attention.
+Rename/note, Recheck, Disable/Enable, Remove, order and selection share ordinary implementations; rename is fully generic and the Profile row renders the public `acquisitionKind` instead of a name suffix. Recheck checks the existing credential and models, without reading the local login. Reconnect keeps the Profile identity and replaces its credential generation and reference. Manual and HTTP 429 switching do not inspect acquisition; disabled and unavailable Profiles cannot become automatic candidates. Selected unavailable credentials fail closed in authentication, usage, Public Models and attention.
 
 ---
 
@@ -597,7 +597,7 @@ Pi's existing locked OAuth refresh behavior is the reference for these semantics
 
 For managed credentials, each execution records the opaque `credentialId`, internal auth type, Backend-projected auth-method label, selected lane, bounded request-time display-name snapshot, attempt result, and selection reason. It never records secret material, token claims, the note, or raw auth-source details. External execution records the bounded source label and selection reason but no Profile attribution. Ambient execution records no invented Profile attribution.
 
-The stable `credentialId` provides exact internal attribution. The user recognizes the credential through the name they assigned and the captured Provider auth-method label; the local Codex auto-login Profile additionally carries the Token-owned ` (LOCAL CODEX)` display suffix. Activity shows a bounded attempt trail such as `Production — 429` followed by `Backup — Success`, with reason `HTTP 429 failover`.
+The stable `credentialId` provides exact internal attribution. The user recognizes the credential through the name they assigned, the public `acquisitionKind`, and the captured Provider auth-method label. Activity shows a bounded attempt trail such as `Production — 429` followed by `Backup — Success`, with reason `HTTP 429 failover`.
 
 Activity attribution is visible by default in the local product and has no separate v1 privacy setting. This does not authorize telemetry or external export. Deleting a profile does not delete already retained Activity snapshots; those disappear through normal Request Ledger retention.
 
@@ -947,7 +947,7 @@ V1 product decisions are closed:
 
 1. `authType: "api_key" | "oauth"` remains Pi's internal authentication discriminant; `api_key` does not mean the stored payload is necessarily a literal API key.
 2. Backend projects a bounded Provider-declared `authMethodLabel`; `identityHint` is optional and is never invented when no safe identity exists. Renderer derives neither fact from Pi metadata or credential payloads.
-3. User-visible Profile names are user-owned and ontology-neutral for manually added Profiles; the local Codex auto-login Profile is the exception and carries the Token-owned ` (LOCAL CODEX)` display suffix. UI actions, rows, search, removal, and 429 settings use projected Provider method labels rather than hard-coded `API key`/`account` product types.
+3. User-visible Profile names are user-owned and ontology-neutral. Source identity is a separate public `acquisitionKind` (`api_key` / `oauth` / `local_oauth`); the internal strategy id, path and owner remain private. UI actions, rows, search, removal, and 429 settings use projected Provider method labels rather than hard-coded `API key`/`account` product types.
 4. Every Provider has one authoritative `activeCredentialId` across both Pi auth branches. It contains an ordinary Profile ID, with no reserved source value or separate pointer by acquisition, auth type or lane.
 5. Manual selection updates that Provider-wide field for subsequent requests. Automatic 429 switching is managed-Profile-only. V1 has no session-affine credential selection.
 6. Provider auth capture is a discriminated union: exact managed binding for a selected Profile, exact external binding for a selected declared source, or operation-local ambient binding when no managed Profiles and no declared external source exist. Missing or unavailable explicit selection fails closed.

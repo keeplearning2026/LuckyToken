@@ -173,7 +173,7 @@ describe("Provider Runtime composition", () => {
     const modelIdentity = runtime.models.getModels("anthropic")[0];
     const login = await runtime.providerAuthBindings.createLoginBinding({
       providerId: "anthropic",
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Production",
       useNow: false,
       expectedRevision: "absent",
@@ -458,7 +458,7 @@ describe("Provider Runtime composition", () => {
     const add = async (providerId: string, displayName: string, key: string) => {
       const binding = await runtime.providerAuthBindings.createLoginBinding({
         providerId,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision: "absent",

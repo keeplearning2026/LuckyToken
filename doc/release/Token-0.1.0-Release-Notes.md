@@ -26,10 +26,12 @@ The management UI is organized around user tasks rather than internal subsystems
   its Pi-declared non-OAuth and OAuth authentication methods. Exactly one
   managed Profile is active for subsequent requests; switching never changes
   the client protocol or data-plane lane.
-- Local Codex auto-login and manual login produce equal ordinary Profiles with
-  the same actions, selector, counts and HTTP 429 candidate rules. The local
-  auto-login Profile carries the ` (LOCAL CODEX)` display-name suffix;
-  otherwise credential acquisition stays private to the Backend.
+- Login forms a Profile. The Provider card offers the Provider's API-key,
+  OAuth and (where registered) local-login entries with distinct icons;
+  every Profile then shares one list, one selection field, one set of
+  actions and the same HTTP 429 candidate rules. `acquisitionKind` is the
+  only public source marker; the internal strategy id, credential path and
+  owner stay private to the Backend.
 - Profiles support notes, priority, enable/disable, explicit activation,
   reconnect, local removal, and separately configurable default-off HTTP 429
   switching for the Provider's two Pi auth branches. A request makes at most
@@ -38,29 +40,30 @@ The management UI is organized around user tasks rather than internal subsystems
   label, lane, attempt, and outcome facts. Secrets and Profile notes are not
   recorded.
 - Provider credentials are stored as independent
-  `pi/credential-profiles/<providerId>.json` records whose token material
-  lives in one incarnation document per committed logical credential
-  (`pi/credentials/<providerId>/<credentialId>/<credentialGeneration>.auth.json`).
-  The record reference switch is the commit point; recovery reads only the
-  referenced incarnation and never adopts an unreferenced file. The obsolete
+  `pi/credential-profiles/<providerId>.json` records; every Profile references
+  exactly one credential document. Managed documents live under
+  `pi/credentials/<providerId>/<credentialId>/<credentialGeneration>.auth.json`;
+  externally owned documents (the local Codex login) are only read and never
+  written, copied or backed up by Token. The record reference switch is the
+  commit point; recovery reads only the referenced document and never adopts an
+  unreferenced file. The obsolete
   Provider single-slot `pi/auth.json` is ignored, never migrated, never
   overwritten, and never deleted automatically. After verifying that no older
   Token installation is needed, users may manually remove that obsolete file.
 
 ## Codex-native `openai-codex` source and model catalog
 
-- By default, Backend startup rebuilds one ordinary Profile from the current
-  local Codex ChatGPT login. Settings → `.codex agent` → “启动时自动登录本地 Codex”
-  controls the next startup. Turning it off preserves existing Profiles. The
-  local Profile is named `Profile N (LOCAL CODEX)`; renaming it appends the
-  suffix to the new name when the name changes.
-- Startup and Reconnect share atomic removal/read/create publication. Each run
-  creates fresh IDs and default metadata, retains other Profiles, and preserves
-  their selection. Missing or invalid local login creates a Profile needing
-  reconnect, without retaining old tokens or silently choosing another account.
-- Imported OAuth lives in Token-owned incarnation files and refreshes through
-  ordinary Pi OAuth. The original Codex auth.json remains unchanged; Recheck
-  checks the existing imported credential instead of re-reading that source.
+- Local Codex login is an explicit entry on the Provider card, shown by
+  Settings → `.codex agent` → “显示本地 Codex 登录入口” (default on, applied
+  immediately). There is no startup auto-login. One local Profile exists at a
+  time: clicking the local entry again reminds the user to reconnect or remove
+  it instead of reading the source or creating a second Profile.
+- Login and Reconnect share one Provider-locked acquisition: existence check,
+  bounded read and record commit. Missing or invalid input fails and creates
+  nothing. Reconnect keeps the Profile identity and replaces its credential
+  generation and reference; the external Codex `auth.json` is never written or
+  refreshed by Token, and Recheck checks the existing reference instead of
+  re-reading the source.
 - The Provider's model list is extended with the local Codex native catalog
   (`codex debug models --bundled`, read-only `models_cache.json` fallback),
   append-only and never written to the user's `models.json`. Appended models

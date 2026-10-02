@@ -137,7 +137,7 @@ export function decodeProviderProfileAuthCommand(
         [
           "command",
           "providerId",
-          "authType",
+          "acquisitionKind",
           "displayName",
           "useNow",
           "expectedRevision",
@@ -145,7 +145,9 @@ export function decodeProviderProfileAuthCommand(
         ["note"],
       ) ||
       !providerId(value.providerId) ||
-      (value.authType !== "api_key" && value.authType !== "oauth") ||
+      (value.acquisitionKind !== "api_key" &&
+        value.acquisitionKind !== "oauth" &&
+        value.acquisitionKind !== "local_oauth") ||
       !metadata(value.displayName, 64) ||
       (value.note !== undefined &&
         !(typeof value.note === "string" && value.note.length <= 200)) ||
@@ -189,6 +191,7 @@ function decodeProfile(value: unknown): CredentialProfileProjectionV1 | undefine
       [
         "credentialId",
         "authType",
+        "acquisitionKind",
         "authMethodLabel",
         "displayName",
         "enabled",
@@ -201,6 +204,9 @@ function decodeProfile(value: unknown): CredentialProfileProjectionV1 | undefine
     ) ||
     !opaqueId(value.credentialId) ||
     (value.authType !== "api_key" && value.authType !== "oauth") ||
+    (value.acquisitionKind !== "api_key" &&
+      value.acquisitionKind !== "oauth" &&
+      value.acquisitionKind !== "local_oauth") ||
     !metadata(value.authMethodLabel, 128) ||
     !metadata(value.displayName, 64) ||
     (value.note !== undefined && !(typeof value.note === "string" && value.note.length <= 200)) ||
@@ -295,21 +301,35 @@ function decodeOptions(value: unknown): CredentialProfileOptionsProjection | und
   for (const provider of value.providers) {
     if (
       !isObject(provider) ||
-      !exactKeys(provider, ["providerId", "name", "source", "authMethods"]) ||
+      !exactKeys(provider, ["providerId", "name", "source", "acquisitionOptions"]) ||
       !providerId(provider.providerId) ||
       !metadata(provider.name, 128) ||
       (provider.source !== "pi_builtin" &&
         provider.source !== "token_bundled" &&
         provider.source !== "user") ||
-      !Array.isArray(provider.authMethods)
+      !Array.isArray(provider.acquisitionOptions)
     ) return undefined;
-    for (const method of provider.authMethods) {
+    for (const method of provider.acquisitionOptions) {
       if (
         !isObject(method) ||
-        !exactKeys(method, ["authType", "authMethodLabel", "interactive"]) ||
+        !exactKeys(method, [
+          "kind",
+          "label",
+          "icon",
+          "authType",
+          "interactive",
+          "state",
+        ]) ||
+        (method.kind !== "api_key" &&
+          method.kind !== "oauth" &&
+          method.kind !== "local_oauth") ||
+        (method.icon !== "key" &&
+          method.icon !== "account" &&
+          method.icon !== "terminal") ||
         (method.authType !== "api_key" && method.authType !== "oauth") ||
-        !metadata(method.authMethodLabel, 128) ||
-        typeof method.interactive !== "boolean"
+        !metadata(method.label, 128) ||
+        typeof method.interactive !== "boolean" ||
+        (method.state !== "available" && method.state !== "already_connected")
       ) return undefined;
     }
   }

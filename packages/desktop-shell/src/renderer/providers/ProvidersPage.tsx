@@ -13,6 +13,7 @@ import {
   Save,
   ShieldCheck,
   Star,
+  Terminal,
   Trash2,
   UserRoundCheck,
   UserRoundPlus,
@@ -51,6 +52,7 @@ type ProviderUsageResult = Awaited<
 >;
 type ProviderUsageRow = ProviderUsageResult["snapshot"]["providers"][number];
 type AuthType = "oauth" | "api_key";
+type AcquisitionOption = ProviderOption["acquisitionOptions"][number];
 
 export interface ProviderModelRow {
   readonly providerId: string;
@@ -64,7 +66,7 @@ export interface ProviderModelRow {
 
 interface AuthModalState {
   readonly providerId: string;
-  readonly authType: AuthType;
+  readonly acquisitionKind: AcquisitionOption["kind"];
   readonly mode: "add" | "reconnect";
   readonly credentialId?: string;
 }
@@ -471,8 +473,14 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
 
   const openAdd = (
     provider: ProviderOption,
-    authType: AuthType,
+    option: AcquisitionOption,
   ): void => {
+    if (option.state === "already_connected") {
+      setNotice(
+        "A local login Profile already exists. Reconnect it to refresh, or remove it first.",
+      );
+      return;
+    }
     const profiles = profileState.providers.find(
       (candidate) => candidate.providerId === provider.providerId,
     )?.profiles ?? [];
@@ -485,7 +493,11 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     setProfileNote("");
     setUseNow(profiles.length === 0);
     setAuthStarted(false);
-    setAuthModal({ providerId: provider.providerId, authType, mode: "add" });
+    setAuthModal({
+      providerId: provider.providerId,
+      acquisitionKind: option.kind,
+      mode: "add",
+    });
     setAuthOutcome(undefined);
     clearAuthInteraction();
   };
@@ -500,7 +512,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     setAuthStarted(false);
     setAuthModal({
       providerId: provider.providerId,
-      authType: profile.authType,
+      acquisitionKind: profile.acquisitionKind,
       mode: "reconnect",
       credentialId: profile.credentialId,
     });
@@ -540,7 +552,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           ? {
               command: "login",
               providerId: provider.providerId,
-              authType: modal.authType,
+              acquisitionKind: modal.acquisitionKind,
               displayName: profileName.trim(),
               ...(profileNote.length === 0 ? {} : { note: profileNote }),
               useNow,
@@ -1015,7 +1027,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           providerId,
           name: providerId,
           source: "user" as const,
-          authMethods: [],
+          acquisitionOptions: [],
         },
     );
   const visible = allProviders.filter((provider) => {
@@ -1088,11 +1100,15 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       : selectedProfilesState?.profiles.find(
           (profile) => profile.credentialId === profileActionsId,
         );
-  const profileActionsMethod = selectedProfilesProvider?.authMethods.find(
-    (method) => method.authType === profileActions?.authType,
+  const profileActionsMethod = selectedProfilesProvider?.acquisitionOptions.find(
+    (option) => option.kind === profileActions?.acquisitionKind,
   );
   const ProfileActionsAuthIcon =
-    profileActions?.authType === "oauth" ? UserRoundCheck : KeyRound;
+    profileActions?.acquisitionKind === "api_key"
+      ? KeyRound
+      : profileActions?.acquisitionKind === "local_oauth"
+        ? Terminal
+        : UserRoundCheck;
   const selectedProviderModelRows =
     modelsProviderId === undefined
       ? []
@@ -1117,8 +1133,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     authModal === undefined
       ? undefined
       : allProviders.find((provider) => provider.providerId === authModal.providerId);
-  const authMethod = authProvider?.authMethods.find(
-    (method) => method.authType === authModal?.authType,
+  const authMethod = authProvider?.acquisitionOptions.find(
+    (option) => option.kind === authModal?.acquisitionKind,
   );
 
   const renderCompactProviderCard = (
@@ -1304,20 +1320,32 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
         ) : null}
 
         <div className="provider-card-actions">
-          {provider.authMethods
-            .filter((method) => method.interactive)
-            .map((method) => {
+          {provider.acquisitionOptions
+            .filter((option) => option.interactive)
+            .map((option) => {
               const Icon =
-                method.authType === "api_key" ? KeyRound : UserRoundPlus;
+                option.icon === "key"
+                  ? KeyRound
+                  : option.icon === "account"
+                    ? UserRoundPlus
+                    : Terminal;
               return (
                 <button
-                  key={method.authType}
+                  key={option.kind}
                   type="button"
                   className="card-icon-button"
-                  aria-label={`Add ${method.authMethodLabel}`}
-                  title={method.authType === "api_key" ? "Add API key" : "Add OAuth account"}
+                  aria-label={
+                    option.state === "already_connected"
+                      ? `${option.label} is already connected`
+                      : `Add ${option.label}`
+                  }
+                  title={
+                    option.state === "already_connected"
+                      ? "Already connected. Reconnect it from Profiles."
+                      : `Add ${option.label}`
+                  }
                   disabled={busyProvider !== undefined}
-                  onClick={() => openAdd(provider, method.authType)}
+                  onClick={() => openAdd(provider, option)}
                 >
                   <Icon size={21} aria-hidden="true" />
                 </button>
@@ -1527,10 +1555,10 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               {selectedProfileAuthTypes.length === 0 ? null : (
                 <div className="profile-switch-policy">
                   {selectedProfileAuthTypes.map((authType) => {
-                    const method = selectedProfilesProvider.authMethods.find(
-                      (candidate) => candidate.authType === authType,
+                    const method = selectedProfilesProvider.acquisitionOptions.find(
+                      (candidate) => candidate.kind === authType,
                     );
-                    const label = method?.authMethodLabel ?? authType;
+                    const label = method?.label ?? authType;
                     const enabled = authType === "api_key"
                       ? selectedProfilesState.switchPolicy?.apiKeyOn429
                       : selectedProfilesState.switchPolicy?.oauthOn429;
@@ -1573,9 +1601,18 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       const active =
                         selectedProfilesState.activeCredentialId === profile.credentialId;
                       const AuthIcon =
-                        profile.authType === "api_key" ? KeyRound : UserRoundCheck;
+                        profile.acquisitionKind === "api_key"
+                          ? KeyRound
+                          : profile.acquisitionKind === "local_oauth"
+                            ? Terminal
+                            : UserRoundCheck;
                       const authLabel =
-                        profile.authType === "api_key" ? "API key" : "OAuth account";
+                        selectedProfilesProvider.acquisitionOptions.find(
+                          (option) => option.kind === profile.acquisitionKind,
+                        )?.label ??
+                        (profile.authType === "api_key"
+                          ? "API key"
+                          : "OAuth account");
                       const healthTone =
                         profile.health === "ready"
                           ? "good"
@@ -1891,7 +1928,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
             <div className="task-modal-header">
               <div>
                 <p className="eyebrow">
-                  {authMethod?.authMethodLabel ?? "Provider credential"}
+                  {authMethod?.label ?? "Provider credential"}
                 </p>
                 <h3>{authProvider.name}</h3>
               </div>
@@ -1925,7 +1962,9 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                   onSubmit={(event) => {
                     event.preventDefault();
                     void startAuth(
-                      authModal.authType === "api_key" ? apiKeyValue : undefined,
+                      authModal.acquisitionKind === "api_key"
+                        ? apiKeyValue
+                        : undefined,
                     );
                   }}
                 >
@@ -1936,7 +1975,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                         <input
                           value={profileName}
                           maxLength={64}
-                          autoFocus={authModal.authType !== "api_key"}
+                          autoFocus={authModal.acquisitionKind !== "api_key"}
                           onChange={(event) => setProfileName(event.currentTarget.value)}
                         />
                       </label>
@@ -1950,9 +1989,9 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       </label>
                     </>
                   ) : (
-                    <p>Reconnect {profileName} using {authMethod?.authMethodLabel}.</p>
+                    <p>Reconnect {profileName} using {authMethod?.label}.</p>
                   )}
-                  {authModal.authType === "api_key" ? (
+                  {authModal.acquisitionKind === "api_key" ? (
                     <label>
                       <span>API key</span>
                       <input
@@ -1977,7 +2016,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       type="submit"
                       disabled={
                         (authModal.mode === "add" && profileName.trim().length === 0) ||
-                        (authModal.authType === "api_key" && apiKeyValue.length === 0)
+                        (authModal.acquisitionKind === "api_key" &&
+                          apiKeyValue.length === 0)
                       }
                     >
                       {authModal.mode === "add" ? "Continue" : "Reconnect"}
@@ -1989,11 +2029,12 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                 </form>
               ) : (
               <>
-                {authModal.authType === "oauth" && externalInteraction === undefined && interaction === undefined ? (
-                  <p>Connecting…</p>
-                ) : null}
-                {authModal.authType === "api_key" && externalInteraction === undefined && interaction === undefined ? (
-                  <p>Connecting…</p>
+                {externalInteraction === undefined && interaction === undefined ? (
+                  <p>
+                    {authModal.acquisitionKind === "local_oauth"
+                      ? "Reading the local login..."
+                      : "Connecting..."}
+                  </p>
                 ) : null}
 
                 {externalInteraction?.type === "auth_url" ? (

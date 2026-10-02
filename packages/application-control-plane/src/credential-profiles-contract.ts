@@ -1,6 +1,11 @@
 import type { AuthInteractionChannel, ProviderSource } from "./contracts.js";
 
 export type CredentialProfileAuthType = "api_key" | "oauth";
+export type CredentialProfileAcquisitionKind =
+  | "api_key"
+  | "oauth"
+  | "local_oauth";
+export type CredentialProfileAcquisitionIcon = "key" | "account" | "terminal";
 export type CredentialProfileHealth =
   | "ready"
   | "not_yet_verified"
@@ -12,6 +17,9 @@ export type CredentialProfileHealth =
 export interface CredentialProfileProjectionV1 {
   readonly credentialId: string;
   readonly authType: CredentialProfileAuthType;
+  /** Public acquisition kind. The internal strategy id, credential path and
+   * document owner never cross this boundary. */
+  readonly acquisitionKind: CredentialProfileAcquisitionKind;
   readonly authMethodLabel: string;
   readonly displayName: string;
   readonly note?: string;
@@ -57,17 +65,20 @@ export interface CredentialProfilesProjectionV1 {
   readonly providers: readonly ProviderCredentialProfilesProjectionV1[];
 }
 
-export interface ProviderCredentialAuthMethodProjection {
+export interface CredentialProfileAcquisitionOptionProjection {
+  readonly kind: CredentialProfileAcquisitionKind;
+  readonly label: string;
+  readonly icon: CredentialProfileAcquisitionIcon;
   readonly authType: CredentialProfileAuthType;
-  readonly authMethodLabel: string;
   readonly interactive: boolean;
+  readonly state: "available" | "already_connected";
 }
 
 export interface ProviderCredentialOptionProjection {
   readonly providerId: string;
   readonly name: string;
   readonly source: ProviderSource;
-  readonly authMethods: readonly ProviderCredentialAuthMethodProjection[];
+  readonly acquisitionOptions: readonly CredentialProfileAcquisitionOptionProjection[];
 }
 
 export interface CredentialProfileOptionsProjection {
@@ -135,7 +146,7 @@ export type ProviderProfileAuthCommand =
   | {
       readonly command: "login";
       readonly providerId: string;
-      readonly authType: CredentialProfileAuthType;
+      readonly acquisitionKind: CredentialProfileAcquisitionKind;
       readonly displayName: string;
       readonly note?: string;
       readonly useNow: boolean;

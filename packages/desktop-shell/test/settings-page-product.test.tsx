@@ -144,37 +144,37 @@ describe("Settings product slice", () => {
     expect(container.textContent).not.toContain("deep diagnostics");
     expect(container.querySelector('button[aria-label="Save restore values"]')).toBeNull();
     expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: [
-      "integrations.codex.searchModel", "integrations.codex.autoLoginOnStartup",
+      "integrations.codex.searchModel", "integrations.codex.localLogin",
     ] });
   });
 
-  it("saves the Codex startup login switch with a next-startup notice", async () => {
-    const key = "integrations.codex.autoLoginOnStartup";
+  it("saves the local Codex login entry switch with an immediate notice", async () => {
+    const key = "integrations.codex.localLogin";
     let enabled = true;
     const executeSettings = vi.fn(async (
       command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0],
     ) => {
       if (command.command === "set" && command.key === key) enabled = command.value === true;
       return {
-        outcome: command.command === "set" ? "pending" as const : "ok" as const,
+        outcome: command.command === "set" ? "applied" as const : "ok" as const,
         settings: {
           ...settingsResult().settings,
           [key]: { key, type: "boolean" as const, default: true,
             validation: { type: "boolean" }, sensitivity: "public" as const,
-            applyMode: "restart-required" as const, value: enabled, effective: true },
+            applyMode: "hot-apply" as const, value: enabled },
         },
       };
     });
     await render(createFakeDesktopApi({ control: { executeSettings } }));
     await click("Advanced");
     await click("Agents");
-    const checkbox = container.querySelector<HTMLInputElement>('input[aria-label="启动时自动登录本地 Codex"]')!;
+    const checkbox = container.querySelector<HTMLInputElement>('input[aria-label="显示本地 Codex 登录入口"]')!;
     expect(checkbox.checked).toBe(true);
     expect(checkbox.disabled).toBe(false);
     await act(async () => checkbox.click());
     expect(executeSettings).toHaveBeenCalledWith({ command: "set", key, value: false });
     expect(checkbox.checked).toBe(false);
-    expect(container.textContent).toContain("已保存，下次启动生效。");
+    expect(container.textContent).toContain("已保存并立即生效。");
   });
 
   it("selects each Claude Code model slot independently from Favorite models", async () => {

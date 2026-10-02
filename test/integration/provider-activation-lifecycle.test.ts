@@ -106,7 +106,7 @@ async function addCommandCodeProfile(client: ControlPlaneClient, key: string) {
   return client.executeProviderProfileAuthCommand({
     command: "login",
     providerId: "commandcode-private",
-    authType: "api_key",
+    acquisitionKind: "api_key",
     displayName: "Primary",
     useNow: true,
     expectedRevision: revision,
@@ -178,11 +178,17 @@ describe("Provider Profiles remain independent of Gateway lifecycle", () => {
       ), "utf8")) as {
         profiles: Array<{
           kind: string;
-          inline: { key: string };
+          reference: { path: string; owner: string };
         }>;
       };
-      expect(record.profiles[0]?.kind).toBe("inline");
-      expect(record.profiles[0]?.inline.key).toBe("sk-profile-lifecycle");
+      expect(record.profiles[0]?.kind).toBe("reference");
+      expect(record.profiles[0]?.reference.owner).toBe("managed");
+      expect(await readFile(join(
+        root,
+        "pi",
+        "credentials",
+        record.profiles[0]!.reference.path,
+      ), "utf8")).toContain("sk-profile-lifecycle");
       expect(record.profiles[0]).not.toHaveProperty("incarnation");
       await expect(access(join(root, "pi", "auth.json"))).rejects.toThrow();
 

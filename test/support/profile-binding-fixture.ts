@@ -37,7 +37,7 @@ export function fixedManagedProfileBindings(
     async capture(providerId: string): Promise<ProviderAuthBindingCapture> {
       return Object.freeze({
         facts: Object.freeze({
-          kind: "managed" as const,
+          kind: "managed" as const, carrierOwner: "managed" as const,
           providerId,
           credentialId,
         authType,

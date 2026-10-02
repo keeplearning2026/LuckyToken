@@ -11,11 +11,14 @@ import type {
 } from "@token/application-control-plane/control-plane";
 
 import { createPiAuthInteraction } from "./auth-interaction.js";
-import type {
-  CredentialProfileManagement,
-  ProfileMutationResult,
-  ProviderAuthBindingAuthority,
-  ProviderAuthBindingCapture,
+import { LocalAcquisitionError, type AcquisitionIcon } from "./acquisition.js";
+import {
+  CredentialProfileOperationError,
+  type CredentialProfileManagement,
+  type CredentialProfilesProjection,
+  type ProfileMutationResult,
+  type ProviderAuthBindingAuthority,
+  type ProviderAuthBindingCapture,
 } from "./profile-contract.js";
 
 export interface CredentialProfilesControlPlaneHandlers {
@@ -23,10 +26,30 @@ export interface CredentialProfilesControlPlaneHandlers {
   readonly auth: ProviderProfileAuthCommandHandler;
 }
 
+/** One Provider-registered local acquisition method. `enabled` reflects the
+ * visibility setting only; it never creates, removes or refreshes Profiles. */
+export interface LocalAcquisitionMethod {
+  readonly providerId: string;
+  readonly label: string | undefined;
+  readonly icon: AcquisitionIcon;
+  readonly authType: "api_key" | "oauth";
+  readonly enabled: boolean;
+}
+
 function projectOptions(
   providers: readonly Provider[],
   providerSource: (providerId: string) => ProviderSource,
+  localMethods: readonly LocalAcquisitionMethod[],
+  state: CredentialProfilesProjection,
 ): CredentialProfileOptionsProjection {
+  const alreadyConnected = new Set<string>();
+  for (const provider of state.providers) {
+    for (const profile of provider.profiles) {
+      if (profile.acquisitionKind === "local_oauth") {
+        alreadyConnected.add(provider.providerId);
+      }
+    }
+  }
   return Object.freeze({
     providers: Object.freeze(
       providers.map((provider) =>
@@ -34,21 +57,47 @@ function projectOptions(
           providerId: provider.id,
           name: provider.name,
           source: providerSource(provider.id),
-          authMethods: Object.freeze([
+          acquisitionOptions: Object.freeze([
             ...(provider.auth.apiKey === undefined
               ? []
               : [Object.freeze({
+                  kind: "api_key" as const,
+                  label: provider.auth.apiKey.name,
+                  icon: "key" as const,
                   authType: "api_key" as const,
-                  authMethodLabel: provider.auth.apiKey.name,
                   interactive: provider.auth.apiKey.login !== undefined,
+                  state: "available" as const,
                 })]),
             ...(provider.auth.oauth === undefined
               ? []
               : [Object.freeze({
+                  kind: "oauth" as const,
+                  label: provider.auth.oauth.name,
+                  icon: "account" as const,
                   authType: "oauth" as const,
-                  authMethodLabel: provider.auth.oauth.name,
                   interactive: true,
+                  state: "available" as const,
                 })]),
+            ...localMethods
+              .filter(
+                (method) =>
+                  method.providerId === provider.id && method.enabled,
+              )
+              .map((method) =>
+                Object.freeze({
+                  kind: "local_oauth" as const,
+                  label:
+                    method.label ??
+                    provider.auth.oauth?.name ??
+                    "Local login",
+                  icon: method.icon,
+                  authType: method.authType,
+                  interactive: true,
+                  state: alreadyConnected.has(provider.id)
+                    ? ("already_connected" as const)
+                    : ("available" as const),
+                }),
+              ),
           ]),
         }),
       ),
@@ -75,6 +124,19 @@ function fixedMutationError(outcome: ProfileMutationResult["outcome"]): string |
     case "ok":
       return undefined;
   }
+}
+
+/** Prefer the operation's own bounded message (for example the local-login
+ * singleton reminder) over the generic outcome text. */
+function errorDetail(error: unknown): string | undefined {
+  if (
+    error instanceof LocalAcquisitionError ||
+    error instanceof CredentialProfileOperationError
+  ) {
+    const message = error.message.trim();
+    return message.length === 0 ? undefined : message.slice(0, 256);
+  }
+  return undefined;
 }
 
 function errorOutcome(error: unknown): ProviderProfileAuthCommandOutcome | undefined {
@@ -129,9 +191,9 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
   readonly models: Pick<Models, "getProviders" | "login">;
   readonly management: CredentialProfileManagement;
   readonly binding: ProviderAuthBindingAuthority;
-  readonly loginFromLocalCodex?: (target: {
-    readonly credentialId: string; readonly expectedRevision: string;
-  }) => Promise<{ readonly credentialId: string; readonly credentialGeneration: string }>;
+  /** Local acquisition methods registered by composition, with their current
+   * visibility. Absent means no Provider exposes a local login. */
+  readonly localAcquisitionMethods?: () => readonly LocalAcquisitionMethod[];
   readonly providerSource?: (providerId: string) => ProviderSource;
   /** Explicit user-driven, non-interactive Provider auth/model recheck. */
   readonly recheckProvider?: (
@@ -146,8 +208,10 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
   ) => void;
 }): CredentialProfilesControlPlaneHandlers {
   const source = options.providerSource ?? (() => "user" as const);
+  const localMethods = () => options.localAcquisitionMethods?.() ?? [];
   const query = () => options.management.query();
-  const currentOptions = () => projectOptions(options.models.getProviders(), source);
+  const optionsFor = (state: CredentialProfilesProjection) =>
+    projectOptions(options.models.getProviders(), source, localMethods(), state);
   const inFlight = new Set<string>();
 
   const recheck = async (
@@ -187,10 +251,11 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
     }
 
     if (outcome !== undefined) {
+      const state = await query();
       return Object.freeze({
         outcome,
-        state: await query(),
-        options: currentOptions(),
+        state,
+        options: optionsFor(state),
         error:
           outcome === "storage_failure"
             ? "Credential Profile storage is unavailable"
@@ -216,11 +281,12 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
         expectedRevision: command.expectedRevision,
       });
     } catch (error) {
+      const state = await query();
       const bindingOutcome = errorOutcome(error);
       return Object.freeze({
         outcome: bindingOutcome === "storage_failure" ? "storage_failure" : "conflict",
-        state: await query(),
-        options: currentOptions(),
+        state,
+        options: optionsFor(state),
         error: bindingOutcome === "storage_failure"
           ? "Credential Profile storage is unavailable"
           : "Credential Profiles changed; re-query and retry",
@@ -245,14 +311,14 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
       return Object.freeze({
         outcome: "reconnect_required",
         state,
-        options: currentOptions(),
+        options: optionsFor(state),
         error: "Provider authentication must be reconnected",
       });
     }
     return Object.freeze({
       outcome: failed ? "unavailable" : "ok",
       state,
-      options: currentOptions(),
+      options: optionsFor(state),
       ...(failed ? { error: "Provider credential recheck did not complete" } : {}),
     });
   };
@@ -261,10 +327,11 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
     command,
   ): Promise<CredentialProfilesCommandResult> => {
     if (command.command === "query") {
+      const state = await options.management.query(command.providerIds);
       return Object.freeze({
         outcome: "ok",
-        state: await options.management.query(command.providerIds),
-        options: currentOptions(),
+        state,
+        options: optionsFor(state),
       });
     }
     if (command.command === "recheck") {
@@ -303,7 +370,7 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
     return Object.freeze({
       outcome: mutation.outcome,
       state,
-      options: currentOptions(),
+      options: optionsFor(state),
       ...(error === undefined ? {} : { error }),
     });
   };
@@ -313,17 +380,19 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
     interaction: AuthInteractionChannel,
   ): Promise<ProviderProfileAuthCommandResult> => {
     if (command.command === "query") {
+      const state = await query();
       return Object.freeze({
         outcome: "ok",
-        state: await query(),
-        options: currentOptions(),
+        state,
+        options: optionsFor(state),
       });
     }
     if (inFlight.has(command.providerId)) {
+      const state = await query();
       return Object.freeze({
         outcome: "conflict",
-        state: await query(),
-        options: currentOptions(),
+        state,
+        options: optionsFor(state),
         error: authErrorMessage("conflict"),
       });
     }
@@ -333,7 +402,7 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
       const binding = command.command === "login"
         ? await options.binding.createLoginBinding({
             providerId: command.providerId,
-            authType: command.authType,
+            acquisitionKind: command.acquisitionKind,
             displayName: command.displayName,
             ...(command.note === undefined ? {} : { note: command.note }),
             useNow: command.useNow,
@@ -345,14 +414,23 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
             useNow: command.useNow,
             expectedRevision: command.expectedRevision,
           });
-      let published = { credentialId: binding.credentialId, credentialGeneration: binding.credentialGeneration };
-      if (binding.acquisition === "codex_local") {
-        if (options.loginFromLocalCodex === undefined) throw new Error("Credential acquisition is unavailable");
+      let published = {
+        credentialId: binding.credentialId,
+        credentialGeneration: binding.credentialGeneration,
+      };
+      if (binding.acquisitionKind === "local_oauth") {
         interaction.signal.throwIfAborted();
-        published = await options.loginFromLocalCodex(binding);
+        published = await options.binding.acquireLocal(
+          binding,
+          interaction.signal,
+        );
       } else {
         await options.binding.runBound(binding, () =>
-          options.models.login(command.providerId, binding.authType, createPiAuthInteraction(interaction)),
+          options.models.login(
+            command.providerId,
+            binding.authType,
+            createPiAuthInteraction(interaction),
+          ),
         );
       }
       if (options.postLoginProvider !== undefined) {
@@ -376,18 +454,19 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
       return Object.freeze({
         outcome: profile?.health === "reconnect_required" ? "unavailable" : "ok",
         state,
-        options: currentOptions(),
+        options: optionsFor(state),
         ...(profile?.health === "reconnect_required" ? { error: authErrorMessage("unavailable") } : {}),
       });
     } catch (error) {
       const outcome = interaction.signal.aborted
         ? "cancelled"
         : (errorOutcome(error) ?? "failed");
+      const state = await query();
       return Object.freeze({
         outcome,
-        state: await query(),
-        options: currentOptions(),
-        error: authErrorMessage(outcome),
+        state,
+        options: optionsFor(state),
+        error: errorDetail(error) ?? authErrorMessage(outcome),
       });
     } finally {
       inFlight.delete(command.providerId);

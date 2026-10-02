@@ -47,12 +47,11 @@ describe("CredentialProfileManagement", () => {
       priority,
       createdAt,
       updatedAt: createdAt,
-      ...credentialProfileCarrier(
-        provider.id,
+      ...credentialProfileCarrier(provider.id, {
         credentialId,
         credentialGeneration,
         credential,
-      ),
+      }),
     });
     const seedRecord = (
       revision: string,
@@ -164,12 +163,11 @@ describe("CredentialProfileManagement", () => {
         priority: 0,
         createdAt: 1,
         updatedAt: 1,
-        ...credentialProfileCarrier(
-          providerId,
-          "credential-a",
-          "credential-generation-a",
-          { type: "api_key", key: "lock-test-secret" },
-        ),
+        ...credentialProfileCarrier(providerId, {
+          credentialId: "credential-a",
+          credentialGeneration: "credential-generation-a",
+          credential: { type: "api_key", key: "lock-test-secret" },
+        }),
       }],
     };
     try {
@@ -262,7 +260,7 @@ describe("CredentialProfileManagement", () => {
     }) => {
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName: input.displayName,
         useNow: false,
         expectedRevision: input.expectedRevision,
@@ -304,6 +302,7 @@ describe("CredentialProfileManagement", () => {
           {
             credentialId: "credential-a",
             authType: "api_key",
+            acquisitionKind: "api_key",
             authMethodLabel: "Fixture API key",
             displayName: "Production",
             identityHint: "•••• lpha",
@@ -316,6 +315,7 @@ describe("CredentialProfileManagement", () => {
           {
             credentialId: "credential-b",
             authType: "api_key",
+            acquisitionKind: "api_key",
             authMethodLabel: "Fixture API key",
             displayName: "Backup",
             identityHint: "•••• beta",
@@ -364,7 +364,7 @@ describe("CredentialProfileManagement", () => {
       ] as const) {
         const binding = await first.binding.createLoginBinding({
           providerId: provider.id,
-          authType: "api_key",
+          acquisitionKind: "api_key",
           displayName,
           useNow: false,
           expectedRevision,
@@ -450,7 +450,7 @@ describe("CredentialProfileManagement", () => {
     ] as const) {
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType,
+        acquisitionKind: authType,
         displayName,
         useNow: false,
         expectedRevision,
@@ -520,7 +520,7 @@ describe("CredentialProfileManagement", () => {
       const addToB = async (displayName: string, expectedRevision: string) => {
         const binding = await profiles.binding.createLoginBinding({
           providerId: providerB.id,
-          authType: "api_key",
+          acquisitionKind: "api_key",
           displayName,
           useNow: false,
           expectedRevision,
@@ -599,7 +599,7 @@ describe("CredentialProfileManagement", () => {
     ] as const) {
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision,
@@ -640,8 +640,8 @@ describe("CredentialProfileManagement", () => {
     const after = await store.read(provider.id);
     // A metadata-only update leaves every persisted incarnation reference
     // untouched; the referenced documents are never rewritten.
-    expect(after?.profiles.map((profile) => profile.incarnation)).toEqual(
-      before?.profiles.map((profile) => profile.incarnation),
+    expect(after?.profiles.map((profile) => profile.kind === "reference" ? profile.reference : undefined)).toEqual(
+      before?.profiles.map((profile) => profile.kind === "reference" ? profile.reference : undefined),
     );
 
     const cleared = await profiles.management.updateMetadata({
@@ -682,7 +682,7 @@ describe("CredentialProfileManagement", () => {
     models.setProvider(provider);
     const binding = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Production",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -745,7 +745,7 @@ describe("CredentialProfileManagement", () => {
     ] as const) {
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision,
@@ -859,7 +859,7 @@ describe("CredentialProfileManagement", () => {
     ] as const) {
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision,
@@ -929,7 +929,7 @@ describe("CredentialProfileManagement", () => {
     models.setProvider(provider);
     const binding = await installed.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Retained profile",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -960,7 +960,7 @@ describe("CredentialProfileManagement", () => {
     });
     await expect(orphaned.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "New profile",
       useNow: false,
       expectedRevision: "revision-a",
@@ -1000,14 +1000,14 @@ describe("CredentialProfileManagement", () => {
     const bindings = await Promise.all([
       profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName: "Client A",
         useNow: false,
         expectedRevision: NO_PROVIDER_RECORD_REVISION,
       }),
       profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName: "Client B",
         useNow: false,
         expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -1082,7 +1082,7 @@ describe("CredentialProfileManagement", () => {
     models.setProvider(provider);
     const login = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Production",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -1134,7 +1134,7 @@ describe("CredentialProfileManagement", () => {
 
     const first = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Primary",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
@@ -1151,7 +1151,7 @@ describe("CredentialProfileManagement", () => {
 
     const second = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "ABCD",
       useNow: false,
       expectedRevision: "revision-a",
@@ -1193,7 +1193,7 @@ describe("CredentialProfileManagement", () => {
     const login = async (displayName: string, expectedRevision: string) => {
       const binding = await profiles.binding.createLoginBinding({
         providerId: provider.id,
-        authType: "api_key",
+        acquisitionKind: "api_key",
         displayName,
         useNow: false,
         expectedRevision,
@@ -1245,7 +1245,7 @@ describe("CredentialProfileManagement", () => {
     models.setProvider(provider);
     const binding = await profiles.binding.createLoginBinding({
       providerId: provider.id,
-      authType: "api_key",
+      acquisitionKind: "api_key",
       displayName: "Ready",
       useNow: false,
       expectedRevision: NO_PROVIDER_RECORD_REVISION,
