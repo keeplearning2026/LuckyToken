@@ -10,163 +10,106 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import {
+  LOCAL_LOGIN_DUPLICATE_MESSAGE,
+  LOCAL_LOGIN_FAILURE_MESSAGE,
+  LocalAcquisitionError,
+  type AcquisitionKind,
+} from "./acquisition.js";
+import {
+  serializeApiKeyCredentialDocument,
+  serializeOAuthCredentialDocument,
+} from "./credential-document.js";
+import {
+  codexLocalOAuthOperations,
+  createProfileCredentialOperations,
+  type ProfileCredentialOperationsOverride,
+} from "./profile-credential-operations.js";
+import {
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
-  credentialProfileCarrier,
-  type PersistedCredentialProfileV2,
-  type PersistedProviderCredentialRecordV2,
+  externalCredentialReference,
+  managedCredentialReference,
+  type PersistedCredentialProfile,
+  type PersistedProviderCredentialRecord,
   type ProviderCredentialRecordStore,
   ProviderCredentialRecordShapeError,
   ProviderCredentialRecordSyntaxError,
 } from "./profile-record-store.js";
-
-import {
-  LOCAL_LOGIN_DUPLICATE_MESSAGE,
-  LOCAL_LOGIN_FAILURE_MESSAGE,
-  LocalAcquisitionError,
-  acquisitionKindOf,
-  defaultAcquisitionKind,
-  type AcquisitionKind,
-  type LocalAcquisitionStrategy,
-} from "./acquisition.js";
-
 import {
   CredentialProfileOperationError,
   MAX_PROFILE_ATTEMPTS_PER_REQUEST,
   ProviderAuthBindingError,
+  isProfileProviderAuthBindingCapture,
   type ActivateProfileInput,
   type AdvanceAfterFinal429Input,
   type AdvanceAfterFinal429Result,
-  type CaptureProfileForRecheckInput,
-  type CreateLoginBindingInput,
-  type CreateReconnectBindingInput,
-  type CredentialHealth,
-  type CredentialLoginBinding,
+  type CredentialAcquisitionBinding,
   type CredentialProfileManagement,
   type CredentialProfileProjection,
   type CredentialProfilesProjection,
+  type CreateAcquisitionBindingInput,
   type ProfileMutationOutcome,
   type ProfileMutationResult,
-  type ProfileTargetInput,
-  type ManagedProviderAuthBindingCapture,
+  type ProfileProviderAuthBindingCapture,
   type ProviderAuthBindingAuthority,
   type ProviderAuthBindingCapture,
-  type ProviderAuthBindingFacts,
+  type ProviderProfileBindingFacts,
   type ProviderCredentialStateProjection,
   type ReorderProfilesInput,
   type RemoveProfileInput,
   type SetProfileEnabledInput,
-  type SetProfilePriorityInput,
   type SetProviderSwitchPolicyInput,
   type UpdateProfileMetadataInput,
 } from "./profile-contract.js";
+
 export { NO_PROVIDER_RECORD_REVISION } from "./profile-record-store.js";
 export * from "./profile-contract.js";
 
-interface ManagedBindingScope {
-  readonly kind: "managed";
-  readonly providerId: string;
-  readonly carrierOwner: "managed" | "external";
-  readonly credentialId: string;
-  readonly authType: AuthType;
-  readonly authMethodLabel: string;
-  readonly displayName: string;
-  readonly credentialGeneration: string;
-  readonly selectionGeneration: string;
-}
+type BoundScope =
+  | CredentialAcquisitionBinding
+  | ProfileProviderAuthBindingCapture;
 
-interface AmbientBindingScope {
-  readonly kind: "ambient";
-  readonly providerId: string;
-}
-
-type BindingScope =
-  | CredentialLoginBinding
-  | ManagedBindingScope
-  | AmbientBindingScope;
-
-/** Internal composition result. Consumers receive only `management` or
- * `binding`; the secret-bearing Pi adapter stays inside Provider Runtime
- * composition. */
 interface ProviderCredentialProfilesComposition {
   readonly management: CredentialProfileManagement;
   readonly binding: ProviderAuthBindingAuthority;
   readonly credentialStore: CredentialStore;
-  scrub(value: string): string;
 }
 
 function throwIfAborted(options: AuthOperationOptions | undefined): void {
   options?.signal?.throwIfAborted();
 }
 
-function providerAuthLabel(provider: Provider, authType: AuthType): string | undefined {
-  return authType === "api_key" ? provider.auth.apiKey?.name : provider.auth.oauth?.name;
+function authTypeFor(acquisitionKind: AcquisitionKind): AuthType {
+  return acquisitionKind === "api_key" ? "api_key" : "oauth";
 }
 
-function providerSupportsLogin(provider: Provider, authType: AuthType): boolean {
-  return authType === "api_key"
+function providerAuthLabel(
+  provider: Provider,
+  acquisitionKind: AcquisitionKind,
+): string {
+  const type = authTypeFor(acquisitionKind);
+  return (
+    (type === "api_key" ? provider.auth.apiKey?.name : provider.auth.oauth?.name) ??
+    (type === "api_key" ? "API key" : "OAuth")
+  );
+}
+
+function providerSupportsAcquisition(
+  provider: Provider,
+  acquisitionKind: "api_key" | "oauth",
+): boolean {
+  return acquisitionKind === "api_key"
     ? provider.auth.apiKey?.login !== undefined
     : provider.auth.oauth !== undefined;
 }
 
-const INVALID_OAUTH_CREDENTIAL_CODES = new Set([
-  "invalid_grant",
-  "invalid_token",
-  "unauthorized_client",
-]);
-
-/** Only structured Provider evidence may turn a usable Profile into a
- * reconnect-required terminal. Generic OAuth, timeout, cancellation,
- * network, and storage failures are not proof that the credential died. */
-function demonstratesInvalidOAuthCredential(
-  providerId: string,
-  error: unknown,
-): boolean {
-  let current: unknown = error;
-  for (let depth = 0; depth < 6; depth += 1) {
-    if (typeof current !== "object" || current === null) return false;
-    const candidate = current as {
-      readonly code?: unknown;
-      readonly error?: unknown;
-      readonly cause?: unknown;
-    };
-    if (
-      (typeof candidate.code === "string" &&
-        INVALID_OAUTH_CREDENTIAL_CODES.has(candidate.code)) ||
-      (typeof candidate.error === "string" &&
-        INVALID_OAUTH_CREDENTIAL_CODES.has(candidate.error))
-    ) {
-      return true;
-    }
-    // Pinned Pi's Kimi OAuth implementation has already reduced 401, 403,
-    // and `invalid_grant` responses to this fixed Provider-owned error
-    // category before Models wraps it. This exact prefix is therefore typed
-    // source evidence, not a guess from arbitrary Provider text.
-    if (
-      providerId === "kimi-coding" &&
-      current instanceof Error &&
-      /^Kimi Code token refresh unauthorized \(status \d{3}\)(?::|$)/u.test(
-        current.message,
-      )
-    ) {
-      return true;
-    }
-    current = candidate.cause;
-  }
-  return false;
+function validDisplayName(value: string): boolean {
+  const normalized = value.trim();
+  return normalized.length > 0 && Array.from(normalized).length <= 64;
 }
 
-function identityHint(credential: Credential): string | undefined {
-  if (
-    credential.type !== "api_key" ||
-    credential.key === undefined ||
-    credential.key.length < 8 ||
-    credential.key.startsWith("$") ||
-    credential.key.startsWith("!")
-  ) {
-    return undefined;
-  }
-  return `•••• ${credential.key.slice(-4)}`;
+function validNote(value: string | undefined): boolean {
+  return value === undefined || Array.from(value).length <= 200;
 }
 
 function credentialSecrets(credential: Credential): readonly string[] {
@@ -195,116 +138,23 @@ function credentialSecrets(credential: Credential): readonly string[] {
   return Object.freeze([...secrets]);
 }
 
-function metadataContainsSecret(
+function metadataContainsSecrets(
   displayName: string,
   note: string | undefined,
-  credentials: readonly Credential[],
+  secrets: Iterable<string>,
 ): boolean {
   const metadata = note === undefined ? displayName : `${displayName}\n${note}`;
-  return credentials.some((credential) =>
-    credentialSecrets(credential).some((secret) => metadata.includes(secret)),
-  );
-}
-
-function recordMetadataContainsSecret(
-  profiles: readonly PersistedCredentialProfileV2[],
-  credentials: readonly Credential[],
-): boolean {
-  const secrets = credentials.flatMap((credential) => credentialSecrets(credential));
-  return profiles.some((profile) => {
-    const metadata = profile.note === undefined
-      ? profile.displayName
-      : `${profile.displayName}\n${profile.note}`;
-    return secrets.some((secret) => metadata.includes(secret));
-  });
-}
-
-function validateCredential(credential: Credential | undefined, authType: AuthType): Credential {
-  if (credential === undefined || credential.type !== authType) {
-    throw new Error("Provider login returned a credential with the wrong authentication type");
+  for (const secret of secrets) {
+    if (secret.length > 0 && metadata.includes(secret)) return true;
   }
-  return structuredClone(credential);
-}
-
-function projectProfile(
-  profile: PersistedCredentialProfileV2,
-  acquisitionKind: AcquisitionKind,
-  health: CredentialHealth,
-  usage?: { readonly lastUsedAt: number; readonly lastSucceededAt?: number },
-): CredentialProfileProjection {
-  return Object.freeze({
-    credentialId: profile.credentialId,
-    authType: profile.authType,
-    acquisitionKind,
-    authMethodLabel: profile.authMethodLabel,
-    displayName: profile.displayName,
-    ...(profile.note === undefined ? {} : { note: profile.note }),
-    ...(profile.identityHint === undefined ? {} : { identityHint: profile.identityHint }),
-    enabled: profile.enabled,
-    health: profile.enabled ? health : "disabled",
-    priority: profile.priority,
-    createdAt: profile.createdAt,
-    updatedAt: profile.updatedAt,
-    ...(usage?.lastUsedAt === undefined ? {} : { lastUsedAt: usage.lastUsedAt }),
-    ...(usage?.lastSucceededAt === undefined
-      ? {}
-      : { lastSucceededAt: usage.lastSucceededAt }),
-  });
-}
-
-function projectRecord(
-  record: PersistedProviderCredentialRecordV2,
-  implementationAvailable: boolean,
-  acquisitionKindFor: (profile: PersistedCredentialProfileV2) => AcquisitionKind,
-  healthFor: (profile: PersistedCredentialProfileV2) => CredentialHealth,
-  usageFor?: (
-    credentialId: string,
-  ) => { readonly lastUsedAt: number; readonly lastSucceededAt?: number } | undefined,
-  ambient?: {
-    readonly kind: "external";
-    readonly status: "configured" | "unknown";
-    readonly message: string;
-  },
-): ProviderCredentialStateProjection {
-  return Object.freeze({
-    providerId: record.providerId,
-    implementationAvailable,
-    revision: record.revision,
-    selectionGeneration: record.selectionGeneration,
-    ...(record.activeCredentialId === undefined
-      ? {}
-      : { activeCredentialId: record.activeCredentialId }),
-    switchPolicy: Object.freeze({ ...record.switchPolicy }),
-    ...(record.profiles.length === 0 && ambient !== undefined
-      ? { ambient: Object.freeze(ambient) }
-      : {}),
-    profiles: Object.freeze(
-      record.profiles.map((profile) =>
-        projectProfile(
-          profile,
-          acquisitionKindFor(profile),
-          healthFor(profile),
-          usageFor?.(profile.credentialId),
-        ),
-      ),
-    ),
-  });
-}
-
-function validDisplayName(value: string): boolean {
-  const normalized = value.trim();
-  return normalized.length > 0 && Array.from(normalized).length <= 64;
-}
-
-function validNote(value: string | undefined): boolean {
-  return value === undefined || Array.from(value).length <= 200;
+  return false;
 }
 
 function createInitialRecord(input: {
   readonly providerId: string;
   readonly selectionGeneration: string;
-  readonly profile: PersistedCredentialProfileV2;
-}): PersistedProviderCredentialRecordV2 {
+  readonly profile: PersistedCredentialProfile;
+}): PersistedProviderCredentialRecord {
   return {
     schemaVersion: PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
     providerId: input.providerId,
@@ -316,33 +166,73 @@ function createInitialRecord(input: {
   };
 }
 
-function withoutActiveCredential(
-  record: PersistedProviderCredentialRecordV2,
-): Omit<PersistedProviderCredentialRecordV2, "activeCredentialId"> {
+/**
+ * Append one acquired Profile. A record can exist with an empty profiles[]
+ * after the last Profile was removed, so acquisition must still activate the
+ * first current Profile instead of leaving the Provider without a selection.
+ */
+function appendAcquiredProfile(
+  record: PersistedProviderCredentialRecord,
+  profile: PersistedCredentialProfile,
+  selectionGeneration: string,
+): PersistedProviderCredentialRecord {
+  if (record.profiles.length === 0) {
+    return {
+      ...record,
+      activeCredentialId: profile.credentialId,
+      selectionGeneration,
+      profiles: [profile],
+    };
+  }
+  return { ...record, profiles: [...record.profiles, profile] };
+}
+
+function clearActive(
+  record: PersistedProviderCredentialRecord,
+  selectionGeneration: string,
+): PersistedProviderCredentialRecord {
   return {
     schemaVersion: record.schemaVersion,
     providerId: record.providerId,
     revision: record.revision,
-    selectionGeneration: record.selectionGeneration,
+    selectionGeneration,
     switchPolicy: record.switchPolicy,
     profiles: record.profiles,
   };
 }
 
-function withoutIdentityHint(
-  profile: PersistedCredentialProfileV2,
-): PersistedCredentialProfileV2 {
-  const rest = { ...profile };
-  delete rest.identityHint;
-  return rest;
+function profileNameTaken(
+  profiles: readonly PersistedCredentialProfile[],
+  displayName: string,
+  exceptCredentialId?: string,
+): boolean {
+  const normalized = displayName.toLocaleLowerCase();
+  return profiles.some(
+    (profile) =>
+      profile.credentialId !== exceptCredentialId &&
+      profile.displayName.toLocaleLowerCase() === normalized,
+  );
 }
 
-function withoutNote(
-  profile: PersistedCredentialProfileV2,
-): PersistedCredentialProfileV2 {
-  const rest = { ...profile };
-  delete rest.note;
-  return rest;
+function mutationFailure(
+  outcome: Exclude<ProfileMutationOutcome, "ok">,
+  error: string,
+): ProfileMutationResult {
+  return Object.freeze({ outcome, error });
+}
+
+function serializeAcquiredCredential(
+  acquisitionKind: "api_key" | "oauth",
+  credential: Credential,
+): string {
+  if (credential.type !== authTypeFor(acquisitionKind)) {
+    throw new Error(
+      "Provider login returned a credential with the wrong authentication type",
+    );
+  }
+  return credential.type === "api_key"
+    ? serializeApiKeyCredentialDocument(credential)
+    : serializeOAuthCredentialDocument(credential);
 }
 
 export function createProviderCredentialProfiles(options: {
@@ -351,8 +241,6 @@ export function createProviderCredentialProfiles(options: {
   readonly createId: () => string;
   readonly now: () => number;
   readonly ambientStatus?: (providerId: string) => "configured" | "unknown";
-  /** Closed set of Provider-registered local acquisition strategies. */
-  readonly acquisitionStrategies?: readonly LocalAcquisitionStrategy[];
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -360,969 +248,709 @@ export function createProviderCredentialProfiles(options: {
     readonly lastUsedAt: number;
     readonly lastSucceededAt?: number;
   }[];
+  readonly credentialOperationOverrides?: readonly ProfileCredentialOperationsOverride[];
 }): ProviderCredentialProfilesComposition {
-  const acquisitionStrategies = Object.freeze([...(options.acquisitionStrategies ?? [])]);
-  const scope = new AsyncLocalStorage<BindingScope>();
-  const capturedScopes = new WeakMap<
-    ProviderAuthBindingCapture,
-    ManagedBindingScope | AmbientBindingScope
-  >();
-  const runtimeHealth = new Map<
-    string,
-    {
-      refreshing: number;
-      terminal?: "ready" | "reconnect_required";
-      cooldownUntil?: number;
-    }
-  >();
-  /** Last observed reference availability, refreshed by every projection.
-   * Kept separate from `runtimeHealth` so a recovered external document
-   * clears the unavailable state without erasing Provider refresh evidence. */
-  const referenceHealth = new Map<string, "available" | "unavailable">();
-
-  const healthKey = (providerId: string, credentialId: string): string =>
-    `${providerId}\u0000${credentialId}`;
-  let latestProjection: CredentialProfilesProjection = Object.freeze({
+  const scope = new AsyncLocalStorage<BoundScope>();
+  const cooldownUntil = new Map<string, number>();
+  const knownSecrets = new Set<string>();
+  let projection: CredentialProfilesProjection = Object.freeze({
     providers: Object.freeze([]),
   });
-  const knownSecrets = new Set<string>();
-  const trackCredentialSecrets = (credential: Credential): void => {
-    for (const secret of credentialSecrets(credential)) knownSecrets.add(secret);
-  };
-  const projectedRuntimeHealth = (
-    providerId: string,
-    credentialId: string,
-  ): CredentialHealth | undefined => {
-    const state = runtimeHealth.get(healthKey(providerId, credentialId));
-    if (state === undefined) return undefined;
-    if (state.refreshing > 0) return "refreshing";
-    if (state.terminal === "reconnect_required") return "reconnect_required";
-    if (state.cooldownUntil !== undefined && state.cooldownUntil > options.now()) {
-      return "cooling_down";
-    }
-    return state.terminal;
-  };
 
   const providerFor = (providerId: string): Provider | undefined =>
     options.providers().find((provider) => provider.id === providerId);
 
-  const strategyFor = (
+  const operations = createProfileCredentialOperations({
+    store: options.recordStore,
+    overrides: Object.freeze([
+      codexLocalOAuthOperations(options.recordStore),
+      ...(options.credentialOperationOverrides ?? []),
+    ]),
+  });
+
+  const cooldownKey = (providerId: string, credentialId: string): string =>
+    `${providerId}\u0000${credentialId}`;
+
+  const isCoolingDown = (
     providerId: string,
-    strategyId: string,
-  ): LocalAcquisitionStrategy | undefined =>
-    acquisitionStrategies.find(
-      (strategy) =>
-        strategy.strategyId === strategyId && strategy.providerId === providerId,
-    );
-
-  const acquisitionKindFor = (
-    profile: PersistedCredentialProfileV2,
-  ): AcquisitionKind =>
-    acquisitionKindOf(profile.strategyId, profile.authType, acquisitionStrategies);
-
-  const managedCapture = (
-    record: PersistedProviderCredentialRecordV2,
-    active: PersistedCredentialProfileV2,
-  ): ManagedProviderAuthBindingCapture => {
-    const managedScope: ManagedBindingScope = Object.freeze({
-      kind: "managed",
-      providerId: record.providerId,
-      carrierOwner: active.kind === "reference" ? active.reference.owner : "managed",
-      credentialId: active.credentialId,
-      authType: active.authType,
-      authMethodLabel: active.authMethodLabel,
-      displayName: active.displayName,
-      credentialGeneration: active.credentialGeneration,
-      selectionGeneration: record.selectionGeneration,
-    });
-    const capture: ManagedProviderAuthBindingCapture = Object.freeze({
-      facts: Object.freeze({ ...managedScope }),
-    });
-    capturedScopes.set(capture, managedScope);
-    return capture;
-  };
-
-  /** Read every referenced credential document. Only referenced paths are
-   * read; unreferenced files are never adopted. Failures are best effort
-   * because this feeds metadata secret checks and known-secret scrubbing. */
-  const loadReferencedCredentials = async (
-    record: PersistedProviderCredentialRecordV2 | undefined,
-  ): Promise<readonly Credential[]> => {
-    if (record === undefined) return Object.freeze([]);
-    const credentials: Credential[] = [];
-    for (const profile of record.profiles) {
-      try {
-        const read = await options.recordStore.readCredential(
-          record.providerId,
-          profile.credentialId,
-          profile.credentialGeneration,
-        );
-        if (read.state === "ok") {
-          trackCredentialSecrets(read.credential);
-          credentials.push(read.credential);
-        }
-      } catch {
-        // A missing/unreadable referenced document is a bounded per-Profile state.
-      }
+    credentialId: string,
+  ): boolean => {
+    const until = cooldownUntil.get(cooldownKey(providerId, credentialId));
+    if (until === undefined) return false;
+    if (until <= options.now()) {
+      cooldownUntil.delete(cooldownKey(providerId, credentialId));
+      return false;
     }
-    return Object.freeze(credentials);
+    return true;
   };
 
-  /** Minimum remaining OAuth validity for an externally owned document.
-   * Token never refreshes it, so a document inside Pi's own five-minute
-   * window is reported as reconnect-required instead of being used. */
-  const OAUTH_MINIMUM_VALIDITY_MS = 5 * 60_000;
+  const projectProfile = (
+    provider: Provider | undefined,
+    profile: PersistedCredentialProfile,
+    usage?: {
+      readonly lastUsedAt: number;
+      readonly lastSucceededAt?: number;
+    },
+  ): CredentialProfileProjection =>
+    Object.freeze({
+      credentialId: profile.credentialId,
+      acquisitionKind: profile.acquisitionKind,
+      authType: authTypeFor(profile.acquisitionKind),
+      authMethodLabel:
+        provider === undefined
+          ? authTypeFor(profile.acquisitionKind) === "api_key"
+            ? "API key"
+            : "OAuth"
+          : providerAuthLabel(provider, profile.acquisitionKind),
+      displayName: profile.displayName,
+      ...(profile.note === undefined ? {} : { note: profile.note }),
+      enabled: profile.enabled,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+      ...(usage?.lastUsedAt === undefined
+        ? {}
+        : { lastUsedAt: usage.lastUsedAt }),
+      ...(usage?.lastSucceededAt === undefined
+        ? {}
+        : { lastSucceededAt: usage.lastSucceededAt }),
+    });
 
-  const isInsufficientlyFresh = (
-    profile: PersistedCredentialProfileV2,
-    credential: Credential,
-  ): boolean =>
-    profile.kind === "reference" &&
-    profile.reference.owner === "external" &&
-    credential.type === "oauth" &&
-    credential.expires - options.now() < OAUTH_MINIMUM_VALIDITY_MS;
-
-  /** Read one referenced Profile document through the store. Never falls
-   * back to another file, another Profile or an ambient credential. */
-  const readProfileCredential = async (
-    providerId: string,
-    profile: PersistedCredentialProfileV2,
-  ): Promise<
-    | { readonly state: "ok"; readonly credential: Credential; readonly revision: string }
-    | { readonly state: "unavailable" }
-  > => {
-    if (profile.kind !== "reference") return Object.freeze({ state: "unavailable" });
-    try {
-      const read = await options.recordStore.readCredential(
-        providerId,
-        profile.credentialId,
-        profile.credentialGeneration,
-      );
-      if (read.state !== "ok" || isInsufficientlyFresh(profile, read.credential)) {
-        return Object.freeze({ state: "unavailable" });
-      }
-      trackCredentialSecrets(read.credential);
-      return Object.freeze({
-        state: "ok",
-        credential: read.credential,
-        revision: read.tokenRevision,
-      });
-    } catch {
-      return Object.freeze({ state: "unavailable" });
-    }
-  };
-
-  const projectProviderRecord = async (
-    record: PersistedProviderCredentialRecordV2,
-    implementationAvailable: boolean,
-  ): Promise<ProviderCredentialStateProjection> => {
+  const projectRecord = (
+    record: PersistedProviderCredentialRecord,
+    provider: Provider | undefined,
+  ): ProviderCredentialStateProjection => {
     const usage = new Map(
       (options.credentialUsage?.(
         record.profiles.map((profile) => profile.credentialId),
       ) ?? []).map((entry) => [entry.credentialId, entry] as const),
     );
-    const health = new Map<string, CredentialHealth>();
-    for (const profile of record.profiles) {
-      const runtime = projectedRuntimeHealth(record.providerId, profile.credentialId);
-      if (runtime !== undefined) {
-        health.set(profile.credentialId, runtime);
-        continue;
-      }
-      const resolved = await readProfileCredential(record.providerId, profile);
-      if (resolved.state !== "ok") {
-        referenceHealth.set(
-          healthKey(record.providerId, profile.credentialId),
-          "unavailable",
-        );
-        health.set(profile.credentialId, "reconnect_required");
-        continue;
-      }
-      referenceHealth.set(
-        healthKey(record.providerId, profile.credentialId),
-        "available",
-      );
-      health.set(
-        profile.credentialId,
-        usage.get(profile.credentialId)?.lastSucceededAt === undefined
-          ? "not_yet_verified"
-          : "ready",
-      );
-    }
-    const ambientStatus = options.ambientStatus?.(record.providerId) ?? "unknown";
-    return projectRecord(
-      record,
-      implementationAvailable,
-      acquisitionKindFor,
-      (profile) => health.get(profile.credentialId) ?? "not_yet_verified",
-      (credentialId) => usage.get(credentialId),
-      record.profiles.length === 0
+    const ambientStatus = options.ambientStatus?.(record.providerId);
+    return Object.freeze({
+      providerId: record.providerId,
+      implementationAvailable: provider !== undefined,
+      revision: record.revision,
+      selectionGeneration: record.selectionGeneration,
+      ...(record.activeCredentialId === undefined
+        ? {}
+        : { activeCredentialId: record.activeCredentialId }),
+      switchPolicy: Object.freeze({ ...record.switchPolicy }),
+      ...(record.profiles.length === 0 && ambientStatus !== undefined
         ? {
-            kind: "external" as const,
-            status: ambientStatus,
-            message:
-              ambientStatus === "configured"
-                ? "External auth is configured and resolved when the Provider is used"
-                : "External auth is resolved only when the Provider is used",
+            ambient: Object.freeze({
+              kind: "external" as const,
+              status: ambientStatus,
+              message:
+                ambientStatus === "configured"
+                  ? "Provider has configured ambient authentication"
+                  : "Provider may use ambient authentication",
+            }),
           }
-        : undefined,
-    );
+        : {}),
+      profiles: Object.freeze(
+        record.profiles.map((profile) =>
+          projectProfile(provider, profile, usage.get(profile.credentialId)),
+        ),
+      ),
+    });
   };
 
-  const mutateProfile = async (
-    input: ProfileTargetInput,
-    mutation: (input: {
-      readonly current: PersistedProviderCredentialRecordV2;
-      readonly profile: PersistedCredentialProfileV2;
-      readonly profileIndex: number;
-    }) =>
-      | { readonly kind: "commit"; readonly record: PersistedProviderCredentialRecordV2 }
-      | { readonly kind: "unchanged" }
-      | { readonly kind: "reject"; readonly outcome: ProfileMutationOutcome; readonly error?: string },
-  ): Promise<ProfileMutationResult> => {
+  const emptyProviderProjection = (
+    providerId: string,
+    provider: Provider | undefined,
+  ): ProviderCredentialStateProjection => {
+    const ambientStatus = options.ambientStatus?.(providerId);
+    return Object.freeze({
+      providerId,
+      implementationAvailable: provider !== undefined,
+      ...(ambientStatus === undefined
+        ? {}
+        : {
+            ambient: Object.freeze({
+              kind: "external" as const,
+              status: ambientStatus,
+              message:
+                ambientStatus === "configured"
+                  ? "Provider has configured ambient authentication"
+                  : "Provider may use ambient authentication",
+            }),
+          }),
+      profiles: Object.freeze([]),
+    });
+  };
+
+  const queryProvider = async (
+    providerId: string,
+  ): Promise<ProviderCredentialStateProjection> => {
+    const provider = providerFor(providerId);
     try {
-      const result = await options.recordStore.modifyManagement(
-        input.providerId,
-        input.expectedRevision,
-        (current) => {
-          if (current === undefined) {
-            return { kind: "unchanged", value: { outcome: "unknown_provider" as const } };
-          }
-          const profileIndex = current.profiles.findIndex(
-            (profile) => profile.credentialId === input.credentialId,
-          );
-          if (profileIndex < 0) {
-            return { kind: "unchanged", value: { outcome: "unknown_profile" as const } };
-          }
-          const next = mutation({
-            current,
-            profile: current.profiles[profileIndex]!,
-            profileIndex,
-          });
-          if (next.kind === "reject") {
-            return {
-              kind: "unchanged",
-              value: { outcome: next.outcome, ...(next.error === undefined ? {} : { error: next.error }) },
-            };
-          }
-          if (next.kind === "unchanged") {
-            return { kind: "unchanged", value: { outcome: "ok" as const } };
-          }
-          return {
-            kind: "commit",
-            record: next.record,
-            value: { outcome: "ok" as const },
-          };
-        },
-      );
-      if (result.kind === "revision_conflict") {
-        return Object.freeze({ outcome: "conflict" });
-      }
-      if (result.value.outcome !== "ok") {
-        return Object.freeze(result.value);
-      }
-      if (result.record === undefined) {
-        return Object.freeze({ outcome: "unknown_provider" });
-      }
+      const record = await options.recordStore.read(providerId);
+      return record === undefined
+        ? emptyProviderProjection(providerId, provider)
+        : projectRecord(record, provider);
+    } catch (error) {
+      const code =
+        error instanceof ProviderCredentialRecordSyntaxError ||
+        error instanceof ProviderCredentialRecordShapeError
+          ? "invalid_record"
+          : "storage_error";
       return Object.freeze({
-        outcome: "ok",
-        provider: await projectProviderRecord(
-          result.record,
-          providerFor(input.providerId) !== undefined,
-        ),
-      });
-    } catch {
-      return Object.freeze({
-        outcome: "storage_failure",
-        error: "Provider credential state could not be updated",
+        providerId,
+        implementationAvailable: provider !== undefined,
+        recordError: Object.freeze({
+          code,
+          message:
+            code === "invalid_record"
+              ? "Provider credential state is invalid"
+              : "Provider credential state is unavailable",
+        }),
+        profiles: Object.freeze([]),
       });
     }
   };
 
-  const credentialStore: CredentialStore = Object.freeze({
-    async read(
-      providerId: string,
-      operationOptions?: AuthOperationOptions,
-    ): Promise<Credential | undefined> {
-      throwIfAborted(operationOptions);
-      const binding = scope.getStore();
-      if (binding === undefined || binding.providerId !== providerId) {
-        throw new Error("Pi credential read requires an exact Provider Profile binding");
-      }
-      if (binding.kind === "ambient" || binding.kind === "login") {
-        return undefined;
-      }
-      let record: PersistedProviderCredentialRecordV2 | undefined;
-      try {
-        record = await options.recordStore.read(providerId);
-      } catch {
-        throw new ProviderAuthBindingError(
-          "storage_failure",
-          "Bound Provider credential state could not be read",
-        );
-      }
-      const profile = record?.profiles.find(
-        (candidate) => candidate.credentialId === binding.credentialId,
+  const refreshProjection = async (
+    providerIds?: readonly string[],
+  ): Promise<CredentialProfilesProjection> => {
+    const ids =
+      providerIds === undefined
+        ? Object.freeze(
+            [
+              ...new Set([
+                ...options.providers().map((provider) => provider.id),
+                ...(await options.recordStore.listProviderIds()),
+              ]),
+            ].sort(),
+          )
+        : Object.freeze([...new Set(providerIds)].sort());
+    const updated = new Map(
+      projection.providers.map((provider) => [provider.providerId, provider] as const),
+    );
+    for (const providerId of ids) {
+      updated.set(providerId, await queryProvider(providerId));
+    }
+    projection = Object.freeze({
+      providers: Object.freeze(
+        [...updated.values()].sort((left, right) =>
+          left.providerId.localeCompare(right.providerId),
+        ),
+      ),
+    });
+    if (providerIds === undefined) return projection;
+    const requested = new Set(ids);
+    return Object.freeze({
+      providers: Object.freeze(
+        projection.providers.filter((provider) =>
+          requested.has(provider.providerId),
+        ),
+      ),
+    });
+  };
+
+  const profileFacts = async (
+    provider: Provider,
+    record: PersistedProviderCredentialRecord,
+    profile: PersistedCredentialProfile,
+  ): Promise<ProviderProfileBindingFacts> => {
+    const externalContentRevision =
+      profile.reference.owner === "external"
+        ? await options.recordStore
+            .readCredentialDocument(record.providerId, profile.credentialId)
+            .then((read) =>
+              read.state === "ok" ? read.contentRevision : undefined,
+            )
+            .catch(() => undefined)
+        : undefined;
+    return Object.freeze({
+      kind: "profile" as const,
+      providerId: record.providerId,
+      credentialId: profile.credentialId,
+      acquisitionKind: profile.acquisitionKind,
+      authType: authTypeFor(profile.acquisitionKind),
+      authMethodLabel: providerAuthLabel(provider, profile.acquisitionKind),
+      displayName: profile.displayName,
+      referenceOwner: profile.reference.owner,
+      ...(externalContentRevision === undefined
+        ? {}
+        : { externalContentRevision }),
+      selectionGeneration: record.selectionGeneration,
+    });
+  };
+
+  const currentProfile = async (
+    providerId: string,
+    credentialId: string,
+  ): Promise<{
+    readonly provider: Provider;
+    readonly record: PersistedProviderCredentialRecord;
+    readonly profile: PersistedCredentialProfile;
+  }> => {
+    const provider = providerFor(providerId);
+    if (provider === undefined) {
+      throw new ProviderAuthBindingError(
+        "unknown_provider",
+        "Provider implementation is unavailable",
       );
-      if (
-        profile === undefined ||
-        !profile.enabled ||
-        profile.credentialGeneration !== binding.credentialGeneration ||
-        profile.authType !== binding.authType
-      ) {
-        throw new ProviderAuthBindingError(
-          "stale_binding",
-          "The bound Provider credential is no longer current",
-        );
-      }
-      // The record references the committed document; only that referenced
-      // document is read. A missing, invalid or insufficiently fresh document
-      // fails closed and never falls back to another file or Profile.
-      const resolved = await readProfileCredential(providerId, profile);
-      if (resolved.state !== "ok") {
-        throw new ProviderAuthBindingError(
-          "stale_binding",
-          "The bound Provider credential document is unavailable",
-        );
-      }
-      return structuredClone(resolved.credential);
-    },
-
-    async list(operationOptions?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
-      throwIfAborted(operationOptions);
-      const binding = scope.getStore();
-      if (binding === undefined) {
-        throw new Error("Pi credential listing requires an exact Provider Profile binding");
-      }
-      if (binding.kind === "managed") {
-        return Object.freeze([{ providerId: binding.providerId, type: binding.authType }]);
-      }
-      return Object.freeze([]);
-    },
-
-    async modify(
-      providerId: string,
-      mutation: (current: Credential | undefined) => Promise<Credential | undefined>,
-      operationOptions?: AuthOperationOptions,
-    ): Promise<Credential | undefined> {
-      throwIfAborted(operationOptions);
-      const binding = scope.getStore();
-      if (binding === undefined || binding.providerId !== providerId) {
-        throw new Error("Pi credential mutation requires an exact Provider Profile binding");
-      }
-
-      if (binding.kind === "ambient") {
-        throw new Error("Ambient Provider authentication is not Token-managed");
-      }
-      if (binding.kind === "managed" && binding.carrierOwner === "external") {
-        // The source owner is the only writer. Pi's refresh callback is never
-        // executed; the request continues with the owner's current document.
-        const record = await options.recordStore.read(providerId);
-        const profile = record?.profiles.find(
-          (candidate) => candidate.credentialId === binding.credentialId,
-        );
-        if (profile === undefined) {
-          throw new ProviderAuthBindingError(
-            "stale_binding",
-            "The bound Provider credential is no longer current",
-          );
-        }
-        const resolved = await readProfileCredential(providerId, profile);
-        if (resolved.state !== "ok") {
-          throw new ProviderAuthBindingError(
-            "external_unavailable",
-            "External Provider credential is unavailable; update it through its owner",
-            { externalReason: "missing" },
-          );
-        }
-        return structuredClone(resolved.credential);
-      }
-      if (binding.kind === "managed") {
-        const key = healthKey(providerId, binding.credentialId);
-        const before = runtimeHealth.get(key) ?? { refreshing: 0 };
-        runtimeHealth.set(key, { ...before, refreshing: before.refreshing + 1 });
-        try {
-          const result = await options.recordStore.modifyCredential(
-            providerId,
-            binding.credentialId,
-            binding.credentialGeneration,
-            async (current) => {
-              trackCredentialSecrets(current);
-              const next = await mutation(structuredClone(current));
-              if (next === undefined) return undefined;
-              const validated = validateCredential(next, binding.authType);
-              trackCredentialSecrets(validated);
-              return validated;
-            },
-          );
-          const latest = runtimeHealth.get(key);
-          if (latest !== undefined) {
-            const refreshing = Math.max(0, latest.refreshing - 1);
-            if (refreshing === 0 && latest.terminal === undefined) {
-              runtimeHealth.delete(key);
-            } else {
-              runtimeHealth.set(key, { ...latest, refreshing });
-            }
-          }
-          return result;
-        } catch (error) {
-          const latest = runtimeHealth.get(key) ?? { refreshing: 1 };
-          const refreshing = Math.max(0, latest.refreshing - 1);
-          if (demonstratesInvalidOAuthCredential(providerId, error)) {
-            runtimeHealth.set(key, {
-              ...latest,
-              refreshing,
-              terminal: "reconnect_required",
-            });
-          } else if (
-            refreshing === 0 &&
-            latest.terminal === undefined &&
-            latest.cooldownUntil === undefined
-          ) {
-            runtimeHealth.delete(key);
-          } else {
-            runtimeHealth.set(key, { ...latest, refreshing });
-          }
-          throw error;
-        }
-      }
-
-      const credential = validateCredential(await mutation(undefined), binding.authType);
-      trackCredentialSecrets(credential);
-      const provider = providerFor(providerId);
-      const authMethodLabel = provider === undefined
-        ? undefined
-        : providerAuthLabel(provider, binding.authType);
-      if (authMethodLabel === undefined) {
-        throw new CredentialProfileOperationError(
-          "unavailable",
-          "Provider authentication method is no longer available",
-        );
-      }
-
-      const timestamp = options.now();
-      const hint = identityHint(credential);
-      const carrier = credentialProfileCarrier(providerId, {
-        credentialId: binding.credentialId,
-        credentialGeneration: binding.credentialGeneration,
-        credential,
-      });
-      const profile: PersistedCredentialProfileV2 = {
-        credentialId: binding.credentialId,
-        credentialGeneration: binding.credentialGeneration,
-        authType: binding.authType,
-        authMethodLabel,
-        displayName: binding.displayName,
-        ...(binding.note === undefined ? {} : { note: binding.note }),
-        ...(hint === undefined ? {} : { identityHint: hint }),
-        enabled: true,
-        priority: 0,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        ...carrier,
-      };
-
-      if (metadataContainsSecret(profile.displayName, profile.note, [credential])) {
-        throw new CredentialProfileOperationError(
-          "invalid",
-          "Profile metadata must not contain stored credential secrets",
-        );
-      }
-
-      // Existing referenced documents participate in the known-secret metadata check;
-      // the referenced documents are read before the commit (the mutation
-      // callback itself is synchronous).
-      let existingRecord: PersistedProviderCredentialRecordV2 | undefined;
-      try {
-        existingRecord = await options.recordStore.read(providerId);
-      } catch {
-        existingRecord = undefined;
-      }
-      const existingCredentials = await loadReferencedCredentials(existingRecord);
-      const allCredentialsForCheck = Object.freeze([
-        ...existingCredentials,
-        credential,
-      ]);
-
-      const result = await options.recordStore.publishCredential(
-        providerId,
-        binding.expectedRevision,
-        {
-          credentialId: binding.credentialId,
-          credentialGeneration: binding.credentialGeneration,
-          credential,
-        },
-        (current) => {
-          if (binding.mode === "reconnect") {
-            if (current === undefined) {
-              throw new CredentialProfileOperationError(
-                "unknown_provider",
-                "Provider credential state is missing",
-              );
-            }
-            const profileIndex = current.profiles.findIndex(
-              (candidate) => candidate.credentialId === binding.credentialId,
-            );
-            if (profileIndex < 0) {
-              throw new CredentialProfileOperationError(
-                "unknown_profile",
-                "Credential Profile is missing",
-              );
-            }
-            const target = current.profiles[profileIndex]!;
-            if (target.authType !== binding.authType) {
-              throw new CredentialProfileOperationError(
-                "invalid",
-                "Credential Profile authentication method changed",
-              );
-            }
-            const { kind, reference, ...metadata } = withoutIdentityHint(target);
-            void kind; void reference;
-            const replacement: PersistedCredentialProfileV2 = {
-              ...metadata,
-              credentialGeneration: binding.credentialGeneration,
-              authMethodLabel,
-              ...(hint === undefined ? {} : { identityHint: hint }),
-              updatedAt: timestamp,
-              ...carrier,
-            };
-            const profiles = [...current.profiles];
-            profiles[profileIndex] = replacement;
-            if (recordMetadataContainsSecret(profiles, allCredentialsForCheck)) {
-              throw new CredentialProfileOperationError(
-                "invalid",
-                "Profile metadata must not contain stored credential secrets",
-              );
-            }
-            const shouldActivate = binding.useNow && current.activeCredentialId !== binding.credentialId;
-            return {
-              kind: "commit",
-              record: {
-                ...current,
-                ...(shouldActivate
-                  ? {
-                      activeCredentialId: binding.credentialId,
-                      selectionGeneration: options.createId(),
-                    }
-                  : {}),
-                profiles,
-              },
-              value: undefined,
-            };
-          }
-
-          if (current?.profiles.some(
-            (candidate) => candidate.displayName.toLocaleLowerCase() === binding.displayName.toLocaleLowerCase(),
-          ) === true) {
-            throw new CredentialProfileOperationError(
-              "duplicate",
-              "A Profile with this name already exists for the Provider",
-            );
-          }
-
-          const nextProfile = {
-            ...profile,
-            priority: current?.profiles.length ?? 0,
-          };
-          if (current === undefined) {
-            return {
-              kind: "commit",
-              record: createInitialRecord({
-                providerId,
-                selectionGeneration: options.createId(),
-                profile: nextProfile,
-              }),
-              value: undefined,
-            };
-          }
-
-          const profiles = [...current.profiles, nextProfile];
-          if (recordMetadataContainsSecret(profiles, allCredentialsForCheck)) {
-            throw new CredentialProfileOperationError(
-              "invalid",
-              "Profile metadata must not contain stored credential secrets",
-            );
-          }
-          const shouldActivate = current.profiles.length === 0 || binding.useNow;
-          return {
-            kind: "commit",
-            record: {
-              ...current,
-              ...(shouldActivate
-                ? {
-                    activeCredentialId: binding.credentialId,
-                    selectionGeneration: options.createId(),
-                  }
-                : {}),
-              profiles,
-            },
-            value: undefined,
-          };
-        },
+    }
+    let record: PersistedProviderCredentialRecord | undefined;
+    try {
+      record = await options.recordStore.read(providerId);
+    } catch (error) {
+      throw new ProviderAuthBindingError(
+        "storage_failure",
+        "Provider credential state could not be read",
+        { cause: error },
       );
-      if (result.kind === "revision_conflict") {
-        throw new CredentialProfileOperationError(
-          "conflict",
-          "Credential Profile state changed; re-query and retry",
-        );
-      }
-      if (binding.mode === "reconnect") {
-        runtimeHealth.delete(healthKey(providerId, binding.credentialId));
-      }
-      return structuredClone(credential);
+    }
+    const profile = record?.profiles.find(
+      (candidate) => candidate.credentialId === credentialId,
+    );
+    if (record === undefined || profile === undefined || !profile.enabled) {
+      throw new ProviderAuthBindingError(
+        "stale_binding",
+        "Bound Credential Profile no longer exists or is disabled",
+      );
+    }
+    return { provider, record, profile };
+  };
+
+  const resultWithProvider = (
+    value: ProfileMutationResult,
+    providerId: string,
+  ): ProfileMutationResult => {
+    const provider = projection.providers.find(
+      (candidate) => candidate.providerId === providerId,
+    );
+    return provider === undefined
+      ? value
+      : Object.freeze({ ...value, provider });
+  };
+
+  const management: CredentialProfileManagement = {
+    async query(providerIds?: readonly string[]) {
+      return refreshProjection(providerIds);
     },
 
-    async delete(providerId: string, operationOptions?: AuthOperationOptions): Promise<void> {
-      throwIfAborted(operationOptions);
-      const binding = scope.getStore();
-      if (binding === undefined || binding.providerId !== providerId) {
-        throw new Error("Pi credential deletion requires an exact Provider Profile binding");
-      }
-      throw new Error("Login bindings cannot delete Provider Profiles");
-    },
-  });
-
-  const management: CredentialProfileManagement = Object.freeze({
-    snapshot(): CredentialProfilesProjection {
-      return latestProjection;
+    snapshot() {
+      return projection;
     },
 
-    async query(providerIds?: readonly string[]): Promise<CredentialProfilesProjection> {
-      const requested = providerIds === undefined
-        ? new Set([
-            ...options.providers().map((provider) => provider.id),
-            ...(await options.recordStore.listProviderIds()),
-          ])
-        : new Set(providerIds);
-      const projections: ProviderCredentialStateProjection[] = [];
-      for (const providerId of [...requested].sort()) {
-        let record: PersistedProviderCredentialRecordV2 | undefined;
-        try {
-          record = await options.recordStore.read(providerId);
-        } catch (error) {
-          const invalid =
-            error instanceof ProviderCredentialRecordSyntaxError ||
-            error instanceof ProviderCredentialRecordShapeError;
-          projections.push(Object.freeze({
-            providerId,
-            implementationAvailable: providerFor(providerId) !== undefined,
-            recordError: Object.freeze({
-              code: invalid ? "invalid_record" : "storage_error",
-              message: invalid
-                ? "Stored Provider credential record is invalid"
-                : "Stored Provider credential record is unavailable",
-            }),
-            profiles: Object.freeze([]),
-          }));
-          continue;
-        }
-        if (record === undefined) {
-          if (providerFor(providerId) !== undefined) {
-            const ambientStatus = options.ambientStatus?.(providerId) ?? "unknown";
-            projections.push(Object.freeze({
-              providerId,
-              implementationAvailable: true,
-              revision: NO_PROVIDER_RECORD_REVISION,
-              ambient: Object.freeze({
-                kind: "external",
-                status: ambientStatus,
-                message: ambientStatus === "configured"
-                  ? "External auth is configured and resolved when the Provider is used"
-                  : "External auth is resolved only when the Provider is used",
-              }),
-              profiles: Object.freeze([]),
-            }));
-          }
-          continue;
-        }
-        await loadReferencedCredentials(record);
-        projections.push(await projectProviderRecord(
-          record,
-          providerFor(providerId) !== undefined,
-        ));
-      }
-      latestProjection = Object.freeze({ providers: Object.freeze(projections) });
-      return latestProjection;
-    },
-
-    async updateMetadata(input: UpdateProfileMetadataInput): Promise<ProfileMutationResult> {
+    async updateMetadata(input: UpdateProfileMetadataInput) {
       if (!validDisplayName(input.displayName) || !validNote(input.note)) {
-        return Object.freeze({
-          outcome: "invalid",
-          error: "Profile metadata is outside the supported bounds",
-        });
+        return mutationFailure("invalid", "Credential Profile metadata is invalid");
+      }
+      if (metadataContainsSecrets(input.displayName, input.note, knownSecrets)) {
+        return mutationFailure(
+          "invalid",
+          "Credential Profile metadata must not contain credential secrets",
+        );
+      }
+      if (providerFor(input.providerId) === undefined) {
+        return mutationFailure("unknown_provider", "Provider is unknown");
       }
       try {
-        const secretRecord = await options.recordStore.read(input.providerId);
-        const secretCredentials = await loadReferencedCredentials(secretRecord);
+        const before = await options.recordStore.read(input.providerId);
+        const targetBefore = before?.profiles.find(
+          (profile) => profile.credentialId === input.credentialId,
+        );
+        if (targetBefore !== undefined) {
+          const credential = await operations
+            .resolve(input.providerId, targetBefore)
+            .read(input.providerId, targetBefore)
+            .catch(() => undefined);
+          if (credential !== undefined) {
+            const secrets = credentialSecrets(credential);
+            for (const secret of secrets) knownSecrets.add(secret);
+            if (
+              metadataContainsSecrets(
+                input.displayName,
+                input.note,
+                secrets,
+              )
+            ) {
+              return mutationFailure(
+                "invalid",
+                "Credential Profile metadata must not contain credential secrets",
+              );
+            }
+          }
+        }
+
         const result = await options.recordStore.modifyManagement(
           input.providerId,
           input.expectedRevision,
           (current) => {
-            if (current === undefined) {
-              return { kind: "unchanged", value: "unknown_provider" as const };
-            }
-            const profileIndex = current.profiles.findIndex(
-              (profile) => profile.credentialId === input.credentialId,
-            );
-            if (profileIndex < 0) {
-              return { kind: "unchanged", value: "unknown_profile" as const };
-            }
-            const target = current.profiles[profileIndex]!;
-            const normalizedName = input.displayName.trim();
-            const effectiveName = normalizedName;
-            if (!validDisplayName(effectiveName)) {
-              return { kind: "unchanged", value: "invalid_name" as const };
+            const index =
+              current?.profiles.findIndex(
+                (profile) => profile.credentialId === input.credentialId,
+              ) ?? -1;
+            if (current === undefined || index < 0) {
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "unknown_profile",
+                  "Credential Profile is unknown",
+                ),
+              };
             }
             if (
-              metadataContainsSecret(effectiveName, input.note, secretCredentials)
-            ) {
-              return { kind: "unchanged", value: "invalid_secret" as const };
-            }
-            if (
-              current.profiles.some(
-                (profile, index) =>
-                  index !== profileIndex &&
-                  profile.displayName.toLocaleLowerCase() === effectiveName.toLocaleLowerCase(),
+              profileNameTaken(
+                current.profiles,
+                input.displayName,
+                input.credentialId,
               )
             ) {
-              return { kind: "unchanged", value: "duplicate" as const };
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "duplicate",
+                  "Credential Profile display name already exists",
+                ),
+              };
             }
-            const updated: PersistedCredentialProfileV2 = {
-              ...withoutNote(target),
-              displayName: effectiveName,
-              ...(input.note === undefined ? {} : { note: input.note }),
-              updatedAt: options.now(),
-            };
-            const nextProfiles = [...current.profiles];
-            nextProfiles[profileIndex] = updated;
+            const target = current.profiles[index]!;
+            if (
+              target.displayName === input.displayName &&
+              target.note === input.note
+            ) {
+              return {
+                kind: "unchanged" as const,
+                value: Object.freeze({ outcome: "ok" as const }),
+              };
+            }
+            const profiles = [...current.profiles];
+            profiles[index] =
+              input.note === undefined
+                ? {
+                    credentialId: target.credentialId,
+                    acquisitionKind: target.acquisitionKind,
+                    reference: target.reference,
+                    displayName: input.displayName,
+                    enabled: target.enabled,
+                    createdAt: target.createdAt,
+                    updatedAt: options.now(),
+                  }
+                : {
+                    ...target,
+                    displayName: input.displayName,
+                    note: input.note,
+                    updatedAt: options.now(),
+                  };
             return {
-              kind: "commit",
-              record: { ...current, profiles: nextProfiles },
-              value: "ok" as const,
+              kind: "commit" as const,
+              record: { ...current, profiles },
+              value: Object.freeze({ outcome: "ok" as const }),
             };
           },
         );
         if (result.kind === "revision_conflict") {
-          return Object.freeze({ outcome: "conflict" });
+          return mutationFailure(
+            "conflict",
+            "Credential Profile state changed; re-query and retry",
+          );
         }
-        if (result.value !== "ok") {
-          if (result.value === "invalid_secret") {
-            return Object.freeze({
-              outcome: "invalid",
-              error: "Profile metadata must not contain stored credential secrets",
-            });
-          }
-          if (result.value === "invalid_name") {
-            return Object.freeze({
-              outcome: "invalid",
-              error: "Profile name is outside the supported bounds",
-            });
-          }
-          return Object.freeze({ outcome: result.value });
-        }
-        return Object.freeze({
-          outcome: "ok",
-          provider: await projectProviderRecord(
-            result.record!,
-            providerFor(input.providerId) !== undefined,
-          ),
-        });
+        await refreshProjection([input.providerId]);
+        return resultWithProvider(result.value, input.providerId);
       } catch {
-        return Object.freeze({
-          outcome: "storage_failure",
-          error: "Provider credential state could not be updated",
-        });
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
       }
     },
 
-    async activate(input: ActivateProfileInput): Promise<ProfileMutationResult> {
-      return mutateProfile(input, ({ current, profile }) => {
-        if (!profile.enabled) {
-          return {
-            kind: "reject",
-            outcome: "invalid",
-            error: "A disabled Profile cannot be activated",
-          };
-        }
-        if (current.activeCredentialId === profile.credentialId) {
-          return { kind: "unchanged" };
-        }
-        return {
-          kind: "commit",
-          record: {
-            ...current,
-            activeCredentialId: profile.credentialId,
-            selectionGeneration: options.createId(),
+    async activate(input: ActivateProfileInput) {
+      if (providerFor(input.providerId) === undefined) {
+        return mutationFailure("unknown_provider", "Provider is unknown");
+      }
+      try {
+        const result = await options.recordStore.modifyManagement(
+          input.providerId,
+          input.expectedRevision,
+          (current) => {
+            const target = current?.profiles.find(
+              (profile) => profile.credentialId === input.credentialId,
+            );
+            if (current === undefined || target === undefined) {
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "unknown_profile",
+                  "Credential Profile is unknown",
+                ),
+              };
+            }
+            if (!target.enabled) {
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "invalid",
+                  "Disabled Credential Profile cannot be activated",
+                ),
+              };
+            }
+            if (current.activeCredentialId === target.credentialId) {
+              return {
+                kind: "unchanged" as const,
+                value: Object.freeze({ outcome: "ok" as const }),
+              };
+            }
+            return {
+              kind: "commit" as const,
+              record: {
+                ...current,
+                activeCredentialId: target.credentialId,
+                selectionGeneration: options.createId(),
+              },
+              value: Object.freeze({ outcome: "ok" as const }),
+            };
           },
-        };
-      });
-    },
-
-    async setEnabled(input: SetProfileEnabledInput): Promise<ProfileMutationResult> {
-      return mutateProfile(input, ({ current, profile, profileIndex }) => {
-        if (profile.enabled === input.enabled) {
-          return { kind: "unchanged" };
+        );
+        if (result.kind === "revision_conflict") {
+          return mutationFailure(
+            "conflict",
+            "Credential Profile state changed; re-query and retry",
+          );
         }
-        const nextProfiles = [...current.profiles];
-        nextProfiles[profileIndex] = {
-          ...profile,
-          enabled: input.enabled,
-          updatedAt: options.now(),
-        };
-        if (!input.enabled && current.activeCredentialId === profile.credentialId) {
-          return {
-            kind: "commit",
-            record: {
-              ...withoutActiveCredential(current),
-              selectionGeneration: options.createId(),
-              profiles: nextProfiles,
-            },
-          };
-        }
-        return {
-          kind: "commit",
-          record: { ...current, profiles: nextProfiles },
-        };
-      });
-    },
-
-    async setPriority(input: SetProfilePriorityInput): Promise<ProfileMutationResult> {
-      if (!Number.isSafeInteger(input.priority)) {
-        return Object.freeze({
-          outcome: "invalid",
-          error: "Profile priority must be a safe integer",
-        });
+        await refreshProjection([input.providerId]);
+        return resultWithProvider(result.value, input.providerId);
+      } catch {
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
       }
-      return mutateProfile(input, ({ current, profile, profileIndex }) => {
-        if (profile.priority === input.priority) {
-          return { kind: "unchanged" };
-        }
-        const nextProfiles = [...current.profiles];
-        nextProfiles[profileIndex] = {
-          ...profile,
-          priority: input.priority,
-          updatedAt: options.now(),
-        };
-        return {
-          kind: "commit",
-          record: { ...current, profiles: nextProfiles },
-        };
-      });
     },
 
-    async reorderProfiles(input: ReorderProfilesInput): Promise<ProfileMutationResult> {
+    async setEnabled(input: SetProfileEnabledInput) {
+      if (providerFor(input.providerId) === undefined) {
+        return mutationFailure("unknown_provider", "Provider is unknown");
+      }
+      try {
+        const result = await options.recordStore.modifyManagement(
+          input.providerId,
+          input.expectedRevision,
+          (current) => {
+            const index =
+              current?.profiles.findIndex(
+                (profile) => profile.credentialId === input.credentialId,
+              ) ?? -1;
+            if (current === undefined || index < 0) {
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "unknown_profile",
+                  "Credential Profile is unknown",
+                ),
+              };
+            }
+            const target = current.profiles[index]!;
+            if (target.enabled === input.enabled) {
+              return {
+                kind: "unchanged" as const,
+                value: Object.freeze({ outcome: "ok" as const }),
+              };
+            }
+            const profiles = [...current.profiles];
+            profiles[index] = {
+              ...target,
+              enabled: input.enabled,
+              updatedAt: options.now(),
+            };
+            const next =
+              !input.enabled &&
+              current.activeCredentialId === target.credentialId
+                ? clearActive(
+                    { ...current, profiles },
+                    options.createId(),
+                  )
+                : { ...current, profiles };
+            return {
+              kind: "commit" as const,
+              record: next,
+              value: Object.freeze({ outcome: "ok" as const }),
+            };
+          },
+        );
+        if (result.kind === "revision_conflict") {
+          return mutationFailure(
+            "conflict",
+            "Credential Profile state changed; re-query and retry",
+          );
+        }
+        await refreshProjection([input.providerId]);
+        return resultWithProvider(result.value, input.providerId);
+      } catch {
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
+      }
+    },
+
+    async reorderProfiles(input: ReorderProfilesInput) {
+      if (providerFor(input.providerId) === undefined) {
+        return mutationFailure("unknown_provider", "Provider is unknown");
+      }
       try {
         const result = await options.recordStore.modifyManagement(
           input.providerId,
           input.expectedRevision,
           (current) => {
             if (current === undefined) {
-              return { kind: "unchanged", value: "unknown_provider" as const };
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "unknown_profile",
+                  "Credential Profiles are unknown",
+                ),
+              };
             }
             if (
               input.credentialIds.length !== current.profiles.length ||
               new Set(input.credentialIds).size !== input.credentialIds.length
             ) {
-              return { kind: "unchanged", value: "invalid" as const };
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure("invalid", "Invalid Profile order"),
+              };
             }
             const byId = new Map(
-              current.profiles.map((profile) => [profile.credentialId, profile] as const),
+              current.profiles.map(
+                (profile) => [profile.credentialId, profile] as const,
+              ),
             );
-            if (input.credentialIds.some((credentialId) => !byId.has(credentialId))) {
-              return { kind: "unchanged", value: "invalid" as const };
+            const profiles: PersistedCredentialProfile[] = [];
+            for (const credentialId of input.credentialIds) {
+              const profile = byId.get(credentialId);
+              if (profile === undefined) {
+                return {
+                  kind: "unchanged" as const,
+                  value: mutationFailure("invalid", "Invalid Profile order"),
+                };
+              }
+              profiles.push(profile);
             }
-            const changed = input.credentialIds.some(
-              (credentialId, index) =>
-                current.profiles[index]?.credentialId !== credentialId ||
-                current.profiles[index]?.priority !== index,
-            );
-            if (!changed) {
-              return { kind: "unchanged", value: "ok" as const };
-            }
-            const profiles = input.credentialIds.map((credentialId, priority) => {
-              const profile = byId.get(credentialId)!;
+            if (
+              profiles.every(
+                (profile, index) =>
+                  profile.credentialId ===
+                  current.profiles[index]?.credentialId,
+              )
+            ) {
               return {
-                ...profile,
-                priority,
-                updatedAt:
-                  profile.priority === priority ? profile.updatedAt : options.now(),
+                kind: "unchanged" as const,
+                value: Object.freeze({ outcome: "ok" as const }),
               };
-            });
+            }
             return {
-              kind: "commit",
+              kind: "commit" as const,
               record: { ...current, profiles },
-              value: "ok" as const,
+              value: Object.freeze({ outcome: "ok" as const }),
             };
           },
         );
         if (result.kind === "revision_conflict") {
-          return Object.freeze({ outcome: "conflict" });
+          return mutationFailure(
+            "conflict",
+            "Credential Profile state changed; re-query and retry",
+          );
         }
-        if (result.value !== "ok") {
-          return Object.freeze({ outcome: result.value });
-        }
-        return Object.freeze({
-          outcome: "ok",
-          provider: await projectProviderRecord(
-            result.record!,
-            providerFor(input.providerId) !== undefined,
-          ),
-        });
+        await refreshProjection([input.providerId]);
+        return resultWithProvider(result.value, input.providerId);
       } catch {
-        return Object.freeze({
-          outcome: "storage_failure",
-          error: "Provider credential state could not be updated",
-        });
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
       }
     },
 
-    async remove(input: RemoveProfileInput): Promise<ProfileMutationResult> {
-      const result = await mutateProfile(input, ({ current, profile, profileIndex }) => {
-        const nextProfiles = current.profiles.filter((_candidate, index) => index !== profileIndex);
-        if (current.activeCredentialId === profile.credentialId) {
-          return {
-            kind: "commit",
-            record: {
-              ...withoutActiveCredential(current),
-              selectionGeneration: options.createId(),
-              profiles: nextProfiles,
-            },
-          };
+    async remove(input: RemoveProfileInput) {
+      if (providerFor(input.providerId) === undefined) {
+        return mutationFailure("unknown_provider", "Provider is unknown");
+      }
+      try {
+        const result = await options.recordStore.modifyManagement(
+          input.providerId,
+          input.expectedRevision,
+          (current) => {
+            const target = current?.profiles.find(
+              (profile) => profile.credentialId === input.credentialId,
+            );
+            if (current === undefined || target === undefined) {
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "unknown_profile",
+                  "Credential Profile is unknown",
+                ),
+              };
+            }
+            cooldownUntil.delete(
+              cooldownKey(input.providerId, target.credentialId),
+            );
+            const profiles = current.profiles.filter(
+              (profile) => profile.credentialId !== target.credentialId,
+            );
+            const next =
+              current.activeCredentialId === target.credentialId
+                ? clearActive(
+                    { ...current, profiles },
+                    options.createId(),
+                  )
+                : { ...current, profiles };
+            return {
+              kind: "commit" as const,
+              record: next,
+              value: Object.freeze({ outcome: "ok" as const }),
+            };
+          },
+        );
+        if (result.kind === "revision_conflict") {
+          return mutationFailure(
+            "conflict",
+            "Credential Profile state changed; re-query and retry",
+          );
         }
-        return {
-          kind: "commit",
-          record: { ...current, profiles: nextProfiles },
-        };
-      });
-      if (result.outcome === "ok") {
-        runtimeHealth.delete(healthKey(input.providerId, input.credentialId));
-        // The record commit above is the visibility point. Collection is a
-        // separate sweep (startup and explicit maintenance) that shares the
-        // per-credential lock and only deletes past the grace period; it is
-        // deliberately not coupled to this user-visible mutation.
+        await refreshProjection([input.providerId]);
+        return resultWithProvider(result.value, input.providerId);
+      } catch {
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
       }
-      return result;
     },
 
-    async setSwitchPolicy(
-      input: SetProviderSwitchPolicyInput,
-    ): Promise<ProfileMutationResult> {
+    async setSwitchPolicy(input: SetProviderSwitchPolicyInput) {
+      if (providerFor(input.providerId) === undefined) {
+        return mutationFailure("unknown_provider", "Provider is unknown");
+      }
       try {
         const result = await options.recordStore.modifyManagement(
           input.providerId,
           input.expectedRevision,
           (current) => {
             if (current === undefined) {
-              return { kind: "unchanged", value: "unknown_provider" as const };
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "unknown_profile",
+                  "Credential Profiles are unknown",
+                ),
+              };
             }
             if (
               current.switchPolicy.apiKeyOn429 === input.apiKeyOn429 &&
               current.switchPolicy.oauthOn429 === input.oauthOn429
             ) {
-              return { kind: "unchanged", value: "ok" as const };
+              return {
+                kind: "unchanged" as const,
+                value: Object.freeze({ outcome: "ok" as const }),
+              };
             }
             return {
-              kind: "commit",
+              kind: "commit" as const,
               record: {
                 ...current,
                 switchPolicy: {
@@ -1330,612 +958,320 @@ export function createProviderCredentialProfiles(options: {
                   oauthOn429: input.oauthOn429,
                 },
               },
-              value: "ok" as const,
+              value: Object.freeze({ outcome: "ok" as const }),
             };
           },
         );
         if (result.kind === "revision_conflict") {
-          return Object.freeze({ outcome: "conflict" });
+          return mutationFailure(
+            "conflict",
+            "Credential Profile state changed; re-query and retry",
+          );
         }
-        if (result.value !== "ok" || result.record === undefined) {
-          return Object.freeze({ outcome: "unknown_provider" });
-        }
-        return Object.freeze({
-          outcome: "ok",
-          provider: await projectProviderRecord(
-            result.record,
-            providerFor(input.providerId) !== undefined,
-          ),
-        });
+        await refreshProjection([input.providerId]);
+        return resultWithProvider(result.value, input.providerId);
       } catch {
-        return Object.freeze({
-          outcome: "storage_failure",
-          error: "Provider credential settings could not be updated",
-        });
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
       }
     },
-  });
 
-  const binding: ProviderAuthBindingAuthority = Object.freeze({
-    async capture(providerId: string): Promise<ProviderAuthBindingCapture> {
-      if (providerFor(providerId) === undefined) {
+    async acquireLocal(input) {
+      const provider = providerFor(input.providerId);
+      if (
+        provider === undefined ||
+        input.acquisition.providerId !== input.providerId
+      ) {
+        return mutationFailure("unknown_provider", "Provider is unknown");
+      }
+      if (!validDisplayName(input.displayName) || !validNote(input.note)) {
+        return mutationFailure("invalid", "Credential Profile metadata is invalid");
+      }
+      input.signal?.throwIfAborted();
+
+      let current: PersistedProviderCredentialRecord | undefined;
+      try {
+        current = await options.recordStore.read(input.providerId);
+      } catch {
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
+      }
+      if (
+        current?.profiles.some(
+          (profile) => profile.acquisitionKind === "local_oauth",
+        )
+      ) {
+        return mutationFailure("duplicate", LOCAL_LOGIN_DUPLICATE_MESSAGE);
+      }
+      if (
+        current !== undefined &&
+        profileNameTaken(current.profiles, input.displayName)
+      ) {
+        return mutationFailure(
+          "duplicate",
+          "Credential Profile display name already exists",
+        );
+      }
+
+      const reference = await input.acquisition.acquire(input.signal);
+      input.signal?.throwIfAborted();
+      if (reference === null) {
+        throw new LocalAcquisitionError(LOCAL_LOGIN_FAILURE_MESSAGE);
+      }
+      const credentialId = options.createId();
+      const now = options.now();
+      const profile: PersistedCredentialProfile = {
+        credentialId,
+        acquisitionKind: "local_oauth",
+        reference: externalCredentialReference(reference.path),
+        displayName: input.displayName,
+        ...(input.note === undefined ? {} : { note: input.note }),
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      try {
+        const result = await options.recordStore.publishCredential(
+          input.providerId,
+          {
+            credentialId,
+            reference: profile.reference,
+          },
+          (latest) => {
+            if (
+              latest?.profiles.some(
+                (candidate) =>
+                  candidate.acquisitionKind === "local_oauth",
+              )
+            ) {
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "duplicate",
+                  LOCAL_LOGIN_DUPLICATE_MESSAGE,
+                ),
+              };
+            }
+            if (
+              latest !== undefined &&
+              profileNameTaken(latest.profiles, input.displayName)
+            ) {
+              return {
+                kind: "unchanged" as const,
+                value: mutationFailure(
+                  "duplicate",
+                  "Credential Profile display name already exists",
+                ),
+              };
+            }
+            const record =
+              latest === undefined
+                ? createInitialRecord({
+                    providerId: input.providerId,
+                    selectionGeneration: options.createId(),
+                    profile,
+                  })
+                : appendAcquiredProfile(
+                    latest,
+                    profile,
+                    options.createId(),
+                  );
+            return {
+              kind: "commit" as const,
+              record,
+              value: Object.freeze({ outcome: "ok" as const }),
+            };
+          },
+        );
+        await refreshProjection([input.providerId]);
+        return resultWithProvider(result.value, input.providerId);
+      } catch {
+        return mutationFailure(
+          "storage_failure",
+          "Credential Profile storage is unavailable",
+        );
+      }
+    },
+  };
+
+  const binding: ProviderAuthBindingAuthority = {
+    async capture(providerId: string) {
+      const provider = providerFor(providerId);
+      if (provider === undefined) {
         throw new ProviderAuthBindingError(
           "unknown_provider",
           "Provider implementation is unavailable",
         );
       }
-      let record: PersistedProviderCredentialRecordV2 | undefined;
+      let record: PersistedProviderCredentialRecord | undefined;
       try {
         record = await options.recordStore.read(providerId);
-      } catch {
+      } catch (error) {
         throw new ProviderAuthBindingError(
           "storage_failure",
           "Provider credential state could not be read",
+          { cause: error },
         );
       }
-
       if (record === undefined || record.profiles.length === 0) {
-        const ambientScope: AmbientBindingScope = Object.freeze({
-          kind: "ambient",
-          providerId,
+        return Object.freeze({
+          facts: Object.freeze({
+            kind: "unbound" as const,
+            providerId,
+          }),
         });
-        const capture: ProviderAuthBindingCapture = Object.freeze({
-          facts: Object.freeze({ kind: "ambient", providerId }),
-        });
-        capturedScopes.set(capture, ambientScope);
-        return capture;
       }
-
-      const active = record.activeCredentialId === undefined
-        ? undefined
-        : record.profiles.find(
-            (profile) => profile.credentialId === record.activeCredentialId,
-          );
-      const activeHealth = active === undefined
-        ? undefined
-        : runtimeHealth.get(healthKey(providerId, active.credentialId));
-      if (
-        active === undefined ||
-        !active.enabled ||
-        referenceHealth.get(healthKey(providerId, active.credentialId)) === "unavailable" ||
-        activeHealth?.terminal === "reconnect_required" ||
-        (activeHealth?.cooldownUntil !== undefined && activeHealth.cooldownUntil > options.now())
-      ) {
+      const profile =
+        record.activeCredentialId === undefined
+          ? undefined
+          : record.profiles.find(
+              (candidate) =>
+                candidate.credentialId === record.activeCredentialId,
+            );
+      if (profile === undefined || !profile.enabled) {
         throw new ProviderAuthBindingError(
           "no_active_profile",
-          "Managed Provider Profiles exist but no enabled active Profile is selected",
+          "Provider has Profiles but no enabled active Profile",
         );
       }
-      return managedCapture(record, active);
+      return Object.freeze({
+        facts: await profileFacts(provider, record, profile),
+      });
     },
 
-    async captureForRecheck(
-      input: CaptureProfileForRecheckInput,
-    ): Promise<ProviderAuthBindingCapture> {
-      if (providerFor(input.providerId) === undefined) {
-        throw new ProviderAuthBindingError(
-          "unknown_provider",
-          "Provider implementation is unavailable",
-        );
-      }
-      let record: PersistedProviderCredentialRecordV2 | undefined;
-      try {
-        record = await options.recordStore.read(input.providerId);
-      } catch {
-        throw new ProviderAuthBindingError(
-          "storage_failure",
-          "Provider credential state could not be read",
-        );
-      }
-      if (record?.revision !== input.expectedRevision) {
-        throw new ProviderAuthBindingError(
-          "stale_binding",
-          "Credential Profile state changed before recheck",
-        );
-      }
-      const active = record.profiles.find(
-        (profile) => profile.credentialId === input.credentialId,
-      );
-      if (
-        active === undefined ||
-        !active.enabled ||
-        referenceHealth.get(healthKey(input.providerId, active.credentialId)) === "unavailable" ||
-        record.activeCredentialId !== active.credentialId
-      ) {
-        throw new ProviderAuthBindingError(
-          "no_active_profile",
-          "Only the enabled active Profile can be rechecked",
-        );
-      }
-      return managedCapture(record, active);
-    },
-
-    async createLoginBinding(input: CreateLoginBindingInput): Promise<CredentialLoginBinding> {
+    async createAcquisitionBinding(input: CreateAcquisitionBindingInput) {
       const provider = providerFor(input.providerId);
       if (provider === undefined) {
         throw new CredentialProfileOperationError(
-          "unavailable",
-          "Provider implementation is unavailable",
+          "unknown_provider",
+          "Provider is unknown",
         );
       }
-      const strategy = input.acquisitionKind === "local_oauth"
-        ? acquisitionStrategies.find(
-            (candidate) => candidate.providerId === input.providerId,
-          )
-        : undefined;
-      if (input.acquisitionKind === "local_oauth" && strategy === undefined) {
+      if (
+        !providerSupportsAcquisition(provider, input.acquisitionKind)
+      ) {
         throw new CredentialProfileOperationError(
           "unavailable",
-          "This Provider has no local login method",
-        );
-      }
-      const authType: AuthType = strategy === undefined
-        ? input.acquisitionKind === "api_key" ? "api_key" : "oauth"
-        : strategy.authType;
-      if (strategy === undefined && !providerSupportsLogin(provider, authType)) {
-        throw new CredentialProfileOperationError(
-          "unavailable",
-          "Provider authentication method cannot be added interactively",
+          "Provider authentication method is unavailable",
         );
       }
       if (!validDisplayName(input.displayName) || !validNote(input.note)) {
         throw new CredentialProfileOperationError(
           "invalid",
-          "Profile display name is outside the supported bounds",
+          "Credential Profile metadata is invalid",
         );
       }
-      let current: PersistedProviderCredentialRecordV2 | undefined;
-      try {
-        current = await options.recordStore.read(input.providerId);
-      } catch {
-        throw new CredentialProfileOperationError(
-          "storage_failure",
-          "Provider credential state could not be read",
-        );
-      }
-      if ((current?.revision ?? NO_PROVIDER_RECORD_REVISION) !== input.expectedRevision) {
-        throw new CredentialProfileOperationError(
-          "conflict",
-          "Credential Profile state changed; re-query and retry",
-        );
-      }
+      const record = await options.recordStore.read(input.providerId);
       if (
-        strategy !== undefined &&
-        strategy.singleton &&
-        current?.profiles.some(
-          (profile) => profile.strategyId === strategy.strategyId,
-        ) === true
+        record !== undefined &&
+        profileNameTaken(record.profiles, input.displayName)
       ) {
         throw new CredentialProfileOperationError(
           "duplicate",
-          LOCAL_LOGIN_DUPLICATE_MESSAGE,
-        );
-      }
-      if (
-        current?.profiles.some(
-          (profile) =>
-            profile.displayName.toLocaleLowerCase() ===
-            input.displayName.trim().toLocaleLowerCase(),
-        ) === true
-      ) {
-        throw new CredentialProfileOperationError(
-          "duplicate",
-          "A Profile with this name already exists for the Provider",
+          "Credential Profile display name already exists",
         );
       }
       return Object.freeze({
-        kind: "login",
-        mode: "add",
-        ...(strategy === undefined ? {} : { strategyId: strategy.strategyId }),
-        acquisitionKind: strategy?.acquisitionKind ?? defaultAcquisitionKind(authType),
+        kind: "acquisition" as const,
         providerId: input.providerId,
-        authType,
-        displayName: input.displayName.trim(),
+        acquisitionKind: input.acquisitionKind,
+        displayName: input.displayName,
         ...(input.note === undefined ? {} : { note: input.note }),
-        useNow: input.useNow,
-        expectedRevision: input.expectedRevision,
         credentialId: options.createId(),
-        credentialGeneration: options.createId(),
       });
-    },
-
-    async createReconnectBinding(
-      input: CreateReconnectBindingInput,
-    ): Promise<CredentialLoginBinding> {
-      const provider = providerFor(input.providerId);
-      if (provider === undefined) {
-        throw new CredentialProfileOperationError(
-          "unavailable",
-          "Provider implementation is unavailable",
-        );
-      }
-      let current: PersistedProviderCredentialRecordV2 | undefined;
-      try {
-        current = await options.recordStore.read(input.providerId);
-      } catch {
-        throw new CredentialProfileOperationError(
-          "storage_failure",
-          "Provider credential state could not be read",
-        );
-      }
-      if ((current?.revision ?? NO_PROVIDER_RECORD_REVISION) !== input.expectedRevision) {
-        throw new CredentialProfileOperationError(
-          "conflict",
-          "Credential Profile state changed; re-query and retry",
-        );
-      }
-      const profile = current?.profiles.find(
-        (candidate) => candidate.credentialId === input.credentialId,
-      );
-      if (profile === undefined) {
-        throw new CredentialProfileOperationError(
-          "unknown_profile",
-          "Credential Profile is missing",
-        );
-      }
-      const strategy = profile.strategyId === undefined
-        ? undefined
-        : strategyFor(input.providerId, profile.strategyId);
-      if (profile.strategyId !== undefined && strategy === undefined) {
-        throw new CredentialProfileOperationError(
-          "unavailable",
-          "The Profile acquisition method is no longer available",
-        );
-      }
-      if (strategy === undefined && !providerSupportsLogin(provider, profile.authType)) {
-        throw new CredentialProfileOperationError(
-          "unavailable",
-          "Provider authentication method cannot be reconnected interactively",
-        );
-      }
-      return Object.freeze({
-        kind: "login",
-        mode: "reconnect",
-        ...(strategy === undefined ? {} : { strategyId: strategy.strategyId }),
-        acquisitionKind: acquisitionKindFor(profile),
-        providerId: input.providerId,
-        authType: profile.authType,
-        displayName: profile.displayName,
-        ...(profile.note === undefined ? {} : { note: profile.note }),
-        useNow: input.useNow,
-        expectedRevision: input.expectedRevision,
-        credentialId: profile.credentialId,
-        credentialGeneration: options.createId(),
-      });
-    },
-
-    async acquireLocal(
-      binding: CredentialLoginBinding,
-      signal?: AbortSignal,
-    ): Promise<{
-      readonly credentialId: string;
-      readonly credentialGeneration: string;
-    }> {
-      signal?.throwIfAborted();
-      if (
-        binding.acquisitionKind !== "local_oauth" ||
-        binding.strategyId === undefined
-      ) {
-        throw new CredentialProfileOperationError(
-          "invalid",
-          "Credential Profile acquisition does not match its strategy",
-        );
-      }
-      const strategy = strategyFor(binding.providerId, binding.strategyId);
-      if (strategy === undefined) {
-        throw new CredentialProfileOperationError(
-          "unavailable",
-          "The Profile acquisition method is no longer available",
-        );
-      }
-      const provider = providerFor(binding.providerId);
-      const authMethodLabel =
-        strategy.label() ??
-        (provider === undefined
-          ? undefined
-          : providerAuthLabel(provider, binding.authType));
-      if (authMethodLabel === undefined) {
-        throw new CredentialProfileOperationError(
-          "unavailable",
-          "Provider authentication method is no longer available",
-        );
-      }
-      if (!validDisplayName(binding.displayName)) {
-        throw new CredentialProfileOperationError(
-          "invalid",
-          "Profile display name is outside the supported bounds",
-        );
-      }
-
-      // The singleton check, the bounded source read and the record commit all
-      // run inside the Provider lock, so a concurrent click cannot create a
-      // second local Profile and a failed read publishes nothing.
-      const result = await options.recordStore.rebuildCredential(
-        binding.providerId,
-        binding.credentialId,
-        binding.expectedRevision,
-        async (current) => {
-          signal?.throwIfAborted();
-          if (binding.mode === "add") {
-            if (
-              strategy.singleton &&
-              current?.profiles.some(
-                (profile) => profile.strategyId === strategy.strategyId,
-              ) === true
-            ) {
-              throw new CredentialProfileOperationError(
-                "duplicate",
-                LOCAL_LOGIN_DUPLICATE_MESSAGE,
-              );
-            }
-          } else {
-            const target = current?.profiles.find(
-              (profile) => profile.credentialId === binding.credentialId,
-            );
-            if (
-              target === undefined ||
-              target.strategyId !== strategy.strategyId
-            ) {
-              throw new CredentialProfileOperationError(
-                "unknown_profile",
-                "Credential Profile is missing",
-              );
-            }
-          }
-
-          const grant = await strategy.acquire(signal);
-          if (grant === null) {
-            throw new LocalAcquisitionError(LOCAL_LOGIN_FAILURE_MESSAGE);
-          }
-          const timestamp = options.now();
-          const hint = identityHint(grant.credential);
-          const carrier = credentialProfileCarrier(binding.providerId, {
-            credentialId: binding.credentialId,
-            credentialGeneration: binding.credentialGeneration,
-            credential: null,
-            externalReference: grant.reference,
-          });
-          const publication = {
-            credentialId: binding.credentialId,
-            credentialGeneration: binding.credentialGeneration,
-            credential: null,
-            externalReference: grant.reference,
-          };
-          const value = {
-            credentialId: binding.credentialId,
-            credentialGeneration: binding.credentialGeneration,
-          };
-
-          if (binding.mode === "reconnect") {
-            const profileIndex = current!.profiles.findIndex(
-              (profile) => profile.credentialId === binding.credentialId,
-            );
-            const target = current!.profiles[profileIndex]!;
-            const replacement: PersistedCredentialProfileV2 = {
-              credentialId: target.credentialId,
-              credentialGeneration: binding.credentialGeneration,
-              authType: target.authType,
-              authMethodLabel,
-              displayName: target.displayName,
-              ...(target.note === undefined ? {} : { note: target.note }),
-              ...(target.strategyId === undefined
-                ? {}
-                : { strategyId: target.strategyId }),
-              ...(hint === undefined ? {} : { identityHint: hint }),
-              enabled: target.enabled,
-              priority: target.priority,
-              createdAt: target.createdAt,
-              updatedAt: timestamp,
-              ...carrier,
-            };
-            const profiles = [...current!.profiles];
-            profiles[profileIndex] = replacement;
-            if (
-              metadataContainsSecret(
-                replacement.displayName,
-                replacement.note,
-                [grant.credential],
-              )
-            ) {
-              throw new CredentialProfileOperationError(
-                "invalid",
-                "Profile metadata must not contain stored credential secrets",
-              );
-            }
-            const shouldActivate =
-              binding.useNow &&
-              current!.activeCredentialId !== binding.credentialId;
-            return {
-              publication,
-              record: {
-                ...current!,
-                ...(shouldActivate
-                  ? {
-                      activeCredentialId: binding.credentialId,
-                      selectionGeneration: options.createId(),
-                    }
-                  : {}),
-                profiles,
-              },
-              value,
-            };
-          }
-
-          const profiles = [...(current?.profiles ?? [])];
-          if (
-            profiles.some(
-              (profile) =>
-                profile.displayName.toLocaleLowerCase() ===
-                binding.displayName.toLocaleLowerCase(),
-            )
-          ) {
-            throw new CredentialProfileOperationError(
-              "duplicate",
-              "A Profile with this name already exists for the Provider",
-            );
-          }
-          const profile: PersistedCredentialProfileV2 = {
-            strategyId: strategy.strategyId,
-            credentialId: binding.credentialId,
-            credentialGeneration: binding.credentialGeneration,
-            authType: binding.authType,
-            authMethodLabel,
-            displayName: binding.displayName,
-            ...(binding.note === undefined ? {} : { note: binding.note }),
-            ...(hint === undefined ? {} : { identityHint: hint }),
-            enabled: true,
-            priority: profiles.length,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-            ...carrier,
-          };
-          if (
-            metadataContainsSecret(profile.displayName, profile.note, [
-              grant.credential,
-            ])
-          ) {
-            throw new CredentialProfileOperationError(
-              "invalid",
-              "Profile metadata must not contain stored credential secrets",
-            );
-          }
-          const record =
-            current === undefined
-              ? createInitialRecord({
-                  providerId: binding.providerId,
-                  selectionGeneration: options.createId(),
-                  profile,
-                })
-              : {
-                  ...current,
-                  ...(current.profiles.length === 0 || binding.useNow
-                    ? {
-                        activeCredentialId: binding.credentialId,
-                        selectionGeneration: options.createId(),
-                      }
-                    : {}),
-                  profiles: [...profiles, profile],
-                };
-          return { publication, record, value };
-        },
-      );
-      if (result.kind === "revision_conflict") {
-        throw new CredentialProfileOperationError(
-          "conflict",
-          "Credential Profile state changed; re-query and retry",
-        );
-      }
-      if (binding.mode === "reconnect") {
-        runtimeHealth.delete(healthKey(binding.providerId, binding.credentialId));
-      }
-      return result.value;
     },
 
     async advanceAfterFinal429(
       input: AdvanceAfterFinal429Input,
     ): Promise<AdvanceAfterFinal429Result> {
       input.signal?.throwIfAborted();
-      const failedScope = capturedScopes.get(input.capture);
-      if (failedScope === undefined || failedScope.kind !== "managed") {
-        return Object.freeze({ outcome: "stale_binding" });
-      }
+      const failedFacts = input.capture.facts;
       const attempted = new Set(input.attemptedCredentialIds);
-      attempted.add(failedScope.credentialId);
+      attempted.add(failedFacts.credentialId);
       if (attempted.size >= MAX_PROFILE_ATTEMPTS_PER_REQUEST) {
         return Object.freeze({ outcome: "exhausted" });
       }
 
       type SwitchValue =
-        | { readonly outcome: "disabled" | "exhausted" | "stale_binding" }
+        | {
+            readonly outcome:
+              | "disabled"
+              | "exhausted"
+              | "stale_binding";
+          }
         | {
             readonly outcome: "switched";
-            readonly target: Omit<ManagedBindingScope, "kind">;
+            readonly credentialId: string;
           };
+
       let result;
       try {
         result = await options.recordStore.modifySelection<SwitchValue>(
-          failedScope.providerId,
+          failedFacts.providerId,
           (current) => {
             input.signal?.throwIfAborted();
             const failed = current?.profiles.find(
-              (profile) => profile.credentialId === failedScope.credentialId,
+              (profile) =>
+                profile.credentialId === failedFacts.credentialId,
             );
             if (
               current === undefined ||
               failed === undefined ||
-              failed.credentialGeneration !== failedScope.credentialGeneration ||
-              current.selectionGeneration !== failedScope.selectionGeneration ||
-              current.activeCredentialId !== failedScope.credentialId
+              current.selectionGeneration !==
+                failedFacts.selectionGeneration ||
+              current.activeCredentialId !== failedFacts.credentialId ||
+              failed.acquisitionKind !== failedFacts.acquisitionKind
             ) {
               return {
                 kind: "unchanged",
                 value: { outcome: "stale_binding" as const },
               };
             }
-            const enabled = failed.authType === "api_key"
-              ? current.switchPolicy.apiKeyOn429
-              : current.switchPolicy.oauthOn429;
+
+            const enabled =
+              authTypeFor(failed.acquisitionKind) === "api_key"
+                ? current.switchPolicy.apiKeyOn429
+                : current.switchPolicy.oauthOn429;
             if (!enabled) {
               return {
                 kind: "unchanged",
                 value: { outcome: "disabled" as const },
               };
             }
-            const candidates = current.profiles
-              .filter((profile) => {
-                if (
-                  profile.authType !== failed.authType ||
-                  !profile.enabled ||
-                  referenceHealth.get(
-                    healthKey(current.providerId, profile.credentialId),
-                  ) === "unavailable" ||
-                  attempted.has(profile.credentialId)
-                ) {
-                  return false;
-                }
-                const health = runtimeHealth.get(
-                  healthKey(current.providerId, profile.credentialId),
-                );
-                return (
-                  health?.terminal !== "reconnect_required" &&
-                  !(health?.cooldownUntil !== undefined && health.cooldownUntil > options.now())
-                );
-              })
-              .sort(
-                (left, right) =>
-                  left.priority - right.priority ||
-                  left.credentialId.localeCompare(right.credentialId),
-              );
-            const target = candidates[0];
+
+            const target = current.profiles.find(
+              (candidate) =>
+                candidate.enabled &&
+                authTypeFor(candidate.acquisitionKind) ===
+                  authTypeFor(failed.acquisitionKind) &&
+                !attempted.has(candidate.credentialId) &&
+                !isCoolingDown(
+                  current.providerId,
+                  candidate.credentialId,
+                ),
+            );
             if (target === undefined) {
               return {
                 kind: "unchanged",
                 value: { outcome: "exhausted" as const },
               };
             }
-            const selectionGeneration = options.createId();
+
             return {
               kind: "commit",
               record: {
                 ...current,
                 activeCredentialId: target.credentialId,
-                selectionGeneration,
+                selectionGeneration: options.createId(),
               },
               value: {
                 outcome: "switched" as const,
-                target: {
-                  providerId: current.providerId,
-                  carrierOwner:
-                    target.kind === "reference"
-                      ? target.reference.owner
-                      : "managed",
-                  credentialId: target.credentialId,
-                  authType: target.authType,
-                  authMethodLabel: target.authMethodLabel,
-                  displayName: target.displayName,
-                  credentialGeneration: target.credentialGeneration,
-                  selectionGeneration,
-                },
+                credentialId: target.credentialId,
               },
             };
           },
@@ -1945,117 +1281,335 @@ export function createProviderCredentialProfiles(options: {
         return Object.freeze({ outcome: "storage_failure" });
       }
 
-      const retryAfterMs = input.retryAfterMs;
       if (
         result.value.outcome !== "stale_binding" &&
-        retryAfterMs !== undefined &&
-        Number.isFinite(retryAfterMs) &&
-        retryAfterMs >= 0 &&
-        retryAfterMs <= 86_400_000
+        input.retryAfterMs !== undefined &&
+        Number.isFinite(input.retryAfterMs) &&
+        input.retryAfterMs >= 0 &&
+        input.retryAfterMs <= 86_400_000
       ) {
-        const key = healthKey(failedScope.providerId, failedScope.credentialId);
-        const currentHealth = runtimeHealth.get(key) ?? { refreshing: 0 };
-        runtimeHealth.set(key, {
-          ...currentHealth,
-          cooldownUntil: options.now() + retryAfterMs,
-        });
-      }
-      if (result.value.outcome !== "switched") {
-        return Object.freeze({ outcome: result.value.outcome });
+        cooldownUntil.set(
+          cooldownKey(
+            failedFacts.providerId,
+            failedFacts.credentialId,
+          ),
+          options.now() + input.retryAfterMs,
+        );
       }
 
-      const targetScope: ManagedBindingScope = Object.freeze({
-        kind: "managed",
-        ...result.value.target,
-      });
-      const capture: ManagedProviderAuthBindingCapture = Object.freeze({
-        facts: Object.freeze({
-          kind: "managed",
-          providerId: targetScope.providerId,
-          carrierOwner: targetScope.carrierOwner,
-          credentialId: targetScope.credentialId,
-          authType: targetScope.authType,
-          authMethodLabel: targetScope.authMethodLabel,
-          displayName: targetScope.displayName,
-          credentialGeneration: targetScope.credentialGeneration,
-          selectionGeneration: targetScope.selectionGeneration,
+      const switchValue = result.value;
+      if (switchValue.outcome !== "switched") {
+        return Object.freeze({ outcome: switchValue.outcome });
+      }
+
+      const provider = providerFor(failedFacts.providerId);
+      const record = result.record;
+      const target = record?.profiles.find(
+        (candidate) =>
+          candidate.credentialId === switchValue.credentialId,
+      );
+      if (provider === undefined || record === undefined || target === undefined) {
+        return Object.freeze({ outcome: "storage_failure" });
+      }
+      return Object.freeze({
+        outcome: "switched" as const,
+        capture: Object.freeze({
+          facts: await profileFacts(provider, record, target),
         }),
       });
-      capturedScopes.set(capture, targetScope);
-      return Object.freeze({ outcome: "switched", capture });
     },
 
-    async publishIfCurrent(
-      capture: ProviderAuthBindingCapture,
-      publish: (assertCurrent: () => void, facts: ProviderAuthBindingFacts) => Promise<void> | void,
-    ): Promise<boolean> {
-      const captured = capturedScopes.get(capture);
-      if (captured === undefined || providerFor(captured.providerId) === undefined) {
-        return false;
-      }
+    async publishIfCurrent(capture, publish) {
+      const facts = capture.facts;
+      const provider = providerFor(facts.providerId);
+      if (provider === undefined) return false;
       return options.recordStore.withSelectionLock(
-        captured.providerId,
+        facts.providerId,
         async (current, assertOwned) => {
-            const currentMatches = captured.kind === "managed"
-              ? (() => {
-                  const health = runtimeHealth.get(
-                    healthKey(captured.providerId, captured.credentialId),
-                  );
-                  return current !== undefined &&
-                    current.activeCredentialId === captured.credentialId &&
-                    current.selectionGeneration === captured.selectionGeneration &&
-                    health?.terminal !== "reconnect_required" &&
-                    !(
-                      health?.cooldownUntil !== undefined &&
-                      health.cooldownUntil > options.now()
-                    ) &&
-                    current.profiles.some(
-                      (profile) =>
-                        profile.credentialId === captured.credentialId &&
-                        profile.credentialGeneration === captured.credentialGeneration &&
-                        profile.authType === captured.authType &&
-                        profile.enabled,
-                    );
-                })()
-              : current === undefined || current.profiles.length === 0;
-          if (!currentMatches) return false;
+          if (facts.kind === "unbound") {
+            if (current !== undefined && current.profiles.length > 0) {
+              return false;
+            }
+          } else {
+            const profile = current?.profiles.find(
+              (candidate) => candidate.credentialId === facts.credentialId,
+            );
+            if (
+              current === undefined ||
+              profile === undefined ||
+              !profile.enabled ||
+              current.activeCredentialId !== facts.credentialId ||
+              current.selectionGeneration !== facts.selectionGeneration ||
+              profile.acquisitionKind !== facts.acquisitionKind ||
+              profile.reference.owner !== facts.referenceOwner
+            ) {
+              return false;
+            }
+            if (facts.externalContentRevision !== undefined) {
+              const read = await options.recordStore.readCredentialDocument(
+                facts.providerId,
+                facts.credentialId,
+              );
+              if (
+                read.state !== "ok" ||
+                read.contentRevision !== facts.externalContentRevision
+              ) {
+                return false;
+              }
+            }
+          }
           assertOwned();
-          await publish(assertOwned, capture.facts);
+          await publish(assertOwned, facts);
           return true;
         },
       );
     },
 
     async runBound<T>(
-      requestedBinding: CredentialLoginBinding | ProviderAuthBindingCapture,
+      requestedBinding: CredentialAcquisitionBinding | ProviderAuthBindingCapture,
       operation: () => Promise<T>,
-    ): Promise<T> {
+    ) {
       if (scope.getStore() !== undefined) {
         throw new Error("Provider Profile bindings cannot be nested");
       }
-      const bindingScope: BindingScope | undefined = "facts" in requestedBinding
-        ? capturedScopes.get(requestedBinding)
-        : requestedBinding;
-      if (bindingScope === undefined) {
+      if (
+        "facts" in requestedBinding &&
+        requestedBinding.facts.kind === "unbound"
+      ) {
+        return operation();
+      }
+      return scope.run(
+        requestedBinding as BoundScope,
+        operation,
+      );
+    },
+  };
+
+  const isAcquisitionScope = (
+    current: BoundScope,
+  ): current is CredentialAcquisitionBinding =>
+    "kind" in current && current.kind === "acquisition";
+
+  const boundProviderId = (current: BoundScope): string =>
+    isAcquisitionScope(current)
+      ? current.providerId
+      : current.facts.providerId;
+
+  const credentialStore: CredentialStore = {
+    async read(providerId: string, operationOptions?: AuthOperationOptions) {
+      throwIfAborted(operationOptions);
+      const current = scope.getStore();
+      if (current !== undefined && boundProviderId(current) !== providerId) {
         throw new ProviderAuthBindingError(
           "stale_binding",
-          "Provider Profile capture did not originate from this Authority",
+          "Credential operation escaped its Provider binding",
         );
       }
-      return scope.run(bindingScope, operation);
+      if (current !== undefined && isAcquisitionScope(current)) {
+        return undefined;
+      }
+      if (current !== undefined) {
+        const resolved = await currentProfile(
+          providerId,
+          current.facts.credentialId,
+        );
+        const credential = await operations
+          .resolve(providerId, resolved.profile)
+          .read(providerId, resolved.profile);
+        if (credential === undefined) {
+          throw new ProviderAuthBindingError(
+            "credential_unavailable",
+            "Bound Credential Profile cannot currently be resolved",
+          );
+        }
+        for (const secret of credentialSecrets(credential)) {
+          knownSecrets.add(secret);
+        }
+        return structuredClone(credential);
+      }
+
+      const record = await options.recordStore.read(providerId);
+      if (record === undefined || record.profiles.length === 0) return undefined;
+      throw new ProviderAuthBindingError(
+        "no_active_profile",
+        "Credential Profile access requires an exact Profile binding",
+      );
     },
-  });
+
+    async list(
+      operationOptions?: AuthOperationOptions,
+    ): Promise<readonly CredentialInfo[]> {
+      throwIfAborted(operationOptions);
+      const entries: CredentialInfo[] = [];
+      for (const providerId of await options.recordStore.listProviderIds()) {
+        const record = await options.recordStore.read(providerId);
+        const profile =
+          record?.activeCredentialId === undefined
+            ? undefined
+            : record.profiles.find(
+                (candidate) =>
+                  candidate.credentialId === record.activeCredentialId &&
+                  candidate.enabled,
+              );
+        if (profile === undefined) continue;
+        entries.push({
+          providerId,
+          type: authTypeFor(profile.acquisitionKind),
+        });
+      }
+      return Object.freeze(entries);
+    },
+
+    async modify(
+      providerId: string,
+      mutation: (
+        current: Credential | undefined,
+      ) => Promise<Credential | undefined>,
+      operationOptions?: AuthOperationOptions,
+    ) {
+      throwIfAborted(operationOptions);
+      const current = scope.getStore();
+      if (current !== undefined && boundProviderId(current) !== providerId) {
+        throw new ProviderAuthBindingError(
+          "stale_binding",
+          "Credential operation escaped its Provider binding",
+        );
+      }
+
+      if (current !== undefined && isAcquisitionScope(current)) {
+        const credential = await mutation(undefined);
+        throwIfAborted(operationOptions);
+        if (
+          credential === undefined ||
+          credential.type !== authTypeFor(current.acquisitionKind)
+        ) {
+          throw new Error(
+            "Provider login returned a credential with the wrong authentication type",
+          );
+        }
+        if (
+          metadataContainsSecrets(
+            current.displayName,
+            current.note,
+            credentialSecrets(credential),
+          )
+        ) {
+          throw new CredentialProfileOperationError(
+            "invalid",
+            "Credential Profile metadata must not contain credential secrets",
+          );
+        }
+        for (const secret of credentialSecrets(credential)) {
+          knownSecrets.add(secret);
+        }
+
+        const now = options.now();
+        const reference = managedCredentialReference(
+          providerId,
+          current.credentialId,
+        );
+        const profile: PersistedCredentialProfile = {
+          credentialId: current.credentialId,
+          acquisitionKind: current.acquisitionKind,
+          reference,
+          displayName: current.displayName,
+          ...(current.note === undefined ? {} : { note: current.note }),
+          enabled: true,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const raw = serializeAcquiredCredential(
+          current.acquisitionKind,
+          credential,
+        );
+        const result = await options.recordStore.publishCredential(
+          providerId,
+          {
+            credentialId: current.credentialId,
+            reference,
+            content: raw,
+          },
+          (record) => {
+            if (
+              record !== undefined &&
+              profileNameTaken(record.profiles, current.displayName)
+            ) {
+              return {
+                kind: "unchanged" as const,
+                value: undefined,
+              };
+            }
+            const next =
+              record === undefined
+                ? createInitialRecord({
+                    providerId,
+                    selectionGeneration: options.createId(),
+                    profile,
+                  })
+                : appendAcquiredProfile(record, profile, options.createId());
+            return {
+              kind: "commit" as const,
+              record: next,
+              value: credential,
+            };
+          },
+        );
+        if (result.value === undefined) {
+          throw new CredentialProfileOperationError(
+            "duplicate",
+            "Credential Profile display name already exists",
+          );
+        }
+        await refreshProjection([providerId]);
+        return structuredClone(result.value);
+      }
+
+      if (
+        current === undefined ||
+        isAcquisitionScope(current) ||
+        !isProfileProviderAuthBindingCapture(current)
+      ) {
+        throw new ProviderAuthBindingError(
+          "stale_binding",
+          "Credential mutation requires an exact Profile binding",
+        );
+      }
+      const resolved = await currentProfile(
+        providerId,
+        current.facts.credentialId,
+      );
+      const credential = await operations
+        .resolve(providerId, resolved.profile)
+        .modify(providerId, resolved.profile, mutation);
+      throwIfAborted(operationOptions);
+      if (credential !== undefined) {
+        for (const secret of credentialSecrets(credential)) {
+          knownSecrets.add(secret);
+        }
+      }
+      return credential === undefined
+        ? undefined
+        : structuredClone(credential);
+    },
+
+    async delete(
+      providerId: string,
+      operationOptions?: AuthOperationOptions,
+    ) {
+      throwIfAborted(operationOptions);
+      const record = await options.recordStore.read(providerId);
+      if (record !== undefined && record.profiles.length > 0) {
+        throw new ProviderAuthBindingError(
+          "stale_binding",
+          "Pi credential delete cannot remove Token Credential Profiles",
+        );
+      }
+    },
+  };
 
   return Object.freeze({
     management,
     binding,
     credentialStore,
-    scrub(value: string): string {
-      let scrubbed = value;
-      for (const secret of [...knownSecrets].sort((left, right) => right.length - left.length)) {
-        scrubbed = scrubbed.replaceAll(secret, "[REDACTED]");
-      }
-      return scrubbed;
-    },
   });
 }

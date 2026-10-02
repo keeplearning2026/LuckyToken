@@ -1,6 +1,6 @@
 import type {
   ProviderUsageCommandHandler,
-  ProviderUsageProviderProjection,
+  ProviderUsageProfileProjection,
 } from "@token/application-control-plane/control-plane";
 
 import type {
@@ -8,10 +8,13 @@ import type {
   ProviderUsageState,
 } from "./contract.js";
 
-function projectState(state: ProviderUsageState): ProviderUsageProviderProjection {
+function projectState(
+  state: ProviderUsageState,
+): ProviderUsageProfileProjection {
   if (state.state === "observed") {
     return Object.freeze({
-      providerId: state.observation.providerId,
+      providerId: state.providerId,
+      credentialId: state.credentialId,
       state: "observed",
       observedAt: state.observation.observedAt,
       refreshable: state.refreshable,
@@ -22,18 +25,21 @@ function projectState(state: ProviderUsageState): ProviderUsageProviderProjectio
   if (state.state === "unobserved") {
     return Object.freeze({
       providerId: state.providerId,
+      credentialId: state.credentialId,
       state: "unobserved",
     });
   }
   if (state.state === "unsupported") {
     return Object.freeze({
       providerId: state.providerId,
+      credentialId: state.credentialId,
       state: "unsupported",
       reason: state.reason,
     });
   }
   return Object.freeze({
     providerId: state.providerId,
+    credentialId: state.credentialId,
     state: "unavailable",
     reason: state.reason,
   });
@@ -48,7 +54,7 @@ export function createProviderUsageControlPlaneHandler(
       return Object.freeze({
         outcome: "ok" as const,
         snapshot: Object.freeze({
-          providers: Object.freeze(snapshot.providers.map(projectState)),
+          profiles: Object.freeze(snapshot.profiles.map(projectState)),
         }),
       });
     }
@@ -56,7 +62,7 @@ export function createProviderUsageControlPlaneHandler(
     return Object.freeze({
       outcome: "ok" as const,
       snapshot: Object.freeze({
-        providers: Object.freeze(result.snapshot.providers.map(projectState)),
+        profiles: Object.freeze(result.snapshot.profiles.map(projectState)),
       }),
       refresh: result.refresh,
     });

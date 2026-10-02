@@ -4,7 +4,7 @@
 
 **Date:** 2026-08-17
 
-**Implementation note (2026-08-22):** The Provider Activation work described here is implemented. Its original one-credential/`auth.json` sections are superseded by [Provider Credential Profiles PRD v1.5](./TokenProviderCredentialProfilesPRD.md) and its [Implementation Plan v1.5](./TokenProviderCredentialProfilesImplementationPlan.md). Statements below that describe the pre-implementation "current product" or the old Credential Authority are historical baseline/context; current runtime authority is defined by those Profile specifications, Core/Electron specifications, AGENTS.md, and source.
+**Implementation note:** The original one-credential/`auth.json` sections are superseded by the [Provider Credential Profiles Specification](./TokenProviderCredentialProfilesSpec.md). Statements below that describe the pre-Profile credential model are historical baseline/context; current credential authority is defined by that specification, Core/Electron specifications, AGENTS.md, and source.
 **Scope:** Provider discovery, Provider authentication, catalog availability, Backend/Data Plane lifecycle ownership, CommandCode Private product bundling, Provider product UI, and release certification  
 **Related specifications:**
 

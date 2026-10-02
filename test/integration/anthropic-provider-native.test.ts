@@ -119,13 +119,13 @@ describe("Anthropic Provider Native lane", () => {
   it("rebuilds Anthropic SDK identity, timeout, and auth after a 429 Profile switch", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2].map((index) => ({
       facts: {
-        kind: "managed", carrierOwner: "managed",
+        kind: "profile", referenceOwner: "managed",
         providerId: "anthropic",
         credentialId: `credential-${index}`,
-        authType: "api_key",
+        acquisitionKind: "api_key",
+          authType: "api_key",
         authMethodLabel: "Anthropic credentials",
         displayName: `Profile ${index}`,
-        credentialGeneration: `credential-generation-${index}`,
         selectionGeneration: `selection-generation-${index}`,
       },
     }));
@@ -196,13 +196,13 @@ describe("Anthropic Provider Native lane", () => {
   it("stops after three outer Profile attempts even if a binding Adapter keeps switching", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2, 3, 4].map((index) => ({
       facts: {
-        kind: "managed", carrierOwner: "managed",
+        kind: "profile", referenceOwner: "managed",
         providerId: "fixture",
         credentialId: `credential-${index}`,
-        authType: "api_key",
+        acquisitionKind: "api_key",
+          authType: "api_key",
         authMethodLabel: "Fixture credentials",
         displayName: `Profile ${index}`,
-        credentialGeneration: `credential-generation-${index}`,
         selectionGeneration: `selection-generation-${index}`,
       },
     }));
@@ -286,8 +286,9 @@ describe("Anthropic Provider Native lane", () => {
       "https://effective.example.com/gateway",
     );
     expect(observed[0]?.capture.facts).toMatchObject({
-      kind: "managed", carrierOwner: "managed",
-      authType: "api_key",
+      kind: "profile", referenceOwner: "managed",
+      acquisitionKind: "api_key",
+          authType: "api_key",
     });
     expect(observed[0]?.response).toMatchObject({
       status: 200,
@@ -451,7 +452,8 @@ describe("Anthropic Provider Native lane", () => {
     expect(upstreamRequest!.headers.get("x-session-affinity")).toBeNull();
     expect(captures).toEqual([
       expect.objectContaining({
-        authType: "oauth",
+        acquisitionKind: "oauth",
+          authType: "oauth",
         authMethodLabel: "Account",
         lane: "provider_native",
         selectionReason: "active",

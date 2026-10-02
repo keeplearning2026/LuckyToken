@@ -56,7 +56,7 @@ export function createProfileBoundPiExecution(options: {
     const attemptedCredentialIds: string[] = [];
     let profileAttempt = 1;
     let selectionReason: "active" | "http_429_switch" = "active";
-    if (capture.facts.kind === "managed") {
+    if (isManagedProviderAuthBindingCapture(capture)) {
       credentialActivity?.credentialCaptured?.({
         ...capture.facts,
         lane: "semantic_conversion",
@@ -116,7 +116,7 @@ export function createProfileBoundPiExecution(options: {
             attemptObservation,
           ),
         );
-        if (capture.facts.kind === "managed") {
+        if (isManagedProviderAuthBindingCapture(capture)) {
           credentialActivity?.credentialAttempt?.({
             ...capture.facts,
             lane: "semantic_conversion",
@@ -127,7 +127,7 @@ export function createProfileBoundPiExecution(options: {
         }
         return result;
       } catch (error) {
-        if (capture.facts.kind === "managed") {
+        if (isManagedProviderAuthBindingCapture(capture)) {
           credentialActivity?.credentialAttempt?.({
             ...capture.facts,
             lane: "semantic_conversion",
@@ -144,8 +144,8 @@ export function createProfileBoundPiExecution(options: {
         if (!(error instanceof ExecutionFailure) || error.failure?.status !== 429) {
           throw error;
         }
-        // Ambient auth is not a Profile pool and never enters the managed
-        // Profile transition Interface.
+        // Unbound ambient auth is not a Profile pool and never enters the
+        // Profile transition interface.
         if (!isManagedProviderAuthBindingCapture(capture)) throw error;
         attemptedCredentialIds.push(capture.facts.credentialId);
         if (profileAttempt >= MAX_PROFILE_ATTEMPTS_PER_REQUEST) throw error;

@@ -6,39 +6,26 @@ export type CredentialProfileAcquisitionKind =
   | "oauth"
   | "local_oauth";
 export type CredentialProfileAcquisitionIcon = "key" | "account" | "terminal";
-export type CredentialProfileHealth =
-  | "ready"
-  | "not_yet_verified"
-  | "refreshing"
-  | "cooling_down"
-  | "reconnect_required"
-  | "disabled";
 
-export interface CredentialProfileProjectionV1 {
+export interface CredentialProfileProjection {
   readonly credentialId: string;
   readonly authType: CredentialProfileAuthType;
-  /** Public acquisition kind. The internal strategy id, credential path and
-   * document owner never cross this boundary. */
   readonly acquisitionKind: CredentialProfileAcquisitionKind;
   readonly authMethodLabel: string;
   readonly displayName: string;
   readonly note?: string;
-  readonly identityHint?: string;
   readonly enabled: boolean;
-  readonly health: CredentialProfileHealth;
-  readonly priority: number;
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly lastUsedAt?: number;
   readonly lastSucceededAt?: number;
 }
 
-export interface ProviderCredentialProfilesProjectionV1 {
+export interface ProviderCredentialProfilesProjection {
   readonly providerId: string;
   readonly implementationAvailable: boolean;
   readonly revision?: string;
   readonly selectionGeneration?: string;
-  /** The selected ordinary Profile id. */
   readonly activeCredentialId?: string;
   readonly switchPolicy?: {
     readonly apiKeyOn429: boolean;
@@ -48,21 +35,17 @@ export interface ProviderCredentialProfilesProjectionV1 {
     readonly code: "invalid_record" | "storage_error";
     readonly message: string;
   };
-  /** External auth source presentation. `connected` reports a locally valid
-   * source document; `configured` reports a locally present
-   * but temporarily unreadable document; `unknown` reports no local signal. */
   readonly ambient?: {
     readonly kind: "external";
-    readonly status: "connected" | "configured" | "unknown";
-    /** Bounded Backend-projected source label; Renderer never derives it. */
+    readonly status: "configured" | "unknown";
     readonly displayName?: string;
     readonly message: string;
   };
-  readonly profiles: readonly CredentialProfileProjectionV1[];
+  readonly profiles: readonly CredentialProfileProjection[];
 }
 
-export interface CredentialProfilesProjectionV1 {
-  readonly providers: readonly ProviderCredentialProfilesProjectionV1[];
+export interface CredentialProfilesProjection {
+  readonly providers: readonly ProviderCredentialProfilesProjection[];
 }
 
 export interface CredentialProfileAcquisitionOptionProjection {
@@ -85,6 +68,13 @@ export interface CredentialProfileOptionsProjection {
   readonly providers: readonly ProviderCredentialOptionProjection[];
 }
 
+export interface CredentialManagementOperationProjection {
+  readonly operationId: string;
+  readonly kind: string;
+  readonly providerId?: string;
+  readonly startedAt: number;
+}
+
 interface ProfileMutationCommandBase {
   readonly providerId: string;
   readonly credentialId: string;
@@ -103,10 +93,6 @@ export type CredentialProfilesCommand =
       readonly command: "set_enabled";
       readonly enabled: boolean;
     })
-  | (ProfileMutationCommandBase & {
-      readonly command: "set_priority";
-      readonly priority: number;
-    })
   | {
       readonly command: "reorder_profiles";
       readonly providerId: string;
@@ -121,7 +107,10 @@ export type CredentialProfilesCommand =
       readonly apiKeyOn429: boolean;
       readonly oauthOn429: boolean;
     }
-  | (ProfileMutationCommandBase & { readonly command: "recheck" });
+  | {
+      readonly command: "cancel_management";
+      readonly operationId: string;
+    };
 
 export type CredentialProfilesCommandOutcome =
   | "ok"
@@ -130,14 +119,16 @@ export type CredentialProfilesCommandOutcome =
   | "duplicate"
   | "unknown_provider"
   | "unknown_profile"
-  | "reconnect_required"
+  | "unknown_operation"
+  | "management_operation_in_progress"
   | "storage_failure"
   | "unavailable";
 
 export interface CredentialProfilesCommandResult {
   readonly outcome: CredentialProfilesCommandOutcome;
-  readonly state: CredentialProfilesProjectionV1;
+  readonly state: CredentialProfilesProjection;
   readonly options?: CredentialProfileOptionsProjection;
+  readonly activeOperation?: CredentialManagementOperationProjection;
   readonly error?: string;
 }
 
@@ -149,33 +140,25 @@ export type ProviderProfileAuthCommand =
       readonly acquisitionKind: CredentialProfileAcquisitionKind;
       readonly displayName: string;
       readonly note?: string;
-      readonly useNow: boolean;
-      readonly expectedRevision: string;
-    }
-  | {
-      readonly command: "reconnect";
-      readonly providerId: string;
-      readonly credentialId: string;
-      readonly useNow: boolean;
-      readonly expectedRevision: string;
     };
 
 export type ProviderProfileAuthCommandOutcome =
   | "ok"
   | "cancelled"
   | "failed"
-  | "conflict"
   | "invalid"
   | "duplicate"
   | "unknown_provider"
   | "unknown_profile"
+  | "management_operation_in_progress"
   | "storage_failure"
   | "unavailable";
 
 export interface ProviderProfileAuthCommandResult {
   readonly outcome: ProviderProfileAuthCommandOutcome;
-  readonly state: CredentialProfilesProjectionV1;
+  readonly state: CredentialProfilesProjection;
   readonly options?: CredentialProfileOptionsProjection;
+  readonly activeOperation?: CredentialManagementOperationProjection;
   readonly error?: string;
 }
 

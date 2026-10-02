@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import type {
   ApplicationStatus,
   CatalogSnapshotProjection,
-  CredentialProfilesProjectionV1,
-  ProviderCredentialProfilesProjectionV1,
+  CredentialProfilesProjection,
+  ProviderCredentialProfilesProjection,
 } from "@token/application-control-plane/control-plane";
 
 import { createOperationalAttentionAuthority } from "../../src/operational-attention/index.js";
@@ -12,7 +12,7 @@ import { publicModelRuntimeFacts } from "../../src/public-models/runtime-facts.j
 
 /**
  * Plan sections 6 and 9 items 13/14: an external-only Codex login
- * (`ambient.status === "connected"`) makes the Provider usable for Public
+ * (`ambient.status === "configured"`) makes the Provider usable for Public
  * Model and keeps Operational Attention quiet.
  */
 
@@ -28,8 +28,8 @@ const running: ApplicationStatus = Object.freeze({
 });
 
 function externalProvider(
-  status: "connected" | "configured" | "unknown",
-): ProviderCredentialProfilesProjectionV1 {
+  status: "configured" | "unknown",
+): ProviderCredentialProfilesProjection {
   return Object.freeze({
     providerId: PROVIDER_ID,
     implementationAvailable: true,
@@ -43,8 +43,8 @@ function externalProvider(
 }
 
 function credentialProjection(
-  providers: readonly ProviderCredentialProfilesProjectionV1[],
-): CredentialProfilesProjectionV1 {
+  providers: readonly ProviderCredentialProfilesProjection[],
+): CredentialProfilesProjection {
   return Object.freeze({ providers: Object.freeze(providers) });
 }
 
@@ -76,7 +76,7 @@ describe("Public Model runtime facts for the external Codex source", () => {
   it("treats a verified external login as usable without any managed Profile", () => {
     const facts = publicModelRuntimeFacts(
       catalog(),
-      credentialProjection([externalProvider("connected")]),
+      credentialProjection([externalProvider("configured")]),
     );
     expect(facts.providers).toEqual([
       {
@@ -106,7 +106,7 @@ describe("Public Model runtime facts for the external Codex source", () => {
 describe("Operational Attention for the external Codex source", () => {
   it("never raises provider-login-invalid while the external login is connected", () => {
     let now = 100;
-    const projection = credentialProjection([externalProvider("connected")]);
+    const projection = credentialProjection([externalProvider("configured")]);
     const authority = createOperationalAttentionAuthority({
       now: () => now,
       credentials: () => projection,
@@ -120,7 +120,7 @@ describe("Operational Attention for the external Codex source", () => {
 
   it("raises the episode only once a previously connected source is gone", () => {
     let now = 100;
-    let projection = credentialProjection([externalProvider("connected")]);
+    let projection = credentialProjection([externalProvider("configured")]);
     const authority = createOperationalAttentionAuthority({
       now: () => now,
       credentials: () => projection,
@@ -141,12 +141,12 @@ describe("Operational Attention for the external Codex source", () => {
     ]);
 
     now = 300;
-    projection = credentialProjection([externalProvider("connected")]);
+    projection = credentialProjection([externalProvider("configured")]);
     expect(authority.project(running)).toBeUndefined();
   });
 
   it("still raises for a genuinely unavailable managed credential", () => {
-    const managed: ProviderCredentialProfilesProjectionV1 = Object.freeze({
+    const managed: ProviderCredentialProfilesProjection = Object.freeze({
       providerId: "anthropic",
       implementationAvailable: true,
       revision: "revision-a",
@@ -160,8 +160,6 @@ describe("Operational Attention for the external Codex source", () => {
           authMethodLabel: "Fixture account",
           displayName: "Production",
           enabled: true,
-          health: "ready" as const,
-          priority: 0,
           createdAt: 1,
           updatedAt: 1,
         }),
@@ -181,7 +179,7 @@ describe("Operational Attention for the external Codex source", () => {
       {
         ...managed,
         profiles: Object.freeze([
-          Object.freeze({ ...managed.profiles[0]!, health: "reconnect_required" as const }),
+          Object.freeze({ ...managed.profiles[0]!, enabled: false }),
         ]),
       },
     ]);

@@ -535,7 +535,6 @@ test(
       await anthropicCard.getByRole("button", { name: /api key/i }).click();
       const anthropicLogin = page.getByRole("dialog", { name: "Anthropic sign in" });
       await anthropicLogin.getByLabel("Profile name").fill("Golden primary");
-      await anthropicLogin.getByLabel("Use this Profile for new requests").check();
       const secretInput = anthropicLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill(TEST_PROVIDER_KEY);
@@ -549,20 +548,14 @@ test(
         });
         const status = auth.state.providers.find((provider) => provider.providerId === "anthropic");
         assert.equal(status?.profiles.length, 1);
+        // The first Profile for a Provider becomes active on acquisition.
         assert.equal(status?.activeCredentialId, status?.profiles[0]?.credentialId);
-        const recheck = await client.executeCredentialProfilesCommand({
-          command: "recheck",
-          providerId: "anthropic",
-          credentialId: status.profiles[0].credentialId,
-          expectedRevision: status.revision,
-        });
-        assert.equal(recheck.outcome, "ok");
       });
 
       // Provider Activation (Spec v1.0 §14): the coarse Provider readiness
       // is derived from Catalog model availability, which the Backend
-      // republishes after the explicit Profile recheck. Wait for that
-      // authoritative convergence before sending the first model request.
+      // republishes after the post-login background catalog refresh. Wait
+      // for that authoritative convergence before sending the first request.
       for (let attempt = 0; attempt < 200; attempt += 1) {
         const status = await client.getStatus();
         if (status.provider === "configured") break;

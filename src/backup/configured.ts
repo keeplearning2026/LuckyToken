@@ -9,7 +9,7 @@ import {
   COMMANDCODE_MODEL_CATALOG_SCHEMA,
   parseCommandCodeModelCatalogText,
 } from "@token/commandcode-model-catalog";
-import { createFileProviderCredentialRecordStore, parseProviderCredentialRecord } from "../credentials/profile-record-store.js";
+import { parseProviderCredentialRecord } from "../credentials/profile-record-store.js";
 import { stripJsonComments } from "../providers/models-json-schema.js";
 import { PI_COMPATIBILITY_BASELINE } from "../providers/pi-baseline.js";
 import {
@@ -134,8 +134,7 @@ function snapshotIncarnationPath(
 async function readReferencedIncarnation(
   credentialDirectory: string,
   relativePath: string,
-  tokenRevision: string,
-): Promise<string> {
+): Promise<{ readonly content: string; readonly tokenRevision: string }> {
   const target = snapshotIncarnationPath(credentialDirectory, relativePath);
   let info;
   try {
@@ -164,12 +163,10 @@ async function readReferencedIncarnation(
     );
   }
   const bytes = await readFile(target);
-  if (sha256Hex(bytes) !== tokenRevision) {
-    throw new TornCredentialProfileSnapshot(
-      `Credential incarnation ${relativePath} changed while the backup snapshot was taken`,
-    );
-  }
-  return bytes.toString("base64");
+  return Object.freeze({
+    content: bytes.toString("base64"),
+    tokenRevision: sha256Hex(bytes),
+  });
 }
 
 async function captureCredentialProfileSnapshot(
@@ -204,39 +201,14 @@ async function captureCredentialProfileSnapshot(
     const match = /^([A-Za-z0-9][A-Za-z0-9._-]{0,63})\.json$/u.exec(entry.name);
     if (match === null) continue;
     const providerId = match[1]!;
-    let recordBytes = await readFile(join(directory, entry.name));
-    // Record writes are atomic renames and stale formats fail closed, so a
-    // parse failure is never a torn read that retrying could repair.
-    let record = parseProviderCredentialRecord(
+    const recordBytes = await readFile(join(directory, entry.name));
+    // Record writes and managed credential writes are both atomic renames.
+    // The Profile carries only a stable reference, so backup integrity uses
+    // the bytes read for this snapshot rather than a persisted Profile hash.
+    const record = parseProviderCredentialRecord(
       recordBytes.toString("utf8"),
       providerId,
     );
-    if (
-      record.profiles.some(
-        (profile) =>
-          profile.kind === "reference" &&
-          profile.reference.owner === "managed",
-      )
-    ) {
-      // Recovery uses the store's credential → record locking and adopts only
-      // the still-referenced managed document. Then capture the reconciled
-      // record. Externally owned references are never read or adopted here.
-      const store = createFileProviderCredentialRecordStore({ piDirectory: dirname(directory),
-        createRevision: () => { throw new Error("Backup recovery cannot change management identity"); } });
-      for (const profile of record.profiles) {
-        signal.throwIfAborted();
-        if (profile.kind === "reference" && profile.reference.owner === "managed") {
-          const read = await store.readCredential(providerId, profile.credentialId, profile.credentialGeneration);
-          if (read.state === "invalid" || read.state === "unreadable") {
-            throw new Error(
-              "Credential backup refused an unsafe or unreadable credential document",
-            );
-          }
-        }
-      }
-      recordBytes = await readFile(join(directory, entry.name));
-      record = parseProviderCredentialRecord(recordBytes.toString("utf8"), providerId);
-    }
     const incarnations: Array<{
       relativePath: string;
       tokenRevision: string;
@@ -244,22 +216,15 @@ async function captureCredentialProfileSnapshot(
     }> = [];
     for (const profile of record.profiles) {
       signal.throwIfAborted();
-      if (
-        profile.kind !== "reference" ||
-        profile.reference.owner !== "managed" ||
-        profile.reference.revision === undefined
-      ) {
-        continue;
-      }
-      const content = await readReferencedIncarnation(
+      if (profile.reference.owner !== "managed") continue;
+      const captured = await readReferencedIncarnation(
         credentialDirectory,
         profile.reference.path,
-        profile.reference.revision,
       );
       incarnations.push({
         relativePath: profile.reference.path,
-        tokenRevision: profile.reference.revision,
-        content,
+        tokenRevision: captured.tokenRevision,
+        content: captured.content,
       });
     }
     providers.push({

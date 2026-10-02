@@ -18,12 +18,16 @@ import type {
   ProviderAuthBindingAuthority,
 } from "../../src/credentials/profile-contract.js";
 import {
-  credentialProfileCarrier,
   createInMemoryProviderCredentialRecordStore,
+  managedCredentialReference,
   NO_PROVIDER_RECORD_REVISION,
   PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
   type ProviderCredentialRecordStore,
 } from "../../src/credentials/profile-record-store.js";
+import {
+  serializeApiKeyCredentialDocument,
+  serializeOAuthCredentialDocument,
+} from "../../src/credentials/credential-document.js";
 import type {
   RequestJourneyBeginInput,
   RequestJourneyObservationAuthority,
@@ -419,14 +423,20 @@ export async function createSeededCredentialRecordStore(
   });
   for (const entry of entries) {
     const credentialId = `test-credential-${entry.providerId}`;
-    const credentialGeneration = `test-generation-${entry.providerId}`;
+    const reference = managedCredentialReference(
+      entry.providerId,
+      credentialId,
+    );
+    const content =
+      entry.credential.type === "api_key"
+        ? serializeApiKeyCredentialDocument(entry.credential)
+        : serializeOAuthCredentialDocument(entry.credential);
     await store.publishCredential(
       entry.providerId,
-      NO_PROVIDER_RECORD_REVISION,
       {
         credentialId,
-        credentialGeneration,
-        credential: structuredClone(entry.credential),
+        reference,
+        content,
       },
       () => ({
         kind: "commit",
@@ -439,19 +449,13 @@ export async function createSeededCredentialRecordStore(
           switchPolicy: { apiKeyOn429: false, oauthOn429: false },
           profiles: [{
             credentialId,
-            credentialGeneration,
-            authType: entry.credential.type,
-            authMethodLabel: entry.authMethodLabel ?? "Test credentials",
+            acquisitionKind:
+              entry.credential.type === "api_key" ? "api_key" : "oauth",
+            reference,
             displayName: entry.displayName ?? "Test",
             enabled: true,
-            priority: 0,
             createdAt: 1,
             updatedAt: 1,
-            ...credentialProfileCarrier(entry.providerId, {
-              credentialId,
-              credentialGeneration,
-              credential: entry.credential,
-            }),
           }],
         },
         value: undefined,

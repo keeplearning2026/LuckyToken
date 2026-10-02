@@ -1,27 +1,18 @@
 import type { AuthType } from "@earendil-works/pi-ai";
 
-import type { AcquisitionKind } from "./acquisition.js";
-
-export type CredentialHealth =
-  | "ready"
-  | "not_yet_verified"
-  | "refreshing"
-  | "cooling_down"
-  | "reconnect_required"
-  | "disabled";
+import type {
+  AcquisitionKind,
+  LocalOAuthAcquisition,
+} from "./acquisition.js";
 
 export interface CredentialProfileProjection {
   readonly credentialId: string;
-  readonly authType: AuthType;
-  /** Public acquisition kind. `strategyId`, path and owner stay private. */
   readonly acquisitionKind: AcquisitionKind;
+  readonly authType: AuthType;
   readonly authMethodLabel: string;
   readonly displayName: string;
   readonly note?: string;
-  readonly identityHint?: string;
   readonly enabled: boolean;
-  readonly health: CredentialHealth;
-  readonly priority: number;
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly lastUsedAt?: number;
@@ -42,15 +33,9 @@ export interface ProviderCredentialStateProjection {
     readonly code: "invalid_record" | "storage_error";
     readonly message: string;
   };
-  /** External auth source presentation. `internal` credentials are managed
-   * Profiles; explicitly supplied external file sources are consumed by
-   * Provider Native, Semantic Conversion and usage through the binding.
-   * `connected` means a valid source document was read locally. */
   readonly ambient?: {
     readonly kind: "external";
-    readonly status: "connected" | "configured" | "unknown";
-    /** Backend-projected label for a locally verified external source. The
-     * Renderer displays this value and never derives a source label itself. */
+    readonly status: "configured" | "unknown";
     readonly displayName?: string;
     readonly message: string;
   };
@@ -77,10 +62,6 @@ export type RemoveProfileInput = ProfileTargetInput;
 
 export interface SetProfileEnabledInput extends ProfileTargetInput {
   readonly enabled: boolean;
-}
-
-export interface SetProfilePriorityInput extends ProfileTargetInput {
-  readonly priority: number;
 }
 
 export interface ReorderProfilesInput {
@@ -115,11 +96,22 @@ export interface ProfileMutationResult {
 export class CredentialProfileOperationError extends Error {
   readonly outcome: Exclude<ProfileMutationOutcome, "ok">;
 
-  constructor(outcome: Exclude<ProfileMutationOutcome, "ok">, message: string) {
+  constructor(
+    outcome: Exclude<ProfileMutationOutcome, "ok">,
+    message: string,
+  ) {
     super(message);
     this.name = "CredentialProfileOperationError";
     this.outcome = outcome;
   }
+}
+
+export interface AcquireLocalProfileInput {
+  readonly providerId: string;
+  readonly displayName: string;
+  readonly note?: string;
+  readonly acquisition: LocalOAuthAcquisition;
+  readonly signal?: AbortSignal;
 }
 
 export interface CredentialProfileManagement {
@@ -128,153 +120,97 @@ export interface CredentialProfileManagement {
   updateMetadata(input: UpdateProfileMetadataInput): Promise<ProfileMutationResult>;
   activate(input: ActivateProfileInput): Promise<ProfileMutationResult>;
   setEnabled(input: SetProfileEnabledInput): Promise<ProfileMutationResult>;
-  setPriority(input: SetProfilePriorityInput): Promise<ProfileMutationResult>;
   reorderProfiles(input: ReorderProfilesInput): Promise<ProfileMutationResult>;
   remove(input: RemoveProfileInput): Promise<ProfileMutationResult>;
   setSwitchPolicy(input: SetProviderSwitchPolicyInput): Promise<ProfileMutationResult>;
+  acquireLocal(input: AcquireLocalProfileInput): Promise<ProfileMutationResult>;
 }
 
-export interface CreateLoginBindingInput {
+export interface CreateAcquisitionBindingInput {
   readonly providerId: string;
-  readonly acquisitionKind: AcquisitionKind;
+  readonly acquisitionKind: "api_key" | "oauth";
   readonly displayName: string;
   readonly note?: string;
-  readonly useNow: boolean;
-  readonly expectedRevision: string;
 }
 
-export interface CredentialLoginBinding {
-  /** Backend-only acquisition strategy id; never projected to the Control
-   * Plane DTO or Renderer. */
-  readonly strategyId?: string;
-  readonly acquisitionKind: AcquisitionKind;
-  readonly kind: "login";
-  readonly mode: "add" | "reconnect";
+export interface CredentialAcquisitionBinding {
+  readonly kind: "acquisition";
   readonly providerId: string;
+  readonly acquisitionKind: "api_key" | "oauth";
+  readonly displayName: string;
+  readonly note?: string;
+  readonly credentialId: string;
+}
+
+export interface ProviderProfileBindingFacts {
+  readonly kind: "profile";
+  readonly providerId: string;
+  readonly credentialId: string;
+  readonly acquisitionKind: AcquisitionKind;
   readonly authType: AuthType;
+  readonly authMethodLabel: string;
   readonly displayName: string;
-  readonly note?: string;
-  readonly useNow: boolean;
-  readonly expectedRevision: string;
-  readonly credentialId: string;
-  readonly credentialGeneration: string;
+  readonly referenceOwner: "managed" | "external";
+  /** Ephemeral external-document content identity for observational consumers
+   * such as Profile Usage. Never persisted or projected publicly. */
+  readonly externalContentRevision?: string;
+  readonly selectionGeneration: string;
 }
 
-export interface CreateReconnectBindingInput {
+export interface ProviderUnboundFacts {
+  readonly kind: "unbound";
   readonly providerId: string;
-  readonly credentialId: string;
-  readonly useNow: boolean;
-  readonly expectedRevision: string;
-}
-
-export interface CaptureProfileForRecheckInput {
-  readonly providerId: string;
-  readonly credentialId: string;
-  readonly expectedRevision: string;
 }
 
 export type ProviderAuthBindingFacts =
-  | {
-      readonly kind: "managed";
-      readonly providerId: string;
-      /** Document ownership of the bound Profile credential. Pi's `modify`
-       * never writes an external document. */
-      readonly carrierOwner: "managed" | "external";
-      readonly credentialId: string;
-      readonly authType: AuthType;
-      readonly authMethodLabel: string;
-      readonly displayName: string;
-      readonly credentialGeneration: string;
-      readonly selectionGeneration: string;
-    }
-  | {
-      readonly kind: "external";
-      readonly providerId: string;
-      readonly authType: AuthType;
-      readonly authMethodLabel: string;
-      readonly displayName: string;
-      /** Canonical, resolved path of the externally owned file. Never written
-       * by Token; source identity and delegated freshness are bound to it. */
-      readonly canonicalPath: string;
-      /** Adapter-owned non-secret principal/grant identity. Publication guards
-       * and usage caches use it with the path and revision; it is never
-       * projected to Renderer or logs. */
-      readonly identityKey: string;
-      /** Content hash of the token document. Changes only when content
-       * changes; no write counter. */
-      readonly tokenRevision: string;
-    }
-  | {
-      readonly kind: "ambient";
-      readonly providerId: string;
-    };
+  | ProviderProfileBindingFacts
+  | ProviderUnboundFacts;
 
-export type ProviderAuthBindingCapture =
-  | {
-      readonly facts: Extract<
-        ProviderAuthBindingFacts,
-        { readonly kind: "managed" }
-      >;
-    }
-  | {
-      readonly facts: Extract<
-        ProviderAuthBindingFacts,
-        { readonly kind: "external" }
-      >;
-    }
-  | {
-      readonly facts: Extract<
-        ProviderAuthBindingFacts,
-        { readonly kind: "ambient" }
-      >;
-    };
+export interface ProviderAuthBindingCapture {
+  readonly facts: ProviderAuthBindingFacts;
+}
 
-export type ManagedProviderAuthBindingCapture = Extract<
-  ProviderAuthBindingCapture,
-  { readonly facts: { readonly kind: "managed" } }
->;
+export type ProfileProviderAuthBindingCapture = ProviderAuthBindingCapture & {
+  readonly facts: ProviderProfileBindingFacts;
+};
 
-export type ExternalProviderAuthBindingCapture = Extract<
-  ProviderAuthBindingCapture,
-  { readonly facts: { readonly kind: "external" } }
->;
+export function isProfileProviderAuthBindingCapture(
+  capture: ProviderAuthBindingCapture,
+): capture is ProfileProviderAuthBindingCapture {
+  return capture.facts.kind === "profile";
+}
+
+/** Compatibility-free descriptive alias for request paths that require an
+ * actual Token Profile. */
+export type ManagedProviderAuthBindingCapture = ProfileProviderAuthBindingCapture;
 
 export function isManagedProviderAuthBindingCapture(
   capture: ProviderAuthBindingCapture,
 ): capture is ManagedProviderAuthBindingCapture {
-  return capture.facts.kind === "managed";
-}
-
-export function isExternalProviderAuthBindingCapture(
-  capture: ProviderAuthBindingCapture,
-): capture is ExternalProviderAuthBindingCapture {
-  return capture.facts.kind === "external";
+  return capture.facts.kind === "profile";
 }
 
 export const MAX_PROFILE_ATTEMPTS_PER_REQUEST = 3;
 
 export interface AdvanceAfterFinal429Input {
-  readonly capture: ManagedProviderAuthBindingCapture;
+  readonly capture: ProfileProviderAuthBindingCapture;
   readonly attemptedCredentialIds: readonly string[];
   readonly retryAfterMs?: number;
   readonly signal?: AbortSignal;
 }
 
 export type AdvanceAfterFinal429Result =
-  | { readonly outcome: "switched"; readonly capture: ManagedProviderAuthBindingCapture }
-  | { readonly outcome: "disabled" | "exhausted" | "stale_binding" | "storage_failure" };
-
-/** Bounded, structured reason for an external-source failure. Callers
- * classify by this value, never by message text. */
-export type ProviderAuthBindingExternalReason =
-  | "missing"
-  | "invalid"
-  | "unreadable"
-  | "refresh_unavailable"
-  | "timeout"
-  | "verification_failed"
-  | "insufficient_validity"
-  | "identity_changed";
+  | {
+      readonly outcome: "switched";
+      readonly capture: ProfileProviderAuthBindingCapture;
+    }
+  | {
+      readonly outcome:
+        | "disabled"
+        | "exhausted"
+        | "stale_binding"
+        | "storage_failure";
+    };
 
 export class ProviderAuthBindingError extends Error {
   readonly outcome:
@@ -282,57 +218,40 @@ export class ProviderAuthBindingError extends Error {
     | "no_active_profile"
     | "stale_binding"
     | "storage_failure"
-    /** The externally owned credential is missing, invalid, unreadable,
-     * or could not be made sufficiently fresh. The caller must not fall back
-     * to Pi OAuth refresh, another source, or a different lane. */
-    | "external_unavailable"
-    /** Pi asked to mutate an external credential. Token never executes Pi's
-     * refresh callback for an externally owned document. */
-    | "external_read_only";
-  readonly externalReason?: ProviderAuthBindingExternalReason;
+    | "credential_unavailable";
 
   constructor(
     outcome: ProviderAuthBindingError["outcome"],
     message: string,
-    options?: { readonly externalReason?: ProviderAuthBindingExternalReason },
+    options?: { readonly cause?: unknown },
   ) {
-    super(message);
+    super(message, options);
     this.name = "ProviderAuthBindingError";
     this.outcome = outcome;
-    if (options?.externalReason !== undefined) {
-      this.externalReason = options.externalReason;
-    }
   }
 }
 
 export interface ProviderAuthBindingAuthority {
   capture(providerId: string): Promise<ProviderAuthBindingCapture>;
-  captureForRecheck(
-    input: CaptureProfileForRecheckInput,
-  ): Promise<ProviderAuthBindingCapture>;
-  createLoginBinding(input: CreateLoginBindingInput): Promise<CredentialLoginBinding>;
-  createReconnectBinding(input: CreateReconnectBindingInput): Promise<CredentialLoginBinding>;
-  /** Run one Provider-registered local acquisition. The singleton check, the
-   * bounded source read and the record commit share the Provider lock.
-   * Returns the actual new Profile id and credential generation. */
-  acquireLocal(
-    binding: CredentialLoginBinding,
-    signal?: AbortSignal,
-  ): Promise<{
-    readonly credentialId: string;
-    readonly credentialGeneration: string;
-  }>;
-  advanceAfterFinal429(input: AdvanceAfterFinal429Input): Promise<AdvanceAfterFinal429Result>;
-  /** Run publication only while this exact binding remains the current
-   * Provider selection/credential reference. Facts describe the revision actually
-   * resolved, not just the earlier capture. The callback must assert the
-   * lease immediately before each irreversible publication boundary. */
+
+  createAcquisitionBinding(
+    input: CreateAcquisitionBindingInput,
+  ): Promise<CredentialAcquisitionBinding>;
+
+  advanceAfterFinal429(
+    input: AdvanceAfterFinal429Input,
+  ): Promise<AdvanceAfterFinal429Result>;
+
   publishIfCurrent(
     capture: ProviderAuthBindingCapture,
-    publish: (assertCurrent: () => void, facts: ProviderAuthBindingFacts) => Promise<void> | void,
+    publish: (
+      assertCurrent: () => void,
+      facts: ProviderAuthBindingFacts,
+    ) => Promise<void> | void,
   ): Promise<boolean>;
+
   runBound<T>(
-    binding: CredentialLoginBinding | ProviderAuthBindingCapture,
+    binding: CredentialAcquisitionBinding | ProviderAuthBindingCapture,
     operation: () => Promise<T>,
   ): Promise<T>;
 }

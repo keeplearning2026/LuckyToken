@@ -12,7 +12,7 @@
 
 **设计约束：** [AGENTS.md](../AGENTS.md)
 
-**Provider credential authority：** [Provider Credential Profiles PRD v1.5](./Spec/TokenProviderCredentialProfilesPRD.md)；旧 one-slot `pi/auth.json` 描述均为历史资料。
+**Provider credential authority：** [Provider Credential Profiles Specification](./Spec/TokenProviderCredentialProfilesSpec.md)；旧 one-slot `pi/auth.json` 与已退役 credential PRD/implementation plan 描述均为历史资料。
 
 本文只提供快速上下文，不复制完整规范。若本文与 Spec 或当前源码冲突，以 owning Spec + 当前源码为准。
 

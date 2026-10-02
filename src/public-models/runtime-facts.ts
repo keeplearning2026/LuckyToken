@@ -1,6 +1,6 @@
 import type {
   CatalogSnapshotProjection,
-  CredentialProfilesProjectionV1,
+  CredentialProfilesProjection,
 } from "@token/application-control-plane/control-plane";
 import type { PublicModelRuntimeFacts } from "./authority.js";
 
@@ -11,7 +11,7 @@ import type { PublicModelRuntimeFacts } from "./authority.js";
  * Catalog lifecycle states itself. */
 export function publicModelRuntimeFacts(
   catalog: CatalogSnapshotProjection,
-  credentials: CredentialProfilesProjectionV1 | undefined,
+  credentials: CredentialProfilesProjection | undefined,
 ): PublicModelRuntimeFacts {
   const authByProvider = new Map(
     (credentials?.providers ?? []).map((status) => [status.providerId, status] as const),
@@ -21,11 +21,13 @@ export function publicModelRuntimeFacts(
     providers: Object.freeze(
       catalog.providers.map((provider) => {
         const auth = authByProvider.get(provider.providerId);
-        const selected = auth?.profiles.find((profile) => profile.credentialId === auth.activeCredentialId);
-        const profileUsable = selected?.enabled === true &&
-          selected.health !== "reconnect_required" && selected.health !== "disabled";
-        const ambientUsable = auth?.profiles.length === 0 &&
-          (auth.ambient?.status === "connected" || auth.ambient?.status === "configured");
+        const selected = auth?.profiles.find(
+          (profile) => profile.credentialId === auth.activeCredentialId,
+        );
+        const profileUsable = selected?.enabled === true;
+        const ambientUsable =
+          auth?.profiles.length === 0 &&
+          auth.ambient?.status === "configured";
         return Object.freeze({
           providerId: provider.providerId,
           usable:

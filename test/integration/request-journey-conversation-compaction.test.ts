@@ -125,7 +125,7 @@ describe("Request Journey OpenAI Responses conversation compaction", () => {
     roots.push(root);
     const model = compactModel();
     const ambientCapture: ProviderAuthBindingCapture = Object.freeze({
-      facts: Object.freeze({ kind: "ambient" as const, providerId: "openai" }),
+      facts: Object.freeze({ kind: "unbound" as const, providerId: "openai" }),
     });
     const bindings: Pick<
       ProviderAuthBindingAuthority,

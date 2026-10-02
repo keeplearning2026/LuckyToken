@@ -1,9 +1,11 @@
 import type { Models } from "@earendil-works/pi-ai";
 
 import {
+  isProfileProviderAuthBindingCapture,
+  type CredentialProfilesProjection,
   type ProviderAuthBindingAuthority,
   type ProviderAuthBindingCapture,
-  type ProviderAuthBindingFacts,
+  type ProviderProfileBindingFacts,
   ProviderAuthBindingError,
 } from "../credentials/profile-contract.js";
 import {
@@ -25,16 +27,8 @@ export const PROVIDER_USAGE_REFRESH_TIMEOUT_MS = 45_000 as const;
 
 interface ProviderUsageSlot {
   readonly bindingIdentity: string;
-  /** Identity of the account the observation belongs to. A new token
-   * revision for the same account may keep displaying the last-known
-   * observation as stale; a different account never carries over. */
-  readonly accountKey: string;
   readonly destinationKey: string;
   readonly observation?: ProviderUsageObservation;
-  /** Bounded failure classification for an external capture, recorded only for
-   * the exact credential revision that produced it. Managed and ambient
-   * bindings keep the previous behavior: a failed refresh is returned but not
-   * persisted as Provider state. */
   readonly unavailable?: {
     readonly bindingIdentity: string;
     readonly reason: ProviderUsageUnavailableReason;
@@ -47,54 +41,54 @@ export interface CreateProviderUsageAuthorityOptions {
     "getProvider" | "getProviders" | "getModels" | "getAuth"
   >;
   readonly binding: ProviderAuthBindingAuthority;
+  readonly profileSnapshot: () => CredentialProfilesProjection;
   readonly probes: readonly ProviderUsageProbe[];
   readonly now?: () => number;
   readonly refreshTimeoutMs?: number | (() => number);
 }
 
-function bindingIdentity(facts: ProviderAuthBindingFacts): string {
-  if (facts.kind === "ambient") return `${facts.providerId}\u0000ambient`;
-  if (facts.kind === "external") {
-    return JSON.stringify([facts.providerId, "external", facts.authType, facts.canonicalPath, facts.identityKey, facts.tokenRevision]);
-  }
-  return `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
+function profileKey(providerId: string, credentialId: string): string {
+  return `${providerId}\u0000${credentialId}`;
 }
 
-function bindingSourceKey(facts: ProviderAuthBindingFacts): string {
-  if (facts.kind === "ambient") return `${facts.providerId}\u0000ambient`;
-  if (facts.kind === "external") {
-    return JSON.stringify([facts.providerId, "external", facts.authType, facts.canonicalPath, facts.identityKey]);
-  }
-  return `${facts.providerId}\u0000managed\u0000${facts.credentialId}\u0000${facts.credentialGeneration}`;
+function bindingIdentity(facts: ProviderProfileBindingFacts): string {
+  return JSON.stringify([
+    facts.providerId,
+    facts.credentialId,
+    facts.referenceOwner,
+    facts.externalContentRevision ?? null,
+  ]);
 }
 
 function inflightIdentity(
-  capture: ProviderAuthBindingCapture,
+  facts: ProviderProfileBindingFacts,
   destinationKey: string,
 ): string {
-  const facts = capture.facts;
-  const binding =
-    facts.kind !== "managed"
-      ? bindingIdentity(capture.facts)
-      : `${bindingIdentity(capture.facts)}\u0000${facts.selectionGeneration}`;
-  return `${binding}\u0000${destinationKey}`;
+  return JSON.stringify([
+    bindingIdentity(facts),
+    facts.selectionGeneration,
+    destinationKey,
+  ]);
 }
 
-function bindingContext(capture: ProviderAuthBindingCapture): ProviderUsageBindingContext {
-  if (capture.facts.kind === "ambient") return Object.freeze({ kind: "ambient" });
-  if (capture.facts.kind === "external") {
-    return Object.freeze({ kind: "external", authType: capture.facts.authType });
-  }
-  return Object.freeze({ kind: "managed", authType: capture.facts.authType });
+function bindingContext(
+  facts: ProviderProfileBindingFacts,
+): ProviderUsageBindingContext {
+  return Object.freeze({
+    kind: facts.referenceOwner,
+    authType: facts.authType,
+  });
 }
 
-/** Follow `cause` links so a Pi `ModelsError` wrapper still exposes the
- * credential boundary's typed outcome. Message text is never inspected. */
 function findBindingFailure(error: unknown): ProviderAuthBindingError | undefined {
   let current: unknown = error;
   for (let depth = 0; depth < 8; depth += 1) {
     if (current instanceof ProviderAuthBindingError) return current;
-    if (typeof current !== "object" || current === null || !("cause" in current)) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      !("cause" in current)
+    ) {
       return undefined;
     }
     current = (current as { readonly cause?: unknown }).cause;
@@ -102,42 +96,11 @@ function findBindingFailure(error: unknown): ProviderAuthBindingError | undefine
   return undefined;
 }
 
-/** Credential-boundary failure classification (plan section 6). The external
- * boundary reports a structured `externalReason`; classification never
- * inspects message text. Read/parse failures, an unavailable delegation, and
- * post-refresh verification failures stay bounded transient. Only documented
- * terminal evidence (a verified credential rejected by the resource server)
- * stops network attempts. Managed and ambient bindings keep their previous
- * classification. */
-function classifyBindingFailure(
-  capture: ProviderAuthBindingCapture,
-  error: unknown,
-): ProviderUsageUnavailableReason {
+function classifyBindingFailure(error: unknown): ProviderUsageUnavailableReason {
   const failure = findBindingFailure(error);
-  if (capture.facts.kind !== "external") {
-    return failure === undefined ? "upstream" : "auth";
-  }
-  switch (failure?.externalReason) {
-    case "identity_changed":
-      return "account_change";
-    case "timeout":
-      return "timeout";
-    case "insufficient_validity":
-      return "insufficient_validity";
-    default:
-      return failure?.outcome === "stale_binding" ? "account_change" : "temporary";
-  }
-}
-
-/** Only a probe's explicit terminal evidence stops retries. Missing auth and
- * bare HTTP authentication failures are transient for external bindings. */
-function classifyProbeFailure(
-  capture: ProviderAuthBindingCapture,
-  reason: ProviderUsageUnavailableReason,
-): ProviderUsageUnavailableReason {
-  return capture.facts.kind === "external" && reason === "auth"
-    ? "temporary"
-    : reason;
+  if (failure?.outcome === "stale_binding") return "account_change";
+  if (failure?.outcome === "credential_unavailable") return "auth";
+  return failure === undefined ? "upstream" : "auth";
 }
 
 export function createProviderUsageAuthority(
@@ -156,15 +119,29 @@ export function createProviderUsageAuthority(
   const lifecycleAbort = new AbortController();
   let closed = false;
   const now = options.now ?? Date.now;
+
   const resolveRefreshTimeoutMs = (): number => {
-    const configured = typeof options.refreshTimeoutMs === "function"
-      ? options.refreshTimeoutMs()
-      : options.refreshTimeoutMs;
+    const configured =
+      typeof options.refreshTimeoutMs === "function"
+        ? options.refreshTimeoutMs()
+        : options.refreshTimeoutMs;
     return configured === undefined ||
       !Number.isSafeInteger(configured) ||
       configured <= 0
       ? PROVIDER_USAGE_REFRESH_TIMEOUT_MS
       : configured;
+  };
+
+  const pruneRemovedProfiles = (): void => {
+    const existing = new Set<string>();
+    for (const provider of options.profileSnapshot().providers) {
+      for (const profile of provider.profiles) {
+        existing.add(profileKey(provider.providerId, profile.credentialId));
+      }
+    }
+    for (const key of cache.keys()) {
+      if (!existing.has(key)) cache.delete(key);
+    }
   };
 
   const servedBaseUrls = (providerId: string): readonly string[] => {
@@ -177,9 +154,12 @@ export function createProviderUsageAuthority(
             typeof baseUrl === "string" && baseUrl.trim().length > 0,
         ),
     );
-    if (modelBaseUrls.size > 0) return Object.freeze([...modelBaseUrls].sort());
+    if (modelBaseUrls.size > 0) {
+      return Object.freeze([...modelBaseUrls].sort());
+    }
     const providerBaseUrl = options.models.getProvider(providerId)?.baseUrl;
-    return typeof providerBaseUrl === "string" && providerBaseUrl.trim().length > 0
+    return typeof providerBaseUrl === "string" &&
+      providerBaseUrl.trim().length > 0
       ? Object.freeze([providerBaseUrl])
       : Object.freeze([]);
   };
@@ -190,7 +170,7 @@ export function createProviderUsageAuthority(
   const eligibilityFor = (
     providerId: string,
     probe: ProviderUsageProbe,
-    capture: ProviderAuthBindingCapture,
+    facts: ProviderProfileBindingFacts,
     baseUrls: readonly string[],
   ): ProviderUsageEligibility => {
     if (
@@ -203,7 +183,7 @@ export function createProviderUsageAuthority(
       const context: ProviderUsageEligibilityContext = Object.freeze({
         providerId,
         effectiveBaseUrl: baseUrl,
-        binding: bindingContext(capture),
+        binding: bindingContext(facts),
       });
       const eligibility = probe.eligibility(context);
       if (eligibility.state !== "eligible") return eligibility;
@@ -211,129 +191,147 @@ export function createProviderUsageAuthority(
     return Object.freeze({ state: "eligible" });
   };
 
+  const stateIdentity = (
+    facts: ProviderProfileBindingFacts,
+  ): { readonly providerId: string; readonly credentialId: string } => ({
+    providerId: facts.providerId,
+    credentialId: facts.credentialId,
+  });
+
   const queryProvider = async (
     providerId: string,
     retry: boolean,
-  ): Promise<ProviderUsageState> => {
-    const probe = probes.get(providerId);
-    if (probe === undefined) {
-      return Object.freeze({
-        state: "unsupported",
-        providerId,
-        reason: "provider",
-      });
-    }
+  ): Promise<ProviderUsageState | undefined> => {
     let capture: ProviderAuthBindingCapture;
     try {
       capture = await options.binding.capture(providerId);
     } catch {
-      if (retry) return queryProvider(providerId, false);
-      return Object.freeze({ state: "unobserved", providerId });
+      return undefined;
     }
+    if (!isProfileProviderAuthBindingCapture(capture)) return undefined;
+
+    const facts = capture.facts;
+    const identity = stateIdentity(facts);
+    const probe = probes.get(providerId);
+    if (probe === undefined) {
+      return Object.freeze({
+        ...identity,
+        state: "unsupported" as const,
+        reason: "provider" as const,
+      });
+    }
+
     const baseUrls = servedBaseUrls(providerId);
-    const key = destinationKey(baseUrls);
+    const destination = destinationKey(baseUrls);
     let eligibility: ProviderUsageEligibility;
     try {
-      eligibility = eligibilityFor(providerId, probe, capture, baseUrls);
+      eligibility = eligibilityFor(providerId, probe, facts, baseUrls);
     } catch {
-      if (retry) return queryProvider(providerId, false);
-      return Object.freeze({ state: "unobserved", providerId });
+      eligibility = Object.freeze({ state: "unsupported_binding" as const });
     }
-    const slot = cache.get(providerId);
-    const identity = bindingIdentity(capture.facts);
-    const accountKey = bindingSourceKey(capture.facts);
+
+    const slot = cache.get(profileKey(providerId, facts.credentialId));
+    const exactBinding = bindingIdentity(facts);
     const matchingSlot =
-      slot !== undefined && slot.destinationKey === key &&
-      (slot.bindingIdentity === identity || slot.accountKey === accountKey)
+      slot !== undefined &&
+      slot.bindingIdentity === exactBinding &&
+      slot.destinationKey === destination
         ? slot
         : undefined;
-    // A recorded failure describes one exact revision: it is shown until the
-    // external document (or the managed credential) changes, and never for a
-    // different account or destination.
-    const unavailable =
-      matchingSlot?.unavailable !== undefined &&
-      matchingSlot.unavailable.bindingIdentity === identity
-        ? matchingSlot.unavailable.reason
-        : undefined;
+
     const candidate: ProviderUsageState =
       matchingSlot?.observation !== undefined
         ? Object.freeze({
-            state: "observed",
+            ...identity,
+            state: "observed" as const,
             observation: matchingSlot.observation,
             refreshable: eligibility.state === "eligible",
           })
-        : unavailable !== undefined
+        : matchingSlot?.unavailable !== undefined
           ? Object.freeze({
-              state: "unavailable",
-              providerId,
-              reason: unavailable,
+              ...identity,
+              state: "unavailable" as const,
+              reason: matchingSlot.unavailable.reason,
             })
           : eligibility.state === "unsupported_binding"
             ? Object.freeze({
-                state: "unsupported",
-                providerId,
-                reason: "binding",
+                ...identity,
+                state: "unsupported" as const,
+                reason: "binding" as const,
               })
             : eligibility.state === "unsupported_destination"
               ? Object.freeze({
-                  state: "unsupported",
-                  providerId,
-                  reason: "destination",
+                  ...identity,
+                  state: "unsupported" as const,
+                  reason: "destination" as const,
                 })
-              : Object.freeze({ state: "unobserved", providerId });
+              : Object.freeze({
+                  ...identity,
+                  state: "unobserved" as const,
+                });
 
     let published: ProviderUsageState | undefined;
     const current = await options.binding.publishIfCurrent(capture, () => {
-      if (destinationKey(servedBaseUrls(providerId)) !== key) return;
+      if (destinationKey(servedBaseUrls(providerId)) !== destination) return;
       published = candidate;
     });
     if (current && published !== undefined) return published;
     if (retry) return queryProvider(providerId, false);
-    return Object.freeze({ state: "unobserved", providerId });
+    return undefined;
   };
 
   const query = async (): Promise<ProviderUsageSnapshot> => {
-    const providerIds = options.models.getProviders().map((provider) => provider.id);
-    const states = await Promise.all(providerIds.map((providerId) => queryProvider(providerId, true)));
-    return Object.freeze({ providers: Object.freeze(states) });
+    pruneRemovedProfiles();
+    const states = await Promise.all(
+      options.models
+        .getProviders()
+        .map((provider) => queryProvider(provider.id, true)),
+    );
+    return Object.freeze({
+      profiles: Object.freeze(
+        states.filter(
+          (state): state is ProviderUsageState => state !== undefined,
+        ),
+      ),
+    });
   };
 
   const unavailableRefresh = (
     providerId: string,
+    credentialId?: string,
+    reason: ProviderUsageUnavailableReason = "network",
   ): ProviderUsageRefreshResult =>
     Object.freeze({
       providerId,
-      outcome: "unavailable",
-      reason: "network",
+      ...(credentialId === undefined ? {} : { credentialId }),
+      outcome: "unavailable" as const,
+      reason,
     });
 
-  /** Publish the bounded failure state of an external capture. Managed and
-   * ambient bindings are not persisted, matching the previous behavior. An
-   * observation for the same account and destination is preserved so the
-   * last-known windows stay displayed as stale. */
   const recordUnavailable = (
-    facts: ProviderAuthBindingFacts,
+    facts: ProviderProfileBindingFacts,
     destination: string,
     reason: ProviderUsageUnavailableReason,
   ): void => {
-    if (closed || facts.kind !== "external") return;
+    if (closed) return;
+    const key = profileKey(facts.providerId, facts.credentialId);
     const identity = bindingIdentity(facts);
-    const accountKey = bindingSourceKey(facts);
-    const previous = cache.get(facts.providerId);
+    const previous = cache.get(key);
     const observation =
-      previous !== undefined &&
-      previous.destinationKey === destination &&
-      previous.accountKey === accountKey
+      previous?.bindingIdentity === identity &&
+      previous.destinationKey === destination
         ? previous.observation
         : undefined;
     cache.set(
-      facts.providerId,
+      key,
       Object.freeze({
         bindingIdentity: identity,
-        accountKey,
         destinationKey: destination,
         ...(observation === undefined ? {} : { observation }),
-        unavailable: Object.freeze({ bindingIdentity: identity, reason }),
+        unavailable: Object.freeze({
+          bindingIdentity: identity,
+          reason,
+        }),
       }),
     );
   };
@@ -343,82 +341,109 @@ export function createProviderUsageAuthority(
     probe: ProviderUsageProbe,
     capture: ProviderAuthBindingCapture,
   ): Promise<ProviderUsageRefreshResult> => {
-    if (closed || lifecycleAbort.signal.aborted) {
-      return Promise.resolve(unavailableRefresh(providerId));
-    }
-    const baseUrls = servedBaseUrls(providerId);
-    if (baseUrls.length === 0) {
-      return Promise.resolve(Object.freeze({
-        providerId,
-        outcome: "unsupported",
-        reason: "destination",
-      }));
-    }
-    let eligibility: ProviderUsageEligibility;
-    try {
-      eligibility = eligibilityFor(providerId, probe, capture, baseUrls);
-    } catch {
-      return Promise.resolve(Object.freeze({
-        providerId,
-        outcome: "unavailable",
-        reason: "upstream",
-      }));
-    }
-    if (eligibility.state === "unsupported_binding") {
-      return Promise.resolve(Object.freeze({
-        providerId,
-        outcome: "unsupported",
-        reason: "binding",
-      }));
-    }
-    if (eligibility.state === "unsupported_destination") {
-      return Promise.resolve(Object.freeze({
-        providerId,
-        outcome: "unsupported",
-        reason: "destination",
-      }));
-    }
-
-    const destination = destinationKey(baseUrls);
-    const current = cache.get(providerId);
-    if (
-      capture.facts.kind === "external" &&
-      current?.destinationKey === destination &&
-      current.unavailable?.bindingIdentity === bindingIdentity(capture.facts) &&
-      current.unavailable.reason === "terminal"
-    ) {
-      // Documented terminal evidence stops automatic network attempts for
-      // this exact credential revision; a changed revision retries.
+    if (!isProfileProviderAuthBindingCapture(capture)) {
       return Promise.resolve(
         Object.freeze({
           providerId,
-          outcome: "unavailable" as const,
-          reason: "terminal" as const,
+          outcome: "unsupported" as const,
+          reason: "binding" as const,
         }),
       );
     }
-    const key = inflightIdentity(capture, destination);
+
+    const facts = capture.facts;
+    if (closed || lifecycleAbort.signal.aborted) {
+      return Promise.resolve(
+        unavailableRefresh(providerId, facts.credentialId),
+      );
+    }
+
+    const baseUrls = servedBaseUrls(providerId);
+    if (baseUrls.length === 0) {
+      return Promise.resolve(
+        Object.freeze({
+          providerId,
+          credentialId: facts.credentialId,
+          outcome: "unsupported" as const,
+          reason: "destination" as const,
+        }),
+      );
+    }
+
+    let eligibility: ProviderUsageEligibility;
+    try {
+      eligibility = eligibilityFor(providerId, probe, facts, baseUrls);
+    } catch {
+      return Promise.resolve(
+        unavailableRefresh(providerId, facts.credentialId, "upstream"),
+      );
+    }
+    if (eligibility.state !== "eligible") {
+      return Promise.resolve(
+        Object.freeze({
+          providerId,
+          credentialId: facts.credentialId,
+          outcome: "unsupported" as const,
+          reason:
+            eligibility.state === "unsupported_destination"
+              ? ("destination" as const)
+              : ("binding" as const),
+        }),
+      );
+    }
+
+    const destination = destinationKey(baseUrls);
+    const profileCacheKey = profileKey(providerId, facts.credentialId);
+    const existingSlot = cache.get(profileCacheKey);
+    if (
+      existingSlot?.destinationKey === destination &&
+      existingSlot.bindingIdentity === bindingIdentity(facts) &&
+      existingSlot.unavailable?.reason === "terminal"
+    ) {
+      return Promise.resolve(
+        unavailableRefresh(providerId, facts.credentialId, "terminal"),
+      );
+    }
+
+    const key = inflightIdentity(facts, destination);
     const existing = inflight.get(key);
     if (existing !== undefined) return existing;
 
     const pending = (async (): Promise<ProviderUsageRefreshResult> => {
-      // The bounded deadline is the authority's own failure class; a lifecycle
-      // abort only ends the run.
       const timeoutSignal = AbortSignal.timeout(resolveRefreshTimeoutMs());
-      const signal = AbortSignal.any([timeoutSignal, lifecycleAbort.signal]);
-      const fail = async (reason: ProviderUsageUnavailableReason): Promise<ProviderUsageRefreshResult> => {
-        if (capture.facts.kind === "external") {
-          let committed = false;
-          const current = await options.binding.publishIfCurrent(capture, (assertCurrent, publicationFacts) => {
-            if (closed || destinationKey(servedBaseUrls(providerId)) !== destination) return;
+      const signal = AbortSignal.any([
+        timeoutSignal,
+        lifecycleAbort.signal,
+      ]);
+
+      const fail = async (
+        reason: ProviderUsageUnavailableReason,
+      ): Promise<ProviderUsageRefreshResult> => {
+        let committed = false;
+        const current = await options.binding.publishIfCurrent(
+          capture,
+          (assertCurrent, publicationFacts) => {
+            if (
+              publicationFacts.kind !== "profile" ||
+              closed ||
+              destinationKey(servedBaseUrls(providerId)) !== destination
+            ) {
+              return;
+            }
             assertCurrent();
             recordUnavailable(publicationFacts, destination, reason);
             committed = true;
-          });
-          if (!current || !committed) return Object.freeze({ providerId, outcome: "superseded" });
-        }
-        return Object.freeze({ providerId, outcome: "unavailable", reason });
+          },
+        );
+        return !current || !committed
+          ? Object.freeze({
+              providerId,
+              credentialId: facts.credentialId,
+              outcome: "superseded" as const,
+            })
+          : unavailableRefresh(providerId, facts.credentialId, reason);
       };
+
       let acquired:
         | ProviderUsageProbeResult
         | { readonly state: "unsupported_destination" };
@@ -426,68 +451,106 @@ export function createProviderUsageAuthority(
         acquired = await options.binding.runBound(capture, async () => {
           const auth = await options.models.getAuth(providerId, { signal });
           if (auth === undefined) {
-            return Object.freeze({ state: "unavailable" as const, reason: "auth" as const });
+            return Object.freeze({
+              state: "unavailable" as const,
+              reason: "auth" as const,
+            });
           }
           const authBaseUrl = auth.auth.baseUrl?.trim();
           if (authBaseUrl !== undefined && authBaseUrl.length > 0) {
             const authEligibility = eligibilityFor(
               providerId,
               probe,
-              capture,
+              facts,
               [authBaseUrl],
             );
             if (authEligibility.state !== "eligible") {
-              return Object.freeze({ state: "unsupported_destination" as const });
+              return Object.freeze({
+                state: "unsupported_destination" as const,
+              });
             }
           }
           return probe.acquire({ auth, signal });
         });
       } catch (error) {
         if (signal.aborted) {
-          return timeoutSignal.aborted ? fail("timeout") : unavailableRefresh(providerId);
+          return timeoutSignal.aborted
+            ? fail("timeout")
+            : unavailableRefresh(
+                providerId,
+                facts.credentialId,
+                "network",
+              );
         }
-        return fail(classifyBindingFailure(capture, error));
+        return fail(classifyBindingFailure(error));
       }
 
       if (acquired.state === "unsupported_destination") {
         return Object.freeze({
           providerId,
-          outcome: "unsupported",
-          reason: "destination",
+          credentialId: facts.credentialId,
+          outcome: "unsupported" as const,
+          reason: "destination" as const,
         });
       }
       if (acquired.state === "unavailable") {
-        return fail(classifyProbeFailure(capture, acquired.reason));
+        return fail(acquired.reason);
       }
-      const facts = normalizeProviderUsageFacts(acquired.facts);
-      if (facts === undefined) {
-        return fail("schema");
-      }
+      const normalized = normalizeProviderUsageFacts(acquired.facts);
+      if (normalized === undefined) return fail("schema");
+
       const observation: ProviderUsageObservation = Object.freeze({
         providerId,
+        credentialId: facts.credentialId,
         observedAt: now(),
-        windows: facts.windows,
-        budgets: facts.budgets,
+        windows: normalized.windows,
+        budgets: normalized.budgets,
       });
       if (destinationKey(servedBaseUrls(providerId)) !== destination) {
-        return Object.freeze({ providerId, outcome: "superseded" });
+        return Object.freeze({
+          providerId,
+          credentialId: facts.credentialId,
+          outcome: "superseded" as const,
+        });
       }
+
       let committed = false;
-      const current = await options.binding.publishIfCurrent(capture, (assertCurrent, publicationFacts) => {
-        if (destinationKey(servedBaseUrls(providerId)) !== destination) return;
-        assertCurrent();
-        cache.set(providerId, Object.freeze({
-          bindingIdentity: bindingIdentity(publicationFacts),
-          accountKey: bindingSourceKey(publicationFacts),
-          destinationKey: destination,
-          observation,
-        }));
-        committed = true;
-      });
+      const current = await options.binding.publishIfCurrent(
+        capture,
+        (assertCurrent, publicationFacts) => {
+          if (
+            publicationFacts.kind !== "profile" ||
+            destinationKey(servedBaseUrls(providerId)) !== destination
+          ) {
+            return;
+          }
+          assertCurrent();
+          cache.set(
+            profileKey(
+              publicationFacts.providerId,
+              publicationFacts.credentialId,
+            ),
+            Object.freeze({
+              bindingIdentity: bindingIdentity(publicationFacts),
+              destinationKey: destination,
+              observation,
+            }),
+          );
+          committed = true;
+        },
+      );
       if (!current || !committed) {
-        return Object.freeze({ providerId, outcome: "superseded" });
+        return Object.freeze({
+          providerId,
+          credentialId: facts.credentialId,
+          outcome: "superseded" as const,
+        });
       }
-      return Object.freeze({ providerId, outcome: "succeeded" });
+      return Object.freeze({
+        providerId,
+        credentialId: facts.credentialId,
+        outcome: "succeeded" as const,
+      });
     })().finally(() => {
       if (inflight.get(key) === pending) inflight.delete(key);
     });
@@ -499,11 +562,14 @@ export function createProviderUsageAuthority(
   const waitForRefresh = (
     pending: Promise<ProviderUsageRefreshResult>,
     providerId: string,
+    credentialId: string | undefined,
     signal: AbortSignal | undefined,
   ): Promise<ProviderUsageRefreshResult> => {
     if (signal === undefined) return pending;
     if (signal.aborted) {
-      return Promise.resolve(unavailableRefresh(providerId));
+      return Promise.resolve(
+        unavailableRefresh(providerId, credentialId),
+      );
     }
     return new Promise<ProviderUsageRefreshResult>((resolve) => {
       let settled = false;
@@ -513,11 +579,12 @@ export function createProviderUsageAuthority(
         signal.removeEventListener("abort", onAbort);
         resolve(value);
       };
-      const onAbort = (): void => finish(unavailableRefresh(providerId));
+      const onAbort = (): void =>
+        finish(unavailableRefresh(providerId, credentialId));
       signal.addEventListener("abort", onAbort, { once: true });
       void pending.then(
         (value) => finish(value),
-        () => finish(unavailableRefresh(providerId)),
+        () => finish(unavailableRefresh(providerId, credentialId)),
       );
     });
   };
@@ -528,80 +595,109 @@ export function createProviderUsageAuthority(
     observedBaseUrl: string,
     rawFacts: Parameters<ProviderUsageAuthority["observePassive"]>[3],
   ): Promise<boolean> => {
-    if (closed) return false;
     if (
+      closed ||
+      !isProfileProviderAuthBindingCapture(capture) ||
       capture.facts.providerId !== providerId ||
       !probes.has(providerId)
     ) {
       return false;
     }
-    const facts = normalizeProviderUsageFacts(rawFacts);
-    if (facts === undefined) return false;
+    const normalized = normalizeProviderUsageFacts(rawFacts);
+    if (normalized === undefined) return false;
     const baseUrls = servedBaseUrls(providerId);
     if (baseUrls.length !== 1 || observedBaseUrl !== baseUrls[0]) return false;
+
     const destination = destinationKey(baseUrls);
     const observation: ProviderUsageObservation = Object.freeze({
       providerId,
+      credentialId: capture.facts.credentialId,
       observedAt: now(),
-      windows: facts.windows,
-      budgets: facts.budgets,
+      windows: normalized.windows,
+      budgets: normalized.budgets,
     });
     let committed = false;
-    const current = await options.binding.publishIfCurrent(capture, (assertCurrent, publicationFacts) => {
-      if (closed) return;
-      if (destinationKey(servedBaseUrls(providerId)) !== destination) return;
-      assertCurrent();
-      cache.set(
-        providerId,
-        Object.freeze({
-          bindingIdentity: bindingIdentity(publicationFacts),
-          accountKey: bindingSourceKey(publicationFacts),
-          destinationKey: destination,
-          observation,
-        }),
-      );
-      committed = true;
-    });
+    const current = await options.binding.publishIfCurrent(
+      capture,
+      (assertCurrent, publicationFacts) => {
+        if (
+          publicationFacts.kind !== "profile" ||
+          closed ||
+          destinationKey(servedBaseUrls(providerId)) !== destination
+        ) {
+          return;
+        }
+        assertCurrent();
+        cache.set(
+          profileKey(
+            publicationFacts.providerId,
+            publicationFacts.credentialId,
+          ),
+          Object.freeze({
+            bindingIdentity: bindingIdentity(publicationFacts),
+            destinationKey: destination,
+            observation,
+          }),
+        );
+        committed = true;
+      },
+    );
     return current && committed;
   };
 
-  const refresh = async (providerId: string, signal?: AbortSignal) => {
+  const refresh = async (
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly snapshot: ProviderUsageSnapshot;
+    readonly refresh: ProviderUsageRefreshResult;
+  }> => {
     if (closed) {
       return Object.freeze({
         snapshot: await query(),
         refresh: unavailableRefresh(providerId),
       });
     }
+
     const probe = probes.get(providerId);
+    let capture: ProviderAuthBindingCapture | undefined;
+    try {
+      capture = await options.binding.capture(providerId);
+    } catch {
+      capture = undefined;
+    }
+    const credentialId =
+      capture !== undefined &&
+      isProfileProviderAuthBindingCapture(capture)
+        ? capture.facts.credentialId
+        : undefined;
+
     let refreshResult: ProviderUsageRefreshResult;
     if (probe === undefined) {
       refreshResult = Object.freeze({
         providerId,
-        outcome: "unsupported",
-        reason: "provider",
+        ...(credentialId === undefined ? {} : { credentialId }),
+        outcome: "unsupported" as const,
+        reason: "provider" as const,
+      });
+    } else if (capture === undefined || !isProfileProviderAuthBindingCapture(capture)) {
+      refreshResult = Object.freeze({
+        providerId,
+        outcome: "unsupported" as const,
+        reason: "binding" as const,
       });
     } else {
-      let capture: ProviderAuthBindingCapture | undefined;
-      try {
-        capture = await options.binding.capture(providerId);
-      } catch {
-        refreshResult = Object.freeze({
-          providerId,
-          outcome: "unavailable",
-          reason: "auth",
-        });
-      }
-      if (capture !== undefined) {
-        refreshResult = await waitForRefresh(
-          startRefresh(providerId, probe, capture),
-          providerId,
-          signal,
-        );
-      }
+      refreshResult = await waitForRefresh(
+        startRefresh(providerId, probe, capture),
+        providerId,
+        credentialId,
+        signal,
+      );
     }
+
     return Object.freeze({
       snapshot: await query(),
-      refresh: refreshResult!,
+      refresh: refreshResult,
     });
   };
 

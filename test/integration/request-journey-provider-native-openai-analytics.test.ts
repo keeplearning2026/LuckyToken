@@ -231,13 +231,13 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
           const model = openAIModel(upstreamOrigin);
           const capture: ProviderAuthBindingCapture = Object.freeze({
             facts: Object.freeze({
-              kind: "managed" as const, carrierOwner: "managed" as const,
+              kind: "profile" as const, referenceOwner: "managed" as const,
               providerId: "openai",
               credentialId: PROFILE_ID,
-              authType: "api_key" as const,
+              acquisitionKind: "api_key" as const,
+      authType: "api_key" as const,
               authMethodLabel: "API key",
               displayName: "OpenAI Usage Profile",
-              credentialGeneration: "credential-generation:usage",
               selectionGeneration: "selection-generation:usage",
             }),
           });
@@ -254,7 +254,7 @@ describe("Provider Native OpenAI Responses terminal usage analytics producer", (
               operation: () => Promise<T>,
             ): Promise<T> => {
               bindingEvents.push(
-                `runBound:${boundCapture.facts.kind === "managed"
+                `runBound:${boundCapture.facts.kind === "profile"
                   ? boundCapture.facts.credentialId
                   : "environment"}`,
               );

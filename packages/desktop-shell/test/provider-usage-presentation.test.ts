@@ -18,6 +18,7 @@ describe("Provider usage presentation", () => {
     expect(
       providerUsageRefreshNotice({
         providerId: "anthropic",
+        credentialId: "profile-a",
         outcome: "unsupported",
         reason: "destination",
       }),
@@ -29,6 +30,7 @@ describe("Provider usage presentation", () => {
       projectProviderCardUsage(
         {
           providerId: "deepseek",
+          credentialId: "profile-a",
           state: "observed",
           observedAt: 1,
           refreshable: true,
@@ -56,6 +58,7 @@ describe("Provider usage presentation", () => {
     const emptyObservation = projectProviderCardUsage(
       {
         providerId: "openrouter",
+        credentialId: "profile-a",
         state: "observed",
         observedAt: 1,
         refreshable: true,
@@ -70,6 +73,7 @@ describe("Provider usage presentation", () => {
       projectProviderCardUsage(
         {
           providerId: "openrouter",
+          credentialId: "profile-a",
           state: "unobserved",
         },
         0,
@@ -81,9 +85,9 @@ describe("Provider usage presentation", () => {
   });
 
   it("keeps failure messages independent of credential acquisition", () => {
-    expect(projectProviderCardUsage({ providerId: "openai-codex", state: "unavailable", reason: "temporary" }, 0))
+    expect(projectProviderCardUsage({ providerId: "openai-codex", credentialId: "profile-a", state: "unavailable", reason: "temporary" }, 0))
       .toEqual({ primary: [], secondary: [], refreshable: true });
-    expect(providerUsageRefreshNotice({ providerId: "openai-codex", outcome: "unavailable", reason: "terminal" }))
+    expect(providerUsageRefreshNotice({ providerId: "openai-codex", credentialId: "profile-a", outcome: "unavailable", reason: "terminal" }))
       .toBe("Provider usage could not be refreshed.");
   });
 
@@ -92,6 +96,7 @@ describe("Provider usage presentation", () => {
       projectProviderCardUsage(
         {
           providerId: "deepseek",
+          credentialId: "profile-a",
           state: "observed",
           observedAt: 1,
           refreshable: true,
@@ -114,6 +119,7 @@ describe("Provider usage presentation", () => {
       projectProviderCardUsage(
         {
           providerId: "anthropic",
+          credentialId: "profile-a",
           state: "observed",
           observedAt: 1,
           refreshable: false,
@@ -129,6 +135,7 @@ describe("Provider usage presentation", () => {
     const unsupportedBinding = projectProviderCardUsage(
       {
         providerId: "anthropic",
+        credentialId: "profile-a",
         state: "unsupported",
         reason: "binding",
       },
@@ -139,6 +146,7 @@ describe("Provider usage presentation", () => {
     const unsupportedDestination = projectProviderCardUsage(
       {
         providerId: "deepseek",
+        credentialId: "profile-a",
         state: "unsupported",
         reason: "destination",
       },

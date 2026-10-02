@@ -1,7 +1,7 @@
 # Token OpenAI Codex Provider Plan: Ordinary Profiles and Native Model Catalog
 
 Status: current implementation contract, revised 2026-10-02. Authoritative
-model: [Provider Credential Core Model](TokenProviderCredentialCoreModelPlan.md).
+credential model: [Provider Credential Profiles Specification](TokenProviderCredentialProfilesSpec.md).
 Provider Native, Semantic Conversion and Direct Mode remain independent.
 
 ## 1. Decisions
@@ -13,10 +13,10 @@ references the Codex-owned `auth.json`; it never supplies a runtime external
 binding. The obsolete Codex external adapter, reserved selection value,
 special card, app-server refresher and startup auto-login are removed.
 
-`integrations.codex.localLogin` is boolean, default true, hot-apply, under
-Settings → `.codex agent`. It gates the visibility of the local login entry on
-the Provider card only. It never creates, removes or refreshes a Profile, and
-explicit Reconnect is always available for an existing local Profile.
+The `local_oauth` entry exists whenever Token composition registers that acquisition
+strategy for `openai-codex`. It is a Provider capability in Token, not a user-toggleable
+setting. Acquisition establishes the Profile reference; subsequent use resolves the
+current referenced Codex-owned `auth.json`.
 
 ## 2. Shared acquisition
 

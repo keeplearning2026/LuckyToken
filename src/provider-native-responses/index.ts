@@ -77,7 +77,7 @@ function safeProfileId(
     >
   >,
 ): string | undefined {
-  if (capture.facts.kind !== "managed") return undefined;
+  if (!isManagedProviderAuthBindingCapture(capture)) return undefined;
   return /^[A-Za-z0-9._:-]{1,256}$/u.test(capture.facts.credentialId)
     ? capture.facts.credentialId
     : undefined;
@@ -228,7 +228,7 @@ function observeManagedProfileAttribution(
   >,
   attempt: number,
 ): void {
-  if (capture.facts.kind !== "managed") return;
+  if (!isManagedProviderAuthBindingCapture(capture)) return;
   observeProviderResponses(observation?.journey, {
     kind: "profile_attributed",
     profileId: capture.facts.credentialId,
@@ -462,7 +462,7 @@ export function createProviderNativeResponses(
       let profileAttempt = 1;
       let physicalAttempt = 0;
       let selectionReason: "active" | "http_429_switch" = "active";
-      if (capture.facts.kind === "managed") {
+      if (isManagedProviderAuthBindingCapture(capture)) {
         input.credentialActivity?.credentialCaptured({
           ...capture.facts,
           lane: "provider_native",
@@ -612,7 +612,7 @@ export function createProviderNativeResponses(
                     kind: "failure_detected",
                     failureId: `${input.observation?.requestId ?? "provider-native"}:provider_http_429:${responseAttempt}`,
                     role:
-                      capture.facts.kind === "managed"
+                      isManagedProviderAuthBindingCapture(capture)
                         ? "supporting"
                         : "primary",
                     classification: "provider_http_429",
@@ -724,7 +724,7 @@ export function createProviderNativeResponses(
             }
           });
         } catch (error) {
-          if (capture.facts.kind === "managed") {
+          if (isManagedProviderAuthBindingCapture(capture)) {
             input.credentialActivity?.credentialAttempt({
               ...capture.facts,
               lane: "provider_native",
@@ -735,7 +735,7 @@ export function createProviderNativeResponses(
           }
           throw error;
         }
-        if (capture.facts.kind === "managed") {
+        if (isManagedProviderAuthBindingCapture(capture)) {
           input.credentialActivity?.credentialAttempt({
             ...capture.facts,
             lane: "provider_native",

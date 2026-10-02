@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type {
   ApplicationStatus,
-  CredentialProfileProjectionV1,
-  CredentialProfilesProjectionV1,
-  ProviderCredentialProfilesProjectionV1,
+  CredentialProfileProjection,
+  CredentialProfilesProjection,
+  ProviderCredentialProfilesProjection,
 } from "@token/application-control-plane/control-plane";
 import {
   decodeAttentionProjection,
@@ -21,25 +21,23 @@ const running: ApplicationStatus = Object.freeze({
 });
 
 function credentials(
-  providers: readonly ProviderCredentialProfilesProjectionV1[],
-): CredentialProfilesProjectionV1 {
+  providers: readonly ProviderCredentialProfilesProjection[],
+): CredentialProfilesProjection {
   return Object.freeze({ providers: Object.freeze(providers) });
 }
 
 const SELECTION_PROVIDER_ID = "selection-provider";
 
 function selectionProfile(
-  health: CredentialProfileProjectionV1["health"] = "ready",
-): CredentialProfileProjectionV1 {
+  enabled = true,
+): CredentialProfileProjection {
   return Object.freeze({
     credentialId: "managed-profile",
     authType: "oauth" as const,
     acquisitionKind: "oauth" as const,
     authMethodLabel: "Fixture account",
     displayName: "Managed Profile",
-    enabled: true,
-    health,
-    priority: 0,
+    enabled,
     createdAt: 1,
     updatedAt: 1,
   });
@@ -48,9 +46,9 @@ function selectionProfile(
 function selectionProvider(input: {
   readonly activeCredentialId?: string;
   readonly declaredExternalSource: boolean;
-  readonly externalStatus: "connected" | "configured" | "unknown";
-  readonly profiles?: readonly CredentialProfileProjectionV1[];
-}): ProviderCredentialProfilesProjectionV1 {
+  readonly externalStatus: "configured" | "unknown";
+  readonly profiles?: readonly CredentialProfileProjection[];
+}): ProviderCredentialProfilesProjection {
   return Object.freeze({
     providerId: SELECTION_PROVIDER_ID,
     implementationAvailable: true,
@@ -68,7 +66,7 @@ function selectionProvider(input: {
 }
 
 function providerInvalidTransitions(
-  states: readonly ProviderCredentialProfilesProjectionV1[],
+  states: readonly ProviderCredentialProfilesProjection[],
 ): readonly boolean[] {
   let projection = credentials([states[0]!]);
   const authority = createOperationalAttentionAuthority({
@@ -170,8 +168,6 @@ describe("operational attention authority", () => {
           authMethodLabel: "Fixture account",
           displayName: "Production",
           enabled: true,
-          health: "ready",
-          priority: 0,
           createdAt: 1,
           updatedAt: 1,
         }],
@@ -191,7 +187,7 @@ describe("operational attention authority", () => {
         ...projection.providers[1]!,
         profiles: [{
           ...projection.providers[1]!.profiles[0]!,
-          health: "reconnect_required",
+          enabled: false,
         }],
       },
     ]);
@@ -211,7 +207,7 @@ describe("operational attention authority", () => {
         ...projection.providers[1]!,
         profiles: [{
           ...projection.providers[1]!.profiles[0]!,
-          health: "ready",
+          enabled: true,
         }],
       },
     ]);
@@ -303,14 +299,14 @@ describe("operational attention and credential selection", () => {
       selectionProvider({
         activeCredentialId: "managed-profile",
         declaredExternalSource: true,
-        externalStatus: "connected",
+        externalStatus: "configured",
         profiles: Object.freeze([selectionProfile()]),
       }),
       selectionProvider({
         activeCredentialId: "managed-profile",
         declaredExternalSource: true,
-        externalStatus: "connected",
-        profiles: Object.freeze([selectionProfile("reconnect_required")]),
+        externalStatus: "configured",
+        profiles: Object.freeze([selectionProfile(false)]),
       }),
     ])).toEqual([true]);
   });
@@ -321,12 +317,12 @@ describe("operational attention and credential selection", () => {
       selectionProvider({
         activeCredentialId: "managed-profile",
         declaredExternalSource: true,
-        externalStatus: "connected",
+        externalStatus: "configured",
         profiles,
       }),
       selectionProvider({
         declaredExternalSource: true,
-        externalStatus: "connected",
+        externalStatus: "configured",
         profiles,
       }),
     ])).toEqual([true]);

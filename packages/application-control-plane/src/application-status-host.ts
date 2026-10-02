@@ -33,7 +33,7 @@ import {
 import type {
   CredentialProfilesCommandHandler,
   CredentialProfilesCommandResult,
-  CredentialProfilesProjectionV1,
+  CredentialProfilesProjection,
   ProviderProfileAuthCommandHandler,
   ProviderProfileAuthCommandResult,
 } from "./credential-profiles-contract.js";
@@ -138,7 +138,7 @@ export interface StartControlPlaneOptions {
   /** Live sanitized models.json projection merged into every snapshot. */
   readonly modelsProjection?: () => ModelsProjection;
   readonly credentialProfilesProjection?: () =>
-    CredentialProfilesProjectionV1 | undefined;
+    CredentialProfilesProjection | undefined;
   /** Live sanitized catalog lifecycle projection merged into every
    *  published snapshot (Ticket 11). */
   readonly catalogProjection?: () => CatalogStatusProjection;
@@ -415,7 +415,7 @@ export async function startApplicationStatusHost(
     return { flow, channel };
   };
 
-  const fallbackCredentialProfilesState = (): CredentialProfilesProjectionV1 =>
+  const fallbackCredentialProfilesState = (): CredentialProfilesProjection =>
     options.credentialProfilesProjection?.() ?? Object.freeze({ providers: [] });
 
   const serveConnection = async (state: ConnectionState): Promise<void> => {

@@ -2,7 +2,7 @@ import type {
   ApplicationStatus,
   AttentionCondition,
   AttentionProjection,
-  CredentialProfilesProjectionV1,
+  CredentialProfilesProjection,
 } from "@token/application-control-plane/control-plane";
 import {
   RECENT_REQUEST_FAILURE_WINDOW_MS,
@@ -10,7 +10,7 @@ import {
 
 export interface OperationalAttentionAuthorityOptions {
   readonly now?: () => number;
-  readonly credentials: () => CredentialProfilesProjectionV1 | undefined;
+  readonly credentials: () => CredentialProfilesProjection | undefined;
   readonly diagnosticsAvailable?: () => boolean;
   readonly requestFailureCount: (from: number, to: number) => number;
 }
@@ -81,7 +81,7 @@ export function createOperationalAttentionAuthority(
         });
       }
 
-      let credentialProjection: CredentialProfilesProjectionV1 | undefined;
+      let credentialProjection: CredentialProfilesProjection | undefined;
       try {
         credentialProjection = options.credentials();
       } catch {
@@ -96,11 +96,13 @@ export function createOperationalAttentionAuthority(
           providerInvalidEpisodes.delete(provider.providerId);
           continue;
         }
-        const selected = provider.profiles.find((profile) => profile.credentialId === provider.activeCredentialId);
-        const profileEffective = selected?.enabled === true &&
-          selected.health !== "reconnect_required" && selected.health !== "disabled";
-        const ambientEffective = provider.profiles.length === 0 &&
-          (provider.ambient?.status === "connected" || provider.ambient?.status === "configured");
+        const selected = provider.profiles.find(
+          (profile) => profile.credentialId === provider.activeCredentialId,
+        );
+        const profileEffective = selected?.enabled === true;
+        const ambientEffective =
+          provider.profiles.length === 0 &&
+          provider.ambient?.status === "configured";
         const effective = provider.implementationAvailable && (profileEffective || ambientEffective);
         const previous = providerWasEffective.get(provider.providerId);
         if (effective) {

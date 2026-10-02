@@ -10,6 +10,7 @@ import test from "node:test";
 
 import {
   connectControlPlane,
+  controlPlaneVersion,
   createNodePipeTransport,
 } from "@token/application-control-plane/control-plane";
 
@@ -158,13 +159,13 @@ test("the assembled release backend serves as a desktop-owned instance from the 
     }
     assert.ok(client !== undefined, `connect failed: ${String(lastError)}`);
     try {
-      const hello = await client.hello(8);
+      const hello = await client.hello(controlPlaneVersion);
       assert.equal(hello.type, "compatible");
       const expectedVersion = JSON.parse(
         await readFile(join(repositoryRoot, "package.json"), "utf8"),
       ).version;
       assert.equal(hello.application.version, expectedVersion);
-      assert.equal(hello.contractVersion, 8);
+      assert.equal(hello.contractVersion, controlPlaneVersion);
 
       let status;
       for (let attempt = 0; attempt < 200; attempt += 1) {

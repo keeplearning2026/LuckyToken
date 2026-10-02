@@ -143,7 +143,11 @@ describe("Token CLI", () => {
     expect(result.stdout).toContain("Token");
     expect(result.stdout).toContain("--config <path>");
     expect(result.stdout).toContain("control profiles");
-    expect(result.stdout).toContain("add|reconnect");
+    expect(result.stdout).toContain("add|rename|activate|enable|disable|reorder|remove|settings|cancel");
+    expect(result.stdout).toContain("cancel <operationId>");
+    expect(result.stdout).not.toContain("reconnect");
+    expect(result.stdout).not.toContain("priority");
+    expect(result.stdout).not.toContain("recheck");
     expect(result.stdout).not.toContain("control credentials");
     expect(result.stdout).not.toContain("client-token");
     expect(result.stdout).toContain("control history");

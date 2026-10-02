@@ -8,7 +8,6 @@ import type {
   CredentialProfileManagement,
   ProviderAuthBindingAuthority,
 } from "../../src/credentials/profile-contract.js";
-import { NO_PROVIDER_RECORD_REVISION } from "../../src/credentials/profile-record-store.js";
 
 export interface OnlineProviderLoginInput {
   readonly models: Models;
@@ -31,12 +30,10 @@ export async function loginOnlineProvider(
   if (provider === undefined || !provider.implementationAvailable) {
     throw new Error(`Online Provider ${input.providerId} is unavailable`);
   }
-  const binding = await input.providerAuthBindings.createLoginBinding({
+  const binding = await input.providerAuthBindings.createAcquisitionBinding({
     providerId: input.providerId,
     acquisitionKind: input.authType,
     displayName: input.displayName,
-    useNow: true,
-    expectedRevision: provider.revision ?? NO_PROVIDER_RECORD_REVISION,
   });
   await input.providerAuthBindings.runBound(binding, () =>
     input.models.login(

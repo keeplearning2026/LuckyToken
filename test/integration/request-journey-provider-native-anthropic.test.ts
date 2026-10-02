@@ -70,13 +70,13 @@ function managedCapture(
 ): ManagedProviderAuthBindingCapture {
   return Object.freeze({
     facts: Object.freeze({
-      kind: "managed" as const, carrierOwner: "managed" as const,
+      kind: "profile" as const, referenceOwner: "managed" as const,
       providerId: "anthropic",
       credentialId,
+      acquisitionKind: "oauth" as const,
       authType: "oauth" as const,
       authMethodLabel: "Account",
       displayName,
-      credentialGeneration: `credential-generation:${credentialId}`,
       selectionGeneration: `selection-generation:${credentialId}`,
     }),
   });
@@ -340,10 +340,10 @@ describe("Anthropic Provider Native Request Journey", () => {
           capture: ProviderAuthBindingCapture,
           operation: () => Promise<T>,
         ): Promise<T> => {
-          expect(capture.facts.kind).toBe("managed");
+          expect(capture.facts.kind).toBe("profile");
           const previous = boundProfileId;
           boundProfileId =
-            capture.facts.kind === "managed"
+            capture.facts.kind === "profile"
               ? capture.facts.credentialId
               : undefined;
           try {

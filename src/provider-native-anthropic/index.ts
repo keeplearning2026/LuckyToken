@@ -226,7 +226,7 @@ export function createAnthropicProviderNativeLane(
       const attemptedCredentialIds: string[] = [];
       let profileAttempt = 1;
       let selectionReason: "active" | "http_429_switch" = "active";
-      if (capture.facts.kind === "managed") {
+      if (isManagedProviderAuthBindingCapture(capture)) {
         input.credentialActivity?.credentialCaptured({
           ...capture.facts,
           lane: "provider_native",
@@ -320,14 +320,14 @@ export function createAnthropicProviderNativeLane(
                     signal,
                     fetch: options.fetch,
                     attempt: profileAttempt,
-                    ...(capture.facts.kind === "managed"
+                    ...(isManagedProviderAuthBindingCapture(capture)
                       ? { profileId: capture.facts.credentialId }
                       : {}),
                     ...(input.journey === undefined
                       ? {}
                       : { journey: input.journey }),
                     bodyProjectionMode:
-                      capture.facts.kind === "managed" &&
+                      isManagedProviderAuthBindingCapture(capture) &&
                       input.model.provider === "anthropic" &&
                       input.model.api === "anthropic-messages" &&
                       capture.facts.authType === "oauth"
@@ -336,7 +336,7 @@ export function createAnthropicProviderNativeLane(
                     authMode:
                       input.model.provider === "github-copilot"
                         ? "github_copilot"
-                        : capture.facts.kind === "managed"
+                        : isManagedProviderAuthBindingCapture(capture)
                           ? capture.facts.authType
                           : "ambient",
                     ...(input.sessionId === undefined
@@ -389,7 +389,7 @@ export function createAnthropicProviderNativeLane(
               observeAnthropicProviderNative(input.journey, {
                 kind: "attempt_observed",
                 attempt: profileAttempt,
-                ...(capture.facts.kind === "managed"
+                ...(isManagedProviderAuthBindingCapture(capture)
                   ? { profileId: capture.facts.credentialId }
                   : {}),
                 status: upstreamResponse.status,
@@ -588,7 +588,7 @@ export function createAnthropicProviderNativeLane(
             },
           );
         } catch (error) {
-          if (capture.facts.kind === "managed") {
+          if (isManagedProviderAuthBindingCapture(capture)) {
             input.credentialActivity?.credentialAttempt({
               ...capture.facts,
               lane: "provider_native",
@@ -599,7 +599,7 @@ export function createAnthropicProviderNativeLane(
           }
           throw error;
         }
-        if (capture.facts.kind === "managed") {
+        if (isManagedProviderAuthBindingCapture(capture)) {
           input.credentialActivity?.credentialAttempt({
             ...capture.facts,
             lane: "provider_native",

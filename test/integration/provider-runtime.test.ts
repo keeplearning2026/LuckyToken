@@ -171,12 +171,10 @@ describe("Provider Runtime composition", () => {
     });
     const modelsIdentity = runtime.models;
     const modelIdentity = runtime.models.getModels("anthropic")[0];
-    const login = await runtime.providerAuthBindings.createLoginBinding({
+    const login = await runtime.providerAuthBindings.createAcquisitionBinding({
       providerId: "anthropic",
       acquisitionKind: "api_key",
       displayName: "Production",
-      useNow: false,
-      expectedRevision: "absent",
     });
     await runtime.providerAuthBindings.runBound(login, () =>
       runtime.models.login("anthropic", "api_key", {
@@ -456,12 +454,10 @@ describe("Provider Runtime composition", () => {
       createUuid: () => "00000000-0000-4000-8000-000000000010",
     });
     const add = async (providerId: string, displayName: string, key: string) => {
-      const binding = await runtime.providerAuthBindings.createLoginBinding({
+      const binding = await runtime.providerAuthBindings.createAcquisitionBinding({
         providerId,
         acquisitionKind: "api_key",
         displayName,
-        useNow: false,
-        expectedRevision: "absent",
       });
       await runtime.providerAuthBindings.runBound(binding, () =>
         runtime.models.login(providerId, "api_key", {

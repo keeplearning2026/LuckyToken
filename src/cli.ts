@@ -38,7 +38,7 @@ Usage:
   Token control auto-start <status|enable|disable> --descriptor <path>
   Token control settings <query|set> [<key> <value>] --descriptor <path>
   Token control models <query|write-raw|write-structured> [<revision> <file>] --descriptor <path>
-  Token control profiles <query|add|reconnect|rename|activate|enable|disable|priority|remove|recheck|settings> ... --descriptor <path>
+  Token control profiles <query|add|rename|activate|enable|disable|reorder|remove|settings|cancel> ... --descriptor <path>
   Token control catalog <query|refresh-background|refresh-manual> --descriptor <path>
   Token control public-models <query|set-port|set-provider|set-model|rename|restore> ... --descriptor <path>
   Token control history <query|export|export-confirm|delete|delete-confirm> ... --descriptor <path>
@@ -73,9 +73,10 @@ control models commands:
 
 control profiles commands:
   query                     Print sanitized Provider/Profile state
-  add|reconnect             Run a Provider-owned auth flow for one Profile
-  rename|activate|enable|disable|priority|remove|recheck|settings
+  add <provider> <kind> <name>  Run a Provider-owned auth flow for a new Profile
+  rename|activate|enable|disable|reorder|remove|settings
                             Mutate one Provider record with optimistic concurrency
+  cancel <operationId>      Cancel the active Credential Management operation
 
 control catalog commands:
   query                     Print the active catalog snapshot

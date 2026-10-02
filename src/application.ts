@@ -40,6 +40,7 @@ import {
 } from "./control-plane-discovery.js";
 import { createProductionControlPipe } from "./control-pipe-composition.js";
 import { createCredentialProfilesControlPlaneHandlers } from "./credentials/profile-control-plane.js";
+import { createCredentialManagementGuard } from "./credentials/management.js";
 import {
   createDiagnosticsAuthority,
   createUnavailableDiagnosticsAuthority,
@@ -795,6 +796,7 @@ async function startNormalApplication(options: {
     const providerUsageAuthority = createProviderUsageAuthority({
       models: providerRuntime.models,
       binding: providerRuntime.providerAuthBindings,
+      profileSnapshot: () => providerRuntime.credentialManagement.snapshot(),
       probes: createBuiltInProviderUsageProbes(globalThis.fetch),
       refreshTimeoutMs: () => {
         const seconds = settingsRegistry.query([
@@ -834,33 +836,23 @@ async function startNormalApplication(options: {
       requestFailureCount: (from, to) =>
         recentRequestFailures.filter((time) => time >= from && time < to).length,
     });
+    const credentialManagementGuard = createCredentialManagementGuard({
+      createId: randomUUID,
+      now: Date.now,
+    });
     const profileControlPlane = createCredentialProfilesControlPlaneHandlers({
       models: providerRuntime.models,
       management: credentialManagement,
       binding: providerRuntime.providerAuthBindings,
+      managementGuard: credentialManagementGuard,
       localAcquisitionMethods: () =>
         providerRuntime.localAcquisitionMethods.map((method) => ({
           providerId: method.providerId,
           label: method.label(),
           icon: method.icon,
-          authType: method.authType,
-          enabled:
-            method.strategyId !== "codex_local" ||
-            settingsRegistry.query(["integrations.codex.localLogin"])[
-              "integrations.codex.localLogin"
-            ]?.value !== false,
+          acquisition: method.acquisition,
         })),
       providerSource: (providerId) => providerRuntime.providerSource(providerId),
-      recheckProvider: async (providerId, capture) => {
-        const report = await catalogController.refreshProviderManual(
-          providerId,
-          undefined,
-          providerRuntime.catalogOperationsFor(capture),
-        );
-        return report.providers.find(
-          (provider) => provider.providerId === providerId,
-        )?.outcome ?? "skipped";
-      },
       postLoginProvider: (providerId, capture) => {
         catalogController.scheduleProviderBackground(
           "login",

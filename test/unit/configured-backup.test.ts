@@ -10,9 +10,11 @@ import {
   recoveryBackupSnapshots,
 } from "../../src/backup/configured.js";
 import {
-  credentialProfileCarrier,
   createFileProviderCredentialRecordStore,
+  managedCredentialReference,
+  PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
 } from "../../src/credentials/profile-record-store.js";
+import { serializeApiKeyCredentialDocument } from "../../src/credentials/credential-document.js";
 import type { TokenCliConfig } from "../../src/cli-config.js";
 
 describe("configured backup contract versions", () => {
@@ -101,18 +103,21 @@ describe("configured backup contract versions", () => {
         createRevision: () => "revision-a",
       });
       const credential = { type: "api_key", key: "profile-secret" } as const;
+      const reference = managedCredentialReference(
+        "provider-a",
+        "credential-a",
+      );
       await store.publishCredential(
         "provider-a",
-        "absent",
         {
           credentialId: "credential-a",
-          credentialGeneration: "generation-a",
-          credential,
+          reference,
+          content: serializeApiKeyCredentialDocument(credential),
         },
         () => ({
           kind: "commit",
           record: {
-            schemaVersion: 2,
+            schemaVersion: PROVIDER_CREDENTIAL_RECORD_SCHEMA_VERSION,
             providerId: "provider-a",
             revision: "record-a",
             selectionGeneration: "selection-a",
@@ -121,19 +126,12 @@ describe("configured backup contract versions", () => {
             profiles: [
               {
                 credentialId: "credential-a",
-                credentialGeneration: "generation-a",
-                authType: "api_key",
-                authMethodLabel: "Fixture credentials",
+                acquisitionKind: "api_key",
+                reference,
                 displayName: "Profile A",
                 enabled: true,
-                priority: 0,
                 createdAt: 1,
                 updatedAt: 1,
-                ...credentialProfileCarrier("provider-a", {
-                  credentialId: "credential-a",
-                  credentialGeneration: "generation-a",
-                  credential,
-                }),
               },
             ],
           },
@@ -168,20 +166,21 @@ describe("configured backup contract versions", () => {
         "credentials",
         "provider-a",
         "credential-a",
-        "generation-a.auth.json",
+        "credential.auth.json",
       ));
       expect(snapshot.providers[0]?.incarnations).toEqual([
         {
-          relativePath: "provider-a/credential-a/generation-a.auth.json",
+          relativePath: "provider-a/credential-a/credential.auth.json",
           tokenRevision: createHash("sha256").update(documentBytes).digest("hex"),
           content: documentBytes.toString("base64"),
         },
       ]);
       const recordDocument = JSON.parse(Buffer.from(snapshot.providers[0]!.record, "base64").toString("utf8"));
       expect(recordDocument.profiles[0]).toMatchObject({
-        kind: "reference",
+        credentialId: "credential-a",
+        acquisitionKind: "api_key",
         reference: {
-          path: "provider-a/credential-a/generation-a.auth.json",
+          path: "provider-a/credential-a/credential.auth.json",
           owner: "managed",
         },
       });

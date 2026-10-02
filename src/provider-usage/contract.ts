@@ -52,6 +52,7 @@ export interface ProviderUsageFacts {
 
 export interface ProviderUsageObservation extends ProviderUsageFacts {
   readonly providerId: string;
+  readonly credentialId: string;
   readonly observedAt: number;
 }
 
@@ -60,33 +61,6 @@ export type ProviderUsageUnsupportedReason =
   | "binding"
   | "destination";
 
-/**
- * Bounded failure classification (plan section 6). Each class stays distinct
- * end to end: usage authority → Control Plane DTO → Public Model/Attention →
- * Renderer.
- *
- * - `auth`: the credential was missing or unusable for the resource request.
- *   Managed and ambient bindings keep this class unchanged.
- * - `timeout`: the authority's own bounded refresh deadline elapsed.
- * - `temporary`: a bounded transient failure of an externally owned source.
- *   The credential boundary reports read/parse failures, an unavailable
- *   delegation, and post-refresh verification failures (including
- *   insufficient validity after a delegated refresh) as one
- *   `external_unavailable` outcome, so they all stay transient here and never
- *   become a permanent reconnect state.
- * - `account_change`: the external document no longer matches the
- *   principal/grant and path captured for the request; last-known usage is never carried over.
- * - `insufficient_validity`: the credential does not meet the source
- *   freshness requirement, so it cannot be dispatched.
- * - `terminal`: an explicit structured rejection of a credential the external
- *   boundary had already resolved and verified, with a known terminal code
- *   in the bounded response body. Bare HTTP 401/403 is insufficient. Only this evidence stops automatic network attempts, and
- *   only until the external document's revision changes. Diagnostics text
- *   (stderr) is never parsed for classification
- *   ([P1 error-classification evidence](../../doc/Research/TokenOpenAICodexP1ErrorClassification.md)).
- * - `network`, `upstream`, `schema`: transport, upstream status, and response
- *   shape failures.
- */
 export type ProviderUsageUnavailableReason =
   | "auth"
   | "timeout"
@@ -98,41 +72,33 @@ export type ProviderUsageUnavailableReason =
   | "upstream"
   | "schema";
 
+interface ProviderUsageProfileIdentity {
+  readonly providerId: string;
+  readonly credentialId: string;
+}
+
 export type ProviderUsageState =
-  | {
+  | (ProviderUsageProfileIdentity & {
       readonly state: "observed";
       readonly observation: ProviderUsageObservation;
       readonly refreshable: boolean;
-    }
-  | {
+    })
+  | (ProviderUsageProfileIdentity & {
       readonly state: "unobserved";
-      readonly providerId: string;
-    }
-  | {
+    })
+  | (ProviderUsageProfileIdentity & {
       readonly state: "unsupported";
-      readonly providerId: string;
       readonly reason: ProviderUsageUnsupportedReason;
-    }
-  | {
+    })
+  | (ProviderUsageProfileIdentity & {
       readonly state: "unavailable";
-      readonly providerId: string;
       readonly reason: ProviderUsageUnavailableReason;
-    };
+    });
 
-export type ProviderUsageBindingContext =
-  | {
-      readonly kind: "managed";
-      readonly authType: "api_key" | "oauth";
-    }
-  | {
-      /** Externally owned Provider credential consumed through the binding.
-       * Only its source owner may refresh it; never Pi OAuth. */
-      readonly kind: "external";
-      readonly authType: "api_key" | "oauth";
-    }
-  | {
-      readonly kind: "ambient";
-    };
+export type ProviderUsageBindingContext = {
+  readonly kind: "managed" | "external";
+  readonly authType: "api_key" | "oauth";
+};
 
 export interface ProviderUsageEligibilityContext {
   readonly providerId: string;
@@ -167,21 +133,26 @@ export interface ProviderUsageProbe {
 }
 
 export interface ProviderUsageSnapshot {
-  readonly providers: readonly ProviderUsageState[];
+  /** At most one current active Profile row per Provider. Every row carries
+   * exact Profile identity. */
+  readonly profiles: readonly ProviderUsageState[];
 }
 
 export type ProviderUsageRefreshResult =
   | {
       readonly providerId: string;
+      readonly credentialId: string;
       readonly outcome: "succeeded" | "superseded";
     }
   | {
       readonly providerId: string;
+      readonly credentialId?: string;
       readonly outcome: "unsupported";
       readonly reason: ProviderUsageUnsupportedReason;
     }
   | {
       readonly providerId: string;
+      readonly credentialId?: string;
       readonly outcome: "unavailable";
       readonly reason: ProviderUsageUnavailableReason;
     };
@@ -261,8 +232,6 @@ function normalizeWindow(value: unknown): ProviderUsageWindow | undefined {
     ) {
       return undefined;
     }
-    const keys = new Set(["kind", "usedPercent", "resetAt", "durationMinutes", "scope"]);
-    if (Object.keys(value).some((key) => !keys.has(key))) return undefined;
     return Object.freeze({
       kind,
       usedPercent: value.usedPercent,
@@ -271,8 +240,6 @@ function normalizeWindow(value: unknown): ProviderUsageWindow | undefined {
       ...(scope === undefined ? {} : { scope }),
     });
   }
-  const keys = new Set(["kind", "usedPercent", "resetAt", "scope"]);
-  if (Object.keys(value).some((key) => !keys.has(key))) return undefined;
   return Object.freeze({
     kind,
     usedPercent: value.usedPercent,
@@ -282,52 +249,47 @@ function normalizeWindow(value: unknown): ProviderUsageWindow | undefined {
 }
 
 function normalizeBudget(value: unknown): ProviderUsageBudget | undefined {
-  if (!isRecord(value) || typeof value.kind !== "string") return undefined;
-  if (value.kind === "balance") {
-    if (
-      Object.keys(value).some((key) => !["kind", "amount", "currency"].includes(key)) ||
-      !isFiniteNonNegative(value.amount) ||
-      !boundedString(value.currency, PROVIDER_USAGE_MAX_CURRENCY_LENGTH)
-    ) {
-      return undefined;
+  if (!isRecord(value)) return undefined;
+  switch (value.kind) {
+    case "credits": {
+      if (
+        !isFiniteNonNegative(value.remaining) ||
+        (value.used !== undefined && !isFiniteNonNegative(value.used)) ||
+        (value.limit !== undefined && !isFiniteNonNegative(value.limit)) ||
+        (value.expiresAt !== undefined && !isPositiveSafeInteger(value.expiresAt)) ||
+        (value.currency !== undefined &&
+          !boundedString(value.currency, PROVIDER_USAGE_MAX_CURRENCY_LENGTH))
+      ) {
+        return undefined;
+      }
+      return Object.freeze({
+        kind: "credits" as const,
+        remaining: value.remaining,
+        ...(value.used === undefined ? {} : { used: value.used }),
+        ...(value.limit === undefined ? {} : { limit: value.limit }),
+        ...(value.expiresAt === undefined ? {} : { expiresAt: value.expiresAt }),
+        ...(value.currency === undefined ? {} : { currency: value.currency }),
+      });
     }
-    return Object.freeze({
-      kind: "balance",
-      amount: value.amount,
-      currency: value.currency,
-    });
-  }
-  if (value.kind === "reset_credits") {
-    if (
-      Object.keys(value).some((key) => !["kind", "available"].includes(key)) ||
-      !isFiniteNonNegative(value.available)
-    ) {
+    case "balance":
+      return isFiniteNonNegative(value.amount) &&
+        boundedString(value.currency, PROVIDER_USAGE_MAX_CURRENCY_LENGTH)
+        ? Object.freeze({
+            kind: "balance" as const,
+            amount: value.amount,
+            currency: value.currency,
+          })
+        : undefined;
+    case "reset_credits":
+      return isFiniteNonNegative(value.available)
+        ? Object.freeze({
+            kind: "reset_credits" as const,
+            available: value.available,
+          })
+        : undefined;
+    default:
       return undefined;
-    }
-    return Object.freeze({ kind: "reset_credits", available: value.available });
   }
-  if (value.kind !== "credits") return undefined;
-  if (
-    Object.keys(value).some(
-      (key) => !["kind", "remaining", "used", "limit", "expiresAt", "currency"].includes(key),
-    ) ||
-    !isFiniteNonNegative(value.remaining) ||
-    (value.used !== undefined && !isFiniteNonNegative(value.used)) ||
-    (value.limit !== undefined && !isFiniteNonNegative(value.limit)) ||
-    (value.expiresAt !== undefined && !isPositiveSafeInteger(value.expiresAt)) ||
-    (value.currency !== undefined &&
-      !boundedString(value.currency, PROVIDER_USAGE_MAX_CURRENCY_LENGTH))
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    kind: "credits",
-    remaining: value.remaining,
-    ...(value.used === undefined ? {} : { used: value.used }),
-    ...(value.limit === undefined ? {} : { limit: value.limit }),
-    ...(value.expiresAt === undefined ? {} : { expiresAt: value.expiresAt }),
-    ...(value.currency === undefined ? {} : { currency: value.currency }),
-  });
 }
 
 export function normalizeProviderUsageFacts(
@@ -335,7 +297,6 @@ export function normalizeProviderUsageFacts(
 ): ProviderUsageFacts | undefined {
   if (
     !isRecord(value) ||
-    Object.keys(value).some((key) => key !== "windows" && key !== "budgets") ||
     !Array.isArray(value.windows) ||
     !Array.isArray(value.budgets) ||
     value.windows.length > PROVIDER_USAGE_MAX_WINDOWS ||
@@ -345,7 +306,10 @@ export function normalizeProviderUsageFacts(
   }
   const windows = value.windows.map(normalizeWindow);
   const budgets = value.budgets.map(normalizeBudget);
-  if (windows.some((entry) => entry === undefined) || budgets.some((entry) => entry === undefined)) {
+  if (
+    windows.some((entry) => entry === undefined) ||
+    budgets.some((entry) => entry === undefined)
+  ) {
     return undefined;
   }
   return Object.freeze({

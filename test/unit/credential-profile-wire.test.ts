@@ -8,181 +8,242 @@ import {
 } from "@token/application-control-plane/control-plane";
 
 const state = {
-  providers: [{
-    providerId: "fixture-provider",
-    implementationAvailable: true,
-    revision: "revision-a",
-    selectionGeneration: "selection-a",
-    activeCredentialId: "credential-a",
-    switchPolicy: { apiKeyOn429: false, oauthOn429: false },
-    profiles: [{
-      credentialId: "credential-a",
-      authType: "api_key",
-      acquisitionKind: "api_key",
-      authMethodLabel: "Fixture API key",
-      displayName: "Production",
-      identityHint: "•••• 1234",
-      enabled: true,
-      health: "ready",
-      priority: 0,
-      createdAt: 1,
-      updatedAt: 2,
-      lastUsedAt: 3,
-      lastSucceededAt: 3,
-    }],
-  }],
+  providers: [
+    {
+      providerId: "fixture-provider",
+      implementationAvailable: true,
+      revision: "revision-a",
+      selectionGeneration: "selection-a",
+      activeCredentialId: "credential-a",
+      switchPolicy: { apiKeyOn429: false, oauthOn429: false },
+      profiles: [
+        {
+          credentialId: "credential-a",
+          authType: "api_key",
+          acquisitionKind: "api_key",
+          authMethodLabel: "Fixture API key",
+          displayName: "Production",
+          enabled: true,
+          createdAt: 1,
+          updatedAt: 2,
+          lastUsedAt: 3,
+          lastSucceededAt: 3,
+        },
+      ],
+    },
+  ],
 } as const;
 
 describe("Credential Profile public wire", () => {
-  it("strictly decodes only the replacement management and auth commands", () => {
-    expect(decodeCredentialProfilesCommand({
+  it("strictly decodes current management and auth commands only", () => {
+    expect(
+      decodeCredentialProfilesCommand({
+        command: "update_metadata",
+        providerId: "fixture-provider",
+        credentialId: "credential-a",
+        displayName: "Release",
+        note: "Primary",
+        expectedRevision: "revision-a",
+      }),
+    ).toEqual({
       command: "update_metadata",
       providerId: "fixture-provider",
       credentialId: "credential-a",
       displayName: "Release",
       note: "Primary",
       expectedRevision: "revision-a",
-    })).toEqual({
-      command: "update_metadata",
-      providerId: "fixture-provider",
-      credentialId: "credential-a",
-      displayName: "Release",
-      note: "Primary",
-      expectedRevision: "revision-a",
     });
-    expect(decodeCredentialProfilesCommand({
+
+    expect(
+      decodeCredentialProfilesCommand({
+        command: "reorder_profiles",
+        providerId: "fixture-provider",
+        credentialIds: ["credential-b", "credential-a"],
+        expectedRevision: "revision-a",
+      }),
+    ).toEqual({
       command: "reorder_profiles",
       providerId: "fixture-provider",
       credentialIds: ["credential-b", "credential-a"],
       expectedRevision: "revision-a",
-    })).toEqual({
-      command: "reorder_profiles",
-      providerId: "fixture-provider",
-      credentialIds: ["credential-b", "credential-a"],
-      expectedRevision: "revision-a",
     });
-    expect(decodeProviderProfileAuthCommand({
+
+    expect(
+      decodeCredentialProfilesCommand({
+        command: "cancel_management",
+        operationId: "operation-a",
+      }),
+    ).toEqual({
+      command: "cancel_management",
+      operationId: "operation-a",
+    });
+
+    expect(
+      decodeProviderProfileAuthCommand({
+        command: "login",
+        providerId: "fixture-provider",
+        acquisitionKind: "local_oauth",
+        displayName: "Production",
+      }),
+    ).toEqual({
       command: "login",
       providerId: "fixture-provider",
       acquisitionKind: "local_oauth",
       displayName: "Production",
-      useNow: true,
-      expectedRevision: "absent",
-    })).toEqual({
-      command: "login",
-      providerId: "fixture-provider",
-      acquisitionKind: "local_oauth",
-      displayName: "Production",
-      useNow: true,
-      expectedRevision: "absent",
     });
-    expect(decodeProviderProfileAuthCommand({
-      command: "reconnect",
-      providerId: "fixture-provider",
-      credentialId: "credential-a",
-      useNow: false,
-      expectedRevision: "revision-a",
-    })).toBeDefined();
 
     for (const obsolete of [
-      { command: "logout", providerId: "fixture-provider", expectedRevision: 1 },
-      { command: "import_preview", expectedRevision: 1, content: "{}" },
-      { command: "login", providerId: "fixture-provider", value: "raw-secret" },
+      {
+        command: "reconnect",
+        providerId: "fixture-provider",
+        credentialId: "credential-a",
+        expectedRevision: "revision-a",
+      },
+      {
+        command: "recheck",
+        providerId: "fixture-provider",
+        credentialId: "credential-a",
+        expectedRevision: "revision-a",
+      },
+      {
+        command: "set_priority",
+        providerId: "fixture-provider",
+        credentialId: "credential-a",
+        priority: 1,
+        expectedRevision: "revision-a",
+      },
+      {
+        command: "login",
+        providerId: "fixture-provider",
+        acquisitionKind: "api_key",
+        displayName: "Production",
+        useNow: true,
+      },
+      {
+        command: "login",
+        providerId: "fixture-provider",
+        acquisitionKind: "api_key",
+        displayName: "Production",
+        expectedRevision: "revision-a",
+      },
     ]) {
+      expect(decodeProviderProfileAuthCommand(obsolete)).toBeUndefined();
       expect(decodeCredentialProfilesCommand(obsolete)).toBeUndefined();
     }
-    expect(decodeCredentialProfilesCommand({
-      command: "remove",
-      providerId: "fixture-provider",
-      credentialId: "credential-a",
-      expectedRevision: "revision-a",
-      value: "raw-secret",
-    })).toBeUndefined();
   });
 
-  it("rejects any result that carries credential payload or an invalid projection", () => {
-    expect(decodeCredentialProfilesCommandResult({ outcome: "ok", state })).toEqual({
+  it("accepts only the minimal public Profile projection", () => {
+    expect(
+      decodeCredentialProfilesCommandResult({ outcome: "ok", state }),
+    ).toEqual({
       outcome: "ok",
       state,
     });
-    expect(decodeProviderProfileAuthCommandResult({ outcome: "ok", state })).toEqual({
+    expect(
+      decodeProviderProfileAuthCommandResult({ outcome: "ok", state }),
+    ).toEqual({
       outcome: "ok",
       state,
     });
-    expect(decodeCredentialProfilesCommandResult({
-      outcome: "ok",
-      state: {
-        providers: [{
-          ...state.providers[0],
-          profiles: [{
-            ...state.providers[0].profiles[0],
-            credential: { type: "api_key", key: "raw-secret" },
-          }],
-        }],
-      },
-    })).toBeUndefined();
+
     for (const internal of [
+      { credential: { type: "api_key", key: "raw-secret" } },
       { strategyId: "codex_local" },
-      { reference: { path: "credentials/id/generation.auth.json", owner: "managed" } },
-      { path: "auth.json" },
+      { reference: { owner: "managed", path: "secret.auth.json" } },
+      { health: "ready" },
+      { priority: 0 },
+      { identityHint: "•••• 1234" },
     ]) {
-      expect(decodeCredentialProfilesCommandResult({
-        outcome: "ok",
-        state: {
-          providers: [{
-            ...state.providers[0],
-            profiles: [{ ...state.providers[0].profiles[0], ...internal }],
-          }],
-        },
-      })).toBeUndefined();
+      expect(
+        decodeCredentialProfilesCommandResult({
+          outcome: "ok",
+          state: {
+            providers: [
+              {
+                ...state.providers[0],
+                profiles: [
+                  {
+                    ...state.providers[0].profiles[0],
+                    ...internal,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ).toBeUndefined();
     }
-    expect(decodeProviderProfileAuthCommandResult({
-      outcome: "ok",
-      state,
-      accessToken: "raw-secret",
-    })).toBeUndefined();
   });
 
-  it("accepts only the bounded configured/unknown ambient status projection", () => {
+  it("accepts bounded configured/unknown ambient status only", () => {
     const ambientState = (status: string, displayName?: unknown) => ({
-      providers: [{
-        providerId: "fixture-provider",
-        implementationAvailable: true,
-        revision: "absent",
-        ambient: {
-          kind: "external",
-          status,
-          message: "Resolved when used",
-          ...(displayName === undefined ? {} : { displayName }),
+      providers: [
+        {
+          providerId: "fixture-provider",
+          implementationAvailable: true,
+          revision: "absent",
+          ambient: {
+            kind: "external",
+            status,
+            message: "Resolved when used",
+            ...(displayName === undefined ? {} : { displayName }),
+          },
+          profiles: [],
         },
-        profiles: [],
-      }],
+      ],
     });
-    expect(decodeCredentialProfilesCommandResult({
-      outcome: "ok",
-      state: ambientState("configured"),
-    })).toBeDefined();
-    expect(decodeCredentialProfilesCommandResult({
-      outcome: "ok",
-      state: ambientState("unknown"),
-    })).toBeDefined();
-    expect(decodeCredentialProfilesCommandResult({
-      outcome: "ok",
-      state: ambientState("verified"),
-    })).toBeUndefined();
-    // A verified external Codex login carries the Backend-projected label the
-    // Renderer displays instead of the generic not-connected copy.
-    expect(decodeCredentialProfilesCommandResult({
-      outcome: "ok",
-      state: ambientState("connected", "Codex login"),
-    })).toBeDefined();
-    expect(decodeCredentialProfilesCommandResult({
-      outcome: "ok",
-      state: ambientState("connected", "x".repeat(65)),
-    })).toBeUndefined();
-    expect(decodeCredentialProfilesCommandResult({
-      outcome: "ok",
-      state: ambientState("connected", 7),
-    })).toBeUndefined();
+
+    expect(
+      decodeCredentialProfilesCommandResult({
+        outcome: "ok",
+        state: ambientState("configured", "Codex login"),
+      }),
+    ).toBeDefined();
+    expect(
+      decodeCredentialProfilesCommandResult({
+        outcome: "ok",
+        state: ambientState("unknown"),
+      }),
+    ).toBeDefined();
+    expect(
+      decodeCredentialProfilesCommandResult({
+        outcome: "ok",
+        state: ambientState("connected"),
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeCredentialProfilesCommandResult({
+        outcome: "ok",
+        state: ambientState("configured", "x".repeat(65)),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts bounded management busy metadata without exposing guard state globally", () => {
+    expect(
+      decodeCredentialProfilesCommandResult({
+        outcome: "management_operation_in_progress",
+        state,
+        activeOperation: {
+          operationId: "operation-a",
+          kind: "acquire_oauth",
+          providerId: "fixture-provider",
+          startedAt: 1,
+        },
+        error: "Another credential management operation is still in progress",
+      }),
+    ).toBeDefined();
+
+    expect(
+      decodeCredentialProfilesCommandResult({
+        outcome: "management_operation_in_progress",
+        state,
+        activeOperation: {
+          operationId: "operation-a",
+          kind: "x".repeat(65),
+          startedAt: 1,
+        },
+      }),
+    ).toBeUndefined();
   });
 });

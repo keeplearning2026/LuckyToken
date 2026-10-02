@@ -6,8 +6,8 @@ import {
 } from "@token/application-control-plane/control-plane";
 
 describe("Agent integrations Control Plane contract", () => {
-  it("ships Claude integration on Control Plane v7", () => {
-    expect(controlPlaneVersion).toBe(8);
+  it("ships Claude integration on Control Plane v9", () => {
+    expect(controlPlaneVersion).toBe(9);
   });
 
   it("decodes Claude as a first-class Agent integration id", () => {

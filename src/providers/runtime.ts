@@ -41,8 +41,8 @@ import type {
 } from "../credentials/profile-contract.js";
 import { createProviderCredentialProfiles } from "../credentials/profile-authority.js";
 import {
-  createCodexLocalAcquisitionStrategy,
-  type LocalAcquisitionStrategy,
+  createCodexLocalAcquisition,
+  type LocalOAuthAcquisition,
 } from "../credentials/acquisition.js";
 import { codexExternalAuthPath } from "../credentials/codex-auth.js";
 import {
@@ -89,10 +89,9 @@ export type ProviderSource =
  * Control Plane option list without its internal read implementation. */
 export interface ProviderRuntimeLocalAcquisitionMethod {
   readonly providerId: string;
-  readonly strategyId: string;
   readonly label: () => string | undefined;
-  readonly icon: LocalAcquisitionStrategy["icon"];
-  readonly authType: LocalAcquisitionStrategy["authType"];
+  readonly icon: LocalOAuthAcquisition["icon"];
+  readonly acquisition: LocalOAuthAcquisition;
 }
 
 /** One Codex native-model overlay generation (plan sections 4.6–4.8). */
@@ -114,7 +113,6 @@ export interface ProviderRuntime {
   readonly credentialManagement: CredentialProfileManagement;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly automaticModelOverlay: AutomaticModelOverlayHandle;
-  scrubCredentialText(value: string): string;
   readonly catalog: CatalogRuntimeHandle;
   catalogOperationsFor(capture: ProviderAuthBindingCapture): CatalogProviderOperations;
   providerSource(providerId: string): ProviderSource;
@@ -146,9 +144,9 @@ export interface CreateProviderRuntimeOptions {
   /** Shared Codex native acquisition. When present, one snapshot generation
    * feeds the automatic `openai-codex` model overlay. */
   readonly nativeCatalogSource?: CodexNativeCatalogSource;
-  /** Explicit closed set of local acquisition strategies. Defaults to the
-   * one Codex local strategy bound to `codexHome`. */
-  readonly localAcquisitionStrategies?: readonly LocalAcquisitionStrategy[];
+  /** Explicit closed set of local OAuth acquisition capabilities. Defaults
+   * to the one Codex local acquisition bound to `codexHome`. */
+  readonly localAcquisitions?: readonly LocalOAuthAcquisition[];
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -228,9 +226,9 @@ export async function createProviderRuntime(
   const createUuid = options.createUuid ?? randomUUID;
   const codexHome = options.codexHome ?? resolveCodexHome();
   let currentProviders: () => readonly Provider[] = () => Object.freeze([]);
-  const acquisitionStrategies: readonly LocalAcquisitionStrategy[] = Object.freeze([
-    ...(options.localAcquisitionStrategies ?? [
-      createCodexLocalAcquisitionStrategy({
+  const localAcquisitions: readonly LocalOAuthAcquisition[] = Object.freeze([
+    ...(options.localAcquisitions ?? [
+      createCodexLocalAcquisition({
         authPath: codexExternalAuthPath(codexHome),
         label: () =>
           currentProviders().find(
@@ -253,7 +251,6 @@ export async function createProviderRuntime(
     providers: () => currentProviders(),
     createId: createUuid,
     now,
-    acquisitionStrategies,
     ambientStatus: (providerId) =>
       modelsJson?.providers[providerId]?.apiKey === undefined
         ? "unknown"
@@ -529,20 +526,18 @@ export async function createProviderRuntime(
   return Object.freeze({
     models: served,
     localAcquisitionMethods: Object.freeze(
-      acquisitionStrategies.map((strategy) =>
+      localAcquisitions.map((acquisition) =>
         Object.freeze({
-          providerId: strategy.providerId,
-          strategyId: strategy.strategyId,
-          label: strategy.label,
-          icon: strategy.icon,
-          authType: strategy.authType,
+          providerId: acquisition.providerId,
+          label: acquisition.label,
+          icon: acquisition.icon,
+          acquisition,
         }),
       ),
     ),
     credentialManagement: profileState.management,
     providerAuthBindings: profileState.binding,
     automaticModelOverlay: automaticModelOverlayHandle,
-    scrubCredentialText: (value: string) => profileState.scrub(value),
     catalog: Object.freeze({
       models: served,
       capture: (preserveProviderIds?: ReadonlySet<string>) =>

@@ -164,7 +164,6 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "diagnostics.fullJourneyCapture.enabled",
       "diagnostics.failedJourneyCapture.enabled",
       "integrations.codex.searchModel",
-      "integrations.codex.localLogin",
       "integrations.claude.model",
       "integrations.claude.opusModel",
       "integrations.claude.sonnetModel",

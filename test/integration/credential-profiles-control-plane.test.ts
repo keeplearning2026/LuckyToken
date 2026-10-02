@@ -1,366 +1,254 @@
 import { createModels } from "@earendil-works/pi-ai";
-import {
-  connectControlPlane,
-  createNodePipeTransport,
-  nodePipeFallbackAccess,
-  startControlPlane,
-  type AuthInteractionChannel,
-} from "@token/application-control-plane/control-plane";
-import { afterEach, describe, expect, it } from "vitest";
+import type { AuthInteractionChannel } from "@token/application-control-plane/control-plane";
+import { describe, expect, it } from "vitest";
 
+import { createCredentialManagementGuard } from "../../src/credentials/management.js";
+import { createProviderCredentialProfiles } from "../../src/credentials/profile-authority.js";
 import { createCredentialProfilesControlPlaneHandlers } from "../../src/credentials/profile-control-plane.js";
-import {
-  createProviderCredentialProfiles,
-  NO_PROVIDER_RECORD_REVISION,
-} from "../../src/credentials/profile-authority.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { createFixtureProvider } from "../support/credential-fixture.js";
 
 function interaction(answer: string): AuthInteractionChannel {
-  const controller = new AbortController();
   return Object.freeze({
-    signal: controller.signal,
-    notify: async () => {},
+    signal: new AbortController().signal,
+    notify: async () => undefined,
     prompt: async () => answer,
   });
 }
 
+function blockingInteraction(): AuthInteractionChannel {
+  const controller = new AbortController();
+  return Object.freeze({
+    signal: controller.signal,
+    notify: async () => undefined,
+    prompt: () =>
+      new Promise<string>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          "abort",
+          () => reject(controller.signal.reason),
+          { once: true },
+        );
+      }),
+  });
+}
+
+function fixture() {
+  let nextId = 0;
+  let nextRevision = 0;
+  const provider = createFixtureProvider();
+  const profiles = createProviderCredentialProfiles({
+    recordStore: createInMemoryProviderCredentialRecordStore({
+      createRevision: () => "revision-" + String(++nextRevision),
+    }),
+    providers: () => [provider],
+    createId: () => "id-" + String(++nextId),
+    now: () => 1_000,
+  });
+  const models = createModels({ credentials: profiles.credentialStore });
+  models.setProvider(provider);
+  const postLoginCaptures: unknown[] = [];
+  const handlers = createCredentialProfilesControlPlaneHandlers({
+    models,
+    management: profiles.management,
+    binding: profiles.binding,
+    managementGuard: createCredentialManagementGuard({
+      createId: () => "operation-" + String(++nextId),
+      now: () => 1_000,
+    }),
+    providerSource: () => "pi_builtin",
+    postLoginProvider: (_providerId, capture) => {
+      postLoginCaptures.push(capture.facts);
+    },
+  });
+  return { provider, profiles, handlers, postLoginCaptures };
+}
+
 describe("Credential Profiles Control Plane", () => {
-  const hosts: Array<Awaited<ReturnType<typeof startControlPlane>>> = [];
+  it("creates new Profiles without acquisition-time activation", async () => {
+    const value = fixture();
 
-  afterEach(async () => {
-    await Promise.all(hosts.splice(0).map((host) => host.close()));
-  });
-
-  it("adds two write-only Provider credentials and returns authoritative sanitized state", async () => {
-    const generatedIds = [
-      "credential-a",
-      "credential-generation-a",
-      "selection-generation-a",
-      "credential-b",
-      "credential-generation-b",
-    ];
-    const revisions = ["revision-a", "revision-b", "revision-metadata"];
-    const provider = createFixtureProvider();
-    const profiles = createProviderCredentialProfiles({
-      recordStore: createInMemoryProviderCredentialRecordStore({
-        createRevision: () => revisions.shift() ?? "unexpected-revision",
-      }),
-      providers: () => [provider],
-      createId: () => generatedIds.shift() ?? "unexpected-id",
-      now: () => 1_786_400_000_000,
-    });
-    const models = createModels({ credentials: profiles.credentialStore });
-    models.setProvider(provider);
-    const postLoginCaptures: unknown[] = [];
-    const handlers = createCredentialProfilesControlPlaneHandlers({
-      models,
-      management: profiles.management,
-      binding: profiles.binding,
-      providerSource: () => "pi_builtin",
-      postLoginProvider: (_providerId, capture) => {
-        postLoginCaptures.push(capture.facts);
-      },
-    });
-
-    const initial = await handlers.auth({ command: "query" }, interaction("unused"));
-    expect(initial).toMatchObject({
-      outcome: "ok",
-      state: {
-        providers: [{
-          providerId: provider.id,
-          revision: NO_PROVIDER_RECORD_REVISION,
-          ambient: { kind: "external", status: "unknown" },
-          profiles: [],
-        }],
-      },
-      options: {
-        providers: [{
-          providerId: provider.id,
-          name: "Fixture Provider",
-          source: "pi_builtin",
-          acquisitionOptions: [{
-            kind: "api_key",
-            label: "Fixture API key",
-            icon: "key",
-            authType: "api_key",
-            interactive: true,
-            state: "available",
-          }],
-        }],
-      },
-    });
-
-    const first = await handlers.auth({
-      command: "login",
-      providerId: provider.id,
-      acquisitionKind: "api_key",
-      displayName: "Production",
-      note: "Primary release credential",
-      useNow: false,
-      expectedRevision: NO_PROVIDER_RECORD_REVISION,
-    }, interaction("control-plane-secret-alpha"));
-    expect(first).toMatchObject({
-      outcome: "ok",
-      state: {
-        providers: [{
-          revision: "revision-a",
-          activeCredentialId: "credential-a",
-          profiles: [{
-            credentialId: "credential-a",
-            authMethodLabel: "Fixture API key",
-            displayName: "Production",
-            note: "Primary release credential",
-            identityHint: "•••• lpha",
-          }],
-        }],
-      },
-    });
-    expect(postLoginCaptures).toEqual([
-      expect.objectContaining({
-        kind: "managed", carrierOwner: "managed",
-        credentialId: "credential-a",
-        credentialGeneration: "credential-generation-a",
-        selectionGeneration: "selection-generation-a",
-      }),
-    ]);
-
-    const second = await handlers.auth({
-      command: "login",
-      providerId: provider.id,
-      acquisitionKind: "api_key",
-      displayName: "Backup",
-      useNow: false,
-      expectedRevision: "revision-a",
-    }, interaction("control-plane-secret-beta"));
-    expect(second).toMatchObject({
-      outcome: "ok",
-      state: {
-        providers: [{
-          revision: "revision-b",
-          activeCredentialId: "credential-a",
-          profiles: [
-            expect.objectContaining({ credentialId: "credential-a" }),
-            expect.objectContaining({ credentialId: "credential-b", displayName: "Backup" }),
-          ],
-        }],
-      },
-    });
-    // An inactive addition must not replace the active account's Catalog.
-    expect(postLoginCaptures).toHaveLength(1);
-
-    const renamed = await handlers.credentials({
-      command: "update_metadata",
-      providerId: provider.id,
-      credentialId: "credential-b",
-      displayName: "Disaster recovery",
-      note: "Use only during incidents",
-      expectedRevision: "revision-b",
-    });
-    expect(renamed).toMatchObject({
-      outcome: "ok",
-      state: {
-        providers: [{
-          revision: "revision-metadata",
-          profiles: [
-            expect.objectContaining({ displayName: "Production" }),
-            expect.objectContaining({
-              displayName: "Disaster recovery",
-              note: "Use only during incidents",
-            }),
-          ],
-        }],
-      },
-    });
-    const wire = JSON.stringify({ initial, first, second, renamed });
-    expect(wire).not.toContain("control-plane-secret");
-  });
-
-  it("round-trips profile management and interactive login over the public pipe", async () => {
-    const generatedIds = [
-      "credential-a",
-      "credential-generation-a",
-      "selection-generation-a",
-    ];
-    const provider = createFixtureProvider();
-    const profiles = createProviderCredentialProfiles({
-      recordStore: createInMemoryProviderCredentialRecordStore({
-        createRevision: () => "revision-a",
-      }),
-      providers: () => [provider],
-      createId: () => generatedIds.shift() ?? "unexpected-id",
-      now: () => 1_786_400_000_000,
-    });
-    const models = createModels({ credentials: profiles.credentialStore });
-    models.setProvider(provider);
-    const handlers = createCredentialProfilesControlPlaneHandlers({
-      models,
-      management: profiles.management,
-      binding: profiles.binding,
-      providerSource: () => "pi_builtin",
-    });
-    const endpoint = {
-      address: `\\\\.\\pipe\\Token-profile-${process.pid}-${Date.now()}`,
-      capability: "profile-test-capability-0123456789",
-    } as const;
-    const host = await startControlPlane({
-      endpoint,
-      application: { id: "Token", version: "test" },
-      initialStatus: { modelDataPlane: "stopped", provider: "unconfigured" },
-      credentialProfilesCommandHandler: handlers.credentials,
-      providerProfileAuthCommandHandler: handlers.auth,
-      pipeServerFactory: createNodePipeTransport(),
-      access: nodePipeFallbackAccess,
-    });
-    hosts.push(host);
-    let nextRequest = 0;
-    const client = await connectControlPlane(host.endpoint, {
-      createRequestId: () => `profile-request-${++nextRequest}`,
-      pipeConnector: createNodePipeTransport(),
-    });
-    await client.hello(8);
-
-    const before = await client.executeCredentialProfilesCommand({
-      command: "query",
-    });
-    expect(before.state.providers[0]).toMatchObject({
-      providerId: provider.id,
-      profiles: [],
-    });
-
-    const events: string[] = [];
-    const login = await client.executeProviderProfileAuthCommand({
-      command: "login",
-      providerId: provider.id,
-      acquisitionKind: "api_key",
-      displayName: "Production",
-      useNow: true,
-      expectedRevision: NO_PROVIDER_RECORD_REVISION,
-    }, (event) => {
-      events.push(event.type);
-      if (event.type === "prompt") {
-        void client.respondAuthInteraction({
-          type: "prompt_response",
-          promptId: event.promptId,
-          value: "pipe-secret-alpha",
-        });
-      }
-    });
-    expect(login).toMatchObject({
-      outcome: "ok",
-      state: {
-        providers: [{
-          activeCredentialId: "credential-a",
-          profiles: [{ displayName: "Production", identityHint: "•••• lpha" }],
-        }],
-      },
-    });
-    expect(events).toEqual(["prompt"]);
-    expect(JSON.stringify(login)).not.toContain("pipe-secret-alpha");
-
-    await client.close();
-  });
-
-  it("rechecks only the exact active Profile without login or selection mutation", async () => {
-    const generatedIds = [
-      "credential-a",
-      "credential-generation-a",
-      "selection-generation-a",
-      "credential-b",
-      "credential-generation-b",
-    ];
-    const revisions = ["revision-a", "revision-b"];
-    const provider = createFixtureProvider();
-    const profiles = createProviderCredentialProfiles({
-      recordStore: createInMemoryProviderCredentialRecordStore({
-        createRevision: () => revisions.shift() ?? "unexpected-revision",
-      }),
-      providers: () => [provider],
-      createId: () => generatedIds.shift() ?? "unexpected-id",
-      now: () => 1_786_400_000_000,
-    });
-    const models = createModels({ credentials: profiles.credentialStore });
-    models.setProvider(provider);
-    let loginPrompts = 0;
-    for (const [displayName, secret, expectedRevision] of [
-      ["Primary", "profile-secret-primary", NO_PROVIDER_RECORD_REVISION],
-      ["Backup", "profile-secret-backup", "revision-a"],
-    ] as const) {
-      const binding = await profiles.binding.createLoginBinding({
-        providerId: provider.id,
+    const first = await value.handlers.auth(
+      {
+        command: "login",
+        providerId: value.provider.id,
         acquisitionKind: "api_key",
-        displayName,
-        useNow: false,
-        expectedRevision,
-      });
-      await profiles.binding.runBound(binding, () =>
-        models.login(provider.id, "api_key", {
-          prompt: async () => {
-            loginPrompts += 1;
-            return secret;
-          },
-          notify: () => {},
-        }),
-      );
-    }
-    const rechecked: string[] = [];
-    let recheckOutcome: "succeeded" | "failed" = "failed";
-    const handlers = createCredentialProfilesControlPlaneHandlers({
-      models,
-      management: profiles.management,
-      binding: profiles.binding,
-      recheckProvider: async (providerId, capture) => {
-        rechecked.push(providerId);
-        expect(capture.facts).toMatchObject({
-          kind: "managed", carrierOwner: "managed",
-          credentialId: "credential-a",
-          credentialGeneration: "credential-generation-a",
-          selectionGeneration: "selection-generation-a",
-        });
-        await profiles.binding.runBound(capture, () => models.checkAuth(providerId));
-        return recheckOutcome;
+        displayName: "Primary",
       },
+      interaction("secret-primary"),
+    );
+    expect(first.outcome).toBe("ok");
+    const firstState = first.state.providers[0]!;
+    expect(firstState.profiles).toHaveLength(1);
+    expect(firstState.activeCredentialId).toBe(
+      firstState.profiles[0]?.credentialId,
+    );
+    expect(JSON.stringify(first)).not.toContain("secret-primary");
+
+    const second = await value.handlers.auth(
+      {
+        command: "login",
+        providerId: value.provider.id,
+        acquisitionKind: "api_key",
+        displayName: "Backup",
+      },
+      interaction("secret-backup"),
+    );
+    expect(second.outcome).toBe("ok");
+    const secondState = second.state.providers[0]!;
+    expect(secondState.profiles.map((profile) => profile.displayName)).toEqual([
+      "Primary",
+      "Backup",
+    ]);
+    expect(secondState.activeCredentialId).toBe(
+      secondState.profiles[0]?.credentialId,
+    );
+
+    // Only the first acquisition becomes active immediately, so only it
+    // schedules post-login catalog work.
+    expect(value.postLoginCaptures).toHaveLength(1);
+  });
+
+  it("keeps ordinary Profile management revision-checked", async () => {
+    const value = fixture();
+    const login = await value.handlers.auth(
+      {
+        command: "login",
+        providerId: value.provider.id,
+        acquisitionKind: "api_key",
+        displayName: "Primary",
+      },
+      interaction("secret-primary"),
+    );
+    const provider = login.state.providers[0]!;
+    const credentialId = provider.profiles[0]!.credentialId;
+
+    const renamed = await value.handlers.credentials({
+      command: "update_metadata",
+      providerId: value.provider.id,
+      credentialId,
+      displayName: "Renamed",
+      expectedRevision: provider.revision!,
+    });
+    expect(renamed.outcome).toBe("ok");
+    expect(renamed.state.providers[0]?.profiles[0]?.displayName).toBe(
+      "Renamed",
+    );
+
+    const stale = await value.handlers.credentials({
+      command: "set_enabled",
+      providerId: value.provider.id,
+      credentialId,
+      enabled: false,
+      expectedRevision: provider.revision!,
+    });
+    expect(stale.outcome).toBe("conflict");
+  });
+
+  it("activates a new first Profile after the last Profile was removed", async () => {
+    const value = fixture();
+    const first = await value.handlers.auth(
+      {
+        command: "login",
+        providerId: value.provider.id,
+        acquisitionKind: "api_key",
+        displayName: "Primary",
+      },
+      interaction("secret-primary"),
+    );
+    const initial = first.state.providers[0]!;
+    const credentialId = initial.profiles[0]!.credentialId;
+    const removed = await value.handlers.credentials({
+      command: "remove",
+      providerId: value.provider.id,
+      credentialId,
+      expectedRevision: initial.revision!,
+    });
+    expect(removed.outcome).toBe("ok");
+    expect(removed.state.providers[0]?.profiles).toEqual([]);
+    expect(removed.state.providers[0]?.activeCredentialId).toBeUndefined();
+
+    const second = await value.handlers.auth(
+      {
+        command: "login",
+        providerId: value.provider.id,
+        acquisitionKind: "api_key",
+        displayName: "Secondary",
+      },
+      interaction("secret-secondary"),
+    );
+    expect(second.outcome).toBe("ok");
+    const state = second.state.providers[0]!;
+    expect(state.profiles.map((profile) => profile.displayName)).toEqual([
+      "Secondary",
+    ]);
+    expect(state.activeCredentialId).toBe(state.profiles[0]?.credentialId);
+    // Both acquisitions were active, so both scheduled post-login work.
+    expect(value.postLoginCaptures).toHaveLength(2);
+  });
+
+  it("exposes local OAuth availability as one acquisition kind", async () => {
+    const value = fixture();
+    const query = await value.handlers.auth(
+      { command: "query" },
+      interaction("unused"),
+    );
+
+    expect(query.options?.providers[0]).toMatchObject({
+      providerId: value.provider.id,
+      source: "pi_builtin",
+      acquisitionOptions: [
+        {
+          kind: "api_key",
+          authType: "api_key",
+          interactive: true,
+          state: "available",
+        },
+      ],
+    });
+  });
+
+  it("fails fast on overlapping management and cancels the active operation", async () => {
+    const value = fixture();
+    const blocked = blockingInteraction();
+    const login = value.handlers.auth(
+      {
+        command: "login",
+        providerId: value.provider.id,
+        acquisitionKind: "api_key",
+        displayName: "Primary",
+      },
+      blocked,
+    );
+    await Promise.resolve();
+
+    const busy = await value.handlers.credentials({
+      command: "remove",
+      providerId: value.provider.id,
+      credentialId: "missing",
+      expectedRevision: "absent",
+    });
+    expect(busy.outcome).toBe("management_operation_in_progress");
+    expect(busy.activeOperation).toMatchObject({
+      kind: "acquire_api_key",
+      providerId: value.provider.id,
     });
 
-    const inactive = await handlers.credentials({
-      command: "recheck",
-      providerId: provider.id,
-      credentialId: "credential-b",
-      expectedRevision: "revision-b",
+    const cancelled = await value.handlers.credentials({
+      command: "cancel_management",
+      operationId: busy.activeOperation!.operationId,
     });
-    expect(inactive.outcome).toBe("invalid");
-    expect(rechecked).toEqual([]);
+    expect(cancelled.outcome).toBe("ok");
 
-    const failed = await handlers.credentials({
-      command: "recheck",
-      providerId: provider.id,
-      credentialId: "credential-a",
-      expectedRevision: "revision-b",
+    // Pi observes the guarded signal, so explicit cancellation settles the
+    // login without a separate interaction abort.
+    await expect(login).resolves.toMatchObject({ outcome: "cancelled" });
+
+    const after = await value.handlers.credentials({
+      command: "remove",
+      providerId: value.provider.id,
+      credentialId: "missing",
+      expectedRevision: "absent",
     });
-    expect(failed).toMatchObject({
-      outcome: "unavailable",
-      error: "Provider credential recheck did not complete",
-    });
-    recheckOutcome = "succeeded";
-    const active = await handlers.credentials({
-      command: "recheck",
-      providerId: provider.id,
-      credentialId: "credential-a",
-      expectedRevision: "revision-b",
-    });
-    expect(active).toMatchObject({
-      outcome: "ok",
-      state: {
-        providers: [
-          {
-            revision: "revision-b",
-            selectionGeneration: "selection-generation-a",
-            activeCredentialId: "credential-a",
-          },
-        ],
-      },
-    });
-    expect(rechecked).toEqual([provider.id, provider.id]);
-    expect(loginPrompts).toBe(2);
+    expect(after.outcome).toBe("unknown_profile");
   });
 });

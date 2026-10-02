@@ -136,13 +136,13 @@ function anthropicModel(): Model<string> {
 function managedCapture(): ManagedProviderAuthBindingCapture {
   return Object.freeze({
     facts: Object.freeze({
-      kind: "managed" as const, carrierOwner: "managed" as const,
+      kind: "profile" as const, referenceOwner: "managed" as const,
       providerId: "anthropic",
       credentialId: PROFILE_ID,
+      acquisitionKind: "api_key" as const,
       authType: "api_key" as const,
       authMethodLabel: "API key",
       displayName: "Anthropic Native Usage",
-      credentialGeneration: "credential-generation:anthropic-usage",
       selectionGeneration: "selection-generation:anthropic-usage",
     }),
   });
@@ -240,7 +240,7 @@ describe("Anthropic Provider Native terminal usage analytics producer", () => {
             requestCapture: ProviderAuthBindingCapture,
             operation: () => Promise<T>,
           ): Promise<T> => {
-            if (requestCapture.facts.kind !== "managed") {
+            if (requestCapture.facts.kind !== "profile") {
               throw new Error("Expected a managed Anthropic Profile");
             }
             boundProfiles.push(requestCapture.facts.credentialId);

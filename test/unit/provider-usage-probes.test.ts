@@ -929,7 +929,7 @@ describe("Provider Usage probes", () => {
     });
   });
 
-  it("certifies managed eligibility and denies ambient bindings for every registered probe", () => {
+  it("certifies supported managed Profile eligibility for every registered probe", () => {
     const transport = createFetch(() => {
       throw new Error("network must not be reached");
     });
@@ -944,14 +944,6 @@ describe("Provider Usage probes", () => {
         ),
         fixture.name,
       ).toEqual({ state: "eligible" });
-      expect(
-        fixture.probe.eligibility({
-          providerId: fixture.probe.providerId,
-          effectiveBaseUrl: fixture.baseUrl,
-          binding: { kind: "ambient" },
-        }),
-        fixture.name,
-      ).toEqual({ state: "unsupported_binding" });
     }
     expect(transport.calls).toEqual([]);
   });

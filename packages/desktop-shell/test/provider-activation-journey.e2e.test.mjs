@@ -368,7 +368,6 @@ test(
         name: "CommandCode Private sign in",
       });
       await commandCodeLogin.getByLabel("Profile name").fill("Packaged primary");
-      await commandCodeLogin.getByLabel("Use this Profile for new requests").check();
       const secretInput = commandCodeLogin.locator('input[type="password"]');
       await secretInput.waitFor();
       await secretInput.fill("sk-activation-commandcode-key");
@@ -515,7 +514,6 @@ test(
         name: "Anthropic sign in",
       });
       await anthropicLogin.getByLabel("Profile name").fill("Packaged Anthropic");
-      await anthropicLogin.getByLabel("Use this Profile for new requests").check();
       const anthropicSecret = anthropicLogin.locator('input[type="password"]');
       await anthropicSecret.waitFor();
       await anthropicSecret.fill(TEST_PROVIDER_KEY);

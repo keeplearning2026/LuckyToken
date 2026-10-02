@@ -693,13 +693,13 @@ describe("Provider Native Responses HTTP retry", () => {
   it("stops after three outer Profile attempts independently of inner transport retry", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2, 3, 4].map((index) => ({
       facts: {
-        kind: "managed", carrierOwner: "managed",
+        kind: "profile", referenceOwner: "managed",
         providerId: "openai",
         credentialId: `credential-${index}`,
-        authType: "api_key",
+        acquisitionKind: "api_key",
+          authType: "api_key",
         authMethodLabel: "OpenAI credentials",
         displayName: `Profile ${index}`,
-        credentialGeneration: `credential-generation-${index}`,
         selectionGeneration: `selection-generation-${index}`,
       },
     }));
@@ -741,13 +741,13 @@ describe("Provider Native Responses HTTP retry", () => {
   it("rebuilds SDK identity, timeout, and auth after a 429 Profile switch", async () => {
     const captures: ManagedProviderAuthBindingCapture[] = [1, 2].map((index) => ({
       facts: {
-        kind: "managed", carrierOwner: "managed",
+        kind: "profile", referenceOwner: "managed",
         providerId: "openai",
         credentialId: `credential-${index}`,
-        authType: "api_key",
+        acquisitionKind: "api_key",
+          authType: "api_key",
         authMethodLabel: "OpenAI credentials",
         displayName: `Profile ${index}`,
-        credentialGeneration: `credential-generation-${index}`,
         selectionGeneration: `selection-generation-${index}`,
       },
     }));

@@ -9,7 +9,7 @@
 **Related specifications:**
 
 - [Token Electron Product Architecture Specification](./TokenElectronArchitectureSpec.md)
-- [Token Provider Credential Profiles Implementation Plan](./TokenProviderCredentialProfilesImplementationPlan.md)
+- [Token Provider Credential Profiles Specification](./TokenProviderCredentialProfilesSpec.md)
 - [Repository architecture rules](../../AGENTS.md)
 
 **Implementation certification (2026-09-29):**
@@ -43,13 +43,15 @@ Destination correction (2026-09-29): The bundled Goat Provider serves Anthropic 
 
 Automatic refresh amendment (2026-09-29): The v0.5 references below to “first release,” explicit-only refresh, and no background refresh describe the historical first release. The current application adds a Backend-owned automatic refresh timer for eligible Providers, defaulting to 15 minutes. `providerUsage.refreshIntervalMinutes` is a hot-applied integer setting from 1 to 1440 minutes in General settings. `providerUsage.refreshTimeoutSeconds` is a hot-applied integer setting from 5 to 600 seconds, defaults to 45 seconds, and must remain below the automatic refresh interval in seconds. The timer starts after Backend startup, refreshes eligible Providers immediately, then repeats after each configured interval, limits each cycle to three concurrent Provider refreshes, skips unsupported and passive-only Providers, and stops on Backend shutdown. The Providers page reads Backend cache every 30 seconds while mounted, without causing an upstream quota request. Double-clicking a refreshable card's usage area (or pressing Enter or Space while it is focused) requests a manual per-Provider refresh. Goat's existing card metrics and labels are unchanged. Empty or malformed Goat, Private, and OpenCode Go quota payloads are unavailable/schema rather than an authoritative empty observation, retaining valid same-binding last-good data. Provider Usage Authority owns the lifecycle of shared in-flight refreshes; a Control Plane waiter signal only releases that waiter and never becomes the shared refresh's cancellation owner. Application shutdown closes Provider Usage before waiting for automatic refresh and the Control Plane.
 
+Profile ownership correction (2026-10-02): the Credential Profiles target architecture supersedes the Provider-level usage identity described in older sections below. Usage acquisition/probing/cache mechanics remain owned by the Provider Usage module, but each observation semantically belongs to one exact Token Profile identified by `providerId + credentialId`. The Provider is the container of Profiles; there is no detached Provider-level usage value. Usage is runtime data and is not persisted in the credential Profile record. Ambient authentication has no Profile identity and therefore has no Profile Usage projection. Cache identity is Profile-scoped and may additionally include destination and an ephemeral external-account fingerprint to prevent stale/cross-account attribution. Profile deletion prunes its usage cache entry.
+
 v0.6 validation: focused root tests 73/73, Desktop tests 129/129, certification tests 74/74, root/Desktop typecheck, targeted ESLint, and Windows `npm run build` succeeded with version 1.3.2. The full release Vitest run had two CLI process startup timeouts under parallel load; the settings contract failure it also exposed was corrected and its focused test passed. Full repository lint remains blocked by three pre-existing unused-variable errors in `responses-native-provider-pi-parity.test.ts`.
 
 ---
 
 # 1. Conclusion
 
-Implement Provider quota, credit, and balance display as a new independent **Provider Usage** vertical module.
+Implement Provider quota, credit, and balance acquisition as a dedicated **Provider Usage** module whose observations are Profile-scoped runtime data.
 
 ```text
 Provider-specific acquisition
@@ -152,7 +154,7 @@ The first implementation does not:
 - make quota affect routing or automatic failover;
 - reject model requests because a displayed quota is exhausted;
 - merge usage into Catalog state;
-- merge usage into Credential Profile state;
+- persist usage inside the credential Profile record;
 - reuse `packages/provider-contract/src/usage.ts` terminal token usage;
 - persist quota observations across Backend restarts;
 - poll quota endpoints while the page is idle;
@@ -183,13 +185,13 @@ The plan is based on the current repository implementation:
 12. Pi's public `StreamOptions.onResponse` exposes HTTP status/headers, which is sufficient for Anthropic API-key passive rate-limit observation. The current OpenAI Responses stream processor does not expose unknown SSE events such as Meta `response.subscription_usage` to Token.
 13. The research inventory proves reliable acquisition methods for only a subset of Providers; the remaining Providers must stay unsupported.
 
-Provider Usage therefore becomes a fourth independent card input:
+Provider Usage remains a separate acquisition/cache authority, but its observations attach to Profiles. Provider-card presentation composes the selected Profile's usage:
 
 ```text
-Credential Profiles → authentication/account state
+Credential Profiles → Provider → Profile identity/selection
+Provider Usage      → usage for an exact Profile
 Catalog             → model availability
 Public Models       → publish/favorite state
-Provider Usage      → quota/credits/balance
 ```
 
 ---
@@ -525,17 +527,16 @@ This also applies to arbitrary `models.json` Providers and user Provider Package
 
 # 8. Credential binding, cache identity, and races
 
-## 8.1 Managed Profile identity
+## 8.1 Profile usage identity
 
-A managed observation belongs to:
+A usage observation belongs to exactly:
 
 ```text
 providerId
 + credentialId
-+ credentialGeneration
 ```
 
-`selectionGeneration` is additionally used as the active-selection publication guard.
+`credentialGeneration` is removed by the Credential Profiles target architecture. `selectionGeneration` remains an active-selection publication guard when the observation is being published for the currently selected Profile. Destination identity and an ephemeral external-account fingerprint may refine cache/publication validity, but they do not replace Profile ownership.
 
 Refresh flow:
 
@@ -568,11 +569,7 @@ If the active Profile switches, reconnects, is removed, or changes generation be
 
 ## 8.2 Ambient auth
 
-Ambient observations are Provider-scoped and valid only while the Provider continues to resolve through ambient auth.
-
-If managed Profiles appear, the previous ambient observation is no longer current and must not be projected for the managed active Profile.
-
-No raw ambient credential is used as a renderer-visible identity.
+Ambient authentication has no Token Profile identity and therefore has no Profile Usage observation. Provider Usage does not project ambient quota/balance into the Profile UI.
 
 ## 8.3 Current-binding query correctness
 
@@ -621,17 +618,17 @@ query
 
 ## 8.4 Cache policy
 
-First release uses one Backend-memory **current slot per Provider**:
+The target architecture uses bounded Backend-memory **slots per existing Profile**:
 
 ```ts
-providerId -> {
-  bindingIdentity,
+providerId + credentialId -> {
   destinationKey,
+  accountFingerprint?,
   observation
 }
 ```
 
-The Authority does not retain an unbounded history of credential generations. In-flight work uses the complete binding identity **plus the sorted set of served model destinations** as its key, so a destination change cannot join an older request. Only the current Provider slot is retained after publication.
+The number of retained slots is bounded by current Token Profiles; deleting a Profile removes its slot. In-flight work additionally includes the served destination identity and any required ephemeral external-account fingerprint, so a destination/account change cannot join or reuse stale work.
 
 There is no acquisition TTL in the first release because:
 
@@ -879,7 +876,7 @@ export interface ProviderUsageCommandResult {
 
 These projections mirror only the bounded normalized semantics in section 6. They do not carry Backend binding identities or Provider wire fields. Currency/model strings are bounded and validated by the wire decoder.
 
-Do not add Provider Usage fields to Catalog or Credential Profile DTOs.
+Do not persist Provider Usage in the credential Profile record or merge it into Catalog. Public usage projections must carry exact Profile identity (`providerId + credentialId`) so presentation can attach usage to the matching Profile. Whether the wire stays a separate Provider Usage command family is an interface choice; ownership remains Profile-scoped.
 
 Because this adds a new request/result command family, increment:
 

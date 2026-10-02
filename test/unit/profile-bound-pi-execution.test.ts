@@ -20,13 +20,13 @@ function capture(
 ): ManagedProviderAuthBindingCapture {
   return Object.freeze({
     facts: Object.freeze({
-      kind: "managed" as const, carrierOwner: "managed" as const,
+      kind: "profile" as const, referenceOwner: "managed" as const,
       providerId: "fixture-provider",
       credentialId,
+      acquisitionKind: "api_key" as const,
       authType: "api_key" as const,
       authMethodLabel: "Fixture credentials",
       displayName,
-      credentialGeneration: `generation-${credentialId}`,
       selectionGeneration,
     }),
   });
@@ -232,7 +232,7 @@ describe("Profile-bound Pi execution", () => {
     const execute = createProfileBoundPiExecution({
       bindings: {
         capture: async () => ({
-          facts: { kind: "ambient" as const, providerId: "fixture-provider" },
+          facts: { kind: "unbound" as const, providerId: "fixture-provider" },
         }),
         runBound: async (_binding, operation) => operation(),
         advanceAfterFinal429: async () => {

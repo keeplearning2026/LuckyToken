@@ -8,13 +8,6 @@ export type ProviderUsageUnsupportedReason =
   | "binding"
   | "destination";
 
-/**
- * Mirror of the Provider Usage authority's bounded failure classes
- * (src/provider-usage/contract.ts). `timeout`, `temporary`, `account_change`,
- * `insufficient_validity`, and `terminal` are the external Codex source
- * classes required by plan section 6; only `terminal` stops automatic
- * network attempts, and only until the external document revision changes.
- */
 export type ProviderUsageUnavailableReason =
   | "auth"
   | "timeout"
@@ -66,37 +59,39 @@ export type ProviderUsageBudgetProjection =
       readonly available: number;
     };
 
-export type ProviderUsageProviderProjection =
-  | {
-      readonly providerId: string;
+interface ProviderUsageProfileIdentityProjection {
+  readonly providerId: string;
+  readonly credentialId: string;
+}
+
+export type ProviderUsageProfileProjection =
+  | (ProviderUsageProfileIdentityProjection & {
       readonly state: "observed";
       readonly observedAt: number;
       readonly refreshable: boolean;
       readonly windows: readonly ProviderUsageWindowProjection[];
       readonly budgets: readonly ProviderUsageBudgetProjection[];
-    }
-  | {
-      readonly providerId: string;
+    })
+  | (ProviderUsageProfileIdentityProjection & {
       readonly state: "unobserved";
-    }
-  | {
-      readonly providerId: string;
+    })
+  | (ProviderUsageProfileIdentityProjection & {
       readonly state: "unsupported";
       readonly reason: ProviderUsageUnsupportedReason;
-    }
-  | {
-      readonly providerId: string;
+    })
+  | (ProviderUsageProfileIdentityProjection & {
       readonly state: "unavailable";
       readonly reason: ProviderUsageUnavailableReason;
-    };
+    });
 
 export interface ProviderUsageSnapshotProjection {
-  readonly providers: readonly ProviderUsageProviderProjection[];
+  readonly profiles: readonly ProviderUsageProfileProjection[];
 }
 
 export type ProviderUsageCommand =
   | { readonly command: "query" }
   | {
+      /** Refresh the Provider's currently selected Profile. */
       readonly command: "refresh";
       readonly providerId: string;
     };
@@ -104,15 +99,18 @@ export type ProviderUsageCommand =
 export type ProviderUsageRefreshProjection =
   | {
       readonly providerId: string;
+      readonly credentialId: string;
       readonly outcome: "succeeded" | "superseded";
     }
   | {
       readonly providerId: string;
+      readonly credentialId?: string;
       readonly outcome: "unsupported";
       readonly reason: ProviderUsageUnsupportedReason;
     }
   | {
       readonly providerId: string;
+      readonly credentialId?: string;
       readonly outcome: "unavailable";
       readonly reason: ProviderUsageUnavailableReason;
     };

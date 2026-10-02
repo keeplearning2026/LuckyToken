@@ -1,633 +1,148 @@
-import type { AuthResult, Models, Provider } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import type {
-  ProviderAuthBindingAuthority,
-  ProviderAuthBindingCapture,
-} from "../../src/credentials/profile-contract.js";
-import { ProviderAuthBindingError } from "../../src/credentials/profile-contract.js";
-import { createProviderUsageAutoRefresh } from "../../src/provider-usage/auto-refresh.js";
+import { createModels } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { describe, expect, it } from "vitest";
+
+import { createCodexLocalAcquisition } from "../../src/credentials/acquisition.js";
+import { createProviderCredentialProfiles } from "../../src/credentials/profile-authority.js";
+import {
+  createInMemoryProviderCredentialRecordStore,
+} from "../../src/credentials/profile-record-store.js";
 import { createProviderUsageAuthority } from "../../src/provider-usage/authority.js";
-import type {
-  ProviderUsageAuthority,
-  ProviderUsageFacts,
-  ProviderUsageProbe,
-  ProviderUsageProbeInput,
-  ProviderUsageProbeResult,
-  ProviderUsageSnapshot,
-} from "../../src/provider-usage/contract.js";
+import type { ProviderUsageProbe } from "../../src/provider-usage/contract.js";
 
-/**
- * Plan section 6 / acceptance 13, 14, and 23: the external Codex login's
- * usage chain. The fixture mirrors the credential boundary's real rules —
- * publication is bound to the revision the operation actually resolved, and
- * capture identity is the account plus the document revision. Nothing here
- * reads a real CODEX_HOME or auth.json.
- */
+const providerId = "openai-codex";
+const provider = builtinProviders().find((item) => item.id === providerId)!;
 
-const PROVIDER_ID = "openai-codex";
-const DESTINATION = "https://chatgpt.com/backend-api";
-
-interface ExternalFileState {
-  readonly canonicalPath?: string;
-  readonly accountId: string;
-  readonly tokenRevision: string;
-}
-
-type ExternalCapture = Extract<
-  ProviderAuthBindingCapture,
-  { readonly facts: { readonly kind: "external" } }
->;
-
-function externalCapture(
-  file: ExternalFileState,
-): ExternalCapture {
-  return Object.freeze({
-    facts: Object.freeze({
-      kind: "external" as const,
-      providerId: PROVIDER_ID,
-      authType: "oauth" as const,
-      authMethodLabel: "Codex (ChatGPT)",
-      displayName: "Codex login",
-      canonicalPath: file.canonicalPath ?? "fixture-codex-home/auth.json",
-      identityKey: file.accountId,
-      tokenRevision: file.tokenRevision,
+function documentFor(account: string): string {
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const access = [
+    encode({ alg: "none" }),
+    encode({
+      exp: Math.floor((Date.now() + 3_600_000) / 1000),
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: account,
+      },
     }),
+    "signature",
+  ].join(".");
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: {
+      access_token: access,
+      refresh_token: "refresh-" + account,
+      account_id: account,
+    },
   });
 }
 
-function createExternalBinding(initial: ExternalFileState) {
-  let file: ExternalFileState = { ...initial };
-  let lastCapture: ExternalCapture | undefined;
-  const resolvedRevisions = new WeakMap<object, string>();
-  const binding = {
-    async capture(): Promise<ProviderAuthBindingCapture> {
-      const capture = externalCapture(file);
-      lastCapture = capture;
-      resolvedRevisions.set(capture, file.tokenRevision);
-      return capture;
-    },
-    async publishIfCurrent(
-      capture: ExternalCapture,
-      publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
-    ): Promise<boolean> {
-      const resolved = resolvedRevisions.get(capture);
-      const matches = (): boolean =>
-        (file.canonicalPath ?? "fixture-codex-home/auth.json") === capture.facts.canonicalPath &&
-        file.accountId === capture.facts.identityKey &&
-        file.tokenRevision === resolved;
-      if (!matches()) return false;
-      await publish(() => {
-        if (!matches()) throw new Error("superseded external revision");
-      }, Object.freeze({ ...capture.facts, tokenRevision: resolved! }));
-      return matches();
-    },
-    async runBound<T>(
-      capture: ExternalCapture,
-      operation: () => Promise<T>,
-    ): Promise<T> {
-      if (file.accountId !== capture.facts.identityKey) {
-        throw new Error("stale external binding");
-      }
-      return operation();
-    },
-  } as unknown as ProviderAuthBindingAuthority;
-  return {
-    binding,
-    file: (): ExternalFileState => ({ ...file }),
-    capture: (): ExternalCapture => {
-      if (lastCapture === undefined) throw new Error("No external capture yet");
-      return lastCapture;
-    },
-    setFile(next: Partial<ExternalFileState>): void {
-      file = { ...file, ...next };
-    },
-    /** Records the revision a delegated resolution actually used, exactly as
-     * the credential boundary mutates its captured scope. */
-    useRevision(capture: ExternalCapture, revision: string): void {
-      resolvedRevisions.set(capture, revision);
-    },
-  };
-}
-
-function createModels(options: {
-  readonly getAuth: (
-    providerId: string,
-  ) => Promise<AuthResult | undefined>;
-}) {
-  let authCalls = 0;
-  const provider = {
-    id: PROVIDER_ID,
-    name: "OpenAI Codex",
-    baseUrl: DESTINATION,
-  } as unknown as Provider;
-  const models = {
-    getProviders: () => [provider],
-    getProvider: (id: string) => (id === PROVIDER_ID ? provider : undefined),
-    getModels: () => [{ provider: PROVIDER_ID, baseUrl: DESTINATION }],
-    getAuth: async () => {
-      authCalls += 1;
-      return options.getAuth(PROVIDER_ID);
-    },
-  } as unknown as Pick<
-    Models,
-    "getProviders" | "getProvider" | "getModels" | "getAuth"
-  >;
-  return { models, authCalls: () => authCalls };
-}
-
-function observed(usedPercent: number): ProviderUsageProbeResult {
-  const facts: ProviderUsageFacts = {
-    windows: [{ kind: "weekly", usedPercent }],
-    budgets: [],
-  };
-  return Object.freeze({ state: "observed", facts });
-}
-
-function createProbe(
-  acquire: (input: ProviderUsageProbeInput) => Promise<ProviderUsageProbeResult>,
-): { readonly probe: ProviderUsageProbe; readonly calls: () => number } {
-  let calls = 0;
-  return {
-    probe: Object.freeze({
-      providerId: PROVIDER_ID,
-      eligibility: () => Object.freeze({ state: "eligible" as const }),
-      acquire: async (input: ProviderUsageProbeInput) => {
-        calls += 1;
-        return acquire(input);
-      },
+async function setup(authPath: string, usageProbe: ProviderUsageProbe) {
+  const profiles = createProviderCredentialProfiles({
+    recordStore: createInMemoryProviderCredentialRecordStore({
+      createRevision: randomUUID,
     }),
-    calls: () => calls,
-  };
+    providers: () => [provider],
+    createId: randomUUID,
+    now: Date.now,
+  });
+  const acquisition = createCodexLocalAcquisition({
+    authPath,
+    label: () => provider.auth.oauth?.name,
+  });
+  await profiles.management.acquireLocal({
+    providerId,
+    displayName: "Codex local",
+    acquisition,
+  });
+  const models = createModels({ credentials: profiles.credentialStore });
+  models.setProvider(provider);
+  const usage = createProviderUsageAuthority({
+    models,
+    binding: profiles.binding,
+    profileSnapshot: () => profiles.management.snapshot(),
+    probes: [usageProbe],
+    now: () => 1_000,
+  });
+  return { profiles, usage };
 }
 
-const oauthAuth: AuthResult = Object.freeze({
-  auth: Object.freeze({ apiKey: "fixture-access-token" }),
-  source: "oauth",
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-describe("Provider usage external Codex state", () => {
-  it.each(["account", "revision", "path"])("does not let a late failure replace newer %s usage", async (change) => {
-    const bindings = createExternalBinding({ accountId: "acct-a", tokenRevision: "r1" });
-    const models = createModels({ getAuth: async () => oauthAuth });
-    let finishOld!: (result: ProviderUsageProbeResult) => void;
-    let started!: () => void;
-    const pending = new Promise<ProviderUsageProbeResult>((resolve) => { finishOld = resolve; });
-    const entered = new Promise<void>((resolve) => { started = resolve; });
-    let first = true;
-    const { probe } = createProbe(async () => {
-      if (first) { first = false; started(); return pending; }
-      return observed(12);
-    });
-    const authority = createProviderUsageAuthority({ models: models.models, binding: bindings.binding, probes: [probe] });
+describe("external Profile Usage identity", () => {
+  it("invalidates cached usage when external credential bytes change", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-usage-external-"));
     try {
-      const old = authority.refresh(PROVIDER_ID);
-      await entered;
-      bindings.setFile({ ...(change === "account" ? { accountId: "acct-b" } : {}),
-        ...(change === "path" ? { canonicalPath: "different-home/auth.json" } : { tokenRevision: "r2" }) });
-      expect((await authority.refresh(PROVIDER_ID)).refresh.outcome).toBe("succeeded");
-      finishOld({ state: "unavailable", reason: "network" });
-      expect((await old).refresh.outcome).toBe("superseded");
-      expect((await authority.query()).providers[0]).toMatchObject({ state: "observed", observation: { windows: [{ usedPercent: 12 }] } });
-    } finally {
-      finishOld({ state: "unavailable", reason: "network" });
-      await authority.close();
-    }
-  });
-  it("reports a bounded transient state and recovers once the source resolves", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    let failing = true;
-    const models = createModels({
-      getAuth: async () => {
-        if (failing) {
-          throw new ProviderAuthBindingError(
-            "external_unavailable",
-            "External Codex credential is unavailable; refresh it through Codex",
-          );
-        }
-        return oauthAuth;
-      },
-    });
-    const { probe, calls } = createProbe(async () => observed(31));
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-      now: () => 1,
-    });
-
-    const failed = await authority.refresh(PROVIDER_ID);
-    expect(failed.refresh).toEqual({
-      providerId: PROVIDER_ID,
-      outcome: "unavailable",
-      reason: "temporary",
-    });
-    expect(failed.snapshot.providers[0]).toEqual({
-      providerId: PROVIDER_ID,
-      state: "unavailable",
-      reason: "temporary",
-    });
-    expect(calls()).toBe(0);
-
-    failing = false;
-    const recovered = await authority.refresh(PROVIDER_ID);
-    expect(recovered.refresh).toEqual({
-      providerId: PROVIDER_ID,
-      outcome: "succeeded",
-    });
-    expect(recovered.snapshot.providers[0]).toMatchObject({
-      state: "observed",
-      refreshable: true,
-      observation: { windows: [{ kind: "weekly", usedPercent: 31 }] },
-    });
-
-    await authority.close();
-  });
-
-  it("sees a wrapped credential-boundary failure through the cause chain", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({
-      getAuth: async () => {
-        // Production shape: Pi wraps the credential boundary's typed error.
-        throw new Error("Credential store read failed", {
-          cause: new ProviderAuthBindingError(
-            "external_unavailable",
-            "External Codex credential is unavailable",
-          ),
-        });
-      },
-    });
-    const { probe } = createProbe(async () => observed(1));
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-    });
-
-    await expect(authority.refresh(PROVIDER_ID)).resolves.toMatchObject({
-      refresh: { outcome: "unavailable", reason: "temporary" },
-    });
-    await authority.close();
-  });
-
-  it("reports a changed account as account_change instead of reusing quota", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({
-      getAuth: async () => {
-        throw new ProviderAuthBindingError(
-          "stale_binding",
-          "External Codex credential account changed since capture",
-        );
-      },
-    });
-    const { probe } = createProbe(async () => observed(1));
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-    });
-
-    await expect(authority.refresh(PROVIDER_ID)).resolves.toMatchObject({
-      refresh: { outcome: "unavailable", reason: "account_change" },
-    });
-    await authority.close();
-  });
-
-  it("classifies the authority deadline as timeout", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({ getAuth: async () => oauthAuth });
-    const { probe } = createProbe(
-      ({ signal }) =>
-        new Promise<ProviderUsageProbeResult>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => reject(signal.reason ?? new Error("aborted")),
-            { once: true },
-          );
-        }),
-    );
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-      refreshTimeoutMs: 25,
-    });
-
-    await expect(authority.refresh(PROVIDER_ID)).resolves.toMatchObject({
-      refresh: { outcome: "unavailable", reason: "timeout" },
-    });
-    await expect(authority.query()).resolves.toMatchObject({
-      providers: [
-        { providerId: PROVIDER_ID, state: "unavailable", reason: "timeout" },
-      ],
-    });
-    await authority.close();
-  });
-
-  it("stops network attempts after documented terminal evidence until the file changes", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({ getAuth: async () => oauthAuth });
-    let reject = true;
-    const { probe, calls } = createProbe(async () =>
-      reject
-        ? { state: "unavailable", reason: "terminal" }
-        : observed(12),
-    );
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-      now: () => 5,
-    });
-
-    // The probe's structured auth rejection is the documented terminal
-    // evidence for an external credential the boundary already verified.
-    const terminal = await authority.refresh(PROVIDER_ID);
-    expect(terminal.refresh).toEqual({
-      providerId: PROVIDER_ID,
-      outcome: "unavailable",
-      reason: "terminal",
-    });
-    expect(calls()).toBe(1);
-    expect(terminal.snapshot.providers[0]).toEqual({
-      providerId: PROVIDER_ID,
-      state: "unavailable",
-      reason: "terminal",
-    });
-
-    // Same revision: no network attempt and no auth resolution.
-    const retried = await authority.refresh(PROVIDER_ID);
-    expect(retried.refresh).toEqual({
-      providerId: PROVIDER_ID,
-      outcome: "unavailable",
-      reason: "terminal",
-    });
-    expect(calls()).toBe(1);
-    expect(models.authCalls()).toBe(1);
-
-    // A changed document revision resumes the attempts.
-    reject = false;
-    bindings.setFile({ tokenRevision: "r2" });
-    const recovered = await authority.refresh(PROVIDER_ID);
-    expect(recovered.refresh).toEqual({
-      providerId: PROVIDER_ID,
-      outcome: "succeeded",
-    });
-    expect(calls()).toBe(2);
-    expect(recovered.snapshot.providers[0]).toMatchObject({
-      state: "observed",
-      observation: { windows: [{ kind: "weekly", usedPercent: 12 }] },
-    });
-
-    await authority.close();
-  });
-
-  it("keeps the last-known same-account observation across a revision change", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({ getAuth: async () => oauthAuth });
-    const { probe } = createProbe(async () => observed(44));
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-      now: () => 9,
-    });
-
-    await authority.refresh(PROVIDER_ID);
-    bindings.setFile({ tokenRevision: "r2" });
-
-    await expect(authority.query()).resolves.toMatchObject({
-      providers: [
-        {
+      const authPath = join(root, "auth.json");
+      await writeFile(authPath, documentFor("account-a"), "utf8");
+      const value = await setup(authPath, {
+        providerId,
+        eligibility: () => ({ state: "eligible" }),
+        acquire: async () => ({
           state: "observed",
-          refreshable: true,
-          observation: {
-            providerId: PROVIDER_ID,
-            observedAt: 9,
-            windows: [{ kind: "weekly", usedPercent: 44 }],
-          },
-        },
-      ],
-    });
-    await authority.close();
-  });
-
-  it("never carries an observation over to a different account", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({ getAuth: async () => oauthAuth });
-    const { probe } = createProbe(async () => observed(44));
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-      now: () => 9,
-    });
-
-    await authority.refresh(PROVIDER_ID);
-    bindings.setFile({ accountId: "acct-b", tokenRevision: "r2" });
-
-    await expect(authority.query()).resolves.toMatchObject({
-      providers: [{ providerId: PROVIDER_ID, state: "unobserved" }],
-    });
-    await authority.close();
-  });
-
-  it("rejects a late response from a superseded revision", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({ getAuth: async () => oauthAuth });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const { probe } = createProbe(async () => {
-      await gate;
-      return observed(80);
-    });
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-      now: () => 3,
-    });
-
-    const pending = authority.refresh(PROVIDER_ID);
-    await Promise.resolve();
-    // The Codex-owned document rotates while the acquisition is in flight.
-    bindings.setFile({ tokenRevision: "r2" });
-    release();
-
-    await expect(pending).resolves.toMatchObject({
-      refresh: { providerId: PROVIDER_ID, outcome: "superseded" },
-    });
-    await expect(authority.query()).resolves.toMatchObject({
-      providers: [{ providerId: PROVIDER_ID, state: "unobserved" }],
-    });
-    await authority.close();
-  });
-
-  it("publishes through the credential guard after a delegated refresh advances the revision", async () => {
-    const bindings = createExternalBinding({
-      accountId: "acct-a",
-      tokenRevision: "r1",
-    });
-    const models = createModels({
-      getAuth: async () => {
-        // A delegated Codex refresh rewrote the file; the boundary records the
-        // revision the operation actually resolved. Publication compares
-        // against that revision, not against the capture-time one.
-        bindings.setFile({ tokenRevision: "r2" });
-        bindings.useRevision(bindings.capture(), "r2");
-        return oauthAuth;
-      },
-    });
-    const { probe } = createProbe(async () => observed(58));
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding: bindings.binding,
-      probes: [probe],
-      now: () => 4,
-    });
-
-    const result = await authority.refresh(PROVIDER_ID);
-    expect(result.refresh).toEqual({
-      providerId: PROVIDER_ID,
-      outcome: "succeeded",
-    });
-    expect(result.snapshot.providers[0]).toMatchObject({
-      state: "observed",
-      observation: { windows: [{ kind: "weekly", usedPercent: 58 }] },
-    });
-    await authority.close();
-  });
-
-  it("keeps managed bindings free of persisted failure state", async () => {
-    const capture: ProviderAuthBindingCapture = Object.freeze({
-      facts: Object.freeze({
-        kind: "managed" as const, carrierOwner: "managed" as const,
-        providerId: PROVIDER_ID,
-        credentialId: "credential-a",
-        authType: "oauth" as const,
-        authMethodLabel: "ChatGPT sign-in",
-        displayName: "Managed login",
-        credentialGeneration: "g1",
-        selectionGeneration: "s1",
-      }),
-    });
-    const binding = {
-      capture: async () => capture,
-      publishIfCurrent: async (
-        _capture: ProviderAuthBindingCapture,
-        publish: Parameters<ProviderAuthBindingAuthority["publishIfCurrent"]>[1],
-      ) => {
-        await publish(() => undefined, _capture.facts);
-        return true;
-      },
-      runBound: async <T>(
-        _capture: ProviderAuthBindingCapture,
-        operation: () => Promise<T>,
-      ) => operation(),
-    } as unknown as ProviderAuthBindingAuthority;
-    const models = createModels({ getAuth: async () => oauthAuth });
-    const { probe } = createProbe(async () => ({
-      state: "unavailable",
-      reason: "auth",
-    }));
-    const authority = createProviderUsageAuthority({
-      models: models.models,
-      binding,
-      probes: [probe],
-    });
-
-    await expect(authority.refresh(PROVIDER_ID)).resolves.toMatchObject({
-      refresh: { outcome: "unavailable", reason: "auth" },
-    });
-    await expect(authority.query()).resolves.toMatchObject({
-      providers: [{ providerId: PROVIDER_ID, state: "unobserved" }],
-    });
-    await authority.close();
-  });
-});
-
-describe("Provider usage automatic refresh selection", () => {
-  function runner(snapshot: ProviderUsageSnapshot): {
-    readonly refresh: ReturnType<typeof vi.fn>;
-    readonly runner: ReturnType<typeof createProviderUsageAutoRefresh>;
-  } {
-    const refresh = vi.fn(async (providerId: string) => {
-      void providerId;
-    });
-    const authority: Pick<ProviderUsageAuthority, "query" | "refresh"> = {
-      query: async () => snapshot,
-      refresh: async (providerId) => {
-        void refresh(providerId);
-        return {
-          snapshot,
-          refresh: { providerId, outcome: "succeeded" as const },
-        };
-      },
-    };
-    return {
-      refresh,
-      runner: createProviderUsageAutoRefresh({
-        authority,
-        intervalMinutes: () => 15,
-      }),
-    };
-  }
-
-  it("retries bounded transient external failures but never terminal evidence", async () => {
-    vi.useFakeTimers();
-    const { refresh, runner: autoRefresh } = runner({
-      providers: [
-        { providerId: PROVIDER_ID, state: "unavailable", reason: "temporary" },
-        { providerId: "openai-codex-terminal", state: "unavailable", reason: "terminal" },
-        {
-          state: "observed",
-          refreshable: true,
-          observation: {
-            providerId: "openai-codex-observed",
-            observedAt: 1,
-            windows: [],
+          facts: {
+            windows: [{ kind: "weekly", usedPercent: 10 }],
             budgets: [],
           },
-        },
-      ],
-    });
-    autoRefresh.start();
-    await vi.advanceTimersByTimeAsync(0);
+        }),
+      });
 
-    expect(refresh.mock.calls.map(([id]) => id).sort()).toEqual([
-      "openai-codex",
-      "openai-codex-observed",
-    ]);
-    await autoRefresh.close();
+      const first = await value.usage.refresh(providerId);
+      expect(first.refresh.outcome).toBe("succeeded");
+      expect(first.snapshot.profiles[0]?.state).toBe("observed");
+
+      await writeFile(authPath, documentFor("account-b"), "utf8");
+      const second = await value.usage.query();
+      expect(second.profiles[0]).toMatchObject({
+        providerId,
+        state: "unobserved",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("supersedes a refresh result when external bytes change before publication", async () => {
+    const root = await mkdtemp(join(tmpdir(), "Token-usage-external-race-"));
+    try {
+      const authPath = join(root, "auth.json");
+      await writeFile(authPath, documentFor("account-a"), "utf8");
+      let entered!: () => void;
+      const acquisitionEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const value = await setup(authPath, {
+        providerId,
+        eligibility: () => ({ state: "eligible" }),
+        acquire: async () => {
+          entered();
+          await gate;
+          return {
+            state: "observed",
+            facts: {
+              windows: [{ kind: "weekly", usedPercent: 55 }],
+              budgets: [],
+            },
+          };
+        },
+      });
+
+      const pending = value.usage.refresh(providerId);
+      await acquisitionEntered;
+      await writeFile(authPath, documentFor("account-b"), "utf8");
+      release();
+
+      const result = await pending;
+      expect(result.refresh.outcome).toBe("superseded");
+      expect(result.snapshot.profiles[0]?.state).toBe("unobserved");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

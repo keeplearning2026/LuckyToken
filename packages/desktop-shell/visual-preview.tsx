@@ -27,14 +27,12 @@ const profilesByProvider = new Map<string, any>([
       profiles: [
         {
           credentialId: "goat-profile-1",
+          acquisitionKind: "api_key",
           authType: "api_key",
           authMethodLabel: "CommandCode Goat API key",
           displayName: "Profile 1",
           note: "Daily coding",
-          identityHint: "•••• WmRW",
           enabled: true,
-          health: "ready",
-          priority: 0,
           createdAt: 1,
           updatedAt: 1,
           lastSucceededAt: Date.now() - 25_000,
@@ -54,28 +52,24 @@ const profilesByProvider = new Map<string, any>([
       profiles: [
         {
           credentialId: "private-profile-1",
+          acquisitionKind: "api_key",
           authType: "api_key",
           authMethodLabel: "CommandCode API key",
           displayName: "Profile 1",
           note: "Production key",
-          identityHint: "•••• 7K2P",
           enabled: true,
-          health: "ready",
-          priority: 0,
           createdAt: 1,
           updatedAt: 1,
           lastSucceededAt: Date.now() - 40_000,
         },
         {
           credentialId: "private-profile-2",
+          acquisitionKind: "oauth",
           authType: "oauth",
           authMethodLabel: "CommandCode account login",
           displayName: "Profile 2",
           note: "Personal account",
-          identityHint: "huich@example.com",
           enabled: true,
-          health: "ready",
-          priority: 1,
           createdAt: 2,
           updatedAt: 2,
           lastSucceededAt: Date.now() - 85_000,
@@ -95,13 +89,11 @@ const profilesByProvider = new Map<string, any>([
       profiles: [
         {
           credentialId: "opencode-profile-1",
+          acquisitionKind: "api_key",
           authType: "api_key",
           authMethodLabel: "OpenCode API key",
           displayName: "Profile 1",
-          identityHint: "•••• 2TmR",
           enabled: true,
-          health: "ready",
-          priority: 0,
           createdAt: 1,
           updatedAt: 1,
           lastSucceededAt: Date.now() - 60_000,
@@ -132,16 +124,22 @@ const options = {
     providerId,
     name,
     source: "pi_builtin",
-    authMethods: [
+    acquisitionOptions: [
       {
+        kind: "api_key",
+        label: `${name} API key`,
+        icon: "key",
         authType: "api_key",
-        authMethodLabel: `${name} API key`,
         interactive: true,
+        state: "available",
       },
       {
+        kind: "oauth",
+        label: `${name} account login`,
+        icon: "account",
         authType: "oauth",
-        authMethodLabel: `${name} account login`,
         interactive: true,
+        state: "available",
       },
     ],
   })),
@@ -289,10 +287,7 @@ const api = createFakeDesktopApi({
         const provider = profilesByProvider.get(command.providerId);
         if (provider !== undefined) {
           const byId = new Map(provider.profiles.map((profile: any) => [profile.credentialId, profile]));
-          provider.profiles = command.credentialIds.map((id: string, index: number) => ({
-            ...byId.get(id),
-            priority: index,
-          }));
+          provider.profiles = command.credentialIds.map((id: string) => byId.get(id));
         }
       }
       return profilesResult() as any;

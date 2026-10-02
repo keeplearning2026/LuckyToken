@@ -19,7 +19,7 @@ import type { AttentionProjection } from "./attention-contract.js";
 import type {
   CredentialProfilesCommand,
   CredentialProfilesCommandResult,
-  CredentialProfilesProjectionV1,
+  CredentialProfilesProjection,
   ProviderProfileAuthCommand,
   ProviderProfileAuthCommandResult,
 } from "./credential-profiles-contract.js";
@@ -28,7 +28,7 @@ import type {
   ProviderUsageCommandResult,
 } from "./provider-usage-contract.js";
 
-export const controlPlaneVersion = 8 as const;
+export const controlPlaneVersion = 9 as const;
 
 export interface ApplicationIdentity {
   readonly id: "Token";
@@ -98,7 +98,7 @@ export interface StatusSnapshot extends ApplicationStatus {
   /** Optional sanitized models.json projection (Ticket 08). */
   readonly models?: ModelsProjection;
   /** Sanitized per-Provider Credential Profile projection. */
-  readonly credentialProfiles?: CredentialProfilesProjectionV1;
+  readonly credentialProfiles?: CredentialProfilesProjection;
   /** Optional sanitized catalog lifecycle projection (Ticket 11). */
   readonly catalog?: CatalogStatusProjection;
 }

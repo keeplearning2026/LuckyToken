@@ -16,13 +16,13 @@ export interface ProviderUsageAutoRefresh {
  * the attempts, and a changed `auth.json` revision resumes them (plan section
  * 6).
  */
-function refreshTarget(provider: ProviderUsageState): string | undefined {
-  if (provider.state === "unobserved") return provider.providerId;
-  if (provider.state === "observed") {
-    return provider.refreshable ? provider.observation.providerId : undefined;
+function refreshTarget(profile: ProviderUsageState): string | undefined {
+  if (profile.state === "unobserved") return profile.providerId;
+  if (profile.state === "observed") {
+    return profile.refreshable ? profile.providerId : undefined;
   }
-  if (provider.state === "unavailable") {
-    return provider.reason === "terminal" ? undefined : provider.providerId;
+  if (profile.state === "unavailable") {
+    return profile.reason === "terminal" ? undefined : profile.providerId;
   }
   return undefined;
 }
@@ -45,8 +45,8 @@ export function createProviderUsageAutoRefresh(options: {
     let providerIds: string[];
     try {
       const snapshot = await options.authority.query();
-      providerIds = snapshot.providers.flatMap((provider) => {
-        const target = refreshTarget(provider);
+      providerIds = snapshot.profiles.flatMap((profile) => {
+        const target = refreshTarget(profile);
         return target === undefined ? [] : [target];
       });
     } catch {

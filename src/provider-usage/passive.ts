@@ -1,6 +1,9 @@
 import type { Model } from "@earendil-works/pi-ai";
 
-import type { ProviderAuthBindingCapture } from "../credentials/profile-contract.js";
+import {
+  isProfileProviderAuthBindingCapture,
+  type ProviderAuthBindingCapture,
+} from "../credentials/profile-contract.js";
 import type {
   ProviderUsageAuthority,
   ProviderUsageFacts,
@@ -88,7 +91,7 @@ export function createProviderUsageResponseObserver(
   return async ({ model, capture, response }) => {
     if (
       model.provider !== "anthropic" ||
-      capture.facts.kind !== "managed" ||
+      !isProfileProviderAuthBindingCapture(capture) ||
       capture.facts.authType !== "api_key" ||
       !canonicalUrl(model.baseUrl, "https://api.anthropic.com", ["/"])
     ) {

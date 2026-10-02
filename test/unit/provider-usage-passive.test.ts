@@ -8,13 +8,13 @@ import {
 
 const capture: ProviderAuthBindingCapture = Object.freeze({
   facts: Object.freeze({
-    kind: "managed" as const, carrierOwner: "managed" as const,
+    kind: "profile" as const, referenceOwner: "managed" as const,
     providerId: "anthropic",
     credentialId: "credential-a",
-    authType: "api_key" as const,
+    acquisitionKind: "api_key" as const,
+      authType: "api_key" as const,
     authMethodLabel: "Anthropic API key",
     displayName: "Primary",
-    credentialGeneration: "generation-a",
     selectionGeneration: "selection-a",
   }),
 });
@@ -108,7 +108,7 @@ describe("Provider Usage passive observation", () => {
         baseUrl: "https://api.anthropic.com",
       } as never,
       capture: {
-        facts: { kind: "ambient", providerId: "anthropic" },
+        facts: { kind: "unbound", providerId: "anthropic" },
       },
       response,
     });

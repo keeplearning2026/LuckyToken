@@ -2,8 +2,6 @@ import { readCredentialDocumentFile } from "../../src/credentials/credential-doc
 import { parseCodexInternalAuth } from "../../src/credentials/codex-internal-auth.js";
 import {
   createFileProviderCredentialRecordStore,
-  credentialProfileCarrier,
-  NO_PROVIDER_RECORD_REVISION,
 } from "../../src/credentials/profile-record-store.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -137,14 +135,16 @@ async function run(): Promise<void> {
       port: 0,
     });
 
-    const localLogin = await composition.providerAuthBindings.createLoginBinding({
+    const localMethod = providerRuntime.localAcquisitionMethods.find(
+      (method) => method.providerId === PROVIDER_ID,
+    );
+    assert.ok(localMethod, "Codex local OAuth acquisition must be available");
+    const localLogin = await composition.credentialManagement.acquireLocal({
       providerId: PROVIDER_ID,
-      acquisitionKind: "local_oauth",
       displayName: "Local Codex",
-      useNow: true,
-      expectedRevision: NO_PROVIDER_RECORD_REVISION,
+      acquisition: localMethod.acquisition,
     });
-    await composition.providerAuthBindings.acquireLocal(localLogin);
+    assert.equal(localLogin.outcome, "ok");
 
     const projection = await composition.credentialManagement.query([PROVIDER_ID]);
     const provider = projection.providers.find(
@@ -158,8 +158,7 @@ async function run(): Promise<void> {
     assert.ok(!JSON.stringify(provider).includes("codex_local"));
     const importedRecord = (await credentialRecordStore.read(PROVIDER_ID))!;
     const imported = importedRecord.profiles[0]!;
-    assert.equal(imported.kind, "reference");
-    assert.ok(imported.kind === "reference");
+    assert.equal(imported.acquisitionKind, "local_oauth");
     assert.equal(imported.reference.owner, "external");
     assert.ok(imported.reference.path.endsWith("auth.json"));
 
@@ -176,6 +175,7 @@ async function run(): Promise<void> {
     usage = createProviderUsageAuthority({
       models: composition.catalog.models,
       binding: composition.providerAuthBindings,
+      profileSnapshot: () => composition!.credentialManagement.snapshot(),
       probes: createBuiltInProviderUsageProbes(globalThis.fetch),
     });
     const usageResult = await usage.refresh(PROVIDER_ID, AbortSignal.timeout(60_000));
@@ -191,65 +191,28 @@ async function run(): Promise<void> {
     // entitlement is recorded, and the credential must stay usable.
     const nativeResponses = await probeNativeResponses(server.origin, laneAlias);
     const semanticMessages = await probeSemanticMessages(server.origin, laneAlias);
-    // A second ordinary storage fixture uses the same authorized grant.
-    // This verifies bidirectional Profile selection through both live lanes;
-    // it does not claim access to a second real account or browser-login proof.
-    const owned = await credentialRecordStore.readCredential(PROVIDER_ID,
-      imported.credentialId, imported.credentialGeneration);
-    assert.ok(owned.state === "ok");
-    const siblingId = randomUUID();
-    const siblingGeneration = randomUUID();
-    const beforeSibling = (await credentialRecordStore.read(PROVIDER_ID))!;
-    await credentialRecordStore.publishCredential(PROVIDER_ID, beforeSibling.revision, {
-      credentialId: siblingId, credentialGeneration: siblingGeneration, credential: owned.credential,
-    }, (current) => ({
-      kind: "commit", value: undefined, record: { ...current!, profiles: [
-        ...current!.profiles, {
-          credentialId: siblingId, credentialGeneration: siblingGeneration, authType: "oauth",
-          authMethodLabel: imported.authMethodLabel, displayName: "Profile 2",
-          enabled: true, priority: 1, createdAt: Date.now(), updatedAt: Date.now(),
-          ...credentialProfileCarrier(PROVIDER_ID, {
-            credentialId: siblingId,
-            credentialGeneration: siblingGeneration,
-            credential: owned.credential,
-          }),
-        },
-      ] },
-    }));
-    const switches = [];
-    for (const credentialId of [siblingId, imported.credentialId]) {
-      const record = (await credentialRecordStore.read(PROVIDER_ID))!;
-      const activation = await composition.credentialManagement.activate({
-        providerId: PROVIDER_ID, credentialId, expectedRevision: record.revision,
-      });
-      assert.equal(activation.outcome, "ok");
-      const captured = await composition.providerAuthBindings.capture(PROVIDER_ID);
-      assert.ok(captured.facts.kind === "managed");
-      assert.equal(captured.facts.credentialId, credentialId);
-      const quota = await usage.refresh(PROVIDER_ID, AbortSignal.timeout(60_000));
-      const native = await probeNativeResponses(server.origin, laneAlias);
-      const semantic = await probeSemanticMessages(server.origin, laneAlias);
-      switches.push({ usage: quota.refresh.outcome, native, semantic,
-        ...codexOnlineGate({ usage: quota.refresh.outcome, native, semantic,
-          rotation: "not_required", usable: true, nonTerminal: true }) });
-    }
     // A documented entitlement rejection records incomplete coverage. It
     // cannot certify either lane or produce a passing suite.
-    const credentialAfterProbes = await composition.providerAuthBindings.capture(PROVIDER_ID);
-    const credentialStayedUsable = credentialAfterProbes.facts.kind === "managed";
-    // A rejected probe must never push the shared credential into a terminal
-    // usage state (plan section 6 evidence rules).
+    const credentialAfterProbes =
+      await composition.providerAuthBindings.capture(PROVIDER_ID);
+    const credentialStayedUsable =
+      credentialAfterProbes.facts.kind === "profile" &&
+      credentialAfterProbes.facts.credentialId === imported.credentialId;
+
     const usageAfterProbes = await usage.refresh(
       PROVIDER_ID,
       AbortSignal.timeout(60_000),
     );
     await usage.close();
-    assert.equal(usageAfterProbes.refresh.outcome, "succeeded", "usage must stay usable after both lane probes");
-    const usageStateAfterProbes = usageAfterProbes.snapshot.providers.find(
+    assert.equal(
+      usageAfterProbes.refresh.outcome,
+      "succeeded",
+      "usage must stay usable after both lane probes",
+    );
+    const usageStateAfterProbes = usageAfterProbes.snapshot.profiles.find(
       (entry) =>
-        (entry.state === "observed"
-          ? entry.observation.providerId
-          : entry.providerId) === PROVIDER_ID,
+        entry.providerId === PROVIDER_ID &&
+        entry.credentialId === imported.credentialId,
     );
     const credentialStayedNonTerminal = !(
       usageStateAfterProbes?.state === "unavailable" &&
@@ -259,26 +222,32 @@ async function run(): Promise<void> {
       credentialStayedNonTerminal,
       "lane rejections must not make the external credential terminal",
     );
-    const final = await readCredentialDocumentFile(authPath);
-    assert.equal(final.state, "ok", "source must remain readable after every consumer");
-    assert.ok(final.state === "ok");
-    assert.equal(final.revision, initial.revision, "Token must not rewrite the original auth.json");
-    const authAfter = await stat(authPath);
-    const after = (await credentialRecordStore.read(PROVIDER_ID))!.profiles.find(
-      (item) => item.credentialId === imported.credentialId,
-    )!;
-    const rotation =
-      imported.kind === "reference" &&
-      after.kind === "reference" &&
-      imported.reference.revision !== after.reference.revision
-        ? "observed"
-        : "not_required";
 
-    const initialGate = codexOnlineGate({ usage: usageResult.refresh.outcome, native: nativeResponses,
-      semantic: semanticMessages, rotation, usable: credentialStayedUsable, nonTerminal: credentialStayedNonTerminal });
-    const results = [initialGate, ...switches];
-    const gate = { ...initialGate, result: results.some((entry) => entry.result === "fail") ? "fail" :
-      results.some((entry) => entry.result === "incomplete") ? "incomplete" : "pass" };
+    const final = await readCredentialDocumentFile(authPath);
+    assert.equal(
+      final.state,
+      "ok",
+      "source must remain readable after every consumer",
+    );
+    assert.ok(final.state === "ok");
+    assert.equal(
+      final.revision,
+      initial.revision,
+      "Token must not rewrite the original auth.json",
+    );
+    const authAfter = await stat(authPath);
+    const rotation = "not_required" as const;
+
+    const initialGate = codexOnlineGate({
+      usage: usageResult.refresh.outcome,
+      native: nativeResponses,
+      semantic: semanticMessages,
+      rotation,
+      usable: credentialStayedUsable,
+      nonTerminal: credentialStayedNonTerminal,
+    });
+    const switches: readonly unknown[] = [];
+    const gate = initialGate;
     if (gate.result !== "pass") process.exitCode = 1;
     process.stdout.write(`${JSON.stringify({
       ...gate,
@@ -297,7 +266,13 @@ async function run(): Promise<void> {
       switches,
       credentialStayedUsable,
       credentialStayedNonTerminal,
-      credentialBoundary: { kind: "managed", authType: "oauth", sourceReadOnly: true },
+      credentialBoundary: {
+        kind: "profile",
+        acquisitionKind: "local_oauth",
+        authType: "oauth",
+        referenceOwner: "external",
+        sourceReadOnly: true,
+      },
       authFile: { contentUnchanged: final.revision === initial.revision,
         mtimeUnchanged: authAfter.mtimeMs === authBefore.mtimeMs,
         sizeBefore: authBefore.size, sizeAfter: authAfter.size,

@@ -93,7 +93,8 @@ const JOURNEY_RECORD: RequestJourneyRecord = Object.freeze({
       state: "captured",
       mediaType: "application/json",
       capturedBytes: 4,
-      originalBytes: 4,      truncated: false,
+      originalBytes: 4,
+      truncated: false,
     }),
   ]),
   incident: Object.freeze({
@@ -224,7 +225,8 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
       state: "captured",
       mediaType: "application/json",
       originalBytes: 4,
-      capturedBytes: 4,      truncated: false,
+      capturedBytes: 4,
+      truncated: false,
       integrityHash: "sha256:fixture",
       location: { phase: "protocol_ingress", step: "capture_client_request_wire" },
     },
@@ -272,8 +274,8 @@ const PERSISTED_OBSERVATIONS: readonly RequestJourneyPersistedObservation[] =
   ]);
 
 describe("unified request diagnostics Control Plane contract", () => {
-  it("publishes the unified diagnostics contract through Control Plane v8", () => {
-    expect(controlPlaneVersion).toBe(8);
+  it("publishes the unified diagnostics contract through Control Plane v9", () => {
+    expect(controlPlaneVersion).toBe(9);
   });
 
   it("strictly decodes the bounded Request Journey query", () => {
@@ -553,7 +555,8 @@ describe("unified request diagnostics Control Plane contract", () => {
         {
           ...JOURNEY_RECORD.artifacts[0],
           originalBytes: 4,
-          capturedBytes: 19,          truncated: false,
+          capturedBytes: 19,
+          truncated: false,
         },
       ],
     } as const;

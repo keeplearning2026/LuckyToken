@@ -3,13 +3,13 @@ import type { DesktopControlPlaneApi } from "../../shared/desktop-api.js";
 type ProviderUsageCommandResult = Awaited<
   ReturnType<DesktopControlPlaneApi["executeProviderUsage"]>
 >;
-type ProviderUsageProviderProjection =
-  ProviderUsageCommandResult["snapshot"]["providers"][number];
+type ProviderUsageProfileProjection =
+  ProviderUsageCommandResult["snapshot"]["profiles"][number];
 type ProviderUsageRefreshProjection = NonNullable<
   ProviderUsageCommandResult["refresh"]
 >;
 type ObservedProviderUsageProjection = Extract<
-  ProviderUsageProviderProjection,
+  ProviderUsageProfileProjection,
   { readonly state: "observed" }
 >;
 type ProviderUsageWindowProjection =
@@ -91,7 +91,7 @@ function money(amount: number, currency: string): string {
 }
 
 export function projectProviderCardUsage(
-  provider: ProviderUsageProviderProjection | undefined,
+  provider: ProviderUsageProfileProjection | undefined,
   now: number,
 ): ProviderCardUsagePresentation {
   if (provider === undefined || provider.state === "unobserved") {

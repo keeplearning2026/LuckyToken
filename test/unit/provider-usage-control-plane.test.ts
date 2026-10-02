@@ -7,8 +7,8 @@ import {
 } from "@token/application-control-plane/control-plane";
 
 describe("Provider Usage Control Plane contract", () => {
-  it("ships on Control Plane v7", () => {
-    expect(controlPlaneVersion).toBe(8);
+  it("ships on Control Plane v9", () => {
+    expect(controlPlaneVersion).toBe(9);
   });
 
   it("strictly decodes query and refresh commands", () => {
@@ -33,33 +33,14 @@ describe("Provider Usage Control Plane contract", () => {
     ).toBeUndefined();
   });
 
-  it("round-trips authoritative empty observed facts", () => {
-    expect(
-      decodeProviderUsageCommandResult({
-        outcome: "ok",
-        snapshot: {
-          providers: [
-            {
-              providerId: "openrouter",
-              state: "observed",
-              observedAt: 123,
-              refreshable: true,
-              windows: [],
-              budgets: [],
-            },
-          ],
-        },
-        refresh: {
-          providerId: "openrouter",
-          outcome: "succeeded",
-        },
-      }),
-    ).toEqual({
+  it("round-trips Profile-scoped observed facts", () => {
+    const value = {
       outcome: "ok",
       snapshot: {
-        providers: [
+        profiles: [
           {
             providerId: "openrouter",
+            credentialId: "profile-a",
             state: "observed",
             observedAt: 123,
             refreshable: true,
@@ -70,9 +51,12 @@ describe("Provider Usage Control Plane contract", () => {
       },
       refresh: {
         providerId: "openrouter",
+        credentialId: "profile-a",
         outcome: "succeeded",
       },
-    });
+    } as const;
+
+    expect(decodeProviderUsageCommandResult(value)).toEqual(value);
   });
 
   it("rejects malformed percentages and credential-bearing fields", () => {
@@ -80,9 +64,10 @@ describe("Provider Usage Control Plane contract", () => {
       decodeProviderUsageCommandResult({
         outcome: "ok",
         snapshot: {
-          providers: [
+          profiles: [
             {
               providerId: "deepseek",
+              credentialId: "profile-a",
               state: "observed",
               observedAt: 1,
               refreshable: true,
@@ -98,9 +83,10 @@ describe("Provider Usage Control Plane contract", () => {
       decodeProviderUsageCommandResult({
         outcome: "ok",
         snapshot: {
-          providers: [
+          profiles: [
             {
               providerId: "deepseek",
+              credentialId: "profile-a",
               state: "unobserved",
               apiKey: "must-not-cross",
             },
@@ -115,14 +101,16 @@ describe("Provider Usage Control Plane contract", () => {
       decodeProviderUsageCommandResult({
         outcome: "ok",
         snapshot: {
-          providers: [
+          profiles: [
             {
               providerId: "openrouter",
+              credentialId: "profile-a",
               state: "unsupported",
               reason: "destination",
             },
             {
               providerId: "deepseek",
+              credentialId: "profile-b",
               state: "unavailable",
               reason: "network",
             },
@@ -131,9 +119,17 @@ describe("Provider Usage Control Plane contract", () => {
       }),
     ).toMatchObject({
       snapshot: {
-        providers: [
-          { state: "unsupported", reason: "destination" },
-          { state: "unavailable", reason: "network" },
+        profiles: [
+          {
+            credentialId: "profile-a",
+            state: "unsupported",
+            reason: "destination",
+          },
+          {
+            credentialId: "profile-b",
+            state: "unavailable",
+            reason: "network",
+          },
         ],
       },
     });
@@ -142,9 +138,10 @@ describe("Provider Usage Control Plane contract", () => {
       decodeProviderUsageCommandResult({
         outcome: "ok",
         snapshot: {
-          providers: [
+          profiles: [
             {
               providerId: "openrouter",
+              credentialId: "profile-a",
               state: "unavailable",
               reason: "destination",
             },

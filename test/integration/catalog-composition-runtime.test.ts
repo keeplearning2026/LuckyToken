@@ -195,12 +195,10 @@ describe("catalog composition runtime", () => {
       now: () => 1,
       createUuid: () => "00000000-0000-4000-8000-000000000003",
     });
-    const login = await providerAuthBindings.createLoginBinding({
+    const login = await providerAuthBindings.createAcquisitionBinding({
       providerId: "login-pkg",
       acquisitionKind: "api_key",
       displayName: "Login fixture",
-      useNow: true,
-      expectedRevision: "absent",
     });
     await providerAuthBindings.runBound(login, () =>
       models.login("login-pkg", "api_key", {

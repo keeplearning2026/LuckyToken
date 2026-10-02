@@ -98,18 +98,11 @@ async function startClient(descriptorPath: string): Promise<ControlPlaneClient> 
 }
 
 async function addCommandCodeProfile(client: ControlPlaneClient, key: string) {
-  const query = await client.executeProviderProfileAuthCommand({ command: "query" });
-  const revision = query.state.providers.find(
-    (provider) => provider.providerId === "commandcode-private",
-  )?.revision;
-  if (revision === undefined) throw new Error("Expected Provider revision");
   return client.executeProviderProfileAuthCommand({
     command: "login",
     providerId: "commandcode-private",
     acquisitionKind: "api_key",
     displayName: "Primary",
-    useNow: true,
-    expectedRevision: revision,
   }, (event) => {
     if (event.type === "prompt" && event.kind === "secret") {
       void client.respondAuthInteraction({
@@ -177,11 +170,11 @@ describe("Provider Profiles remain independent of Gateway lifecycle", () => {
         "commandcode-private.json",
       ), "utf8")) as {
         profiles: Array<{
-          kind: string;
+          acquisitionKind: string;
           reference: { path: string; owner: string };
         }>;
       };
-      expect(record.profiles[0]?.kind).toBe("reference");
+      expect(record.profiles[0]?.acquisitionKind).toBe("api_key");
       expect(record.profiles[0]?.reference.owner).toBe("managed");
       expect(await readFile(join(
         root,

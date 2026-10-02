@@ -11,7 +11,6 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
-  ShieldCheck,
   Star,
   Terminal,
   Trash2,
@@ -50,7 +49,7 @@ type CatalogResult = Awaited<ReturnType<TokenDesktopApi["control"]["executeCatal
 type ProviderUsageResult = Awaited<
   ReturnType<TokenDesktopApi["control"]["executeProviderUsage"]>
 >;
-type ProviderUsageRow = ProviderUsageResult["snapshot"]["providers"][number];
+type ProviderUsageRow = ProviderUsageResult["snapshot"]["profiles"][number];
 type AuthType = "oauth" | "api_key";
 type AcquisitionOption = ProviderOption["acquisitionOptions"][number];
 
@@ -67,8 +66,6 @@ export interface ProviderModelRow {
 interface AuthModalState {
   readonly providerId: string;
   readonly acquisitionKind: AcquisitionOption["kind"];
-  readonly mode: "add" | "reconnect";
-  readonly credentialId?: string;
 }
 
 interface AuthOutcome {
@@ -88,7 +85,7 @@ function providerHasCredentialSource(
 ): boolean {
   if (provider === undefined) return false;
   return provider.profiles.length > 0 ||
-    provider.ambient?.status === "connected";
+    provider.ambient?.status === "configured";
 }
 
 function modelNameFromInternalAlias(
@@ -137,7 +134,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [profileName, setProfileName] = useState("");
   const [profileNote, setProfileNote] = useState("");
-  const [useNow, setUseNow] = useState(true);
   const [authStarted, setAuthStarted] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState<string>();
   const [editingProfileName, setEditingProfileName] = useState("");
@@ -307,7 +303,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
         if (!active) return;
         setProviderUsageById((current) => {
           const next = { ...current };
-          for (const row of result.snapshot.providers) {
+          for (const row of result.snapshot.profiles) {
             const expectedEpoch = changed.get(row.providerId);
             if (
               expectedEpoch === undefined ||
@@ -341,7 +337,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           if (!active || usageRefreshVersion.current !== expectedRefreshVersion) return;
           setProviderUsageById((current) => {
             const next = { ...current };
-            for (const row of result.snapshot.providers) {
+            for (const row of result.snapshot.profiles) {
               if (
                 !expectedEpochs.has(row.providerId) ||
                 expectedEpochs.get(row.providerId) !==
@@ -392,7 +388,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           ) {
             return;
           }
-          const row = result.snapshot.providers.find(
+          const row = result.snapshot.profiles.find(
             (candidate) => candidate.providerId === providerId,
           );
           if (row === undefined) return;
@@ -477,7 +473,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
   ): void => {
     if (option.state === "already_connected") {
       setNotice(
-        "A local login Profile already exists. Reconnect it to refresh, or remove it first.",
+        "A local login Profile already exists. Remove it first to add another local login Profile.",
       );
       return;
     }
@@ -491,30 +487,10 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     while (usedNames.has(`profile ${ordinal}`)) ordinal += 1;
     setProfileName(`Profile ${ordinal}`);
     setProfileNote("");
-    setUseNow(profiles.length === 0);
     setAuthStarted(false);
     setAuthModal({
       providerId: provider.providerId,
       acquisitionKind: option.kind,
-      mode: "add",
-    });
-    setAuthOutcome(undefined);
-    clearAuthInteraction();
-  };
-
-  const openReconnect = (
-    provider: ProviderOption,
-    profile: CredentialProfile,
-  ): void => {
-    setProfileName(profile.displayName);
-    setProfileNote(profile.note ?? "");
-    setUseNow(false);
-    setAuthStarted(false);
-    setAuthModal({
-      providerId: provider.providerId,
-      acquisitionKind: profile.acquisitionKind,
-      mode: "reconnect",
-      credentialId: profile.credentialId,
     });
     setAuthOutcome(undefined);
     clearAuthInteraction();
@@ -526,17 +502,14 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     const provider = providers.find(
       (candidate) => candidate.providerId === modal.providerId,
     );
-    const providerState = profileState.providers.find(
-      (candidate) => candidate.providerId === modal.providerId,
-    );
-    if (provider === undefined || providerState?.revision === undefined) {
+    if (provider === undefined) {
       setAuthOutcome({
         kind: "failed",
-        message: "Provider Profile state is unavailable. Refresh and try again.",
+        message: "Provider is unavailable. Refresh and try again.",
       });
       return;
     }
-    if (modal.mode === "add" && profileName.trim().length === 0) {
+    if (profileName.trim().length === 0) {
       setAuthOutcome({ kind: "failed", message: "Enter a Profile name." });
       return;
     }
@@ -548,23 +521,13 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     let pendingApiKey = initialApiKey;
     try {
       const result = await api.control.executeProviderProfileAuth(
-        modal.mode === "add"
-          ? {
-              command: "login",
-              providerId: provider.providerId,
-              acquisitionKind: modal.acquisitionKind,
-              displayName: profileName.trim(),
-              ...(profileNote.length === 0 ? {} : { note: profileNote }),
-              useNow,
-              expectedRevision: providerState.revision,
-            }
-          : {
-              command: "reconnect",
-              providerId: provider.providerId,
-              credentialId: modal.credentialId!,
-              useNow,
-              expectedRevision: providerState.revision,
-            },
+        {
+          command: "login",
+          providerId: provider.providerId,
+          acquisitionKind: modal.acquisitionKind,
+          displayName: profileName.trim(),
+          ...(profileNote.length === 0 ? {} : { note: profileNote }),
+        },
         (event) => {
           if (event.type === "auth_url") {
             setExternalInteraction(event);
@@ -598,10 +561,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       if (result.outcome === "ok") {
         setAuthOutcome({
           kind: "success",
-          message:
-            modal.mode === "add"
-              ? `${profileName.trim()} added to ${provider.name}.`
-              : `${profileName} reconnected.`,
+          message: `${profileName.trim()} added to ${provider.name}.`,
         });
       } else if (result.outcome === "cancelled") {
         setAuthOutcome({ kind: "cancelled", message: "Sign-in cancelled." });
@@ -679,7 +639,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       if ((usageEpochByProvider.current.get(providerId) ?? 0) !== expectedEpoch) {
         return;
       }
-      const row = result.snapshot.providers.find(
+      const row = result.snapshot.profiles.find(
         (candidate) => candidate.providerId === providerId,
       );
       if (row !== undefined) {
@@ -980,12 +940,9 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     ) {
       return;
     }
-    const credentialIds = [...provider.profiles]
-      .sort(
-        (left, right) =>
-          left.priority - right.priority || left.createdAt - right.createdAt,
-      )
-      .map((profile) => profile.credentialId);
+    const credentialIds = provider.profiles.map(
+      (profile) => profile.credentialId,
+    );
     const sourceIndex = credentialIds.indexOf(sourceCredentialId);
     const targetIndex = credentialIds.indexOf(targetCredentialId);
     if (sourceIndex < 0 || targetIndex < 0) return;
@@ -1040,7 +997,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
         (profile) =>
           profile.displayName.toLowerCase().includes(normalizedSearch) ||
           profile.authMethodLabel.toLowerCase().includes(normalizedSearch) ||
-          profile.identityHint?.toLowerCase().includes(normalizedSearch) === true ||
           profile.note?.toLowerCase().includes(normalizedSearch) === true,
       ) === true
     );
@@ -1100,9 +1056,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       : selectedProfilesState?.profiles.find(
           (profile) => profile.credentialId === profileActionsId,
         );
-  const profileActionsMethod = selectedProfilesProvider?.acquisitionOptions.find(
-    (option) => option.kind === profileActions?.acquisitionKind,
-  );
   const ProfileActionsAuthIcon =
     profileActions?.acquisitionKind === "api_key"
       ? KeyRound
@@ -1159,17 +1112,34 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       managed?.recordError !== undefined ||
       managed?.implementationAvailable === false;
     const hasManagedProfiles = (managed?.profiles.length ?? 0) > 0;
-    const statusTone = hasError || active?.health === "reconnect_required" ? "error" :
-      active?.health === "ready" ? "good" : hasManagedProfiles ? "warning" : "neutral";
-    const statusLabel = hasError ? "Provider error" : active?.health === "reconnect_required" ? "Reconnect required" :
-      active?.health === "ready" ? "Provider available" : hasManagedProfiles ? "Select or verify a Profile" : "Not connected";
+    const ambientConfigured =
+      managed?.profiles.length === 0 &&
+      managed.ambient?.status === "configured";
+    const statusTone = hasError
+      ? "error"
+      : active !== undefined || ambientConfigured
+        ? "good"
+        : hasManagedProfiles
+          ? "warning"
+          : "neutral";
+    const statusLabel = hasError
+      ? "Provider error"
+      : active !== undefined || ambientConfigured
+        ? "Provider available"
+        : hasManagedProfiles
+          ? "Select an active Profile"
+          : "Not connected";
     const credentialSummary = active !== undefined
       ? { label: active.displayName, actionLabel: `Manage ${provider.name} profiles`,
           description: `Active Profile: ${active.displayName}. ${statusLabel}`, title: `Active Profile: ${active.displayName}` }
       : hasManagedProfiles ? { label: "Select a Profile", actionLabel: `Manage ${provider.name} profiles`,
           description: `Select an active Profile. ${statusLabel}`, title: "Select an active Profile" } : undefined;
+    const usageRow = providerUsageById[provider.providerId];
     const usagePresentation = projectProviderCardUsage(
-      providerUsageById[provider.providerId],
+      active !== undefined &&
+        usageRow?.credentialId === active.credentialId
+        ? usageRow
+        : undefined,
       Date.now(),
     );
     const usageText = [
@@ -1178,10 +1148,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       ...usagePresentation.secondary,
     ].filter((part): part is string => part !== undefined).join(" · ");
     const usageRefreshing = usageRefreshingProviders.has(provider.providerId);
-    // The card is shown whenever the Provider has a usage source (a managed
-    // Profile or a verified external Codex login) and something to say: the
-    // WHAM windows, the "not refreshed" cue, or the bounded external prompt.
-    const showUsage = providerHasCredentialSource(managed) &&
+    // Usage belongs to the selected Profile, not the Provider card itself.
+    const showUsage = active !== undefined &&
       (usagePresentation.primary.length > 0 ||
         usagePresentation.secondary.length > 0 ||
         usagePresentation.status !== undefined);
@@ -1341,10 +1309,13 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                   }
                   title={
                     option.state === "already_connected"
-                      ? "Already connected. Reconnect it from Profiles."
+                      ? "A local login Profile already exists. Remove it first to add another."
                       : `Add ${option.label}`
                   }
-                  disabled={busyProvider !== undefined}
+                  disabled={
+                    busyProvider !== undefined ||
+                    option.state === "already_connected"
+                  }
                   onClick={() => openAdd(provider, option)}
                 >
                   <Icon size={21} aria-hidden="true" />
@@ -1588,13 +1559,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                 <p>No Profiles have been added to this Provider.</p>
               ) : (
                 <ul className="secondary-card-list profile-card-list">
-                  {[...selectedProfilesState.profiles]
-                    .sort(
-                      (left, right) =>
-                        left.priority - right.priority ||
-                        left.createdAt - right.createdAt,
-                    )
-                    .map((profile) => {
+                  {selectedProfilesState.profiles.map((profile) => {
                       const editing = editingProfileId === profile.credentialId;
                       const actionsOpen =
                         profileActionsId === profile.credentialId;
@@ -1613,14 +1578,14 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                         (profile.authType === "api_key"
                           ? "API key"
                           : "OAuth account");
-                      const healthTone =
-                        profile.health === "ready"
-                          ? "good"
-                          : profile.health === "reconnect_required"
-                            ? "error"
-                            : profile.health === "disabled"
-                              ? "neutral"
-                              : "warning";
+                      const profileStateLabel = !profile.enabled
+                        ? "disabled"
+                        : active
+                          ? "active"
+                          : "enabled";
+                      const profileTone = active && profile.enabled
+                        ? "good"
+                        : "neutral";
                       return (
                         <li
                           className={`secondary-card profile-card${active ? " active" : ""}`}
@@ -1711,19 +1676,16 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                                 <span className="secondary-card-meta">
                                   <AuthIcon size={16} aria-hidden="true" />
                                   {authLabel}
-                                  {profile.identityHint === undefined
-                                    ? ""
-                                    : ` · ${profile.identityHint}`}
                                 </span>
                                 <span className="secondary-card-meta">
                                   <span
-                                    className={`status-dot ${healthTone}`}
+                                    className={`status-dot ${profileTone}`}
                                     role="img"
-                                    aria-label={profile.health.replaceAll("_", " ")}
-                                    title={profile.health.replaceAll("_", " ")}
+                                    aria-label={profileStateLabel}
+                                    title={profileStateLabel}
                                   />
                                   {profile.lastSucceededAt === undefined
-                                    ? profile.health.replaceAll("_", " ")
+                                    ? profileStateLabel
                                     : `Last success ${new Date(profile.lastSucceededAt).toLocaleString()}`}
                                 </span>
                               </div>
@@ -1833,45 +1795,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                   <small>Edit Profile-owned labels</small>
                 </span>
               </button>
-              {profileActionsMethod?.interactive === true ? (
-                <button
-                  type="button"
-                  aria-label="Reconnect"
-                  onClick={() => {
-                    setProfileActionsId(undefined);
-                    openReconnect(selectedProfilesProvider, profileActions);
-                  }}
-                >
-                  <RefreshCw size={18} aria-hidden="true" />
-                  <span>
-                    <strong>Reconnect</strong>
-                    <small>Replace this Profile's sign-in</small>
-                  </span>
-                </button>
-              ) : null}
-              {selectedProfilesState.activeCredentialId ===
-              profileActions.credentialId ? (
-                <button
-                  type="button"
-                  aria-label="Recheck"
-                  onClick={() => {
-                    setProfileActionsId(undefined);
-                    if (selectedProfilesState.revision === undefined) return;
-                    void executeProfileCommand({
-                      command: "recheck",
-                      providerId: selectedProfilesProvider.providerId,
-                      credentialId: profileActions.credentialId,
-                      expectedRevision: selectedProfilesState.revision,
-                    });
-                  }}
-                >
-                  <ShieldCheck size={18} aria-hidden="true" />
-                  <span>
-                    <strong>Recheck</strong>
-                    <small>Verify this Profile now</small>
-                  </span>
-                </button>
-              ) : null}
               <button
                 type="button"
                 aria-label={profileActions.enabled ? "Disable" : "Enable"}
@@ -1968,29 +1891,23 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                     );
                   }}
                 >
-                  {authModal.mode === "add" ? (
-                    <>
-                      <label>
-                        <span>Profile name</span>
-                        <input
-                          value={profileName}
-                          maxLength={64}
-                          autoFocus={authModal.acquisitionKind !== "api_key"}
-                          onChange={(event) => setProfileName(event.currentTarget.value)}
-                        />
-                      </label>
-                      <label>
-                        <span>Note (optional)</span>
-                        <textarea
-                          value={profileNote}
-                          maxLength={200}
-                          onChange={(event) => setProfileNote(event.currentTarget.value)}
-                        />
-                      </label>
-                    </>
-                  ) : (
-                    <p>Reconnect {profileName} using {authMethod?.label}.</p>
-                  )}
+                  <label>
+                    <span>Profile name</span>
+                    <input
+                      value={profileName}
+                      maxLength={64}
+                      autoFocus={authModal.acquisitionKind !== "api_key"}
+                      onChange={(event) => setProfileName(event.currentTarget.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Note (optional)</span>
+                    <textarea
+                      value={profileNote}
+                      maxLength={200}
+                      onChange={(event) => setProfileNote(event.currentTarget.value)}
+                    />
+                  </label>
                   {authModal.acquisitionKind === "api_key" ? (
                     <label>
                       <span>API key</span>
@@ -2003,24 +1920,16 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       />
                     </label>
                   ) : null}
-                  {authModal.mode === "add" ? <label>
-                    <input
-                      type="checkbox"
-                      checked={useNow}
-                      onChange={(event) => setUseNow(event.currentTarget.checked)}
-                    />
-                    Use this Profile for new requests
-                  </label> : null}
                   <div className="button-row">
                     <button
                       type="submit"
                       disabled={
-                        (authModal.mode === "add" && profileName.trim().length === 0) ||
+                        profileName.trim().length === 0 ||
                         (authModal.acquisitionKind === "api_key" &&
                           apiKeyValue.length === 0)
                       }
                     >
-                      {authModal.mode === "add" ? "Continue" : "Reconnect"}
+                      Continue
                     </button>
                     <button type="button" className="secondary" onClick={cancelAuth}>
                       Cancel
