@@ -1058,6 +1058,30 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       ? undefined
       : profileByProvider.get(profilesProviderId);
   const selectedProfilesCount = selectedProfilesState?.profiles.length ?? 0;
+  const selectedProfileAuthTypes: readonly AuthType[] =
+    selectedProfilesState === undefined
+      ? []
+      : (["api_key", "oauth"] as const).filter((authType) =>
+          selectedProfilesState.profiles.some(
+            (profile) => profile.authType === authType,
+          ),
+        );
+  const toggleProfileSwitchPolicy = (authType: AuthType): void => {
+    if (
+      selectedProfilesProvider === undefined ||
+      selectedProfilesState?.revision === undefined ||
+      selectedProfilesState.switchPolicy === undefined ||
+      busyProvider !== undefined
+    ) return;
+    const policy = selectedProfilesState.switchPolicy;
+    void executeProfileCommand({
+      command: "set_switch_policy",
+      providerId: selectedProfilesProvider.providerId,
+      expectedRevision: selectedProfilesState.revision,
+      apiKeyOn429: authType === "api_key" ? !policy.apiKeyOn429 : policy.apiKeyOn429,
+      oauthOn429: authType === "oauth" ? !policy.oauthOn429 : policy.oauthOn429,
+    });
+  };
   const profileActions =
     profileActionsId === undefined
       ? undefined
@@ -1096,33 +1120,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
   const authMethod = authProvider?.authMethods.find(
     (method) => method.authType === authModal?.authType,
   );
-  const authProviderState = authModal === undefined
-    ? undefined
-    : profileByProvider.get(authModal.providerId);
-  const authSwitchPolicy = authProviderState?.switchPolicy;
-  const authFallbackOn = authModal?.authType === "api_key"
-    ? authSwitchPolicy?.apiKeyOn429
-    : authSwitchPolicy?.oauthOn429;
-
-  const toggleAuthFallback = (): void => {
-    if (
-      authModal === undefined ||
-      authProviderState?.revision === undefined ||
-      authSwitchPolicy === undefined ||
-      busyProvider !== undefined
-    ) return;
-    void executeProfileCommand({
-      command: "set_switch_policy",
-      providerId: authModal.providerId,
-      expectedRevision: authProviderState.revision,
-      apiKeyOn429: authModal.authType === "api_key"
-        ? !authSwitchPolicy.apiKeyOn429
-        : authSwitchPolicy.apiKeyOn429,
-      oauthOn429: authModal.authType === "oauth"
-        ? !authSwitchPolicy.oauthOn429
-        : authSwitchPolicy.oauthOn429,
-    });
-  };
 
   const renderCompactProviderCard = (
     provider: ProviderOption,
@@ -1527,6 +1524,38 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
             </div>
 
             <div className="secondary-card-modal-body">
+              {selectedProfileAuthTypes.length === 0 ? null : (
+                <div className="profile-switch-policy">
+                  {selectedProfileAuthTypes.map((authType) => {
+                    const method = selectedProfilesProvider.authMethods.find(
+                      (candidate) => candidate.authType === authType,
+                    );
+                    const label = method?.authMethodLabel ?? authType;
+                    const enabled = authType === "api_key"
+                      ? selectedProfilesState.switchPolicy?.apiKeyOn429
+                      : selectedProfilesState.switchPolicy?.oauthOn429;
+                    return (
+                      <div className="settings-action-row" key={authType}>
+                        <div className="settings-action-copy">
+                          <strong>Switch Profiles after HTTP 429</strong>
+                          <p>{label} · Only within this Provider and sign-in method.</p>
+                        </div>
+                        <button
+                          type="button"
+                          className={`switch-control${enabled ? " on" : ""}`}
+                          aria-label={`${enabled ? "Disable" : "Enable"} HTTP 429 Profile switching for ${selectedProfilesProvider.name} ${label}`}
+                          aria-pressed={enabled ?? false}
+                          disabled={busyProvider !== undefined || selectedProfilesState.switchPolicy === undefined}
+                          onClick={() => toggleProfileSwitchPolicy(authType)}
+                          title={enabled ? "Disable HTTP 429 Profile switching" : "Enable HTTP 429 Profile switching"}
+                        >
+                          <span aria-hidden="true" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {selectedProfilesState.profiles.length === 0 ? (
                 <p>No Profiles have been added to this Provider.</p>
               ) : (
@@ -1873,26 +1902,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                 onClick={cancelAuth}
               >
                 ×
-              </button>
-            </div>
-
-            <div className="settings-action-row">
-              <div className="settings-action-copy">
-                <strong>Switch Profiles after HTTP 429</strong>
-                <p>{authSwitchPolicy === undefined
-                  ? "Add a Profile to configure switching."
-                  : "Only within this Provider and sign-in method."}</p>
-              </div>
-              <button
-                type="button"
-                className={`switch-control${authFallbackOn ? " on" : ""}`}
-                aria-label={`${authFallbackOn ? "Disable" : "Enable"} HTTP 429 Profile switching for ${authProvider.name} ${authMethod?.authMethodLabel ?? authModal.authType}`}
-                aria-pressed={authFallbackOn ?? false}
-                disabled={busyProvider !== undefined || authSwitchPolicy === undefined}
-                onClick={toggleAuthFallback}
-                title={authFallbackOn ? "Disable HTTP 429 Profile switching" : "Enable HTTP 429 Profile switching"}
-              >
-                <span aria-hidden="true" />
               </button>
             </div>
 

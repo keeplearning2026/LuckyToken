@@ -2,7 +2,7 @@
 
 ## 1. 核心规则
 
-所有 profile 使用同一个数据模型、列表、选择字段和 action 接口。凭证获取方式只在 Backend 内部决定具体实现，不向用户暴露“本地”“external”“只读”等 profile 类别。
+所有 profile 使用同一个数据模型、列表、选择字段和 action 接口。凭证获取方式只在 Backend 内部决定具体实现；唯一的公开标注是本地 Codex 自动登录项的 displayName 带 ` (LOCAL CODEX)` 后缀，external、只读等其他 profile 类别不向用户暴露。
 
 本地 Codex 自动登录封装成一个完整操作，**内部固定执行：**
 
@@ -25,7 +25,7 @@
 
 - 使用私有 `acquisition?: "codex_local"` 标记定位自动登录项，不按名称、账号或 token 内容识别。
 - 清除所有匹配旧项后，使用受限文件读取和现有 Codex ChatGPT 解析器获取当前凭证。
-- 创建普通随机 `credentialId` 和新的 `credentialGeneration`；名称使用最小未占用的 `Profile N`，排序追加到列表末尾。
+- 创建普通随机 `credentialId` 和新的 `credentialGeneration`；名称使用最小未占用的 `Profile N` 基名并追加 ` (LOCAL CODEX)`，排序追加到列表末尾。rename 时提交的名字与当前名字不同，就在新名字后追加同一后缀；名字没变则保持原样，不重复追加。
 - 有效凭证写入 Token 管理的 incarnation 文件。后续请求和刷新使用该文件，不继续引用原 `.codex/auth.json`。
 - 本地缺失、不可读或无法解析时，仍创建这一份 profile，但没有可用凭证，绝不保留旧 token。
 - 可解析的过期 OAuth 凭证按原值导入，后续由普通 Pi OAuth 流程处理刷新；启动读取阶段不执行网络登录或刷新。
@@ -47,7 +47,7 @@
 
 沿用当前统一 profile 命令接口：
 
-- Rename / note、Recheck、Disable / Enable、Remove、排序和选中共用普通 profile 实现。
+- Rename / note、Recheck、Disable / Enable、Remove、排序和选中共用普通 profile 实现；本地项的 rename 走同一实现，只在名字变化时追加 ` (LOCAL CODEX)` 后缀。
 - Reconnect 在 Backend 查找目标 profile 的凭证获取方式：本地获取调用完整自动登录模块；手动获取执行现有 Provider 登录流程。
 - 本地 Reconnect 必须先校验目标 ID 和记录 revision，再执行模块，防止旧命令清除当前项。
 - 本地 Reconnect 返回实际新建的 profile ID 和凭证代次，供 Backend 后续认证、目录检查和状态发布使用；不再按已删除的旧 ID安排后续任务。
@@ -83,6 +83,6 @@ Settings → `.codex agent` 增加：
 - **Actions：** 两种创建方式均可使用完整菜单；本地 Reconnect 调用共享模块，Recheck 不读取本地源，启动开关不阻止显式 Reconnect。
 - **实际请求：** 双向切换后 Provider Native、Semantic Conversion 和 usage 使用选中项；不可用项不回落到其他账号；429 候选规则不区别来源。
 - **事务与刷新：** revision 冲突、写入失败、旧结果发布和 GC 不产生半成品、重复项或错误状态；刷新只更新 Token 管理的文件。
-- **设置与 UI：** 默认值、持久化、下次启动生效、关闭时不调用模块；公开 DTO 和菜单不暴露 acquisition 标记或来源类别。
+- **设置与 UI：** 默认值、持久化、下次启动生效、关闭时不调用模块；公开 DTO 和菜单不暴露 acquisition 标记，除 displayName 的 ` (LOCAL CODEX)` 后缀外不暴露其他来源类别。
 
 所有 Codex 测试使用新临时 `CODEX_HOME`、合成凭证和显式路径，不读取或复制用户真实 auth。验收运行 `npm run typecheck`、`npm run lint` 和 guarded `npm test`。

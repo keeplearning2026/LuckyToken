@@ -573,7 +573,7 @@ Implementation responsibilities:
 - `ProvidersPage.tsx` owns Provider selection and high-level page refresh only;
 - a credential-management feature Module owns the selected Provider's sanitized rows, filters, mutation drafts, confirmations, conflicts, and re-query after mutation;
 - the existing auth interaction UI is extracted as a reusable login/reconnect Module without moving Provider auth logic into Renderer;
-- every add, reconnect, 429-setting, search, row, and confirmation label uses Backend-projected `authMethodLabel`; default display names remain neutral `Profile N` suggestions;
+- every add, reconnect, 429-setting, search, row, and confirmation label uses Backend-projected `authMethodLabel`; manual add default display names remain neutral `Profile N` suggestions, while the local Codex auto-login Profile carries the Token-owned ` (LOCAL CODEX)` display suffix;
 - destructive confirmations distinguish local `Remove from Token` from OAuth `Disconnect from Token`, use the Provider-declared auth label, and never claim remote revocation;
 - closing/reopening the view performs a fresh query and reconstructs all state from Backend authority;
 - management remains usable when the Data Plane listener is stopped or failed.

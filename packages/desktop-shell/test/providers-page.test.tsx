@@ -866,7 +866,7 @@ describe("Providers Profile product slice", () => {
     });
   });
 
-  it("places method-specific HTTP 429 switching in the sign-in dialog", async () => {
+  it("places method-specific HTTP 429 switching in the Profiles dialog", async () => {
     const executeCredentialProfiles = vi.fn(async (command) => {
       const result = managedProfiles();
       if (command.command !== "set_switch_policy") return result;
@@ -886,6 +886,9 @@ describe("Providers Profile product slice", () => {
     await render({ profiles: managedProfiles(), executeCredentialProfiles });
     expect(container.querySelector('.provider-card [aria-label*="HTTP 429"]')).toBeNull();
     await clickAria("Add AWS credentials or bearer token");
+    expect(container.querySelector('[aria-label*="HTTP 429"]')).toBeNull();
+    await clickAria("Close sign in");
+    await clickAria("Manage AWS Provider profiles");
     const fallback = ariaButton("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
     expect(fallback.getAttribute("aria-pressed")).toBe("false");
     await clickAria("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
@@ -902,8 +905,6 @@ describe("Providers Profile product slice", () => {
     expect(enabledFallback.classList.contains("on")).toBe(true);
     expect(enabledFallback.getAttribute("title")).toBe("Disable HTTP 429 Profile switching");
 
-    await clickAria("Close sign in");
-    await clickAria("Add AWS organization sign-in");
     await clickAria("Enable HTTP 429 Profile switching for AWS Provider AWS organization sign-in");
     expect(executeCredentialProfiles).toHaveBeenLastCalledWith({
       command: "set_switch_policy",
@@ -914,11 +915,24 @@ describe("Providers Profile product slice", () => {
     });
   });
 
-  it("explains why HTTP 429 switching is unavailable before the first Profile", async () => {
+  it("does not expose HTTP 429 switching before the first Profile", async () => {
     await render();
     await clickAria("Add AWS credentials or bearer token");
-    expect(container.textContent).toContain("Add a Profile to configure switching.");
-    expect(ariaButton("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token").disabled).toBe(true);
+    expect(container.querySelector('[aria-label*="HTTP 429"]')).toBeNull();
+    await clickAria("Close sign in");
+    expect(container.querySelector('[aria-label*="HTTP 429"]')).toBeNull();
+  });
+
+  it("shows the HTTP 429 switch only for auth branches that have Profiles", async () => {
+    const singleBranch = managedProfiles();
+    const provider = singleBranch.state.providers[0]!;
+    provider.profiles = provider.profiles.filter(
+      (profile) => profile.authType === "api_key",
+    );
+    await render({ profiles: singleBranch });
+    await clickAria("Manage AWS Provider profiles");
+    expect(ariaButton("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token")).toBeTruthy();
+    expect(container.querySelector('[aria-label*="HTTP 429 Profile switching for AWS Provider AWS organization sign-in"]')).toBeNull();
   });
 
   it("queries cached Provider usage on page load and refreshes on usage double-click", async () => {

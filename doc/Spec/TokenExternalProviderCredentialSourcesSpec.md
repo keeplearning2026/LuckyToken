@@ -31,7 +31,7 @@ The generic `createKeyedSingleFlight()` coalesces the configured source's verifi
 
 ## Adapters and composition
 
-- `codex-local-login.ts` owns local Codex acquisition into an ordinary Profile: stage removal, read/parse, publish a fresh credential incarnation and Profile in one transaction. It is outside the external binding contract. The source file remains unchanged; subsequent Pi refresh updates only the Token-owned incarnation.
+- `codex-local-login.ts` owns local Codex acquisition into an ordinary Profile: stage removal, read/parse, publish a fresh credential incarnation and Profile in one transaction. It is outside the external binding contract. Its Profile display name carries the ` (LOCAL CODEX)` suffix, appended to a changed name on rename. The source file remains unchanged; subsequent Pi refresh updates only the Token-owned incarnation.
 - `api-key-file-source.ts` reads a single non-empty plaintext key, trimming surrounding whitespace and rejecting embedded newlines or NUL. It supplies `{ type: "api_key", key }` and uses a key hash as grant identity. With no account evidence, a different key is a different grant; an old capture cannot consume it. Whitespace changes revision without changing identity. It has no refresh delegate.
 - Another login JSON format supplies its own decoder to the same factory. A cloud-profile credential may supply Pi's API-key branch with Provider-owned `env`; the plaintext adapter does not interpret such documents.
 

@@ -360,6 +360,8 @@ button.secondary { background: var(--surface); color: var(--text); box-shadow: i
 .settings-action-row button:not(.switch-control, .settings-icon-button):hover, .settings-form-actions button:not(.settings-icon-button):hover, .confirmation-panel button:hover { background: var(--settings-button-hover); }
 .settings-action-row button:disabled, .settings-form-actions button:disabled { opacity: .42; cursor: default; }
 .settings-action-row > .switch-control { flex: 0 0 auto; }
+.profile-switch-policy { margin-bottom: 16px; }
+.profile-switch-policy .settings-action-row:first-child { border-top: 0; padding-top: 0; }
 .settings-form-actions .agent-sync { display: inline-flex; align-items: center; gap: 8px; }
 .settings-icon-button { flex: 0 0 auto; width: 38px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--text); padding: 0; }
 .settings-icon-button:hover { background: var(--surface-muted); }

@@ -1,5 +1,6 @@
 import { CredentialProfileOperationError } from "./profile-contract.js";
 import { parseCodexInternalAuth } from "./codex-internal-auth.js";
+import { codexLocalProfileDisplayName } from "./codex-local-profile-name.js";
 import { readExternalCredentialFile } from "./external-credential-file.js";
 import {
   credentialProfileCarrier,
@@ -35,7 +36,10 @@ export function createCodexLocalLogin(options: {
         const credential = file.state === "ok" ? parseCodexInternalAuth(file.raw) ?? null : null;
         const names = new Set(profiles.map((profile) => profile.displayName.toLocaleLowerCase()));
         let index = 1;
-        while (names.has(`profile ${index}`)) index += 1;
+        while (
+          names.has(`profile ${index}`) ||
+          names.has(codexLocalProfileDisplayName(`Profile ${index}`).toLocaleLowerCase())
+        ) index += 1;
         let maximumPriority = profiles.reduce((maximum, item) => Math.max(maximum, item.priority), -1);
         if (maximumPriority === Number.MAX_SAFE_INTEGER) {
           profiles = [...profiles].sort((left, right) =>
@@ -47,7 +51,7 @@ export function createCodexLocalLogin(options: {
         const profile = {
           credentialId, credentialGeneration, acquisition: "codex_local" as const,
           authType: "oauth" as const, authMethodLabel: options.authMethodLabel(),
-          displayName: `Profile ${index}`, enabled: true,
+          displayName: codexLocalProfileDisplayName(`Profile ${index}`), enabled: true,
           priority: maximumPriority + 1,
           createdAt: time, updatedAt: time,
           ...credentialProfileCarrier("openai-codex", credentialId, credentialGeneration, credential),

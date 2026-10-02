@@ -27,8 +27,9 @@ The management UI is organized around user tasks rather than internal subsystems
   managed Profile is active for subsequent requests; switching never changes
   the client protocol or data-plane lane.
 - Local Codex auto-login and manual login produce equal ordinary Profiles with
-  the same actions, selector, counts and HTTP 429 candidate rules. Credential
-  acquisition stays private to the Backend.
+  the same actions, selector, counts and HTTP 429 candidate rules. The local
+  auto-login Profile carries the ` (LOCAL CODEX)` display-name suffix;
+  otherwise credential acquisition stays private to the Backend.
 - Profiles support notes, priority, enable/disable, explicit activation,
   reconnect, local removal, and separately configurable default-off HTTP 429
   switching for the Provider's two Pi auth branches. A request makes at most
@@ -50,7 +51,9 @@ The management UI is organized around user tasks rather than internal subsystems
 
 - By default, Backend startup rebuilds one ordinary Profile from the current
   local Codex ChatGPT login. Settings → `.codex agent` → “启动时自动登录本地 Codex”
-  controls the next startup. Turning it off preserves existing Profiles.
+  controls the next startup. Turning it off preserves existing Profiles. The
+  local Profile is named `Profile N (LOCAL CODEX)`; renaming it appends the
+  suffix to the new name when the name changes.
 - Startup and Reconnect share atomic removal/read/create publication. Each run
   creates fresh IDs and default metadata, retains other Profiles, and preserves
   their selection. Missing or invalid local login creates a Profile needing

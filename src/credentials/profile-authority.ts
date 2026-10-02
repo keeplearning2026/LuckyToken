@@ -20,6 +20,8 @@ import {
   ProviderCredentialRecordSyntaxError,
 } from "./profile-record-store.js";
 
+import { codexLocalProfileDisplayName } from "./codex-local-profile-name.js";
+
 import {
   CredentialProfileOperationError,
   MAX_PROFILE_ATTEMPTS_PER_REQUEST,
@@ -1163,9 +1165,17 @@ export function createProviderCredentialProfiles(options: {
             if (profileIndex < 0) {
               return { kind: "unchanged", value: "unknown_profile" as const };
             }
+            const target = current.profiles[profileIndex]!;
             const normalizedName = input.displayName.trim();
+            const effectiveName =
+              target.acquisition === "codex_local" && normalizedName !== target.displayName
+                ? codexLocalProfileDisplayName(normalizedName)
+                : normalizedName;
+            if (!validDisplayName(effectiveName)) {
+              return { kind: "unchanged", value: "invalid_name" as const };
+            }
             if (
-              metadataContainsSecret(normalizedName, input.note, secretCredentials)
+              metadataContainsSecret(effectiveName, input.note, secretCredentials)
             ) {
               return { kind: "unchanged", value: "invalid_secret" as const };
             }
@@ -1173,15 +1183,14 @@ export function createProviderCredentialProfiles(options: {
               current.profiles.some(
                 (profile, index) =>
                   index !== profileIndex &&
-                  profile.displayName.toLocaleLowerCase() === normalizedName.toLocaleLowerCase(),
+                  profile.displayName.toLocaleLowerCase() === effectiveName.toLocaleLowerCase(),
               )
             ) {
               return { kind: "unchanged", value: "duplicate" as const };
             }
-            const target = current.profiles[profileIndex]!;
             const updated: PersistedCredentialProfileV2 = {
               ...withoutNote(target),
-              displayName: normalizedName,
+              displayName: effectiveName,
               ...(input.note === undefined ? {} : { note: input.note }),
               updatedAt: options.now(),
             };
@@ -1202,6 +1211,12 @@ export function createProviderCredentialProfiles(options: {
             return Object.freeze({
               outcome: "invalid",
               error: "Profile metadata must not contain stored credential secrets",
+            });
+          }
+          if (result.value === "invalid_name") {
+            return Object.freeze({
+              outcome: "invalid",
+              error: "Profile name is too long after adding the LOCAL CODEX label",
             });
           }
           return Object.freeze({ outcome: result.value });

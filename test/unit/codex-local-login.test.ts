@@ -52,12 +52,16 @@ function fixture(store: ProviderCredentialRecordStore, authPath: string) {
 }
 const memory = () => createInMemoryProviderCredentialRecordStore({ createRevision: randomUUID });
 
-async function sibling(store: ProviderCredentialRecordStore) {
+/** Add a manual sibling and rename the local Profile to exercise renamed/local states. */
+async function addManualSibling(
+  store: ProviderCredentialRecordStore,
+  displayName = "Profile 1",
+) {
   const current = (await store.read(providerId))!;
   const id = randomUUID();
   const generation = randomUUID();
   const other: PersistedCredentialProfileV2 = {
-    credentialId: id, credentialGeneration: generation, displayName: "Profile 1",
+    credentialId: id, credentialGeneration: generation, displayName,
     authType: "oauth", authMethodLabel: provider.auth.oauth!.name,
     enabled: true, priority: 1, createdAt: 1, updatedAt: 1, kind: "unavailable",
   };
@@ -77,18 +81,20 @@ describe("shared local Codex acquisition", () => {
       const state = fixture(store, authPath);
       await writeFile(authPath, document());
       const first = await state.login();
-      const other = await sibling(store);
+      const other = await addManualSibling(store);
       let record = (await store.read(providerId))!;
       await state.management.updateMetadata({
         providerId, credentialId: first.credentialId, expectedRevision: record.revision,
         displayName: "Renamed", note: "old note",
       });
       record = (await store.read(providerId))!;
+      expect(record.profiles.find((item) => item.credentialId === first.credentialId))
+        .toMatchObject({ displayName: "Renamed (LOCAL CODEX)" });
       const second = await state.login({ credentialId: first.credentialId, expectedRevision: record.revision });
       record = (await store.read(providerId))!;
       expect(record.activeCredentialId).toBe(second.credentialId);
       expect(record.profiles.map((item) => item.credentialId)).toEqual([other, second.credentialId]);
-      expect(record.profiles[1]).toMatchObject({ displayName: "Profile 2", enabled: true, priority: 2 });
+      expect(record.profiles[1]).toMatchObject({ displayName: "Profile 2 (LOCAL CODEX)", enabled: true, priority: 2 });
       expect(record.profiles[1]).not.toHaveProperty("note");
       expect(second.credentialGeneration).not.toBe(first.credentialGeneration);
       await state.management.activate({ providerId, credentialId: other, expectedRevision: record.revision });
@@ -109,6 +115,71 @@ describe("shared local Codex acquisition", () => {
       expect(JSON.parse(await readFile(authPath, "utf8")).tokens.refresh_token).toBe("refresh-account-a");
     }));
   }
+
+  it("appends the LOCAL CODEX label only when a local Profile name changes", async () => isolated(async (_root, authPath) => {
+    const store = memory();
+    const state = fixture(store, authPath);
+    await writeFile(authPath, document());
+    const local = await state.login();
+    expect((await store.read(providerId))!.profiles[0])
+      .toMatchObject({ displayName: "Profile 1 (LOCAL CODEX)" });
+    const manual = await addManualSibling(store);
+    let record = (await store.read(providerId))!;
+    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
+      .toMatchObject({ displayName: "Old local" });
+    const renamed = await state.management.updateMetadata({
+      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
+      displayName: "Work", note: "first note",
+    });
+    expect(renamed.outcome).toBe("ok");
+    record = (await store.read(providerId))!;
+    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
+      .toMatchObject({ displayName: "Work (LOCAL CODEX)", note: "first note" });
+    const unchanged = await state.management.updateMetadata({
+      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
+      displayName: "Work (LOCAL CODEX)", note: "second note",
+    });
+    expect(unchanged.outcome).toBe("ok");
+    record = (await store.read(providerId))!;
+    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
+      .toMatchObject({ displayName: "Work (LOCAL CODEX)", note: "second note" });
+    const manualRename = await state.management.updateMetadata({
+      providerId, credentialId: manual, expectedRevision: record.revision,
+      displayName: "Manual",
+    });
+    expect(manualRename.outcome).toBe("ok");
+    record = (await store.read(providerId))!;
+    expect(record.profiles.find((item) => item.credentialId === manual))
+      .toMatchObject({ displayName: "Manual" });
+    const doubled = await state.management.updateMetadata({
+      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
+      displayName: "Work (LOCAL CODEX) 2",
+    });
+    expect(doubled.outcome).toBe("ok");
+    record = (await store.read(providerId))!;
+    expect(record.profiles.find((item) => item.credentialId === local.credentialId))
+      .toMatchObject({ displayName: "Work (LOCAL CODEX) 2 (LOCAL CODEX)" });
+    const tooLong = await state.management.updateMetadata({
+      providerId, credentialId: local.credentialId, expectedRevision: record.revision,
+      displayName: "x".repeat(51),
+    });
+    expect(tooLong).toMatchObject({
+      outcome: "invalid",
+      error: "Profile name is too long after adding the LOCAL CODEX label",
+    });
+  }));
+
+  it("skips a base already used by a suffixed manual sibling", async () => isolated(async (_root, authPath) => {
+    const store = memory();
+    const state = fixture(store, authPath);
+    await writeFile(authPath, document());
+    await state.login();
+    await addManualSibling(store, "Profile 1 (LOCAL CODEX)");
+    const next = await state.login();
+    const record = (await store.read(providerId))!;
+    expect(record.profiles.find((item) => item.credentialId === next.credentialId))
+      .toMatchObject({ displayName: "Profile 2 (LOCAL CODEX)" });
+  }));
 
   for (const input of ["missing", "directory", "empty", "json", "mode", "oversize", "expiry"] as const) {
     it(`replaces previous credentials with unavailable for ${input}`, async () => isolated(async (_root, authPath) => {
@@ -278,7 +349,7 @@ describe("shared local Codex acquisition", () => {
     const store = memory();
     const state = fixture(store, authPath);
     await state.login();
-    const other = await sibling(store);
+    const other = await addManualSibling(store);
     await state.management.setPriority({
       providerId, credentialId: other, priority: Number.MAX_SAFE_INTEGER,
       expectedRevision: (await store.read(providerId))!.revision,
