@@ -1,12 +1,14 @@
 import { join } from "node:path";
 
 /**
- * Codex-owned external `auth.json` source for the `openai-codex` provider.
+ * Codex-owned `auth.json` source for the `openai-codex` provider.
  *
- * The document is Codex's: Token reads it, may request an in-place refresh
- * through the Codex app-server, and never writes, copies, moves, or deletes
- * it. The same payload family is used for Token-internal Profiles, but the
- * two sources have different ownership, path, and refresh rules.
+ * The document is Codex's. Token reads it during local acquisition and never
+ * writes, moves, or deletes it. Imported credential material lives in a
+ * Token-owned Profile incarnation; subsequent Pi OAuth refresh updates that
+ * incarnation, never this document. The same payload family is used for
+ * Token-internal Profiles, but the two have different ownership, path, and
+ * refresh rules.
  */
 
 export const EXTERNAL_AUTH_PROVIDER_ID = "openai-codex" as const;
