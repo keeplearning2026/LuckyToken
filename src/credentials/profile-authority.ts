@@ -1144,6 +1144,38 @@ export function createProviderCredentialProfiles(options: {
       });
     },
 
+    async captureProfile(providerId: string, credentialId: string) {
+      const provider = providerFor(providerId);
+      if (provider === undefined) {
+        throw new ProviderAuthBindingError(
+          "unknown_provider",
+          "Provider implementation is unavailable",
+        );
+      }
+      let record: PersistedProviderCredentialRecord | undefined;
+      try {
+        record = await options.recordStore.read(providerId);
+      } catch (error) {
+        throw new ProviderAuthBindingError(
+          "storage_failure",
+          "Provider credential state could not be read",
+          { cause: error },
+        );
+      }
+      const profile = record?.profiles.find(
+        (candidate) => candidate.credentialId === credentialId,
+      );
+      if (record === undefined || profile === undefined) {
+        throw new ProviderAuthBindingError(
+          "stale_binding",
+          "Credential Profile no longer exists",
+        );
+      }
+      return Object.freeze({
+        facts: await profileFacts(provider, record, profile),
+      }) as ProfileProviderAuthBindingCapture;
+    },
+
     async createAcquisitionBinding(input: CreateAcquisitionBindingInput) {
       const provider = providerFor(input.providerId);
       if (provider === undefined) {
@@ -1319,7 +1351,7 @@ export function createProviderCredentialProfiles(options: {
       });
     },
 
-    async publishIfCurrent(capture, publish) {
+    async publishIfCurrent(capture, publish, optionsForPublication) {
       const facts = capture.facts;
       const provider = providerFor(facts.providerId);
       if (provider === undefined) return false;
@@ -1338,8 +1370,9 @@ export function createProviderCredentialProfiles(options: {
               current === undefined ||
               profile === undefined ||
               !profile.enabled ||
-              current.activeCredentialId !== facts.credentialId ||
-              current.selectionGeneration !== facts.selectionGeneration ||
+              (optionsForPublication?.requireActiveSelection !== false &&
+                (current.activeCredentialId !== facts.credentialId ||
+                  current.selectionGeneration !== facts.selectionGeneration)) ||
               profile.acquisitionKind !== facts.acquisitionKind ||
               profile.reference.owner !== facts.referenceOwner
             ) {

@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  projectProviderCardUsage,
+  projectProfileUsage,
   providerUsageRefreshFailureNotice,
   providerUsageRefreshNotice,
-} from "../src/renderer/providers/provider-usage-presentation.js";
+} from "../src/renderer/providers/profile-usage-presentation.js";
 
-describe("Provider usage presentation", () => {
+describe("Profile usage presentation", () => {
   it("keeps explicit refresh reachable before the initial cache query succeeds", () => {
-    expect(projectProviderCardUsage(undefined, 0)).toMatchObject({
+    expect(projectProfileUsage(undefined, 0)).toMatchObject({
       status: "Usage not refreshed",
       refreshable: true,
     });
@@ -27,7 +27,7 @@ describe("Provider usage presentation", () => {
 
   it("formats structured windows and balances without Provider wire knowledge", () => {
     expect(
-      projectProviderCardUsage(
+      projectProfileUsage(
         {
           providerId: "deepseek",
           credentialId: "profile-a",
@@ -55,7 +55,7 @@ describe("Provider usage presentation", () => {
   });
 
   it("keeps the initial refresh cue while leaving empty observations quiet", () => {
-    const emptyObservation = projectProviderCardUsage(
+    const emptyObservation = projectProfileUsage(
       {
         providerId: "openrouter",
         credentialId: "profile-a",
@@ -70,7 +70,7 @@ describe("Provider usage presentation", () => {
     expect(emptyObservation.refreshable).toBe(true);
     expect(emptyObservation.status).toBeUndefined();
     expect(
-      projectProviderCardUsage(
+      projectProfileUsage(
         {
           providerId: "openrouter",
           credentialId: "profile-a",
@@ -85,7 +85,7 @@ describe("Provider usage presentation", () => {
   });
 
   it("keeps failure messages independent of credential acquisition", () => {
-    expect(projectProviderCardUsage({ providerId: "openai-codex", credentialId: "profile-a", state: "unavailable", reason: "temporary" }, 0))
+    expect(projectProfileUsage({ providerId: "openai-codex", credentialId: "profile-a", state: "unavailable", reason: "temporary" }, 0))
       .toEqual({ primary: [], secondary: [], refreshable: true });
     expect(providerUsageRefreshNotice({ providerId: "openai-codex", credentialId: "profile-a", outcome: "unavailable", reason: "terminal" }))
       .toBe("Provider usage could not be refreshed.");
@@ -93,7 +93,7 @@ describe("Provider usage presentation", () => {
 
   it("groups every currency balance under one Balance label", () => {
     expect(
-      projectProviderCardUsage(
+      projectProfileUsage(
         {
           providerId: "deepseek",
           credentialId: "profile-a",
@@ -116,7 +116,7 @@ describe("Provider usage presentation", () => {
 
   it("does not offer refresh for passive-only observations, unsupported bindings, or destinations", () => {
     expect(
-      projectProviderCardUsage(
+      projectProfileUsage(
         {
           providerId: "anthropic",
           credentialId: "profile-a",
@@ -132,7 +132,7 @@ describe("Provider usage presentation", () => {
       primary: ["Week 22%"],
       refreshable: false,
     });
-    const unsupportedBinding = projectProviderCardUsage(
+    const unsupportedBinding = projectProfileUsage(
       {
         providerId: "anthropic",
         credentialId: "profile-a",
@@ -143,7 +143,7 @@ describe("Provider usage presentation", () => {
     );
     expect(unsupportedBinding).toMatchObject({ refreshable: false });
     expect(unsupportedBinding.status).toBeUndefined();
-    const unsupportedDestination = projectProviderCardUsage(
+    const unsupportedDestination = projectProfileUsage(
       {
         providerId: "deepseek",
         credentialId: "profile-a",

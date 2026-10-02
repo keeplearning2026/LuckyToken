@@ -91,9 +91,11 @@ export interface ProviderUsageSnapshotProjection {
 export type ProviderUsageCommand =
   | { readonly command: "query" }
   | {
-      /** Refresh the Provider's currently selected Profile. */
+      /** Refresh one exact Profile's usage. Omit credentialId to refresh the
+       * Provider's currently selected Profile. */
       readonly command: "refresh";
       readonly providerId: string;
+      readonly credentialId?: string;
     };
 
 export type ProviderUsageRefreshProjection =

@@ -58,7 +58,12 @@ export function createProviderUsageControlPlaneHandler(
         }),
       });
     }
-    const result = await authority.refresh(command.providerId, signal);
+    const result = await authority.refresh(command.providerId, {
+      ...(command.credentialId === undefined
+        ? {}
+        : { credentialId: command.credentialId }),
+      ...(signal === undefined ? {} : { signal }),
+    });
     return Object.freeze({
       outcome: "ok" as const,
       snapshot: Object.freeze({

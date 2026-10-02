@@ -133,8 +133,9 @@ export interface ProviderUsageProbe {
 }
 
 export interface ProviderUsageSnapshot {
-  /** At most one current active Profile row per Provider. Every row carries
-   * exact Profile identity. */
+  /** One row per current Profile per Provider. Every row carries exact
+   * Profile identity; inactive rows expose that Profile's own cached
+   * observation or `unobserved` state. */
   readonly profiles: readonly ProviderUsageState[];
 }
 
@@ -159,7 +160,13 @@ export type ProviderUsageRefreshResult =
 
 export interface ProviderUsageAuthority {
   query(): Promise<ProviderUsageSnapshot>;
-  refresh(providerId: string, signal?: AbortSignal): Promise<{
+  refresh(
+    providerId: string,
+    input?: {
+      readonly credentialId?: string;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<{
     readonly snapshot: ProviderUsageSnapshot;
     readonly refresh: ProviderUsageRefreshResult;
   }>;

@@ -386,17 +386,22 @@ export function decodeProviderUsageCommand(
   }
   if (
     value.command !== "refresh" ||
-    !hasOnlyKeys(value, ["command", "providerId"])
+    !hasOnlyKeys(value, ["command", "providerId", "credentialId"])
   ) {
     return undefined;
   }
   const id = providerId(value.providerId);
-  return id === undefined
-    ? undefined
-    : Object.freeze({
-        command: "refresh" as const,
-        providerId: id,
-      });
+  if (id === undefined) return undefined;
+  const cid =
+    value.credentialId === undefined
+      ? undefined
+      : credentialId(value.credentialId);
+  if (value.credentialId !== undefined && cid === undefined) return undefined;
+  return Object.freeze({
+    command: "refresh" as const,
+    providerId: id,
+    ...(cid === undefined ? {} : { credentialId: cid }),
+  });
 }
 
 function decodeRefresh(

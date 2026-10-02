@@ -319,7 +319,8 @@ describe("Providers Profile product slice", () => {
     });
 
     await clickAria("Manage AWS Provider profiles");
-    expect(container.textContent).not.toContain("Last success");
+    const successText = new Date(1_725_000_000_000).toLocaleString();
+    expect(container.textContent).not.toContain(successText);
 
     await act(async () => {
       listener?.({
@@ -339,7 +340,8 @@ describe("Providers Profile product slice", () => {
     });
 
     expect(executeCredentialProfiles).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Last success");
+    expect(container.textContent).toContain("active");
+    expect(container.textContent).toContain(successText);
   });
 
   it("keeps Provider facts on the outer card and Profile facts in secondary cards", async () => {
@@ -352,8 +354,14 @@ describe("Providers Profile product slice", () => {
       providerCard?.querySelector('[data-provider-icon="fallback"]')?.textContent,
     ).toBe("A");
     expect(
-      providerCard?.querySelector('[aria-label="1 published, 1 currently available"]'),
+      providerCard?.querySelector(
+        '.provider-card-actions [aria-label="1 published, 1 currently available"]',
+      ),
     ).not.toBeNull();
+    expect(
+      providerCard?.querySelector('[aria-label="Active Profile 1 of 2"]'),
+    ).not.toBeNull();
+    expect(providerCard?.textContent).toContain("1/2");
 
     const manageProfiles = providerCard?.querySelector(
       'button[aria-label="Manage AWS Provider profiles"]',
@@ -728,33 +736,121 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).not.toContain("Account 1");
   });
 
-  it("opens Profile actions in a separate tall tertiary card", async () => {
+  it("renders Profile actions inline on each Profile card", async () => {
     await render({ profiles: managedProfiles() });
     await clickAria("Manage AWS Provider profiles");
-    await clickAria("More actions for Incident account");
 
-    const incidentCard = container.querySelector('[data-profile-id="credential-b"]');
-    const actionsDialog = container.querySelector(
-      '.profile-actions-modal[role="dialog"][aria-label="Actions for Incident account"]',
+    const productionCard = container.querySelector(
+      '[data-profile-id="credential-a"]',
     );
-    expect(actionsDialog).not.toBeNull();
-    expect(incidentCard?.contains(actionsDialog)).toBe(false);
-    expect(incidentCard?.querySelector(".profile-actions-card")).toBeNull();
-    expect(actionsDialog?.textContent).toContain("Incident account");
-    expect(actionsDialog?.textContent).toContain("OAuth account");
-    expect(actionsDialog?.textContent).toContain("Rename / note");
-    expect(actionsDialog?.textContent).not.toContain("Reconnect");
-    expect(actionsDialog?.textContent).not.toContain("Recheck");
-    expect(actionsDialog?.textContent).toContain("Remove");
-
-    await clickAria("Close Profile actions");
-    await clickAria("More actions for Production role");
+    const incidentCard = container.querySelector('[data-profile-id="credential-b"]');
     expect(
-      container.querySelector('[aria-label="Actions for Incident account"]'),
-    ).toBeNull();
-    expect(
-      container.querySelector('[aria-label="Actions for Production role"]'),
+      productionCard?.querySelector('[aria-label="Rename Production role"]'),
     ).not.toBeNull();
+    expect(
+      productionCard?.querySelector('[aria-label="Disable Production role"]'),
+    ).not.toBeNull();
+    expect(
+      productionCard?.querySelector('[aria-label="Remove Production role"]'),
+    ).not.toBeNull();
+    expect(
+      incidentCard?.querySelector('[aria-label="Rename Incident account"]'),
+    ).not.toBeNull();
+    expect(
+      incidentCard?.querySelector('[aria-label="Disable Incident account"]'),
+    ).not.toBeNull();
+    expect(
+      incidentCard?.querySelector('[aria-label="Remove Incident account"]'),
+    ).not.toBeNull();
+    expect(
+      productionCard?.querySelector(
+        '.profile-card-power [aria-label="Disable Production role"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      productionCard?.querySelector('[aria-label="Edit note for Production role"]'),
+    ).not.toBeNull();
+    expect(
+      incidentCard?.querySelector('[aria-label="Edit note for Incident account"]'),
+    ).not.toBeNull();
+    expect(container.querySelector(".profile-actions-modal")).toBeNull();
+    expect(container.textContent).not.toContain("Reconnect");
+    expect(container.textContent).not.toContain("Recheck");
+  });
+
+  it("opens the Profile rename editor from the Profile name", async () => {
+    await render({ profiles: managedProfiles() });
+    await clickAria("Manage AWS Provider profiles");
+    await clickAria("Rename Incident account");
+
+    const incidentCard = container.querySelector(
+      '[data-profile-id="credential-b"]',
+    );
+    const editor = incidentCard?.querySelector(".profile-metadata-editor");
+    const input = editor?.querySelector("input");
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    expect((input as HTMLInputElement).value).toBe("Incident account");
+    expect(editor?.querySelector("textarea")).toBeNull();
+  });
+
+  it("saves an inline rename without changing the Profile note", async () => {
+    const executeCredentialProfiles = vi.fn<
+      DesktopControlPlaneApi["executeCredentialProfiles"]
+    >(async () => managedProfiles());
+    await render({ profiles: managedProfiles(), executeCredentialProfiles });
+    await clickAria("Manage AWS Provider profiles");
+    await clickAria("Rename Production role");
+
+    const input = container.querySelector(
+      '[data-profile-id="credential-a"] .profile-metadata-editor input',
+    );
+    expect(
+      input,
+    ).toBeInstanceOf(HTMLInputElement);
+    await act(async () => {
+      setInput(input as HTMLInputElement, "Primary renamed");
+      input
+        ?.closest("form")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    expect(executeCredentialProfiles).toHaveBeenCalledWith({
+      command: "update_metadata",
+      providerId: "aws-provider",
+      credentialId: "credential-a",
+      expectedRevision: "revision-a",
+      displayName: "Primary renamed",
+      note: "Release traffic",
+    });
+  });
+
+  it("saves an inline note edit without changing the Profile name", async () => {
+    const executeCredentialProfiles = vi.fn<
+      DesktopControlPlaneApi["executeCredentialProfiles"]
+    >(async () => managedProfiles());
+    await render({ profiles: managedProfiles(), executeCredentialProfiles });
+    await clickAria("Manage AWS Provider profiles");
+    await clickAria("Edit note for Incident account");
+
+    const textarea = container.querySelector(
+      '[data-profile-id="credential-b"] .profile-metadata-editor textarea',
+    );
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    await act(async () => {
+      setInput(textarea as HTMLTextAreaElement, "Escalation contact");
+      textarea
+        ?.closest("form")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    expect(executeCredentialProfiles).toHaveBeenCalledWith({
+      command: "update_metadata",
+      providerId: "aws-provider",
+      credentialId: "credential-b",
+      expectedRevision: "revision-a",
+      displayName: "Incident account",
+      note: "Escalation contact",
+    });
   });
 
   it("searches sanitized Profile names, notes, and labels", async () => {
@@ -823,8 +919,7 @@ describe("Providers Profile product slice", () => {
     await render({ profiles: managedProfiles(), executeCredentialProfiles });
 
     await clickAria("Manage AWS Provider profiles");
-    await clickAria("More actions for Production role");
-    await clickAria("Disable");
+    await clickAria("Disable Production role");
     expect(executeCredentialProfiles).toHaveBeenCalledWith({
       command: "set_enabled",
       providerId: "aws-provider",
@@ -833,8 +928,7 @@ describe("Providers Profile product slice", () => {
       enabled: false,
     });
 
-    await clickAria("More actions for Incident account");
-    await clickAria("Remove");
+    await clickAria("Remove Incident account");
     expect(confirm).toHaveBeenCalledWith(
       expect.stringMatching(/may remain valid at the Provider.*revoke it/iu),
     );
@@ -968,7 +1062,7 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).toContain("Week 25%");
   });
 
-  it("does not show a usage row attributed to a different Profile", async () => {
+  it("keeps each Profile's own usage on its own Profile card", async () => {
     await render({
       profiles: managedProfiles(),
       executeProviderUsage: async () => ({
@@ -991,6 +1085,83 @@ describe("Providers Profile product slice", () => {
 
     expect(container.textContent).not.toContain("Week 91%");
     expect(container.textContent).toContain("Usage not refreshed");
+
+    await clickAria("Manage AWS Provider profiles");
+    const incidentCard = container.querySelector(
+      '[data-profile-id="credential-b"]',
+    );
+    expect(incidentCard?.textContent).toContain("Week 91%");
+  });
+
+  it("shows each Profile's own usage and refreshes it by double click", async () => {
+    const executeProviderUsage = vi.fn<
+      DesktopControlPlaneApi["executeProviderUsage"]
+    >(async (command) => {
+      const profiles = [
+        {
+          providerId: "aws-provider",
+          credentialId: "credential-a",
+          state: "observed" as const,
+          observedAt: 1,
+          refreshable: true,
+          windows: [{ kind: "weekly" as const, usedPercent: 25 }],
+          budgets: [],
+        },
+        {
+          providerId: "aws-provider",
+          credentialId: "credential-b",
+          state: "observed" as const,
+          observedAt: 1,
+          refreshable: true,
+          windows: [
+            {
+              kind: "weekly" as const,
+              usedPercent: command.command === "refresh" ? 92 : 91,
+              resetAt: Date.now() + 3_600_000,
+            },
+          ],
+          budgets: [],
+        },
+      ];
+      return command.command === "refresh"
+        ? {
+            outcome: "ok" as const,
+            snapshot: { profiles },
+            refresh: {
+              providerId: "aws-provider",
+              credentialId: "credential-b",
+              outcome: "succeeded" as const,
+            },
+          }
+        : { outcome: "ok" as const, snapshot: { profiles } };
+    });
+    await render({ profiles: managedProfiles(), executeProviderUsage });
+    await clickAria("Manage AWS Provider profiles");
+
+    const productionCard = container.querySelector(
+      '[data-profile-id="credential-a"]',
+    );
+    const incidentCard = container.querySelector(
+      '[data-profile-id="credential-b"]',
+    );
+    expect(productionCard?.textContent).toContain("Week 25%");
+    expect(incidentCard?.textContent).toContain("Week 91%");
+    expect(incidentCard?.textContent).toContain("Week resets in 1h");
+
+    const usage = incidentCard?.querySelector(
+      '.profile-card-usage[role="button"]',
+    );
+    expect(usage).toBeInstanceOf(HTMLElement);
+    await act(async () => {
+      usage?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(executeProviderUsage).toHaveBeenCalledWith({
+      command: "refresh",
+      providerId: "aws-provider",
+      credentialId: "credential-b",
+    });
+    expect(incidentCard?.textContent).toContain("Week 92%");
   });
 
   it("clears displayed usage when active Profile selection changes", async () => {
@@ -1144,7 +1315,8 @@ describe("Providers Profile product slice", () => {
     expect(container.textContent).toContain("removed-provider");
     expect(container.querySelector('[aria-label="Provider error"]')).not.toBeNull();
     await clickAria("Manage removed-provider profiles");
-    await clickAria("More actions for Incident account");
-    expect(container.textContent).toContain("Remove");
+    expect(
+      container.querySelector('[aria-label="Remove Incident account"]'),
+    ).not.toBeNull();
   });
 });

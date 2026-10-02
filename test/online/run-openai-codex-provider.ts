@@ -178,7 +178,9 @@ async function run(): Promise<void> {
       profileSnapshot: () => composition!.credentialManagement.snapshot(),
       probes: createBuiltInProviderUsageProbes(globalThis.fetch),
     });
-    const usageResult = await usage.refresh(PROVIDER_ID, AbortSignal.timeout(60_000));
+    const usageResult = await usage.refresh(PROVIDER_ID, {
+      signal: AbortSignal.timeout(60_000),
+    });
     assert.equal(
       usageResult.refresh.outcome,
       "succeeded",
@@ -201,7 +203,7 @@ async function run(): Promise<void> {
 
     const usageAfterProbes = await usage.refresh(
       PROVIDER_ID,
-      AbortSignal.timeout(60_000),
+      { signal: AbortSignal.timeout(60_000) },
     );
     await usage.close();
     assert.equal(

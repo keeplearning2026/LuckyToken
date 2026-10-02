@@ -234,6 +234,14 @@ export class ProviderAuthBindingError extends Error {
 export interface ProviderAuthBindingAuthority {
   capture(providerId: string): Promise<ProviderAuthBindingCapture>;
 
+  /** Capture facts for one exact existing Profile. Used by runtime facets
+   * such as Provider Usage that must observe a non-active Profile without
+   * changing the Provider's active selection. */
+  captureProfile(
+    providerId: string,
+    credentialId: string,
+  ): Promise<ProfileProviderAuthBindingCapture>;
+
   createAcquisitionBinding(
     input: CreateAcquisitionBindingInput,
   ): Promise<CredentialAcquisitionBinding>;
@@ -248,6 +256,13 @@ export interface ProviderAuthBindingAuthority {
       assertCurrent: () => void,
       facts: ProviderAuthBindingFacts,
     ) => Promise<void> | void,
+    options?: {
+      /** Selection-sensitive side effects (429 switching, passive usage of
+       * the active request) require the captured Profile to still be the
+       * active selection. Exact-Profile usage refresh only requires that the
+       * same Profile still exists and is enabled. */
+      readonly requireActiveSelection?: boolean;
+    },
   ): Promise<boolean>;
 
   runBound<T>(

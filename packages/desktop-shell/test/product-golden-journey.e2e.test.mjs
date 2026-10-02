@@ -489,7 +489,14 @@ test(
     let application;
     let page;
     try {
-      const endpoint = await waitForEndpoint(fixture.descriptorPath);
+      let endpoint;
+      try {
+        endpoint = await waitForEndpoint(fixture.descriptorPath);
+      } catch (error) {
+        throw new Error(
+          `${String(error)}\nRelease backend output:\n${backend.output()}`,
+        );
+      }
       client = await connect(endpoint);
       const running = await waitForRunning(client);
       const backendPid = running.ownership?.owner.pid;

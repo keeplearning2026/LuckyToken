@@ -28,6 +28,24 @@ describe("Provider Usage Control Plane contract", () => {
       decodeProviderUsageCommand({
         command: "refresh",
         providerId: "openrouter",
+        credentialId: "profile-b",
+      }),
+    ).toEqual({
+      command: "refresh",
+      providerId: "openrouter",
+      credentialId: "profile-b",
+    });
+    expect(
+      decodeProviderUsageCommand({
+        command: "refresh",
+        providerId: "openrouter",
+        credentialId: "",
+      }),
+    ).toBeUndefined();
+    expect(
+      decodeProviderUsageCommand({
+        command: "refresh",
+        providerId: "openrouter",
         secret: "forbidden",
       }),
     ).toBeUndefined();

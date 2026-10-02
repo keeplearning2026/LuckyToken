@@ -111,14 +111,60 @@ describe("Provider Usage Profile ownership", () => {
       expectedRevision: before.revision!,
     });
 
-    expect(await value.usage.query()).toEqual({
-      profiles: [{
+    const state = await value.usage.query();
+    expect(
+      state.profiles.find((row) => row.credentialId === first),
+    ).toMatchObject({
+      providerId: value.provider.id,
+      credentialId: first,
+      state: "observed",
+      observation: {
+        providerId: value.provider.id,
+        credentialId: first,
+        observedAt: 2_000,
+        windows: [{ kind: "weekly", usedPercent: 25 }],
+      },
+    });
+    expect(
+      state.profiles.find((row) => row.credentialId === second),
+    ).toEqual({
         providerId: value.provider.id,
         credentialId: second,
         state: "unobserved",
-      }],
-    });
+      });
     expect(first).not.toBe(second);
+  });
+
+  it("refreshes one exact Profile while another Profile stays selected", async () => {
+    const value = fixture();
+    const first = await add(value, "Primary", "secret-primary");
+    const second = await add(value, "Backup", "secret-backup");
+
+    const refreshed = await value.usage.refresh(value.provider.id, {
+      credentialId: second,
+    });
+    expect(refreshed.refresh).toEqual({
+      providerId: value.provider.id,
+      credentialId: second,
+      outcome: "succeeded",
+    });
+    const state = await value.usage.query();
+    expect(
+      state.profiles.find((row) => row.credentialId === second),
+    ).toMatchObject({
+      credentialId: second,
+      state: "observed",
+      observation: {
+        credentialId: second,
+        windows: [{ kind: "weekly", usedPercent: 25 }],
+      },
+    });
+    expect(
+      state.profiles.find((row) => row.credentialId === first),
+    ).toMatchObject({
+      credentialId: first,
+      state: "unobserved",
+    });
   });
 
   it("publishes passive usage only while the exact selection is current", async () => {
@@ -148,8 +194,12 @@ describe("Provider Usage Profile ownership", () => {
       ),
     ).resolves.toBe(false);
     const state = await value.usage.query();
-    expect(state.profiles[0]?.credentialId).toBe(second);
-    expect(state.profiles[0]?.state).toBe("unobserved");
+    expect(
+      state.profiles.find((row) => row.credentialId === first),
+    ).toMatchObject({ credentialId: first, state: "unobserved" });
+    expect(
+      state.profiles.find((row) => row.credentialId === second),
+    ).toMatchObject({ credentialId: second, state: "unobserved" });
     expect(first).not.toBe(second);
   });
 });

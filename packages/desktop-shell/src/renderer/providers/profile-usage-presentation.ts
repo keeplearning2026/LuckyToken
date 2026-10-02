@@ -14,7 +14,7 @@ type ObservedProviderUsageProjection = Extract<
 >;
 type ProviderUsageWindowProjection =
   ObservedProviderUsageProjection["windows"][number];
-export interface ProviderCardUsagePresentation {
+export interface ProfileUsagePresentation {
   readonly primary: readonly string[];
   readonly secondary: readonly string[];
   readonly status?: string;
@@ -90,10 +90,10 @@ function money(amount: number, currency: string): string {
   }
 }
 
-export function projectProviderCardUsage(
+export function projectProfileUsage(
   provider: ProviderUsageProfileProjection | undefined,
   now: number,
-): ProviderCardUsagePresentation {
+): ProfileUsagePresentation {
   if (provider === undefined || provider.state === "unobserved") {
     return Object.freeze({
       primary: Object.freeze([]),

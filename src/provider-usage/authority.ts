@@ -198,6 +198,52 @@ export function createProviderUsageAuthority(
     credentialId: facts.credentialId,
   });
 
+  const candidateState = (
+    identity: { readonly providerId: string; readonly credentialId: string },
+    facts: ProviderProfileBindingFacts,
+    eligibility: ProviderUsageEligibility,
+    destination: string,
+  ): ProviderUsageState => {
+    const slot = cache.get(profileKey(identity.providerId, identity.credentialId));
+    const matchingSlot =
+      slot !== undefined &&
+      slot.bindingIdentity === bindingIdentity(facts) &&
+      slot.destinationKey === destination
+        ? slot
+        : undefined;
+    return Object.freeze(
+      matchingSlot?.observation !== undefined
+        ? {
+            ...identity,
+            state: "observed" as const,
+            observation: matchingSlot.observation,
+            refreshable: eligibility.state === "eligible",
+          }
+        : matchingSlot?.unavailable !== undefined
+          ? {
+              ...identity,
+              state: "unavailable" as const,
+              reason: matchingSlot.unavailable.reason,
+            }
+          : eligibility.state === "unsupported_binding"
+            ? {
+                ...identity,
+                state: "unsupported" as const,
+                reason: "binding" as const,
+              }
+            : eligibility.state === "unsupported_destination"
+              ? {
+                  ...identity,
+                  state: "unsupported" as const,
+                  reason: "destination" as const,
+                }
+              : {
+                  ...identity,
+                  state: "unobserved" as const,
+                },
+    );
+  };
+
   const queryProvider = async (
     providerId: string,
     retry: boolean,
@@ -230,45 +276,7 @@ export function createProviderUsageAuthority(
       eligibility = Object.freeze({ state: "unsupported_binding" as const });
     }
 
-    const slot = cache.get(profileKey(providerId, facts.credentialId));
-    const exactBinding = bindingIdentity(facts);
-    const matchingSlot =
-      slot !== undefined &&
-      slot.bindingIdentity === exactBinding &&
-      slot.destinationKey === destination
-        ? slot
-        : undefined;
-
-    const candidate: ProviderUsageState =
-      matchingSlot?.observation !== undefined
-        ? Object.freeze({
-            ...identity,
-            state: "observed" as const,
-            observation: matchingSlot.observation,
-            refreshable: eligibility.state === "eligible",
-          })
-        : matchingSlot?.unavailable !== undefined
-          ? Object.freeze({
-              ...identity,
-              state: "unavailable" as const,
-              reason: matchingSlot.unavailable.reason,
-            })
-          : eligibility.state === "unsupported_binding"
-            ? Object.freeze({
-                ...identity,
-                state: "unsupported" as const,
-                reason: "binding" as const,
-              })
-            : eligibility.state === "unsupported_destination"
-              ? Object.freeze({
-                  ...identity,
-                  state: "unsupported" as const,
-                  reason: "destination" as const,
-                })
-              : Object.freeze({
-                  ...identity,
-                  state: "unobserved" as const,
-                });
+    const candidate = candidateState(identity, facts, eligibility, destination);
 
     let published: ProviderUsageState | undefined;
     const current = await options.binding.publishIfCurrent(capture, () => {
@@ -280,18 +288,73 @@ export function createProviderUsageAuthority(
     return undefined;
   };
 
+  const queryCachedProfile = async (
+    providerId: string,
+    credentialId: string,
+  ): Promise<ProviderUsageState | undefined> => {
+    let capture: ProviderAuthBindingCapture;
+    try {
+      capture = await options.binding.captureProfile(providerId, credentialId);
+    } catch {
+      return undefined;
+    }
+    if (!isProfileProviderAuthBindingCapture(capture)) return undefined;
+    const facts = capture.facts;
+    const identity = stateIdentity(facts);
+    const probe = probes.get(providerId);
+    if (probe === undefined) {
+      return Object.freeze({
+        ...identity,
+        state: "unsupported" as const,
+        reason: "provider" as const,
+      });
+    }
+    const baseUrls = servedBaseUrls(providerId);
+    const destination = destinationKey(baseUrls);
+    let eligibility: ProviderUsageEligibility;
+    try {
+      eligibility = eligibilityFor(providerId, probe, facts, baseUrls);
+    } catch {
+      eligibility = Object.freeze({ state: "unsupported_binding" as const });
+    }
+    return candidateState(identity, facts, eligibility, destination);
+  };
+
   const query = async (): Promise<ProviderUsageSnapshot> => {
     pruneRemovedProfiles();
-    const states = await Promise.all(
-      options.models
-        .getProviders()
-        .map((provider) => queryProvider(provider.id, true)),
+    const profileSnapshot = options.profileSnapshot();
+    const providerStates = await Promise.all(
+      options.models.getProviders().map(async (provider) => {
+        const providerEntry = profileSnapshot.providers.find(
+          (entry) => entry.providerId === provider.id,
+        );
+        if (providerEntry === undefined || providerEntry.profiles.length === 0) {
+          return Object.freeze([] as ProviderUsageState[]);
+        }
+
+        const activeState = await queryProvider(provider.id, true);
+        const rows: ProviderUsageState[] = [];
+        for (const profile of providerEntry.profiles) {
+          const state =
+            activeState?.credentialId === profile.credentialId
+              ? activeState
+              : await queryCachedProfile(provider.id, profile.credentialId);
+          if (state !== undefined) rows.push(state);
+        }
+        if (
+          activeState !== undefined &&
+          !rows.some(
+            (state) => state.credentialId === activeState.credentialId,
+          )
+        ) {
+          rows.push(activeState);
+        }
+        return Object.freeze(rows);
+      }),
     );
     return Object.freeze({
       profiles: Object.freeze(
-        states.filter(
-          (state): state is ProviderUsageState => state !== undefined,
-        ),
+        providerStates.flat(),
       ),
     });
   };
@@ -340,6 +403,7 @@ export function createProviderUsageAuthority(
     providerId: string,
     probe: ProviderUsageProbe,
     capture: ProviderAuthBindingCapture,
+    requireActiveSelection: boolean,
   ): Promise<ProviderUsageRefreshResult> => {
     if (!isProfileProviderAuthBindingCapture(capture)) {
       return Promise.resolve(
@@ -434,6 +498,7 @@ export function createProviderUsageAuthority(
             recordUnavailable(publicationFacts, destination, reason);
             committed = true;
           },
+          { requireActiveSelection },
         );
         return !current || !committed
           ? Object.freeze({
@@ -538,6 +603,7 @@ export function createProviderUsageAuthority(
           );
           committed = true;
         },
+        { requireActiveSelection },
       );
       if (!current || !committed) {
         return Object.freeze({
@@ -647,11 +713,15 @@ export function createProviderUsageAuthority(
 
   const refresh = async (
     providerId: string,
-    signal?: AbortSignal,
+    input: {
+      readonly credentialId?: string;
+      readonly signal?: AbortSignal;
+    } = {},
   ): Promise<{
     readonly snapshot: ProviderUsageSnapshot;
     readonly refresh: ProviderUsageRefreshResult;
   }> => {
+    const signal = input.signal;
     if (closed) {
       return Object.freeze({
         snapshot: await query(),
@@ -662,7 +732,13 @@ export function createProviderUsageAuthority(
     const probe = probes.get(providerId);
     let capture: ProviderAuthBindingCapture | undefined;
     try {
-      capture = await options.binding.capture(providerId);
+      capture =
+        input.credentialId === undefined
+          ? await options.binding.capture(providerId)
+          : await options.binding.captureProfile(
+              providerId,
+              input.credentialId,
+            );
     } catch {
       capture = undefined;
     }
@@ -670,7 +746,7 @@ export function createProviderUsageAuthority(
       capture !== undefined &&
       isProfileProviderAuthBindingCapture(capture)
         ? capture.facts.credentialId
-        : undefined;
+        : input.credentialId;
 
     let refreshResult: ProviderUsageRefreshResult;
     if (probe === undefined) {
@@ -688,7 +764,12 @@ export function createProviderUsageAuthority(
       });
     } else {
       refreshResult = await waitForRefresh(
-        startRefresh(providerId, probe, capture),
+        startRefresh(
+          providerId,
+          probe,
+          capture,
+          input.credentialId === undefined,
+        ),
         providerId,
         credentialId,
         signal,

@@ -18,16 +18,14 @@ describe("Providers models modal layout", () => {
     expect(css).toMatch(/\.favorite-models-modal\s*\{[^}]*width:\s*min\(600px, 100%\)/u);
   });
 
-  it("renders Profile actions as a separate tall vertical tertiary card", async () => {
+  it("renders Profile actions inline in each Profile card", async () => {
     const css = await readFile(stylesheetPath, "utf8");
-    const modalRule = css.match(/\.profile-actions-modal\s*\{[^}]*\}/u)?.[0] ?? "";
-    const listRule = css.match(/\.profile-actions-list\s*\{[^}]*\}/u)?.[0] ?? "";
+    const actionsRule = css.match(/\.profile-row-actions\s*\{[^}]*\}/u)?.[0] ?? "";
 
-    expect(modalRule).toContain("width: min(390px, 100%)");
-    expect(modalRule).toContain("min-height: 480px");
-    expect(listRule).toContain("grid-template-columns: 1fr");
-    expect(css).not.toContain(".profile-actions-card");
-    expect(css).not.toMatch(/\.profile-menu\s*\{[^}]*position:\s*absolute/u);
+    expect(actionsRule).toContain("display: flex");
+    expect(css).not.toContain(".profile-actions-modal");
+    expect(css).not.toContain(".profile-actions-list");
+    expect(css).not.toContain(".profile-menu-wrap");
   });
 
   it("adds only a matching pale tint around the selected three-color navigation strip", async () => {
