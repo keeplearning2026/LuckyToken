@@ -40,7 +40,7 @@ export interface RegisteredSetting extends SettingValue {
   readonly sensitivity: SettingSensitivity;
   readonly applyMode: SettingApplyMode;
   /** Present only for restart-required settings: the value currently in
-   *  effect on the Data Plane listener. */
+   *  effect in the current Backend Application. */
   readonly effective?: SettingScalar;
 }
 
@@ -244,6 +244,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     validation: Object.freeze({ type: "model-name" }),
     sensitivity: "public",
     applyMode: "hot-apply",
+  }),
+  Object.freeze({
+    key: "integrations.codex.autoLoginOnStartup",
+    type: "boolean",
+    default: true,
+    validation: Object.freeze({ type: "boolean" }),
+    sensitivity: "public",
+    applyMode: "restart-required",
   }),
   Object.freeze({
     key: "integrations.claude.model",

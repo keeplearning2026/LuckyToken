@@ -20,13 +20,13 @@ Token currently presents one effective stored credential per Provider. A second 
 
 Token must introduce **Provider Credential Profiles**: multiple independently managed Provider credentials under one Provider. Pi's `api_key` branch includes literal API keys, bearer tokens, cloud profiles, service-account configuration, existing credential chains, and other Provider-declared non-OAuth methods; it is not a product assertion that every such Profile contains a literal key. Every managed Profile has a stable identity, a user-visible name, an optional note, a Provider-declared authentication-method label, an optional safe identity hint, lifecycle state, and request-selection eligibility. Users can add, rename, disable, reconnect, remove, or disconnect one Profile without mutating siblings.
 
-The first release prioritizes control and safety over sophisticated load balancing. Each Provider has at most one active managed credential at a time across both Pi auth branches. Manual or automatic switching is a local, non-interactive update of that one active pointer for subsequent requests; a request that has already captured a managed or ambient binding keeps it for its lifetime. A managed OAuth request may perform Pi's non-interactive token refresh when needed, and Activity attributes only exact captured managed Profiles.
+The first release prioritizes control and safety over sophisticated load balancing. Each Provider records one active credential selection across ordinary Profiles. Manual selection or managed-Profile 429 switching is a local, non-interactive update of `activeCredentialId` for subsequent requests; a request that has already captured a managed, external, or ambient binding keeps it for its lifetime. A managed OAuth request may perform Pi's non-interactive token refresh when needed, and Activity attributes only exact captured managed Profiles.
 
-Automatic switching is limited to two Provider-scoped settings that are off by default: switching within the Provider's `api_key` branch and switching within its `oauth` branch after a final HTTP 429. The UI renders each setting with the Backend-projected Provider authentication-method label rather than hard-coded `API key` or `account` ontology. Automatic switching stays within the current Pi auth branch and already selected lane, with at most three Profile attempts for one client request. Round-robin, session-affine credential selection, quota optimization, team secret sharing, and cross-device sync are later or separate product decisions.
+Automatic switching is limited to two Provider-scoped settings that are off by default: switching within the Provider's `api_key` branch and switching within its `oauth` branch after a final HTTP 429. The UI renders each setting with the Backend-projected Provider authentication-method label rather than hard-coded `API key` or `account` ontology. Automatic switching stays within managed Profiles in the current Pi auth branch and already selected lane, with at most three Profile attempts for one client request; every available Profile participates regardless of acquisition. Round-robin, session-affine credential selection, quota optimization, team secret sharing, and cross-device sync are later or separate product decisions.
 
-The current Data Plane accepts Client Protocol HTTP requests only on the fixed loopback host `127.0.0.1`. OpenAI Responses, Anthropic Messages, and other local API request wires describe the client-facing protocol; they do not declare which upstream Provider authentication method to use. The request's model/protocol capability selects Provider Native or Semantic Conversion, after which the selected lane consumes the Backend's managed or ambient auth binding. An inbound `Authorization` or other credential-shaped header never selects or overrides that binding.
+The current Data Plane accepts Client Protocol HTTP requests only on the fixed loopback host `127.0.0.1`. OpenAI Responses, Anthropic Messages, and other local API request wires describe the client-facing protocol; they do not declare which upstream Provider authentication method to use. The request's model/protocol capability selects Provider Native or Semantic Conversion, after which the selected lane consumes the Backend's selected managed, external, or ambient auth binding. An inbound `Authorization` or other credential-shaped header never selects or overrides that binding.
 
-Provider Native is not blind HTTP passthrough. The client's parsed JSON semantics remain the authoritative model-visible request. Before dispatch Token applies only the boundary-required top-level `model` projection plus two declared, separately scoped semantic exceptions: (1) first-party Anthropic Messages with a captured managed OAuth Profile, which applies only the pinned Pi Agent's confirmed OAuth-dependent Claude Code identity and tool-name projections; (2) Provider Native Responses `operation === "responses"` (never compact), which may defer original `role=developer` message elements out of a fully validated, closed tool-call group. OpenAI/Azure Responses and Anthropic Native then hand that projected JSON to the pinned vendor SDK, so whitespace, property formatting, and JSON numeric lexical spelling are not a preservation contract. No unrequested JSON field may be injected. The outbound transport envelope is generated/reconstructed as the pinned Pi Agent implementation would send it for the captured managed or ambient binding and resolved Pi Model. Binding/Pi-owned URL, authentication, account identity, Provider headers, version/beta headers, session headers, User-Agent, SDK identity, and content encoding never inherit conflicting client values.
+Provider Native is not blind HTTP passthrough. The client's parsed JSON semantics remain the authoritative model-visible request. Before dispatch Token applies only the boundary-required top-level `model` projection plus two declared, separately scoped semantic exceptions: (1) first-party Anthropic Messages with a captured managed OAuth Profile, which applies only the pinned Pi Agent's confirmed OAuth-dependent Claude Code identity and tool-name projections; (2) Provider Native Responses `operation === "responses"` (never compact), which may defer original `role=developer` message elements out of a fully validated, closed tool-call group. OpenAI/Azure Responses and Anthropic Native then hand that projected JSON to the pinned vendor SDK, so whitespace, property formatting, and JSON numeric lexical spelling are not a preservation contract. No unrequested JSON field may be injected. The outbound transport envelope is generated/reconstructed as the pinned Pi Agent implementation would send it for the captured managed, external, or ambient binding and resolved Pi Model. Binding/Pi-owned URL, authentication, account identity, Provider headers, version/beta headers, session headers, User-Agent, SDK identity, and content encoding never inherit conflicting client values.
 
 Credential profiles are Provider-side infrastructure state. They never enter Pi AI IR or model-visible semantics, and they do not create a shared execution, credential, transport, or fallback abstraction across Token's independent data-plane lanes. Direct Mode caller-envelope behavior is outside this PRD.
 
@@ -122,15 +122,15 @@ Token distinguishes local removal from Provider-side revocation. It never claims
 
 ## 5.5 Predictable selection
 
-The first product contract uses one explicit active credential per Provider. All new requests use that profile until a manual or permitted automatic switch changes the active pointer. Without user opt-in, an unavailable or rate-limited credential fails and the user switches manually. Optional 429 switching follows user priority within the same credential type; it does not introduce session-local or opaque random rotation.
+The first product contract uses one explicit active credential selection per Provider. All new requests use that selected Profile until a manual or permitted managed-Profile switch changes `activeCredentialId`. Without user opt-in, an unavailable or rate-limited credential fails and the user switches manually. Optional 429 switching follows user priority among enabled, available Profiles within the same credential type; it does not introduce session-local or opaque random rotation.
 
 ## 5.6 Lane isolation remains authoritative
 
-Credential-profile management does not change protocol conversion or lane-isolation semantics. Provider Native and Semantic Conversion each resolve and capture the managed-or-ambient Provider binding through their own lane-owned seam. Provider Native applies only the two closed body exceptions: the explicit managed-OAuth Anthropic exception defined in section 9 and the Responses `operation === "responses"` tool-call adjacency deferral; Semantic Conversion remains unchanged. The lanes do not receive a shared preselected credential object. Once the Client Protocol contract selects a lane, the binding cannot redirect that request to another lane; failure never falls through after execution begins.
+Credential-profile management does not change protocol conversion or lane-isolation semantics. Provider Native and Semantic Conversion each resolve and capture the managed, external, or ambient Provider binding through their own lane-owned seam. Provider Native applies only the two closed body exceptions: the explicit managed-OAuth Anthropic exception defined in section 9 and the Responses `operation === "responses"` tool-call adjacency deferral; Semantic Conversion remains unchanged. The lanes do not receive a shared preselected credential object. Once the Client Protocol contract selects a lane, the binding cannot redirect that request to another lane; failure never falls through after execution begins.
 
 ## 5.7 Client request wire never selects Provider auth
 
-Provider Native and Semantic Conversion never inspect or classify inbound client headers to decide the upstream Pi auth branch. They use the Backend-selected managed or ambient binding. Credential-shaped inbound headers are excluded from Pi `options.apiKey`, Pi CredentialStore, Provider headers, Activity attribution, and automatic switching. The loopback address is a transport exposure constraint, not a Provider-auth input.
+Provider Native and Semantic Conversion never inspect or classify inbound client headers to decide the upstream Pi auth branch. They use the Backend-selected managed, external, or ambient binding. Credential-shaped inbound headers are excluded from Pi `options.apiKey`, Pi CredentialStore, Provider headers, Activity attribution, and automatic switching. The loopback address is a transport exposure constraint, not a Provider-auth input.
 
 ## 5.8 No hidden interaction
 
@@ -183,11 +183,11 @@ interface ProviderCredentialState {
 }
 ```
 
-There is at most one `activeCredentialId` across both Pi auth branches. Token does not maintain separate active pointers by auth type, because that would recreate request-time ambiguity.
+`activeCredentialId` is the one authoritative selection field. Its value is an ordinary Profile `credentialId`. All acquisition methods enter the same list. Token does not maintain separate active pointers by auth type, source kind, or lane, because that would recreate request-time ambiguity.
 
 `revision` is the Provider's user-visible management concurrency token. It changes for committed add/reconnect, metadata, enable/disable, priority, removal, active-pointer, and switch-policy mutations. It is not captured by Data Plane requests and is not the 429 selection guard.
 
-`selectionGeneration` is an opaque Provider selection token. It changes only when `activeCredentialId` actually changes, including first activation and clearing the active pointer. Re-selecting the already active Profile is not a selection change. The Data Plane captures it to detect manual/automatic races and `A → B → A` ABA changes without treating rename or note edits as selection conflicts.
+`selectionGeneration` is an opaque Provider selection token. It changes only when `activeCredentialId` actually changes, including first activation, clearing, and local Profile reconstruction when the removed ID was selected. Re-selecting the already active Profile is not a selection change. The Data Plane captures it to detect manual/automatic races and `A → B → A` ABA changes without treating rename or note edits as selection conflicts.
 
 Each persisted Profile also owns an opaque `credentialGeneration`, initialized on add and regenerated on reconnect or any other logical credential replacement. Silent OAuth token rotation preserves `credentialGeneration`, `selectionGeneration`, `revision`, and user-visible `updatedAt`. This distinguishes a new logical credential incarnation from maintenance of the same OAuth credential.
 
@@ -225,57 +225,21 @@ unavailable
 
 Provider-specific error text does not become a new generic state. Backend maps only demonstrated, actionable conditions into the bounded product contract.
 
-## 6.6 External auth source
+## 6.6 Acquisition and ambient authentication
 
-Environment variables, `models.json`, command-derived configuration, cloud profiles, and other Provider ambient sources are not Token-managed credential profiles.
+All Profiles share one model, list, selection field and action interface. Credential acquisition is private Backend metadata; the product does not expose local/external/read-only Profile categories. Ambient environment or command sources are not enumerable Profiles and remain eligible only when no Profiles exist, never as fallback for unavailable or unselected Profiles.
 
-They are presented as **External auth sources** with locally known configuration and, when available, bounded last-known health. Side-effect-free query does not execute a credential command, contact a Provider, or claim live availability; unknown remains unknown until an actual request or explicit recheck supplies evidence. Token does not offer rename, notes, delete, logout, automatic pool selection, or remote revocation for a source it does not own. The UI explains where the user must edit or remove that source. An external source never replaces an active managed Profile.
+### 6.6.1 Shared local Codex acquisition
 
-Request selection mirrors Pi's stored-wins/otherwise-ambient contract exactly: when any managed Profile exists, a valid active managed Profile is required and missing/disabled/unavailable active state fails closed without ambient fallback; when zero managed Profiles exist, an operation-local ambient binding may allow Pi to resolve its existing external sources. Ambient binding is not a persisted selection or Profile and needs no product selector.
+`integrations.codex.autoLoginOnStartup` is boolean, default true and restart-required, under Settings → `.codex agent`. On Backend Application startup, after Provider registration and before authentication/catalog checks, the shared acquisition operation stages deletion of existing `acquisition: "codex_local"` items, reads `<CODEX_HOME>/auth.json` through the bounded file reader and ChatGPT parser, then creates one fresh ordinary Profile and commits the complete record once. Reconnect of that Profile calls the same operation after validating the target ID and revision. Renderer mounting, settings queries, Data Plane restart and in-session removal do not invoke acquisition. Disabling the setting skips the operation entirely; explicit Reconnect remains available.
 
-### 6.6.1 Codex-owned external credential (`openai-codex` only)
+Every invocation creates a random credential ID and generation, the smallest unused `Profile N` name, no note, enabled true, and appends the Profile after retained siblings. No account comparison, duplicate-token rejection or old identity preservation applies to this operation. If the removed local item was selected, selection transfers to the new item; other selected IDs remain unchanged. A new Provider record selects the new item, while an existing unselected record remains unselected.
 
-`openai-codex` additionally recognizes the Codex-owned `<CODEX_HOME>/auth.json`
-document as a first-class **external OAuth source**. Codex is the currently
-shipped adapter with a delegated refresh contract. The Provider-neutral
-[credential-file boundary](TokenExternalProviderCredentialSourcesSpec.md)
-also accepts explicitly supplied API-key and other login-file adapters;
-each adapter owns its format, identity evidence and refresh protocol. The
-general external-source ownership and managed-precedence rules still apply.
+Valid material is copied as a parsed Pi OAuth credential into a Token-owned incarnation. Expired but parseable OAuth is imported unchanged and refreshes later through ordinary Pi OAuth; acquisition does not use network login or refresh. Missing, unreadable, empty, oversized, invalid or unsupported documents still create one Profile with `kind: "unavailable"`, no credential material or fabricated file reference, and ordinary `reconnect_required` health. No old token survives in the live record. Old incarnations follow the existing GC grace rule.
 
-- Ownership. Codex writes and refreshes the document. Token reads it, may
-  request an in-place refresh through a bounded one-shot `codex app-server`
-  `account/read {"refreshToken": true}` call against the same `CODEX_HOME`, and
-  never writes, copies, moves, deletes, or rewrites it. Token never uses the
-  refresh token itself and never executes Pi's OAuth refresh callback for it.
-- Selection. A managed `openai-codex` Profile remains authoritative. Only when
-  zero managed Profiles exist may a request capture the external source; when
-  the external document is missing, invalid, unreadable, or cannot be made
-  sufficiently fresh, the request fails closed with a Codex-refresh prompt
-  instead of falling back to Pi refresh, ambient resolution, or another lane.
-- Freshness. The valid-token refresh trigger is the Codex five-minute
-  threshold. Unparseable expiry never proves sufficient validity: Token
-  requires delegated refresh and verified expiry even with recent `last_refresh`. Freshness is enforced inside the private binding
-  boundary; a near-expiry external credential is never handed to Pi, and RPC
-  success is never accepted without a re-read that proves the same canonical
-  path, the same account identity, an advanced revision, and more than the
-  minimum validity.
-- Identity. The account identity is the intersection contract: the nested
-  `https://api.openai.com/auth.chatgpt_account_id` claim is required, a
-  top-level `chatgpt_account_id` must match when present, and `tokens.account_id`
-  must match when present. A top-level-only document is rejected consistently
-  by Provider Native, Semantic Conversion, and usage.
-- Presentation. The credential-management view presents the source as
-  `connected` when a valid ChatGPT document was read, `configured` when the
-  document is locally present but temporarily unreadable, and `unknown` when no
-  local signal exists. The Backend projects the bounded source label
-  (`Codex login`) with the projection; the Providers list shows that label and
-  a connected status tone instead of the generic `Not connected` copy, and the
-  Renderer never derives a source name itself. Usage, Public Model
-  availability, and Operational Attention treat `connected` as usable.
+Schema remains 2. `acquisition?: "codex_local"` is optional private persisted metadata, permitted only for Codex OAuth, with at most one such item per Provider. It never enters public DTOs, Renderer, logs or Pi semantic state. The general carrier additionally supports `unavailable`; publication accepts `Credential | null`. The single current validator continues to accept existing ordinary schema-2 records; no migration or dual reader exists.
 
-Token-internal Profiles and this external document share one payload family
-(the Codex ChatGPT branch) but not ownership, path, or refresh rules.
+Rename/note, Recheck, Disable/Enable, Remove, order and selection share ordinary implementations. Recheck checks the existing owned credential and models, without reading the local login. Reconnect returns the fresh ID/generation privately so post-login checks never target the deleted item. Manual and HTTP 429 switching do not inspect acquisition; disabled and unavailable Profiles cannot become automatic candidates. Selected unavailable credentials fail closed in authentication, usage, Public Models and attention.
 
 ---
 
@@ -295,7 +259,7 @@ The summary must not expand every profile into the Provider grid. Credential-lev
 
 ## 7.2 Credential management view
 
-The view lists one row per managed profile and a separate read-only section for external auth sources.
+The view lists one identical row and full PROFILE ACTIONS per ordinary Profile. Acquisition metadata never affects UI appearance, counting, selectors or menus. True ambient auth is presentation-only and has no selector.
 
 Each managed row shows:
 
@@ -320,7 +284,7 @@ Users can search by display name, note, authentication-method label, or optional
 6. The Profile begins as `not_yet_verified`; the first real attributed request supplies success/failure evidence, and Token does not spend tokens merely to test it.
 7. The result returns only sanitized Profile metadata, including `authMethodLabel` and optional `identityHint`.
 
-The first managed profile for a Provider becomes active. Adding a sibling profile does not replace an existing active profile unless the user explicitly chooses `Save and use now`.
+When no credential source is selected, the first managed Profile for a Provider becomes active. and adding a sibling Profile does not replace an existing active Profile unless the user explicitly chooses `Save and use now`.
 
 An occupied Provider no longer triggers overwrite confirmation. A duplicate managed credential payload may be rejected without revealing which existing Profile owns it.
 
@@ -332,7 +296,7 @@ An occupied Provider no longer triggers overwrite confirmation. A duplicate mana
 4. Token suggests a neutral name such as `Profile 1`; it does not parse token claims to guess a user identity.
 5. User supplies or edits the name and optional note.
 6. Each OAuth Profile stores and refreshes its own token set independently.
-7. The first managed Profile for a Provider becomes active; a later login changes the active Profile only when the user explicitly chooses to use the new Profile now.
+7. When no credential source is selected, the first managed Profile for a Provider becomes active. and a later login changes the active Profile only when the user explicitly chooses to use the new Profile now.
 
 Cancelling or failing login leaves no partially created profile.
 
@@ -349,7 +313,7 @@ Cancelling or failing login leaves no partially created profile.
 - Disable removes the profile from new request selection without deleting secret material.
 - In-flight requests that already resolved request-local Provider auth are not cancelled or rebound merely because the Profile is disabled.
 - Re-enable returns the profile to selection only if its health is otherwise eligible.
-- Disabling the active profile clears `activeCredentialId` and does not silently choose another profile. The user must select a replacement; until then, new requests that require a managed profile fail explicitly.
+- Disabling the active profile clears `activeCredentialId` and does not silently choose another Profile. The user must select a replacement; until then, new requests fail explicitly.
 
 ## 7.7 Remove a managed Provider credential
 
@@ -370,9 +334,9 @@ The destructive action is labeled `Disconnect from Token` and includes the Provi
 
 V1 removes Token's local access and refresh tokens only. It does not claim to revoke authorization at the Provider because the current Pi OAuth contract exposes no standard remote-revocation operation. The confirmation directs the user to the Provider when remote revocation is required.
 
-## 7.9 External-source removal
+## 7.9 Source selection after removal
 
-If the last managed Profile is removed while an environment, `models.json`, or other ambient source is locally configured, the Provider may still authenticate through Pi's existing ambient contract. The mutation result displays that configured source and its bounded last-known/unknown status without probing it, and must not show the false success message `Provider disconnected`.
+If the last Profile is removed, Token clears `activeCredentialId` when that Profile was selected. Runtime removal does not recreate the local Codex item; the next Backend startup does so only when enabled. A composition with no Profiles may use its existing operation-local ambient/file source contract, without inventing a selected Profile. The mutation result displays configured sources and their bounded last-known/unknown status without probing them, and must not show the false success message `Provider disconnected`.
 
 ---
 
@@ -380,11 +344,11 @@ If the last managed Profile is removed while an environment, `models.json`, or o
 
 ## 8.1 One active credential per Provider
 
-V1 has at most one active managed Profile per Provider across both Pi auth branches. Manual switching updates the Provider's authoritative `activeCredentialId`; it does not create a session override, request override, separate authentication-mode toggle, or second active pointer.
+V1 has one authoritative credential selection per Provider across both Pi auth branches. `activeCredentialId` stores an ordinary Profile ID. Manual selection updates that field; it does not create a session override, request override, separate authentication-mode toggle, or second active pointer.
 
-If the active profile is missing, disabled, or unavailable, the request fails explicitly. Token does not silently choose a lower-priority sibling or ambient source and does not choose a different data-plane lane because of the profile type.
+If selection is absent while managed Profiles exist, or if the selected source is missing, disabled, or unavailable, the request fails explicitly. Token does not silently choose a lower-priority sibling, another source, or ambient auth and does not choose a different data-plane lane because of the selected source type. Local source-file changes have no effect on an existing imported Profile until startup acquisition or explicit Reconnect.
 
-When the Provider has zero managed Profiles, the request captures an operation-local `AmbientBinding` and Pi may resolve its existing ambient source. `AmbientBinding` has no `credentialId`, is not persisted, does not enter the Profile pool or Profile 429 switching, and produces no Profile attribution. There is no External Profile selector.
+When the Provider has no managed Profiles and no declared external source, the request captures an operation-local `AmbientBinding` and Pi may resolve its existing ambient source. `AmbientBinding` has no `credentialId`, is not persisted, does not enter the Profile pool or Profile 429 switching, and produces no Profile attribution. An explicitly injected file source is an operation-local binding eligible only when no Profiles exist; it has no reserved selection value or product Profile row. Codex local acquisition always creates an ordinary Profile instead.
 
 ## 8.2 Request capture and switching
 
@@ -402,20 +366,31 @@ type ProviderAuthBinding =
       readonly selectionGeneration: string;
     }
   | {
+      readonly kind: "external";
+      readonly providerId: string;
+      readonly authType: "api_key" | "oauth";
+      readonly authMethodLabel: string;
+      readonly displayName: string;
+      readonly selectionGeneration: string;
+      readonly canonicalPath: string;
+      readonly identityKey: string;
+      readonly tokenRevision: string;
+    }
+  | {
       readonly kind: "ambient";
       readonly providerId: string;
     };
 ```
 
-Every auth-consuming operation inside a managed lane execution resolves through that exact binding. Provider Native and Semantic Conversion establish independent bindings and do not pass a credential object between lanes. Management `revision` is not a Data Plane capture fact.
+Every auth-consuming operation inside a lane execution resolves through that exact binding. Provider Native and Semantic Conversion establish independent bindings and do not pass a credential object between lanes. Management `revision` is not a Data Plane capture fact. An external binding fails if its source's canonical path, auth branch, identity, or resolved revision no longer matches.
 
-Changing `activeCredentialId` affects only requests that capture after the committed switch. In-flight requests retain their captured credential even when another user action or HTTP 429 switches the Provider globally. Display names and notes never participate in binding.
+Changing `activeCredentialId` affects only requests that capture after the committed selection. In-flight requests retain their captured credential even when another user action or HTTP 429 switches the Provider globally. Display names and notes never participate in binding.
 
 Capture retains Profile identity, not a second long-lived secret copy. A pointer switch leaves the captured Profile present, so the request continues under that Profile. Removal is different: if the request already resolved Provider auth, it may finish with its request-local value; if removal commits before the bound auth read/refresh, the missing Profile fails closed. Token does not resurrect or retain a deleted Profile merely to make an in-flight request succeed.
 
-Manual activation and automatic 429 switching commit only the Provider record's active pointer, `selectionGeneration`, and management `revision`. They do not call `Models.getAuth()`, `Models.checkAuth()`, `Models.refresh()`, or `Models.login()`; they perform no Provider network request and cannot open a browser. Pi `Model` objects are Provider/model descriptors rather than credential containers, so switching Profiles does not recreate or update `Models`.
+Manual selection and automatic managed-Profile 429 switching commit only the Provider record's active selection, `selectionGeneration`, and management `revision`. They do not call `Models.getAuth()`, `Models.checkAuth()`, `Models.refresh()`, or `Models.login()`; they perform no Provider network request and cannot open a browser. Pi `Model` objects are Provider/model descriptors rather than credential containers, so changing selection does not recreate or update `Models`.
 
-The implementation must fail closed if a Provider-backed auth operation that requires a managed profile executes without an exact profile binding. It must not fall back to the current active profile late in the operation, because the active pointer may have changed since request start.
+The implementation must fail closed if a Provider-backed auth operation that requires an explicit selection executes without the exact managed or external binding. It must not fall back to the current selection late in the operation, because `activeCredentialId` may have changed since request start.
 
 ## 8.3 Provider-scoped 429 settings
 
@@ -435,13 +410,14 @@ Both settings default to `off`. They are owned by the Provider Credential Profil
 Automatic switching occurs only when all of the following are true:
 
 - the matching Provider setting is enabled;
+- the failed binding is managed; external and ambient bindings never trigger or receive automatic switching;
 - the already selected lane's existing Provider/transport retry contract has returned a final HTTP 429;
 - no client-visible response or model output has been committed;
 - the alternative profile belongs to the same Provider, credential authority, selected lane, and auth type;
 - the alternative is enabled, not cooling down, not known to require reconnect, and has not already been attempted for this request;
 - request cancellation and the lane's total retry limits remain honored.
 
-`api_key` Profiles switch only to `api_key` Profiles. `oauth` Profiles switch only to `oauth` Profiles. Eligible alternatives follow user priority, with equal priority broken deterministically by `credentialId`. Each Profile is attempted at most once, and `MAX_PROFILE_ATTEMPTS_PER_REQUEST` is fixed at `3`, including the initial Profile. Reaching that cap returns the final 429 even when more eligible Profiles exist. Each lane continues to enforce its own existing inner transport-retry limit, making the maximum Provider dispatch count for that lane calculable as `3 × (max transport retries + 1)`.
+`api_key` Profiles switch only to `api_key` Profiles. `oauth` Profiles switch only to `oauth` Profiles. Eligible alternatives are managed Profiles; the declared external source is never an automatic successor, and an operation-local external binding never enters Profile switching. Eligible alternatives follow user priority, with equal priority broken deterministically by `credentialId`. Each Profile is attempted at most once, and `MAX_PROFILE_ATTEMPTS_PER_REQUEST` is fixed at `3`, including the initial Profile. Reaching that cap returns the final 429 even when more eligible Profiles exist. Each lane continues to enforce its own existing inner transport-retry limit, making the maximum Provider dispatch count for that lane calculable as `3 × (max transport retries + 1)`.
 
 Before retrying with an alternative, Token enters the latest Provider record lock and verifies that the failed Profile still exists, its `credentialGeneration` equals the failed managed binding, the record's `selectionGeneration` equals the failed binding, and `activeCredentialId` still equals the failed `credentialId`. Only then does it use the latest switch setting, enabled state, priority, cooldown, reconnect state, and attempted set to choose a successor. It atomically updates `activeCredentialId`, advances `selectionGeneration` and management `revision`, and captures the successor. A mismatch is stale state and cannot overwrite reconnect, manual/automatic selection, or `A → B → A` ABA history; rename or note changes alone do not cause a selection conflict.
 
@@ -570,7 +546,7 @@ Current closed certification scope is represented directly in `src/provider-nati
 | `anthropic-messages` | `github-copilot` | `messages` | GitHub Copilot, ambient |
 | `anthropic-messages` | `cloudflare-ai-gateway` | `messages` | `api_key`, ambient |
 
-The Responses table records binding source because the resolved `AuthResult` is the sender input and managed-versus-ambient does not itself change SDK envelope construction. Anthropic records the envelope branch because its API-key/OAuth/Copilot identity rules are materially different.
+The Responses table records binding source because the resolved `AuthResult` is the sender input and managed, external, or ambient binding does not itself change SDK envelope construction. Anthropic records the envelope branch because its API-key/OAuth/Copilot identity rules are materially different.
 
 ---
 
@@ -619,7 +595,7 @@ Pi's existing locked OAuth refresh behavior is the reference for these semantics
 
 ## 11.1 Request attribution
 
-For managed credentials, each execution records the opaque `credentialId`, internal auth type, Backend-projected auth-method label, selected lane, bounded request-time display-name snapshot, attempt result, and selection reason. It never records secret material, token claims, the note, or raw auth-source details. Ambient execution records no invented Profile attribution.
+For managed credentials, each execution records the opaque `credentialId`, internal auth type, Backend-projected auth-method label, selected lane, bounded request-time display-name snapshot, attempt result, and selection reason. It never records secret material, token claims, the note, or raw auth-source details. External execution records the bounded source label and selection reason but no Profile attribution. Ambient execution records no invented Profile attribution.
 
 The stable `credentialId` provides exact internal attribution. The user recognizes the credential through the name they assigned and the captured Provider auth-method label. Activity shows a bounded attempt trail such as `Production — 429` followed by `Backup — Success`, with reason `HTTP 429 failover`.
 
@@ -633,7 +609,7 @@ Users can understand:
 - whether and why HTTP 429 selected another same-type credential;
 - whether a profile is cooling down, disabled, or needs reconnection;
 - whether local removal succeeded;
-- whether an external source remains configured and may become applicable after removal.
+- which Profile is selected and whether it needs reconnecting.
 
 ## 11.3 No raw-provider error UI
 
@@ -665,7 +641,7 @@ Renderer does not infer profile health from raw error strings. Backend owners pr
 Backend Application owns the authoritative credential-profile lifecycle. The authority owns:
 
 - stable profile identities;
-- the one active managed profile pointer per Provider;
+- the one active credential selection per Provider, an ordinary Profile ID;
 - metadata and secret association;
 - status and eligibility facts;
 - serialized profile mutations;
@@ -694,19 +670,19 @@ No profile metadata or secret authority is duplicated in Electron.
 
 Token does not modify Pi AI and does not create a new Pi `Models` collection when a profile changes. The one Backend-lifetime `Models` collection remains authoritative for Provider/model/auth behavior.
 
-One Profile State Owner supplies separate consumer-specific Interfaces: a secret-free Management Interface, an opaque secret-free Binding Interface, and a composition-private Pi `CredentialStore` Adapter. The Management and Binding Interfaces never expose `Credential`, `AuthResult`, tokens, Provider-private payloads, or the CredentialStore itself. Composition injects the private Adapter into the one Backend-lifetime Pi `Models`; data-plane lanes receive only their own Binding Interface. Pi continues to read, refresh, and publish explicit login/reconnect results through its existing Provider-keyed `CredentialStore` contract, while the Adapter maps an intentionally bound Pi operation to the exact managed Profile or the allowed ambient scope. Local removal is owned directly by the State Owner. Pi does not know that sibling Profiles exist.
+One Profile State Owner supplies separate consumer-specific Interfaces: a secret-free Management Interface, an opaque secret-free Binding Interface, and a composition-private Pi `CredentialStore` Adapter. The Management and Binding Interfaces never expose `Credential`, `AuthResult`, tokens, Provider-private payloads, or the CredentialStore itself. Composition injects the private Adapter into the one Backend-lifetime Pi `Models`; data-plane lanes receive only their own Binding Interface. Pi continues to read, refresh, and publish explicit login/reconnect results through its existing Provider-keyed `CredentialStore` contract, while the Adapter maps an intentionally bound Pi operation to the exact managed Profile, declared external source, or allowed ambient scope. Local removal is owned directly by the State Owner. Pi does not know that sibling Profiles exist.
 
-Only operations that intentionally invoke Pi establish an exact binding: Provider-backed request execution, explicit login/reconnect, and explicit auth/model recheck. Missing or stale managed bindings fail closed. An ambient binding is permitted only when the latest Provider record has zero managed Profiles. Query and local Profile mutations do not invoke Pi. OAuth refresh uses exact Profile identity, `credentialGeneration`, per-credential serialization, and short guarded record publication; login publication and local mutations use the Provider management `revision` so a late operation cannot update, replace, or recreate a different Profile.
+Only operations that intentionally invoke Pi establish an exact binding: Provider-backed request execution, explicit login/reconnect, and explicit auth/model recheck. Missing, stale, or unavailable explicit selections fail closed. An ambient binding is permitted only when the latest Provider record has no managed Profiles and the Provider declares no external source. Query and local Profile mutations do not invoke Pi. OAuth refresh uses exact Profile identity, `credentialGeneration`, per-credential serialization, and short guarded record publication; login publication and local mutations use the Provider management `revision` so a late operation cannot update, replace, or recreate a different Profile.
 
-Switching the active profile reuses the same Pi `Models` object and existing Pi `Model` descriptors. It does not call `Models.refresh()` or wait for Provider model discovery. Every lifecycle Catalog operation—not only Recheck or post-login—captures one exact managed-or-ambient Provider binding and generation-guards that Provider's publication. Dynamic network refreshes stage their cache result; static Provider availability is checked and published as its own exact child and never under another Provider's lease. Account-dependent catalog/availability re-evaluation occurs either through explicit Recheck or as a non-blocking child phase after a successful login/reconnect publishes the newly authenticated Profile as active. Explicit Recheck returns the target Provider's typed `succeeded`/`failed`/`skipped` outcome; only `succeeded` becomes product `ok`. The post-login phase captures that exact `credentialId`, `credentialGeneration`, and `selectionGeneration`; it never resolves whichever Profile happens to be active later. Every successful active login owns an independent queued child run; one login cannot replace another pending exact refresh. The Provider refresh revalidates selection-lock ownership immediately before committing its stage and served model slice. A post-commit failure rolls the cache back only when the stage is still the latest writer; rollback I/O failure is treated as unproven, not as a safe compare miss. Login success does not wait on or roll back for Catalog failure. If the Profile is inactive, removed, reconnected, or superseded before publication, the staged result is discarded, the authoritative cache remains unchanged, and the last complete served Catalog remains authoritative. If authoritative live-state restoration cannot be proven, only that Provider is quarantined behind its last complete served model slice until a later exact guarded publication succeeds; unrelated Providers continue to refresh and publish.
+Changing the active selection reuses the same Pi `Models` object and existing Pi `Model` descriptors. It does not call `Models.refresh()` or wait for Provider model discovery. Every lifecycle Catalog operation—not only Recheck or post-login—captures one exact managed, external, or ambient Provider binding and generation-guards that Provider's publication. Dynamic network refreshes stage their cache result; static Provider availability is checked and published as its own exact child and never under another Provider's lease. Account-dependent catalog/availability re-evaluation occurs either through explicit Recheck or as a non-blocking child phase after a successful login/reconnect publishes the newly authenticated Profile as active. Explicit Recheck returns the target Provider's typed `succeeded`/`failed`/`skipped` outcome; only `succeeded` becomes product `ok`. The post-login phase captures that exact `credentialId`, `credentialGeneration`, and `selectionGeneration`; it never resolves whichever Profile happens to be active later. Every successful active login owns an independent queued child run; one login cannot replace another pending exact refresh. The Provider refresh revalidates selection-lock ownership immediately before committing its stage and served model slice. A post-commit failure rolls the cache back only when the stage is still the latest writer; rollback I/O failure is treated as unproven, not as a safe compare miss. Login success does not wait on or roll back for Catalog failure. If the Profile is inactive, removed, reconnected, or superseded before publication, the staged result is discarded, the authoritative cache remains unchanged, and the last complete served Catalog remains authoritative. If authoritative live-state restoration cannot be proven, only that Provider is quarantined behind its last complete served model slice until a later exact guarded publication succeeds; unrelated Providers continue to refresh and publish.
 
 ## 13.4 Data-plane isolation
 
 - Direct Mode caller-envelope forwarding and execution are outside this Provider profile PRD and remain unchanged.
-- The fixed-loopback HTTP Data Plane accepts the client API request before Client Protocol/model capability routing selects Provider Native or Semantic Conversion; no request field selects Pi auth branch or ambient mode.
+- The fixed-loopback HTTP Data Plane accepts the client API request before Client Protocol/model capability routing selects Provider Native or Semantic Conversion; no request field selects Pi auth branch or credential source.
 - Client Protocol routing selects Provider Native or Semantic Conversion from the existing protocol/model capability contract, not from credential facts.
-- After selection, Provider Native and Semantic Conversion independently capture and consume the managed-or-ambient Provider binding through separate lane-owned seams.
-- The Provider Native seam may receive a managed binding's captured `authType` needed for its own Provider-wire construction; an ambient binding has no invented `authType`. The seam does not receive a broad mutable profile store, and credential type does not select the lane.
+- After selection, Provider Native and Semantic Conversion independently capture and consume the managed, external, or ambient Provider binding through separate lane-owned seams.
+- The Provider Native seam may receive a managed or external binding's captured `authType` needed for its own Provider-wire construction; an ambient binding has no invented `authType`. The seam does not receive a broad mutable profile store, and credential type does not select the lane.
 - Provider Native Responses and Semantic Conversion/Pi AI IR share no request builder, credential-binding Adapter, execution wrapper, transport, retry state, response handling, or semantic type. Their separate lane-owned seams may depend on the same authoritative Profile state and allowed Backend-lifetime Pi `Models` capabilities without calling or wrapping each other.
 - No generic cross-lane credential router, executor, transport, target, or fallback abstraction is introduced.
 - Credential identity and selection reason are infrastructure/observation facts; neither enters Pi AI IR.
@@ -735,9 +711,10 @@ This PRD does not require migration or backward compatibility for the obsolete o
 - required display name and optional note;
 - Backend-projected Provider authentication-method label and optional safe identity hint;
 - add, rename, edit note, set priority, use now, enable, disable, reconnect, remove, and disconnect;
-- at most one active managed Profile per Provider across both Pi auth branches, with explicit failure when managed Profiles exist but none is active;
-- ambient binding only when zero managed Profiles exist, without fake Profile identity, persistence, switching, or Profile attribution;
-- request-start capture of exact credential and selection generations so active-Profile changes, reconnect, and ABA history affect only valid later decisions;
+- one active credential selection per Provider across ordinary Profiles, with explicit failure when selection is absent or unavailable;
+- equal ordinary Profiles from local Codex and manual acquisition, with complete actions and explicit failure on unavailable selection;
+- ambient binding only when no managed Profiles and no declared external source exist, without fake Profile identity, persistence, switching, or Profile attribution;
+- request-start capture of exact credential and selection generations so active-selection changes, reconnect, and ABA history affect only valid later decisions;
 - non-interactive OAuth refresh only while an exact bound Profile is consumed, explicitly rechecked, or used by its exact-profile post-login Catalog phase;
 - per-credential OAuth refresh serialization with no Provider record/file lock held during network I/O and generation-guarded publication;
 - profile-bound Pi authentication without modifying Pi AI or rebuilding the Backend-lifetime `Models` collection;
@@ -753,7 +730,7 @@ This PRD does not require migration or backward compatibility for the obsolete o
 - generation-aware same-branch HTTP 429 switching only under the fixed conditions in section 8.4, with at most three Profile attempts per request;
 - sanitized profile status while Data Plane is stopped or failed;
 - Activity attribution by stable profile identity;
-- explicit external-source presentation;
+- identical Profile presentation and actions for every acquisition method;
 - typed concurrent-mutation conflicts;
 - no secret projection.
 
@@ -797,8 +774,9 @@ This PRD does not require migration or backward compatibility for the obsolete o
 - automatic model/catalog refresh caused only by changing `activeCredentialId`;
 - automatic switching for non-429 failures;
 - automatic cross-auth-type switching;
+- automatic selection of a declared external source, or automatic switching between it and a managed Profile;
 - Provider account-identity discovery or remote OAuth revocation in v1;
-- importing external auth sources as managed profiles;
+- arbitrary file-source auto-discovery beyond the explicit local Codex acquisition contract;
 - using fuzzy Provider identity, payload resemblance, or cross-lane failure to choose an alternative execution path;
 - compatibility shims, dual persistence, or silent migration for the old one-slot credential shape.
 
@@ -818,7 +796,7 @@ This PRD does not require migration or backward compatibility for the obsolete o
 
 - replace the one-slot product contract with multiple managed profiles;
 - add stable identity, Provider authentication-method label, name, note, optional identity hint, status, and enable/disable;
-- add one authoritative active profile across both authentication types;
+- add one authoritative active credential selection across ordinary Profiles and both authentication types;
 - persist one independent logical record per Provider with opaque Provider payloads, credential generations, and selection generation;
 - enumerate persisted Provider IDs and keep orphaned Profiles locally removable;
 - add the credential management view;
@@ -828,7 +806,7 @@ This PRD does not require migration or backward compatibility for the obsolete o
 ## Slice 3 — request binding and Provider Native completeness
 
 - manual active/priority selection;
-- exact managed/ambient request-start binding through the one Backend-lifetime Pi `Models` collection;
+- exact managed, external, or ambient request-start binding through the one Backend-lifetime Pi `Models` collection;
 - separate secret-free Management/Binding Interfaces and a composition-private Pi CredentialStore Adapter;
 - serialized per-Profile OAuth refresh with short generation-guarded record publication;
 - explicit Provider-scoped model/auth recheck when the user requests current credential-dependent facts;
@@ -841,7 +819,7 @@ This PRD does not require migration or backward compatibility for the obsolete o
 
 - separate Provider-scoped `api_key`/`oauth` 429 settings, default off and rendered with Provider auth labels;
 - generation-aware same-branch, same-lane final-429 switching;
-- atomic update of the Provider's global active profile;
+- atomic update of the Provider's global active selection, managed-Profile-only;
 - maximum three Profile attempts per request;
 - Activity attempt attribution and 429 selection reasons.
 
@@ -870,7 +848,7 @@ These measures require telemetry/privacy review before collection. They are prod
 - a Provider operation reads or writes a profile other than the exact bound `credentialId`;
 - a Data Plane capture or 429 transition uses management `revision` instead of exact credential/selection generations;
 - a stale request 429 can override a reconnect, a later manual/automatic selection, or `A → B → A` selection history;
-- changing the active profile changes an already in-flight request;
+- changing the active selection changes an already in-flight request;
 - selection can cross data-plane lanes after execution begins;
 - an inbound client credential selects, overrides, or reaches an upstream Provider credential path;
 - Provider Native adds/deletes/changes any parsed request-body semantic other than the boundary-required top-level `model` projection, the closed Responses tool-call adjacency deferral, or the exact certified Anthropic OAuth identity/tool-name differential;
@@ -883,11 +861,13 @@ These measures require telemetry/privacy review before collection. They are prod
 - Renderer hard-codes `API key`/`account` as the product auth-method name instead of consuming the Backend-projected Provider label;
 - a required masked identity is invented for a credential that has no safely displayable identity hint;
 - Renderer becomes authoritative for profile facts;
-- removing a stored profile reports `disconnected` while an external source remains configured/applicable under the ambient contract;
+- removing a stored profile silently selects a declared external source or reports `disconnected` while a true ambient source remains configured;
+- a missing or unavailable explicit selection falls back to another Profile, declared external source, or ambient auth;
+- an unavailable or disabled Profile participates in automatic 429 failover, or private acquisition metadata changes candidate eligibility;
 - a renamed profile changes routing identity;
 - credentials switch on any status other than a final pre-output HTTP 429;
 - automatic switching crosses between `api_key` and `oauth` branches;
-- a committed manual or automatic switch fails to update the Provider's active profile for subsequent requests;
+- a committed manual selection or automatic managed-Profile switch fails to update the Provider's active selection for subsequent requests;
 - one Provider's malformed credential record prevents an unrelated Provider from loading or serving;
 - a persisted Provider record becomes undiscoverable or locally irremovable because its Provider implementation is absent;
 - a Management or Binding Interface exposes a Pi CredentialStore, `Credential`, `AuthResult`, or Provider-private credential payload;
@@ -897,7 +877,7 @@ These measures require telemetry/privacy review before collection. They are prod
 - changing `activeCredentialId` automatically calls `Models.refresh()` or makes switch success depend on catalog refresh;
 - silent OAuth refresh failure starts login, opens a browser, switches again, or rolls back a committed active pointer;
 - Provider OAuth network refresh runs while the Provider record/file lock is held, a late refresh publishes after removal/reconnect, or silent refresh advances credential/selection generation;
-- an ambient binding is created while any managed Profile exists, receives a fake `credentialId`, enters Profile switching, or produces Profile attribution;
+- an ambient binding is created while a managed Profile exists, receives a fake `credentialId`, enters Profile switching, or produces Profile attribution;
 - one request attempts more than `MAX_PROFILE_ATTEMPTS_PER_REQUEST = 3` Profiles;
 
 ---
@@ -906,18 +886,19 @@ These measures require telemetry/privacy review before collection. They are prod
 
 1. **Two Provider-auth Profiles:** Add two managed Profiles through one Provider's `api_key` branch with distinct names and notes. Both persist independently; any literal key value is never redisplayed, and adding the second does not replace the first active Profile unless `Save and use now` is explicitly chosen.
 2. **Two OAuth Profiles:** Log in through the same Provider OAuth method twice. Each Profile has independent status, refresh lifecycle, and removal; the second login does not implicitly replace an existing active Profile.
-3. **Both Pi auth branches:** Store `api_key` and `oauth` Profiles under one dual-auth Provider. Exactly one Profile is active, and manually choosing the other updates the same `activeCredentialId` regardless of auth branch.
+3. **Both Pi auth branches and acquisition methods:** Store ordinary `api_key` and `oauth` Profiles under one dual-auth Provider; imported Codex OAuth is an ordinary Profile. Exactly one Profile is selected, and choosing any Profile updates the same `activeCredentialId` without an acquisition discriminator.
+
 4. **Rename safety:** Rename a profile while a request is active. The request and future routing remain associated with the same `credentialId`.
 5. **Request capture:** Start request A with profile A, switch the Provider to profile B, then start request B. Request A uses A for its complete lifetime and request B uses B.
-6. **Disable:** Disable the active profile. `activeCredentialId` is cleared, new managed requests fail until the user selects a replacement, and existing in-flight requests are not cancelled or rebound.
-7. **Remove one:** Remove one of three profiles. Its secret is deleted, siblings remain byte-for-byte and behaviorally unchanged, and removing the active profile does not silently activate a sibling.
+6. **Disable:** Disable the active profile. `activeCredentialId` is cleared, new requests fail until the user explicitly selects another Profile, and existing in-flight requests are not cancelled or rebound.
+7. **Remove one:** Remove one of three profiles. Its secret is deleted, siblings remain byte-for-byte and behaviorally unchanged, and removing the active profile does not silently activate a sibling or the declared external source.
 8. **Disconnect OAuth:** Disconnect one OAuth profile during a concurrent refresh. The late refresh cannot recreate the removed credential or write its tokens into another profile.
-9. **Ambient source after last removal:** Remove the last managed Profile while an environment source is configured. UI shows the configured source with last-known or unknown availability, performs no hidden probe, and does not claim the Provider is disconnected; a later request captures `AmbientBinding` and lets Pi establish live evidence without creating a Profile.
+9. **Last removal:** Remove the last ordinary Codex Profile. It is not recreated in the running Backend. On the next Backend startup, recreate it only when startup auto-login is enabled; when disabled, do not read or clear the local source.
 10. **Provider record isolation:** Corrupt one Provider's record. That Provider fails closed with sanitized status while another Provider's profiles continue to load and serve.
 11. **Refresh concurrency:** Concurrent requests for one expiring OAuth Profile serialize by `credentialId`, perform at most one effective token refresh, preserve `credentialGeneration`, and observe the published rotated credential in that exact Profile.
-12. **`api_key`-branch 429 switching:** Enable only the Provider-labeled `api_key` setting. After a final pre-output 429, Token atomically makes the next enabled same-branch Profile active, retries under its exact binding, and never selects OAuth. Concurrent requests already bound to the previous Profile remain unchanged.
-13. **OAuth 429 switching:** Enable only the Provider-labeled OAuth setting. After a final pre-output 429, Token atomically makes the next enabled OAuth Profile active, retries under its exact binding, and never selects the `api_key` branch.
-14. **Settings off:** With the matching setting off, a final 429 is returned without changing the active profile.
+12. **`api_key`-branch 429 switching:** Enable only the Provider-labeled `api_key` setting. After a final pre-output 429, Token atomically makes the next enabled same-branch Profile active, retries under its exact binding, and never selects OAuth or the external source. Concurrent requests already bound to the previous Profile remain unchanged.
+13. **OAuth 429 switching:** Enable only the Provider-labeled OAuth setting. After a final pre-output 429, Token atomically makes the next enabled OAuth Profile active, retries under its exact binding, and never selects the `api_key` branch or the external source.
+14. **429 setting off:** With the matching auth-branch switch policy off, return the final 429 without changing the selected Profile, regardless of acquisition.
 15. **Concurrent switch conflict:** A manual switch and automatic 429 switch race on the same `selectionGeneration`. One selection commits and advances it; the stale 429 cannot overwrite the newer active choice even when management-only metadata changed independently.
 16. **Bounded attempts:** Each eligible same-branch Profile is attempted once at most and no request exceeds `MAX_PROFILE_ATTEMPTS_PER_REQUEST = 3`; reaching the cap returns the final 429 even when more eligible Profiles exist.
 17. **Explicit cooldown:** A valid `Retry-After` creates a bounded cooldown; a 429 without one creates no guessed cooldown beyond the current request.
@@ -929,7 +910,7 @@ These measures require telemetry/privacy review before collection. They are prod
 23. **Provider Native completeness:** For every Provider Native operation claimed by the product, all managed auth types exposed by that Provider pass the internal coverage matrix before release.
 24. **Semantic Conversion independence:** The same Provider's `api_key` and OAuth Profiles both execute through the Pi Provider path without importing or observing Provider Native transport state.
 25. **Lane isolation:** A Provider Native or Semantic Conversion failure remains in the already selected lane and never uses the other lane as fallback.
-26. **Activity:** Activity shows captured request-time credential names, Backend auth-method labels, selected lanes, attempt outcomes, and `HTTP 429 failover` without note, secret, token claim, inbound client credential, or guessed account identity; ambient execution shows no Profile attribution.
+26. **Activity:** Activity shows captured request-time credential names, Backend auth-method labels, selected lanes, attempt outcomes, and `HTTP 429 failover` without note, secret, token claim, inbound client credential, or guessed account identity; external and ambient execution show no invented Profile attribution.
 27. **Profile deletion:** Deleting a profile removes current credential/profile state immediately; existing bounded Activity snapshots remain only for normal ledger retention.
 28. **Desktop reconstruction:** Close and reopen the management window. Renderer queries the authoritative profiles and does not rely on stale local state.
 29. **Backend lifecycle:** Stop or fail the Data Plane listener. Profile query, login, editing, removal, settings, and status remain available through the Backend Control Plane.
@@ -950,8 +931,9 @@ These measures require telemetry/privacy review before collection. They are prod
 44. **Responses/Semantic architecture isolation:** Architecture tests prove Provider Native Responses has no import or call path into Pi AI IR, Client Wire ↔ Pi AI IR adapters, Pi Provider execution, or Semantic request/credential-binding/execution/transport/retry/response modules, and prove the reverse dependency is also absent.
 45. **Anthropic OAuth body exception:** With the first-party Anthropic Messages model and a captured managed OAuth Profile, Native output matches the pinned Pi Agent OAuth differential for Claude Code system identity and tool-name references while preserving every unrelated client-authored semantic. The same body under a managed `api_key` Profile or ambient binding receives no OAuth projection, and no token-shape check selects the exception.
 46. **Provider auth ontology:** Create Bedrock bearer-token, AWS-profile, existing-chain, Vertex API-key, ADC, and service-account Profiles through Pi's `api_key` branch. Each row uses the Backend-projected Provider `authMethodLabel`; only credentials with a safely displayable identity receive `identityHint`, and the UI never invents a masked key suffix.
-47. **Managed-versus-ambient binding:** With zero managed Profiles, a request captures `AmbientBinding` and Pi may resolve ambient auth. After adding any managed Profile, clearing or disabling the active Profile causes requests to fail closed and never fall back to ambient auth.
-48. **Credential generation protects reconnect:** Request R captures active Profile A at credential generation C1. Reconnect replaces A with C2 without changing its ID. R's later 429 and late refresh are stale and cannot switch away from or overwrite C2.
+47. **Equal acquisition methods:** Startup and local Reconnect call the same atomic module and publish an ordinary Profile with fresh IDs/default metadata. Both acquisition methods support all actions and use the same selected ID, usage and lane bindings. Unavailable input creates an unavailable item; disabled/unavailable items cannot be 429 candidates. The startup setting controls only the next Backend startup.
+
+48. **Credential generation protects reconnect:** Request R captures active Profile A at credential generation C1. Manual Reconnect replaces A with C2 without changing its ID; local acquisition reconstruction creates a fresh ID and generation. R's later 429, late refresh and publication cannot affect either replacement.
 49. **Selection generation protects ABA:** Request R captures A at selection generation S1. A manual `A → B → A` sequence produces S3 even though A is active again. R's later 429 cannot overwrite the newer selection history.
 50. **Refresh does not lock Provider management:** While Profile A waits on OAuth network refresh, rename/activate operations for Profile B and removal of A commit through short Provider record locks. A late refresh of removed A is discarded.
 51. **Orphan Provider lifecycle:** Persist Profiles for Provider `foo`, then remove its implementation. Query still enumerates the sanitized orphan record and permits local removal, while login, reconnect, recheck, and request execution are unavailable.
@@ -966,19 +948,19 @@ V1 product decisions are closed:
 1. `authType: "api_key" | "oauth"` remains Pi's internal authentication discriminant; `api_key` does not mean the stored payload is necessarily a literal API key.
 2. Backend projects a bounded Provider-declared `authMethodLabel`; `identityHint` is optional and is never invented when no safe identity exists. Renderer derives neither fact from Pi metadata or credential payloads.
 3. Profile default names are ontology-neutral. UI actions, rows, search, removal, and 429 settings use projected Provider method labels rather than hard-coded `API key`/`account` product types.
-4. Every Provider has one authoritative active managed-Profile pointer across both Pi auth branches; it references at most one Profile and there are no separate active pointers by auth type.
-5. Manual switching updates that Provider-wide active pointer for subsequent requests. V1 has no session-affine credential selection.
-6. Provider auth capture is a discriminated union: exact managed binding when a valid active managed Profile exists; fail closed when managed Profiles exist without one; operation-local ambient binding only when zero managed Profiles exist.
-7. Ambient binding has no `credentialId`, persistence, Profile-pool membership, Profile switching, or Profile attribution.
+4. Every Provider has one authoritative `activeCredentialId` across both Pi auth branches. It contains an ordinary Profile ID, with no reserved source value or separate pointer by acquisition, auth type or lane.
+5. Manual selection updates that Provider-wide field for subsequent requests. Automatic 429 switching is managed-Profile-only. V1 has no session-affine credential selection.
+6. Provider auth capture is a discriminated union: exact managed binding for a selected Profile, exact external binding for a selected declared source, or operation-local ambient binding when no managed Profiles and no declared external source exist. Missing or unavailable explicit selection fails closed.
+7. Ambient binding has no `credentialId`, persistence, Profile-pool membership, Profile switching, or Profile attribution. External binding has no managed `credentialId` and performs no automatic switching.
 8. A managed binding captures `credentialGeneration` and `selectionGeneration`, not management `revision`.
-9. `credentialGeneration` changes on add/reconnect/logical credential replacement and is preserved by silent token refresh. `selectionGeneration` changes whenever the active pointer actually changes and protects manual/automatic races and ABA history.
+9. `credentialGeneration` changes on add/reconnect/logical credential replacement and is preserved by silent token refresh. `selectionGeneration` changes whenever `activeCredentialId` actually changes, including Profile ↔ external transitions, and protects manual/automatic races and ABA history.
 10. Management `revision` remains the Desktop/CLI optimistic concurrency token and may change for metadata and settings that do not stale a Data Plane binding.
 11. Adding a sibling Profile does not replace an existing active Profile unless the user explicitly chooses to use it now.
 12. Every Provider has separate `api_key`-branch and `oauth`-branch 429 settings; both default to off and the UI renders Provider method labels.
-13. Automatic switching is limited to a final pre-output HTTP 429 after the selected lane's existing retry behavior and stays inside the same Provider, auth branch, credential authority, and selected lane.
+13. Automatic switching is limited to managed Profiles after a final pre-output HTTP 429 and stays inside the same Provider, auth branch, credential authority, and selected lane. The declared external source is never a candidate or trigger.
 14. A 429 transition verifies exact credential and selection generations plus current active identity, then recomputes eligibility from the latest record. Rename/note do not cause selection conflict; reconnect, later selection, and ABA state do.
 15. `MAX_PROFILE_ATTEMPTS_PER_REQUEST` is `3`, including the initial Profile. Each lane retains its own independent inner transport-retry contract.
-16. A committed automatic switch updates the Provider-wide active pointer and advances selection generation; it is not a request-only or session-only override.
+16. A committed automatic switch updates the Provider-wide active selection and advances selection generation; it is not a request-only or session-only override.
 17. V1 does not switch automatically across auth branches or for 401, 403, 5xx, network, refresh, or storage failures.
 18. Client Protocol/lane selection and Provider credential selection are independent. Direct Mode behavior is outside this PRD.
 19. A claimed Provider Native transport must support every managed auth type exposed by that Provider. Auth-type coverage is release certification, not runtime routing or fallback state.
@@ -990,8 +972,8 @@ V1 product decisions are closed:
 25. V1 uses user-assigned names as human Profile identity. It does not parse tokens to guess account identity.
 26. V1 OAuth disconnect removes local tokens only; remote Provider revocation is not claimed.
 27. The Profile State Owner keeps no deleted-Profile tombstone. Activity owns bounded request-time name/auth-method snapshots for its normal retention period.
-28. Activity attribution is visible by default locally and never includes notes, inbound client credentials, or secret/token material. Ambient execution does not invent Profile attribution.
-29. External auth sources are not imported automatically as managed Profiles and need no external-source selector.
+28. Activity attribution is visible by default locally and never includes notes, inbound client credentials, or secret/token material. External and ambient execution do not invent Profile attribution.
+29. Local Codex acquisition imports an ordinary Profile through the shared atomic rebuild module. Explicitly injected generic external bindings remain operation-local infrastructure for zero-Profile compositions, with no product selector.
 30. Profile query and local mutations, including manual/automatic switching, perform no Provider network call and cannot start login, browser, or prompt interaction.
 31. OAuth refresh holds a per-credential serialization lock through Pi's callback, holds the Provider record/file lock only for short read/publish sections, and publishes only when the exact Profile and credential generation remain current.
 32. `Models.getAuth()` may perform only non-interactive OAuth token refresh while an exact managed Profile is consumed. Refresh failure stops the operation and never becomes automatic login or another Profile switch.

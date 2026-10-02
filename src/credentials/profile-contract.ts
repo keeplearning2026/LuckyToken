@@ -140,6 +140,8 @@ export interface CreateLoginBindingInput {
 }
 
 export interface CredentialLoginBinding {
+  /** Backend-only acquisition strategy; never projected to the Control Plane DTO. */
+  readonly acquisition?: "codex_local";
   readonly kind: "login";
   readonly mode: "add" | "reconnect";
   readonly providerId: string;

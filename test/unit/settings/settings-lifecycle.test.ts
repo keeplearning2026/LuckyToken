@@ -15,6 +15,23 @@ function emptyStore(): SettingsStore {
 }
 
 describe("settings registry pending and effective lifecycle", () => {
+  it("defaults Codex startup acquisition on and applies saved changes on the next Backend load", async () => {
+    let persisted: Readonly<Record<string, unknown>> = {};
+    const store: SettingsStore = {
+      load: async () => persisted,
+      save: async (value) => { persisted = { ...value }; },
+    };
+    const key = "integrations.codex.autoLoginOnStartup";
+    const registry = createSettingsRegistry(store);
+    await registry.load();
+    expect(registry.query([key])[key]).toMatchObject({ default: true, value: true, effective: true });
+    expect(await registry.set(key, false, undefined)).toMatchObject({ outcome: "pending" });
+    expect(registry.query([key])[key]).toMatchObject({ value: false, effective: true });
+    const restarted = createSettingsRegistry(store);
+    await restarted.load();
+    expect(restarted.query([key])[key]).toMatchObject({ value: false, effective: false });
+    expect(registry.validate(key, "false")).toMatchObject({ valid: false });
+  });
   it("keeps the old authoritative value when persistence fails", async () => {
     const registry = createSettingsRegistry({
       async load() {

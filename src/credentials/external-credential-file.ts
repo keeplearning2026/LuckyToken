@@ -17,7 +17,7 @@ export async function canonicalCredentialPath(path: string): Promise<string> {
 }
 
 /** Infrastructure-only read. Raw contents never enter public binding facts,
- * errors or diagnostics. Token does not write, copy or relocate the file. */
+ * errors or diagnostics. This reader never mutates the source file. */
 export async function readExternalCredentialFile(
   path: string,
   options: { readonly canonicalPath?: string } = {},

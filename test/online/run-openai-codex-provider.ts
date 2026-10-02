@@ -1,3 +1,9 @@
+import { readExternalCredentialFile } from "../../src/credentials/external-credential-file.js";
+import { parseCodexInternalAuth } from "../../src/credentials/codex-internal-auth.js";
+import {
+  createFileProviderCredentialRecordStore,
+  credentialProfileCarrier,
+} from "../../src/credentials/profile-record-store.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -11,9 +17,6 @@ import { loadTokenCliConfig } from "../../src/cli-config.js";
 import { createProviderUsageAuthority } from "../../src/provider-usage/authority.js";
 import type { ProviderUsageAuthority } from "../../src/provider-usage/contract.js";
 import { createBuiltInProviderUsageProbes } from "../../src/provider-usage/registry.js";
-import { createCodexExternalCredentialSource } from "../../src/credentials/codex-external-credential-source.js";
-import { createCodexAppServerRefresher } from "../../src/credentials/codex-app-server-refresh.js";
-import type { ExternalCredentialSource } from "../../src/credentials/external-credential-source.js";
 import { codexExternalAuthPath } from "../../src/credentials/codex-auth.js";
 import { createProviderRuntime } from "../../src/providers/runtime.js";
 import { loadBundledProviderConfigurations } from "../../src/providers/bundled-configuration.js";
@@ -32,67 +35,9 @@ import { classifyCodexOnlineLane, codexOnlineGate, type CodexOnlineLane as LaneP
 const DEDICATED_CODEX_AUTH_HOME_ENV = "TOKEN_CODEX_TEST_AUTH_HOME";
 const PROVIDER_ID = "openai-codex";
 
-/**
- * Dedicated `openai-codex` online suite.
- *
- * The Codex home is `TOKEN_CODEX_TEST_AUTH_HOME` when set (dedicated test
- * login), otherwise the local Codex home (`CODEX_HOME` or `~/.codex`). The
- * file stays at its original path. An explicitly injected generic source
- * supplies its identity and request-local Pi credentials to both lanes and
- * usage. Only an owner-native refresh may modify it. Model discovery and
- * synthetic app-server probes use a new temporary CODEX_HOME; no real auth
- * is copied. Missing login records skip rather than mocked online coverage.
- */
-/**
- * Delegation mechanics against the real Codex app-server, in a temp home with
- * synthetic tokens. Proves the trigger fires, the handshake completes, and the
- * re-read verification — not the RPC result — decides the outcome. The user's
- * Codex home is never touched.
- */
-async function probeDelegationMechanics(
-  root: string,
-): Promise<{ readonly outcome: string; readonly wroteUserHome: false }> {
-  const probeHome = join(root, "delegation-probe-home");
-  await mkdir(probeHome, { recursive: true });
-  const encode = (value: unknown): string =>
-    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-  const accessToken = [
-    encode({ alg: "none" }),
-    encode({
-      exp: Math.floor(Date.now() / 1000) + 60,
-      "https://api.openai.com/auth": { chatgpt_account_id: "probe-account" },
-    }),
-    "signature",
-  ].join(".");
-  const authPath = codexExternalAuthPath(probeHome);
-  await writeFile(
-    authPath,
-    `${JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        id_token: [encode({ alg: "none" }), encode({ sub: "probe-user", "https://api.openai.com/auth": { chatgpt_account_id: "probe-account" } }), "signature"].join("."),
-        access_token: accessToken,
-        refresh_token: "probe-refresh-token",
-        account_id: "probe-account",
-      },
-      last_refresh: new Date().toISOString(),
-    })}\n`,
-    "utf8",
-  );
-  const source = createCodexExternalCredentialSource({
-    authPath,
-    refresher: createCodexAppServerRefresher({ codexHome: probeHome }),
-  });
-  const resolution = await source.resolve();
-  return Object.freeze({
-    outcome:
-      resolution.state === "ok"
-        ? "unexpectedly_resolved"
-        : `${resolution.reason}:${resolution.detail}`,
-    wroteUserHome: false as const,
-  });
-}
-
+/** Real-login certification imports parsed material into temporary Token-owned
+ * storage. All CLI/native-catalog processes receive the temporary CODEX_HOME.
+ * The explicitly selected source auth path is read only and never rewritten. */
 async function run(): Promise<void> {
   const dedicatedHome = process.env[DEDICATED_CODEX_AUTH_HOME_ENV]?.trim();
   const codexHome =
@@ -102,13 +47,11 @@ async function run(): Promise<void> {
   const loginSource =
     dedicatedHome === undefined || dedicatedHome.length === 0 ? "local" : "dedicated";
   const authPath = codexExternalAuthPath(codexHome);
-  const fileSource = createCodexExternalCredentialSource({ authPath,
-    refresher: createCodexAppServerRefresher({ codexHome }) });
-  const initial = await fileSource.read();
+  const initial = await readExternalCredentialFile(authPath);
   if (initial.state !== "ok") {
     process.stdout.write(`${JSON.stringify({
       result: "skip",
-      reason: initial.state === "invalid" ? "codex_login_not_chatgpt" : "codex_login_unavailable",
+      reason: "codex_login_unavailable",
       codexHome,
       loginSource,
       env: DEDICATED_CODEX_AUTH_HOME_ENV,
@@ -117,28 +60,7 @@ async function run(): Promise<void> {
     return;
   }
   const authBefore = await stat(authPath);
-  const sourceCalls = { identityReads: 0, resolutions: 0, refreshedResolutions: 0 };
-  // Observe only bounded facts. Never retain or print a returned credential.
-  const externalSource: ExternalCredentialSource = Object.freeze({ ...fileSource,
-    async read(options?: { readonly signal?: AbortSignal }) {
-      sourceCalls.identityReads += 1;
-      const read = await fileSource.read(options);
-      if (read.state === "ok") assert.deepEqual(Object.keys(read).sort(),
-        ["canonicalPath", "identityKey", "state", "tokenRevision"], "generic read must contain identity facts only");
-      return read;
-    },
-    async resolve(options?: { readonly signal?: AbortSignal }) {
-      sourceCalls.resolutions += 1;
-      const result = await fileSource.resolve(options);
-      if (result.state === "ok") {
-        assert.equal(result.canonicalPath, initial.canonicalPath, "credential must stay at its canonical path");
-        assert.equal(result.identityKey, initial.identityKey, "credential must stay on the captured principal");
-        assert.equal(result.credential.type, "oauth");
-        if (result.refreshed) sourceCalls.refreshedResolutions += 1;
-      }
-      return result;
-    },
-  });
+  assert.ok(parseCodexInternalAuth(initial.raw), "local Codex login must contain a parseable ChatGPT credential");
   const root = await mkdtemp(join(tmpdir(), "Token-openai-codex-online-"));
   const previousCodexHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = root;
@@ -189,11 +111,12 @@ async function run(): Promise<void> {
       modelId: laneProbeModel,
     });
     const bundled = await loadBundledProviderConfigurations(join(stateDirectory, "commandcode-models.json"));
+    const credentialRecordStore = createFileProviderCredentialRecordStore({ piDirectory, createRevision: randomUUID });
     const providerRuntime = await nativeCatalogSource.withSnapshot(nativeSnapshot, () => createProviderRuntime({
-      piDirectory, modelsJsonPath: config.pi.modelsJson, codexHome: root,
+      piDirectory, modelsJsonPath: config.pi.modelsJson, codexHome,
       bundledProviderConfigurations: bundled.configurations, userProviderPackages: config.providerPackages,
       fetch: globalThis.fetch, nativeCatalogSource,
-      externalCredentialSources: { [PROVIDER_ID]: externalSource },
+      credentialRecordStore,
     }));
     composition = await createConfiguredTokenDataPlane({
       config,
@@ -217,11 +140,12 @@ async function run(): Promise<void> {
     const provider = projection.providers.find(
       (candidate) => candidate.providerId === PROVIDER_ID,
     );
-    assert.equal(
-      provider?.ambient?.status,
-      "connected",
-      "external Codex login must be presented as connected",
-    );
+    assert.equal(provider?.profiles.length, 1, "startup must create one ordinary Profile");
+    assert.equal(provider?.activeCredentialId, provider?.profiles[0]?.credentialId);
+    assert.equal(provider?.ambient, undefined, "imported credentials have no external presentation");
+    assert.ok(!JSON.stringify(provider).includes("acquisition"));
+    const importedRecord = (await credentialRecordStore.read(PROVIDER_ID))!;
+    const imported = importedRecord.profiles[0]!;
 
     const servedIds = new Set(
       composition.catalog.models.getModels(PROVIDER_ID).map((model) => model.id),
@@ -251,10 +175,48 @@ async function run(): Promise<void> {
     // entitlement is recorded, and the credential must stay usable.
     const nativeResponses = await probeNativeResponses(server.origin, laneAlias);
     const semanticMessages = await probeSemanticMessages(server.origin, laneAlias);
+    // A second ordinary storage fixture uses the same authorized grant.
+    // This verifies bidirectional Profile selection through both live lanes;
+    // it does not claim access to a second real account or browser-login proof.
+    const owned = await credentialRecordStore.readCredential(PROVIDER_ID,
+      imported.credentialId, imported.credentialGeneration);
+    assert.ok(owned.state === "ok");
+    const siblingId = randomUUID();
+    const siblingGeneration = randomUUID();
+    const beforeSibling = (await credentialRecordStore.read(PROVIDER_ID))!;
+    await credentialRecordStore.publishCredential(PROVIDER_ID, beforeSibling.revision, {
+      credentialId: siblingId, credentialGeneration: siblingGeneration, credential: owned.credential,
+    }, (current) => ({
+      kind: "commit", value: undefined, record: { ...current!, profiles: [
+        ...current!.profiles, {
+          credentialId: siblingId, credentialGeneration: siblingGeneration, authType: "oauth",
+          authMethodLabel: imported.authMethodLabel, displayName: "Profile 2",
+          enabled: true, priority: 1, createdAt: Date.now(), updatedAt: Date.now(),
+          ...credentialProfileCarrier(PROVIDER_ID, siblingId, siblingGeneration, owned.credential),
+        },
+      ] },
+    }));
+    const switches = [];
+    for (const credentialId of [siblingId, imported.credentialId]) {
+      const record = (await credentialRecordStore.read(PROVIDER_ID))!;
+      const activation = await composition.credentialManagement.activate({
+        providerId: PROVIDER_ID, credentialId, expectedRevision: record.revision,
+      });
+      assert.equal(activation.outcome, "ok");
+      const captured = await composition.providerAuthBindings.capture(PROVIDER_ID);
+      assert.ok(captured.facts.kind === "managed");
+      assert.equal(captured.facts.credentialId, credentialId);
+      const quota = await usage.refresh(PROVIDER_ID, AbortSignal.timeout(60_000));
+      const native = await probeNativeResponses(server.origin, laneAlias);
+      const semantic = await probeSemanticMessages(server.origin, laneAlias);
+      switches.push({ usage: quota.refresh.outcome, native, semantic,
+        ...codexOnlineGate({ usage: quota.refresh.outcome, native, semantic,
+          rotation: "not_required", usable: true, nonTerminal: true }) });
+    }
     // A documented entitlement rejection records incomplete coverage. It
     // cannot certify either lane or produce a passing suite.
-    const credentialAfterProbes = await externalSource.read();
-    const credentialStayedUsable = credentialAfterProbes.state === "ok";
+    const credentialAfterProbes = await composition.providerAuthBindings.capture(PROVIDER_ID);
+    const credentialStayedUsable = credentialAfterProbes.facts.kind === "managed";
     // A rejected probe must never push the shared credential into a terminal
     // usage state (plan section 6 evidence rules).
     const usageAfterProbes = await usage.refresh(
@@ -277,22 +239,22 @@ async function run(): Promise<void> {
       credentialStayedNonTerminal,
       "lane rejections must not make the external credential terminal",
     );
-    const delegationMechanics = await probeDelegationMechanics(root);
-    assert.equal(delegationMechanics.outcome, "verification_failed:revision_unchanged",
-      "the synthetic delegation must complete the handshake and fail closed on unchanged credentials");
-
-    const final = await externalSource.read();
-    assert.equal(final.state, "ok", "credential must remain readable after every consumer");
+    const final = await readExternalCredentialFile(authPath);
+    assert.equal(final.state, "ok", "source must remain readable after every consumer");
     assert.ok(final.state === "ok");
-    assert.equal(final.canonicalPath, initial.canonicalPath);
-    assert.equal(final.identityKey, initial.identityKey);
-    assert.ok(sourceCalls.resolutions >= 4, "usage and both lanes must resolve the same injected source");
+    assert.equal(final.tokenRevision, initial.tokenRevision, "Token must not rewrite the original auth.json");
     const authAfter = await stat(authPath);
-    const rotation = sourceCalls.refreshedResolutions > 0 ? "observed" : "not_required";
-    if (rotation === "observed") assert.notEqual(final.tokenRevision, initial.tokenRevision);
+    const after = (await credentialRecordStore.read(PROVIDER_ID))!.profiles.find(
+      (item) => item.credentialId === imported.credentialId,
+    )!;
+    const rotation = imported.kind === "incarnation" && after.kind === "incarnation" &&
+      imported.incarnation.tokenRevision !== after.incarnation.tokenRevision ? "observed" : "not_required";
 
-    const gate = codexOnlineGate({ usage: usageResult.refresh.outcome, native: nativeResponses,
+    const initialGate = codexOnlineGate({ usage: usageResult.refresh.outcome, native: nativeResponses,
       semantic: semanticMessages, rotation, usable: credentialStayedUsable, nonTerminal: credentialStayedNonTerminal });
+    const results = [initialGate, ...switches];
+    const gate = { ...initialGate, result: results.some((entry) => entry.result === "fail") ? "fail" :
+      results.some((entry) => entry.result === "incomplete") ? "incomplete" : "pass" };
     if (gate.result !== "pass") process.exitCode = 1;
     process.stdout.write(`${JSON.stringify({
       ...gate,
@@ -308,16 +270,15 @@ async function run(): Promise<void> {
       laneAlias,
       nativeResponses,
       semanticMessages,
+      switches,
       credentialStayedUsable,
       credentialStayedNonTerminal,
-      delegationMechanics,
-      credentialBoundary: { kind: "external", authType: externalSource.authType, ...sourceCalls,
-        identityOnlyReads: true, canonicalPathStayedSame: true },
+      credentialBoundary: { kind: "managed", authType: "oauth", sourceReadOnly: true },
       authFile: { contentUnchanged: final.tokenRevision === initial.tokenRevision,
         mtimeUnchanged: authAfter.mtimeMs === authBefore.mtimeMs,
         sizeBefore: authBefore.size, sizeAfter: authAfter.size,
         sha256Before: initial.tokenRevision, sha256After: final.tokenRevision },
-      testState: { temporaryCodexHome: true, copiedAuth: false },
+      testState: { temporaryCodexHome: true, importedCredential: true },
     })}\n`);
   } finally {
     await usage?.close().catch(() => undefined);

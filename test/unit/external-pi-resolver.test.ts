@@ -10,7 +10,7 @@ import type {
 } from "../../src/credentials/external-credential-source.js";
 import { createBrowserOAuthProvider } from "../support/auth-login-fixture.js";
 
-const PROVIDER_ID = "openai-codex";
+const PROVIDER_ID = "fixture-external-oauth";
 
 function resolverFixture(options: {
   readonly resolution: ExternalCredentialResolution;
@@ -41,7 +41,7 @@ function resolverFixture(options: {
     },
   };
   const source: ExternalCredentialSource = Object.freeze({
-    authType: "oauth", authMethodLabel: "Codex (ChatGPT)", displayName: "Codex login",
+    authType: "oauth", authMethodLabel: "Fixture OAuth", displayName: "Fixture file",
     async read(): Promise<ExternalCredentialRead> {
       if (options.resolution.state !== "ok") {
         return Object.freeze({
@@ -103,7 +103,7 @@ function resolution(options: {
   });
 }
 
-describe("real Pi resolver over the external Codex binding", () => {
+describe("real Pi resolver over an explicitly injected external binding", () => {
   it("resolves a fresh external credential without invoking Pi OAuth refresh", async () => {
     const now = 1_800_000_000_000;
     const fixture = resolverFixture({

@@ -129,6 +129,9 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
   readonly models: Pick<Models, "getProviders" | "login">;
   readonly management: CredentialProfileManagement;
   readonly binding: ProviderAuthBindingAuthority;
+  readonly loginFromLocalCodex?: (target: {
+    readonly credentialId: string; readonly expectedRevision: string;
+  }) => Promise<{ readonly credentialId: string; readonly credentialGeneration: string }>;
   readonly providerSource?: (providerId: string) => ProviderSource;
   /** Explicit user-driven, non-interactive Provider auth/model recheck. */
   readonly recheckProvider?: (
@@ -335,20 +338,23 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
             useNow: command.useNow,
             expectedRevision: command.expectedRevision,
           });
-      await options.binding.runBound(binding, () =>
-        options.models.login(
-          command.providerId,
-          binding.authType,
-          createPiAuthInteraction(interaction),
-        ),
-      );
+      let published = { credentialId: binding.credentialId, credentialGeneration: binding.credentialGeneration };
+      if (binding.acquisition === "codex_local") {
+        if (options.loginFromLocalCodex === undefined) throw new Error("Credential acquisition is unavailable");
+        interaction.signal.throwIfAborted();
+        published = await options.loginFromLocalCodex(binding);
+      } else {
+        await options.binding.runBound(binding, () =>
+          options.models.login(command.providerId, binding.authType, createPiAuthInteraction(interaction)),
+        );
+      }
       if (options.postLoginProvider !== undefined) {
         try {
           const capture = await options.binding.capture(command.providerId);
           if (
             capture.facts.kind === "managed" &&
-            capture.facts.credentialId === binding.credentialId &&
-            capture.facts.credentialGeneration === binding.credentialGeneration
+            capture.facts.credentialId === published.credentialId &&
+            capture.facts.credentialGeneration === published.credentialGeneration
           ) {
             options.postLoginProvider(command.providerId, capture);
           }
@@ -357,10 +363,14 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
           // scheduling race suppresses only the optional background refresh.
         }
       }
+      const state = await query();
+      const profile = state.providers.find((item) => item.providerId === command.providerId)
+        ?.profiles.find((item) => item.credentialId === published.credentialId);
       return Object.freeze({
-        outcome: "ok",
-        state: await query(),
+        outcome: profile?.health === "reconnect_required" ? "unavailable" : "ok",
+        state,
         options: currentOptions(),
+        ...(profile?.health === "reconnect_required" ? { error: authErrorMessage("unavailable") } : {}),
       });
     } catch (error) {
       const outcome = interaction.signal.aborted

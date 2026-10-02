@@ -14,11 +14,6 @@ type ObservedProviderUsageProjection = Extract<
 >;
 type ProviderUsageWindowProjection =
   ObservedProviderUsageProjection["windows"][number];
-type ProviderUsageUnavailableReason = Extract<
-  ProviderUsageProviderProjection,
-  { readonly state: "unavailable" }
->["reason"];
-
 export interface ProviderCardUsagePresentation {
   readonly primary: readonly string[];
   readonly secondary: readonly string[];
@@ -26,59 +21,15 @@ export interface ProviderCardUsagePresentation {
   readonly refreshable: boolean;
 }
 
-export interface ProviderUsagePresentationOptions {
-  /** The externally owned source serving this Provider
-   * (`ambient.status === "connected"`). `label` is the Backend-projected
-   * display name when one exists; the prompt never derives a source name
-   * locally. Managed bindings keep the generic failure notice. */
-  readonly externalSource?: {
-    readonly label?: string;
-  };
-}
-
-const GENERIC_EXTERNAL_SOURCE_LABEL = "The external sign-in";
-
 export function providerUsageRefreshFailureNotice(): string {
   return "Provider usage could not be refreshed.";
 }
 
-/** One bounded, actionable message per failure class (plan section 6). */
-function unavailableUsagePrompt(
-  reason: ProviderUsageUnavailableReason,
-  sourceLabel: string,
-): string {
-  switch (reason) {
-    case "terminal":
-      return `${sourceLabel} was rejected. Refresh it through its source, then try again.`;
-    case "account_change":
-      return `${sourceLabel} changed accounts. Refresh it through its source, then try again.`;
-    case "insufficient_validity":
-      return `${sourceLabel} no longer satisfies the account contract. Refresh it through its source, then try again.`;
-    case "temporary":
-      return `${sourceLabel} is temporarily unreadable. Refresh it through its source, then try again.`;
-    case "timeout":
-      return "Usage refresh timed out. Try again.";
-    case "auth":
-      return `${sourceLabel} is no longer valid. Sign in through its source, then try again.`;
-    case "network":
-    case "upstream":
-      return "Usage is temporarily unavailable. Try again.";
-    case "schema":
-      return "Usage response could not be read.";
-  }
-}
-
 export function providerUsageRefreshNotice(
   refresh: ProviderUsageRefreshProjection | undefined,
-  options: ProviderUsagePresentationOptions = {},
 ): string | undefined {
   if (refresh?.outcome === "unavailable") {
-    return options.externalSource === undefined
-      ? providerUsageRefreshFailureNotice()
-      : unavailableUsagePrompt(
-          refresh.reason,
-          options.externalSource.label ?? GENERIC_EXTERNAL_SOURCE_LABEL,
-        );
+    return providerUsageRefreshFailureNotice();
   }
   if (refresh?.outcome === "unsupported") {
     return refresh.reason === "destination"
@@ -142,7 +93,6 @@ function money(amount: number, currency: string): string {
 export function projectProviderCardUsage(
   provider: ProviderUsageProviderProjection | undefined,
   now: number,
-  options: ProviderUsagePresentationOptions = {},
 ): ProviderCardUsagePresentation {
   if (provider === undefined || provider.state === "unobserved") {
     return Object.freeze({
@@ -163,14 +113,6 @@ export function projectProviderCardUsage(
     return Object.freeze({
       primary: Object.freeze([]),
       secondary: Object.freeze([]),
-      ...(options.externalSource === undefined
-        ? {}
-        : {
-            status: unavailableUsagePrompt(
-              provider.reason,
-              options.externalSource.label ?? GENERIC_EXTERNAL_SOURCE_LABEL,
-            ),
-          }),
       refreshable: true,
     });
   }

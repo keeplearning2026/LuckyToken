@@ -1,12 +1,5 @@
 import type { AuthInteractionChannel, ProviderSource } from "./contracts.js";
 
-/** Reserved `activeCredentialId` value selecting the Provider's declared
- * external credential source instead of a managed Profile. It lives in the
- * same single selection field as managed Profile ids; there is no second
- * active pointer. The Renderer compares against this constant and never
- * derives the value itself. */
-export const EXTERNAL_CREDENTIAL_SELECTION_ID = "external" as const;
-
 export type CredentialProfileAuthType = "api_key" | "oauth";
 export type CredentialProfileHealth =
   | "ready"
@@ -15,62 +8,6 @@ export type CredentialProfileHealth =
   | "cooling_down"
   | "reconnect_required"
   | "disabled";
-
-/** Which credential source currently serves a Provider.
- *
- * `unselected` is the fail-closed state: managed Profiles exist but no
- * enabled active selection is set. It never falls back to another source. */
-export type ProviderCredentialSelection<
-  TProfile extends { readonly credentialId: string },
-> =
-  | { readonly kind: "profile"; readonly profile: TProfile }
-  | { readonly kind: "external" }
-  | { readonly kind: "unselected" };
-
-const EXTERNAL_SELECTION = Object.freeze({ kind: "external" as const });
-const UNSELECTED_SELECTION = Object.freeze({ kind: "unselected" as const });
-
-/** Single authority for "which credential source serves this Provider".
- *
- * Backend binding and every projection consumer (usable/attention/Renderer)
- * resolve this one rule so they cannot drift:
- * - an explicit selection wins;
- * - a reserved external selection requires a declared external source;
- * - with no explicit selection, zero managed Profiles plus a declared
- *   external source means the external source (the Codex-login default);
- * - anything else is `unselected` and fails closed.
- */
-export function resolveProviderCredentialSelection<
-  TProfile extends { readonly credentialId: string },
->(input: {
-  readonly activeCredentialId: string | undefined;
-  readonly profiles: readonly TProfile[];
-  readonly declaredExternalSource: boolean;
-}): ProviderCredentialSelection<TProfile> {
-  if (input.activeCredentialId === EXTERNAL_CREDENTIAL_SELECTION_ID) {
-    return input.declaredExternalSource ? EXTERNAL_SELECTION : UNSELECTED_SELECTION;
-  }
-  if (input.activeCredentialId !== undefined) {
-    const profile = input.profiles.find(
-      (candidate) => candidate.credentialId === input.activeCredentialId,
-    );
-    return profile === undefined
-      ? UNSELECTED_SELECTION
-      : Object.freeze({ kind: "profile" as const, profile });
-  }
-  return input.profiles.length === 0 && input.declaredExternalSource
-    ? EXTERNAL_SELECTION
-    : UNSELECTED_SELECTION;
-}
-
-/** Whether the Provider declares a Token-addressable external credential
- * source. `displayName` is present only for a declared file source; the
- * pre-existing environment/CLI ambient projection has no label. */
-export function hasDeclaredExternalCredentialSource(
-  provider: ProviderCredentialProfilesProjectionV1,
-): boolean {
-  return provider.ambient?.displayName !== undefined;
-}
 
 export interface CredentialProfileProjectionV1 {
   readonly credentialId: string;
@@ -93,8 +30,7 @@ export interface ProviderCredentialProfilesProjectionV1 {
   readonly implementationAvailable: boolean;
   readonly revision?: string;
   readonly selectionGeneration?: string;
-  /** The single active selection: a managed Profile id, or
-   * `EXTERNAL_CREDENTIAL_SELECTION_ID` for the declared external source. */
+  /** The selected ordinary Profile id. */
   readonly activeCredentialId?: string;
   readonly switchPolicy?: {
     readonly apiKeyOn429: boolean;

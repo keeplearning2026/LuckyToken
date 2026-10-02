@@ -26,6 +26,9 @@ The management UI is organized around user tasks rather than internal subsystems
   its Pi-declared non-OAuth and OAuth authentication methods. Exactly one
   managed Profile is active for subsequent requests; switching never changes
   the client protocol or data-plane lane.
+- Local Codex auto-login and manual login produce equal ordinary Profiles with
+  the same actions, selector, counts and HTTP 429 candidate rules. Credential
+  acquisition stays private to the Backend.
 - Profiles support notes, priority, enable/disable, explicit activation,
   reconnect, local removal, and separately configurable default-off HTTP 429
   switching for the Provider's two Pi auth branches. A request makes at most
@@ -45,26 +48,25 @@ The management UI is organized around user tasks rather than internal subsystems
 
 ## Codex-native `openai-codex` source and model catalog
 
-- `openai-codex` also recognizes the Codex-owned `<CODEX_HOME>/auth.json` as an
-  external ChatGPT credential source. Token reads it and may ask Codex, through
-  a bounded one-shot `codex app-server` call, to refresh it in place; Token
-  never writes, copies, moves, or deletes the document and never falls back to
-  Pi OAuth refresh, ambient auth, or another lane. A near-expiry external
-  credential is never handed to Pi, and every delegated refresh is verified by
-  re-reading the same canonical path, account, and revision.
+- By default, Backend startup rebuilds one ordinary Profile from the current
+  local Codex ChatGPT login. Settings → `.codex agent` → “启动时自动登录本地 Codex”
+  controls the next startup. Turning it off preserves existing Profiles.
+- Startup and Reconnect share atomic removal/read/create publication. Each run
+  creates fresh IDs and default metadata, retains other Profiles, and preserves
+  their selection. Missing or invalid local login creates a Profile needing
+  reconnect, without retaining old tokens or silently choosing another account.
+- Imported OAuth lives in Token-owned incarnation files and refreshes through
+  ordinary Pi OAuth. The original Codex auth.json remains unchanged; Recheck
+  checks the existing imported credential instead of re-reading that source.
 - The Provider's model list is extended with the local Codex native catalog
   (`codex debug models --bundled`, read-only `models_cache.json` fallback),
   append-only and never written to the user's `models.json`. Appended models
   carry an explicit reasoning-level map (unlisted levels are `null`) and an
   explicit compatibility set copied from a same-generation Pi sibling or, when
   none exists, a closed conservative default with a bounded warning.
-- The usage card, Public Model availability, and Operational Attention treat a
-  verified external Codex login as a usable source; a Codex-side credential
-  rotation invalidates the cached observation for that account without
-  carrying quota across accounts.
-- The Providers list shows the Backend-projected `Codex login` label instead of
-  the generic `Not connected` copy when the only source is a verified external
-  Codex login.
+- Usage, Public Model availability and Operational Attention consume the selected
+  ordinary Profile. Imported Profiles support the full PROFILE ACTIONS menu
+  and have no source-specific label or read-only card.
 - The Codex Responses backend answers with a buffered SSE body and no
   `content-type`; Provider Native Responses now decides the response wire shape
   from an explicit content type first and from the bounded head of the body

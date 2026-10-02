@@ -143,7 +143,38 @@ describe("Settings product slice", () => {
     expect(container.textContent).not.toContain("model_provider");
     expect(container.textContent).not.toContain("deep diagnostics");
     expect(container.querySelector('button[aria-label="Save restore values"]')).toBeNull();
-    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: ["integrations.codex.searchModel"] });
+    expect(executeSettings).toHaveBeenCalledWith({ command: "query", keys: [
+      "integrations.codex.searchModel", "integrations.codex.autoLoginOnStartup",
+    ] });
+  });
+
+  it("saves the Codex startup login switch with a next-startup notice", async () => {
+    const key = "integrations.codex.autoLoginOnStartup";
+    let enabled = true;
+    const executeSettings = vi.fn(async (
+      command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0],
+    ) => {
+      if (command.command === "set" && command.key === key) enabled = command.value === true;
+      return {
+        outcome: command.command === "set" ? "pending" as const : "ok" as const,
+        settings: {
+          ...settingsResult().settings,
+          [key]: { key, type: "boolean" as const, default: true,
+            validation: { type: "boolean" }, sensitivity: "public" as const,
+            applyMode: "restart-required" as const, value: enabled, effective: true },
+        },
+      };
+    });
+    await render(createFakeDesktopApi({ control: { executeSettings } }));
+    await click("Advanced");
+    await click("Agents");
+    const checkbox = container.querySelector<HTMLInputElement>('input[aria-label="启动时自动登录本地 Codex"]')!;
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(false);
+    await act(async () => checkbox.click());
+    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key, value: false });
+    expect(checkbox.checked).toBe(false);
+    expect(container.textContent).toContain("已保存，下次启动生效。");
   });
 
   it("selects each Claude Code model slot independently from Favorite models", async () => {

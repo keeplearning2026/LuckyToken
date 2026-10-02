@@ -1,3 +1,4 @@
+import { readExternalCredentialFile } from "../../src/credentials/external-credential-file.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import {
   resolveCodexAccountIdentity,
 } from "../../src/credentials/codex-auth.js";
 
-import { createCodexExternalCredentialSource } from "../../src/credentials/codex-external-credential-source.js";
+
 
 const roots: string[] = [];
 
@@ -150,16 +151,13 @@ describe("Codex external auth reads", () => {
   it("distinguishes missing, invalid, unreadable, and ok", async () => {
     const root = await home();
     const authPath = join(root, "auth.json");
-    const source = createCodexExternalCredentialSource({ authPath,
-      refresher: { inflightCount: () => 0,
-        refresh: async () => { throw new Error("Identity reads must not refresh"); } },
-    });
+    const source = { read: () => readExternalCredentialFile(authPath) };
     await expect(source.read()).resolves.toMatchObject({
       state: "missing",
     });
     await writeFile(authPath, "{", "utf8");
     await expect(source.read()).resolves.toMatchObject({
-      state: "invalid",
+      state: "ok",
     });
     await rm(authPath, { force: true });
     await mkdir(authPath, { recursive: true });

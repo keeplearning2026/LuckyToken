@@ -40,8 +40,7 @@ import type {
   ProviderAuthBindingCapture,
 } from "../credentials/profile-contract.js";
 import { createProviderCredentialProfiles } from "../credentials/profile-authority.js";
-import { createCodexAppServerRefresher } from "../credentials/codex-app-server-refresh.js";
-import { createCodexExternalCredentialSource } from "../credentials/codex-external-credential-source.js";
+import { createCodexLocalLogin } from "../credentials/codex-local-login.js";
 import { codexExternalAuthPath } from "../credentials/codex-auth.js";
 import type {
   ExternalCredentialSource,
@@ -100,6 +99,7 @@ export interface AutomaticModelOverlayHandle {
 
 /** The narrow Provider Runtime seam (Spec §7.3). */
 export interface ProviderRuntime {
+  readonly loginFromLocalCodex: ReturnType<typeof createCodexLocalLogin>;
   readonly models: Models;
   readonly credentialManagement: CredentialProfileManagement;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
@@ -111,6 +111,7 @@ export interface ProviderRuntime {
 }
 
 export interface CreateProviderRuntimeOptions {
+  readonly codexAutoLoginOnStartup?: boolean;
   readonly piDirectory: string;
   readonly modelsJsonPath: string;
   /** Product-owned configurations for the Token bundled Provider Packages.
@@ -131,14 +132,12 @@ export interface CreateProviderRuntimeOptions {
   readonly onAutomaticModelOverlayWarnings?: (warnings: readonly string[]) => void;
   readonly createUuid?: () => string;
   readonly now?: () => number;
-  /** Codex-owned home observed by the external credential source and the
-   * Codex-native refresh delegation. Defaults to `resolveCodexHome()`. */
+  /** Source home for local acquisition. Defaults to `resolveCodexHome()`. */
   readonly codexHome?: string;
   /** Shared Codex native acquisition. When present, one snapshot generation
    * feeds the automatic `openai-codex` model overlay. */
   readonly nativeCatalogSource?: CodexNativeCatalogSource;
-  /** Explicit provider-owned file sources. The Codex adapter is supplied by
-   * default; callers can provide other adapters or replace it at composition. */
+  /** Explicit file sources for other compositions; no default Codex binding. */
   readonly externalCredentialSources?: Readonly<Record<string, ExternalCredentialSource>>;
   readonly credentialUsage?: (
     credentialIds: readonly string[],
@@ -218,15 +217,7 @@ export async function createProviderRuntime(
   const now = options.now ?? Date.now;
   const createUuid = options.createUuid ?? randomUUID;
   const codexHome = options.codexHome ?? resolveCodexHome();
-  const externalSources = {
-    "openai-codex": options.externalCredentialSources?.["openai-codex"] ??
-      createCodexExternalCredentialSource({
-        authPath: codexExternalAuthPath(codexHome),
-        refresher: createCodexAppServerRefresher({ codexHome }),
-        now,
-      }),
-    ...options.externalCredentialSources,
-  };
+  const externalSources = options.externalCredentialSources ?? {};
   const recordStore =
     options.credentialRecordStore ??
     createFileProviderCredentialRecordStore({
@@ -389,6 +380,14 @@ export async function createProviderRuntime(
   // in-flight invocations keep their captured Model objects.
   const served = createCatalogSnapshotModels(facade);
   currentProviders = () => served.getProviders();
+  const loginFromLocalCodex = createCodexLocalLogin({
+    store: recordStore, authPath: codexExternalAuthPath(codexHome),
+    createId: createUuid, now,
+    authMethodLabel: () => currentProviders().find((provider) => provider.id === "openai-codex")!.auth.oauth!.name,
+  });
+  if (options.codexAutoLoginOnStartup !== false) {
+    await loginFromLocalCodex();
+  }
   await served.refresh({ allowNetwork: false });
   served.capture();
   await profileState.management.query();
@@ -517,6 +516,7 @@ export async function createProviderRuntime(
   return Object.freeze({
     models: served,
     credentialManagement: profileState.management,
+    loginFromLocalCodex,
     providerAuthBindings: profileState.binding,
     automaticModelOverlay: automaticModelOverlayHandle,
     scrubCredentialText: (value: string) => profileState.scrub(value),

@@ -2,7 +2,7 @@
 
 Status: implemented current contract. Related: [Provider Credential Profiles](TokenProviderCredentialProfilesPRD.md), [Codex Provider Plan](TokenOpenAICodexProviderPlan.md).
 
-Token can bind an explicitly supplied, externally owned credential file to any Provider. Codex is one adapter. The shared lifecycle does not recognize Codex paths, JSON branches, JWT claims, accounts or app-server RPCs.
+A composition may explicitly supply an externally owned credential file for a Provider with no managed Profiles. Codex local login imports an ordinary Profile instead and does not use this binding. The shared lifecycle does not recognize Codex paths, JSON branches, JWT claims, accounts or app-server RPCs.
 
 ## Evidence and extraction
 
@@ -27,15 +27,15 @@ The decoder owns the file grammar, identity evidence and translation into Pi `Cr
 
 Freshness is single-flight per source instance and canonical path, covering reread, delegation and verification. Composition supplies one source instance per Provider to all binding consumers. A late waiter rechecks the file before delegation. Cancellation detaches the waiter without canceling shared work. Delegates must bound their own process/network lifetime. A successful delegate is accepted only after rereading the original configured location and proving unchanged canonical path and identity, changed content revision and sufficient validity. Exceptions and failed verification fail closed; no error text implies terminal authentication.
 
-The generic `createKeyedSingleFlight()` also supplies the Codex app-server delegate's existing one-shot RPC coalescing. That delegate remains usable independently by the Codex probe; file-source coalescing additionally covers the full verification lifecycle.
+The generic `createKeyedSingleFlight()` coalesces the configured source's verification lifecycle.
 
 ## Adapters and composition
 
-- `codex-external-credential-source.ts` owns ChatGPT-only parsing, the nested account-claim intersection, the Codex display labels and the app-server refresh delegate. Codex `accountId` becomes the private generic `identityKey`. Its owned file remains at the original Codex home.
+- `codex-local-login.ts` owns local Codex acquisition into an ordinary Profile: stage removal, read/parse, publish a fresh credential incarnation and Profile in one transaction. It is outside the external binding contract. The source file remains unchanged; subsequent Pi refresh updates only the Token-owned incarnation.
 - `api-key-file-source.ts` reads a single non-empty plaintext key, trimming surrounding whitespace and rejecting embedded newlines or NUL. It supplies `{ type: "api_key", key }` and uses a key hash as grant identity. With no account evidence, a different key is a different grant; an old capture cannot consume it. Whitespace changes revision without changing identity. It has no refresh delegate.
 - Another login JSON format supplies its own decoder to the same factory. A cloud-profile credential may supply Pi's API-key branch with Provider-owned `env`; the plaintext adapter does not interpret such documents.
 
-`CreateProviderRuntimeOptions.externalCredentialSources` is an explicit Provider-id-to-source composition input. Runtime supplies the Codex adapter by default. `createProviderCredentialProfiles({ externalSources })` accepts the same contract. There is no global source registry, discovery, config migration or automatic import into managed Profiles. Other adapters are not automatically enabled merely because some file exists.
+`CreateProviderRuntimeOptions.externalCredentialSources` is an explicit Provider-id-to-source composition input. Runtime supplies no default external Codex adapter. `createProviderCredentialProfiles({ externalSources })` accepts the same contract. There is no global source registry, discovery, config migration or automatic import into managed Profiles. Other adapters are not automatically enabled merely because some file exists.
 
 For a plaintext file, composition can supply:
 
@@ -53,9 +53,9 @@ For a login document, use `createExternalCredentialSource({ path, authType: "oau
 
 ## Binding, ownership and lanes
 
-Managed Profiles always win. With any managed Profile present, invalid active selection fails closed without external fallback. With no managed Profiles, an explicitly supplied file source wins over ambient auth, including when the file is unavailable. Without such a source, the existing ambient contract applies.
+`activeCredentialId` selects only ordinary Profile IDs. An explicitly supplied external source is eligible only when zero Profiles exist; it is never a fallback for a selected or unselected record containing Profiles. It has no product selector or Profile actions. Automatically acquired Codex Profiles are ordinary managed Profiles, including automatic 429 candidates, and are not subject to this external-source restriction.
 
-Capture contains only source facts. Resolution must match captured canonical path, identity and auth branch. Publication must also match the revision actually resolved by that request, while no managed Profile has taken authority. `publishIfCurrent` supplies the lease assertion and immutable publication facts, including that resolved revision. Both successful observations and failures use those facts; a terminal refusal after refresh must be recorded against the refreshed revision, otherwise the next capture incorrectly resumes network attempts. Usage cache/in-flight identities contain Provider, auth branch, path, identity and revision; source identity without revision owns terminal recovery tracking. Neither path nor identity reaches Renderer.
+External capture contains only source facts. Resolution must match captured canonical path, identity and auth branch. Publication must also match the revision actually resolved by that request and the captured selection; a later active-selection change invalidates the lease. `publishIfCurrent` supplies the lease assertion and immutable publication facts, including that resolved revision. Both successful observations and failures use those facts; a terminal refusal after refresh must be recorded against the refreshed revision, otherwise the next capture incorrectly resumes network attempts. Usage cache/in-flight identities contain Provider, auth branch, path, identity and revision; source identity without revision owns terminal recovery tracking. Neither path nor identity reaches Renderer.
 
 Pi's external `modify()` path always rejects before executing its callback. The owner delegate is the sole external refresh writer. Managed non-Codex inline payloads, Codex managed incarnation layout and internal refresh remain unchanged.
 
@@ -63,8 +63,8 @@ The boundary lives in credential infrastructure. Provider Native and Semantic Co
 
 ## Verification
 
-`test/integration/external-provider-credentials.test.ts` exercises a plaintext key through actual Runtime, Pi auth and usage; an unrelated JSON login through real Pi auth; managed precedence; read states and size/type constraints; revision/grant changes; post-refresh path, identity, revision and validity checks; cancellation and coalescing; and exception secrecy. Existing Codex claim, app-server, file-source and real Pi resolver suites retain their behavior. Usage tests reject late failures after path changes even when account and content revision match.
+`test/integration/external-provider-credentials.test.ts` exercises a plaintext key through actual Runtime, Pi auth and usage; an unrelated JSON login through real Pi auth; managed precedence and fail-closed unavailable bindings; read states and size/type constraints; revision/grant changes; post-refresh path, identity, revision and validity checks; cancellation and coalescing; and exception secrecy. Codex claim parsing and local-import tests exercise the ordinary managed lifecycle. The obsolete Codex external adapter and app-server refresher are deleted. Usage tests reject late failures after path changes even when account and content revision match.
 
 Offline fixtures are synthetic in newly created temporary homes, with cleanup in `finally`. Runtime receives the temporary `codexHome` explicitly; repository guarded commands provide temporary `CODEX_HOME` to test processes. No real auth file is read or copied for offline verification. These tests certify composition and local lifecycle; they do not certify a new Provider's upstream refresh protocol or live entitlement.
 
-With explicit user authorization, `test/online/run-openai-codex-provider.ts` supplies one Codex adapter through the generic Runtime source input to usage and both serving lanes. The authorized login file remains in place; model-discovery subprocesses, Runtime state and synthetic app-server probes use temporary homes. Only the real login's owner-native freshness delegate is configured against its original home, and only when freshness requires it. The suite asserts metadata-only reads and stable canonical identity, records actual source resolutions, hashes and file metadata, requires successful usage and completed HTTP 200 in both lanes, and leaves an untriggered rotation branch explicitly uncovered. Missing login records `skip`.
+With explicit user authorization, `test/online/run-openai-codex-provider.ts` reads the real local login, imports parsed credentials into isolated Token-owned storage, and exercises usage, Provider Native and Semantic Conversion through the selected ordinary Profile. Native-catalog subprocesses receive a new temporary CODEX_HOME. The original auth.json is hash-checked after the run; no owner-native refresh or source-file write is performed. Missing login records `skip`, not online certification.

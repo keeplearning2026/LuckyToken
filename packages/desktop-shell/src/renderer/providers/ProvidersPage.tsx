@@ -23,7 +23,6 @@ import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { ProviderIcon } from "./ProviderIcon.js";
 import {
   projectProviderCardUsage,
-  type ProviderUsagePresentationOptions,
   providerUsageRefreshFailureNotice,
   providerUsageRefreshNotice,
 } from "./provider-usage-presentation.js";
@@ -76,15 +75,7 @@ interface AuthOutcome {
 }
 
 function providerUsageBindingKey(provider: ProviderProfiles): string {
-  return JSON.stringify([
-    provider.revision ?? "",
-    provider.selectionGeneration ?? "",
-    provider.activeCredentialId ?? "",
-    provider.profiles.length === 0 ? "ambient" : "managed",
-    // A verified external Codex login appears as `connected` without any
-    // managed Profile; the transition must re-query the usage snapshot.
-    provider.ambient?.status ?? "",
-  ]);
+  return JSON.stringify([provider.revision, provider.selectionGeneration, provider.activeCredentialId]);
 }
 
 /** Whether this Provider has a credential source: any managed Profile, or a
@@ -96,38 +87,6 @@ function providerHasCredentialSource(
   if (provider === undefined) return false;
   return provider.profiles.length > 0 ||
     provider.ambient?.status === "connected";
-}
-
-/** A Profile exists only when the external source is present: verified
- * (`connected`) or present but unreadable (`configured`). No local signal
- * (`unknown`) leaves the Provider Not connected with no Profile. */
-function presentExternalProfile(
-  ambient: ProviderProfiles["ambient"],
-): NonNullable<ProviderProfiles["ambient"]> | undefined {
-  return ambient === undefined ||
-    ambient.displayName === undefined ||
-    ambient.status === "unknown"
-    ? undefined
-    : ambient;
-}
-
-/** Usage presentation input for the credential source serving this Provider.
- *  The external source label stays Backend-projected; the Renderer never
- *  derives a source name itself. */
-function providerUsagePresentationOptions(
-  provider: ProviderProfiles | undefined,
-): ProviderUsagePresentationOptions {
-  if (
-    provider === undefined ||
-    provider.profiles.length > 0 ||
-    provider.ambient?.status !== "connected"
-  ) {
-    return Object.freeze({});
-  }
-  const label = provider.ambient.displayName;
-  return Object.freeze({
-    externalSource: Object.freeze(label === undefined ? {} : { label }),
-  });
 }
 
 function modelNameFromInternalAlias(
@@ -537,7 +496,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
   ): void => {
     setProfileName(profile.displayName);
     setProfileNote(profile.note ?? "");
-    setUseNow(true);
+    setUseNow(false);
     setAuthStarted(false);
     setAuthModal({
       providerId: provider.providerId,
@@ -719,7 +678,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       }
       const refreshNotice = providerUsageRefreshNotice(
         result.refresh,
-        providerUsagePresentationOptions(profileByProvider.get(providerId)),
       );
       if (refreshNotice !== undefined) setNotice(refreshNotice);
     } catch {
@@ -1099,14 +1057,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     profilesProviderId === undefined
       ? undefined
       : profileByProvider.get(profilesProviderId);
-  // An externally owned login is a Profile in the product presentation: it is
-  // counted and listed, but stays read-only because Token does not own it.
-  const selectedExternalSource = presentExternalProfile(
-    selectedProfilesState?.ambient,
-  );
-  const selectedProfilesCount =
-    (selectedProfilesState?.profiles.length ?? 0) +
-    (selectedExternalSource === undefined ? 0 : 1);
+  const selectedProfilesCount = selectedProfilesState?.profiles.length ?? 0;
   const profileActions =
     profileActionsId === undefined
       ? undefined
@@ -1195,67 +1146,18 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
       managed?.recordError !== undefined ||
       managed?.implementationAvailable === false;
     const hasManagedProfiles = (managed?.profiles.length ?? 0) > 0;
-    // The Backend projects every externally owned source through the same
-    // bounded ambient shape; the Renderer never derives or names one itself.
-    const externalSource = hasManagedProfiles ? undefined : managed?.ambient;
-    const externalProfile = presentExternalProfile(externalSource);
-    const externalSourceLabel = externalProfile?.displayName;
-    const externalConnected =
-      externalProfile?.status === "connected" && externalSourceLabel !== undefined;
-    const externalStatusLabel =
-      externalSourceLabel === undefined
-        ? undefined
-        : externalConnected
-          ? externalSourceLabel
-          : `${externalSourceLabel} needs attention`;
-    const statusTone = hasError
-      ? "error"
-      : active?.health === "ready"
-        ? "good"
-        : externalConnected
-          ? "good"
-          : externalSourceLabel !== undefined
-            ? "warning"
-            : active?.health === "reconnect_required"
-              ? "error"
-              : hasManagedProfiles
-                ? "warning"
-                : "neutral";
-    const statusLabel = hasError
-      ? "Provider error"
-      : active?.health === "ready"
-        ? "Provider available"
-        : externalStatusLabel ??
-          (active?.health === "reconnect_required"
-            ? "Reconnect required"
-            : hasManagedProfiles
-              ? "Select or verify a Profile"
-              : "Not connected");
-    // One card row for every credential source: a managed Profile and a
-    // verified external login differ only in label, description and title.
-    const credentialSummary = hasManagedProfiles
-      ? {
-          label: active?.displayName ?? "Select a Profile",
-          actionLabel: `Manage ${provider.name} profiles`,
-          description: active === undefined
-            ? `Select an active Profile. ${statusLabel}`
-            : `Active Profile: ${active.displayName}. ${statusLabel}`,
-          title: active === undefined
-            ? "Select an active Profile"
-            : `Active Profile: ${active.displayName}`,
-        }
-      : externalSourceLabel === undefined
-        ? undefined
-        : {
-            label: externalSourceLabel,
-            actionLabel: `Manage ${provider.name} credentials`,
-            description: `External Profile: ${externalSourceLabel}. ${statusLabel}`,
-            title: "Manage credentials",
-          };
+    const statusTone = hasError || active?.health === "reconnect_required" ? "error" :
+      active?.health === "ready" ? "good" : hasManagedProfiles ? "warning" : "neutral";
+    const statusLabel = hasError ? "Provider error" : active?.health === "reconnect_required" ? "Reconnect required" :
+      active?.health === "ready" ? "Provider available" : hasManagedProfiles ? "Select or verify a Profile" : "Not connected";
+    const credentialSummary = active !== undefined
+      ? { label: active.displayName, actionLabel: `Manage ${provider.name} profiles`,
+          description: `Active Profile: ${active.displayName}. ${statusLabel}`, title: `Active Profile: ${active.displayName}` }
+      : hasManagedProfiles ? { label: "Select a Profile", actionLabel: `Manage ${provider.name} profiles`,
+          description: `Select an active Profile. ${statusLabel}`, title: "Select an active Profile" } : undefined;
     const usagePresentation = projectProviderCardUsage(
       providerUsageById[provider.providerId],
       Date.now(),
-      providerUsagePresentationOptions(managed),
     );
     const usageText = [
       ...usagePresentation.primary,
@@ -1303,8 +1205,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               disabled={
                 publicProvider === undefined ||
                 (!providerOn &&
-                  active === undefined &&
-                  !externalConnected)
+                  active === undefined)
               }
               onClick={() => void setProviderOn(provider.providerId, !providerOn)}
               title="Publish this Provider in model discovery."
@@ -1626,8 +1527,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
             </div>
 
             <div className="secondary-card-modal-body">
-              {selectedProfilesState.profiles.length === 0 &&
-              selectedExternalSource === undefined ? (
+              {selectedProfilesState.profiles.length === 0 ? (
                 <p>No Profiles have been added to this Provider.</p>
               ) : (
                 <ul className="secondary-card-list profile-card-list">
@@ -1642,8 +1542,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       const actionsOpen =
                         profileActionsId === profile.credentialId;
                       const active =
-                        selectedProfilesState.activeCredentialId ===
-                        profile.credentialId;
+                        selectedProfilesState.activeCredentialId === profile.credentialId;
                       const AuthIcon =
                         profile.authType === "api_key" ? KeyRound : UserRoundCheck;
                       const authLabel =
@@ -1812,34 +1711,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                         </li>
                       );
                     })}
-                  {selectedExternalSource === undefined ? null : (
-                    <li className="secondary-card external-source-card">
-                      <span className="external-source-mark" aria-hidden="true">
-                        <UserRoundCheck size={20} />
-                      </span>
-                      <div className="secondary-card-copy">
-                        <strong>{selectedExternalSource.displayName}</strong>
-                        <span className="secondary-card-meta">
-                          <span
-                            className={`status-dot ${
-                              selectedExternalSource.status === "connected"
-                                ? "good"
-                                : selectedExternalSource.status === "configured"
-                                  ? "warning"
-                                  : "neutral"
-                            }`}
-                            role="img"
-                            aria-label={selectedExternalSource.status}
-                            title={selectedExternalSource.status}
-                          />
-                          External · read-only · {selectedExternalSource.status}
-                        </span>
-                        <span className="secondary-card-meta">
-                          {selectedExternalSource.message}
-                        </span>
-                      </div>
-                    </li>
-                  )}
                 </ul>
               )}
             </div>
@@ -2084,14 +1955,14 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       />
                     </label>
                   ) : null}
-                  <label>
+                  {authModal.mode === "add" ? <label>
                     <input
                       type="checkbox"
                       checked={useNow}
                       onChange={(event) => setUseNow(event.currentTarget.checked)}
                     />
                     Use this Profile for new requests
-                  </label>
+                  </label> : null}
                   <div className="button-row">
                     <button
                       type="submit"
@@ -2110,7 +1981,7 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               ) : (
               <>
                 {authModal.authType === "oauth" && externalInteraction === undefined && interaction === undefined ? (
-                  <p>Opening your browser…</p>
+                  <p>Connecting…</p>
                 ) : null}
                 {authModal.authType === "api_key" && externalInteraction === undefined && interaction === undefined ? (
                   <p>Connecting…</p>

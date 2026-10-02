@@ -233,7 +233,7 @@ async function captureCredentialProfileSnapshot(
     }> = [];
     for (const profile of record.profiles) {
       signal.throwIfAborted();
-      if (profile.kind === "inline") continue;
+      if (profile.kind !== "incarnation") continue;
       const content = await readReferencedIncarnation(
         credentialDirectory,
         profile.incarnation.relativePath,

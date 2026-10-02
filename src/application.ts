@@ -740,6 +740,9 @@ async function startNormalApplication(options: {
       piDirectory: config.pi.directory,
       modelsJsonPath: config.pi.modelsJson,
       codexHome,
+      codexAutoLoginOnStartup: settingsRegistry.query(["integrations.codex.autoLoginOnStartup"])[
+        "integrations.codex.autoLoginOnStartup"
+      ]?.value !== false,
       nativeCatalogSource: codexNativeCatalog,
       bundledProviderConfigurations:
         bundledProviderConfigurationLoad.configurations,
@@ -838,6 +841,7 @@ async function startNormalApplication(options: {
       models: providerRuntime.models,
       management: credentialManagement,
       binding: providerRuntime.providerAuthBindings,
+      loginFromLocalCodex: providerRuntime.loginFromLocalCodex,
       providerSource: (providerId) => providerRuntime.providerSource(providerId),
       recheckProvider: async (providerId, capture) => {
         const report = await catalogController.refreshProviderManual(

@@ -4,7 +4,9 @@ import type {
   AttentionProjection,
   CredentialProfilesProjectionV1,
 } from "@token/application-control-plane/control-plane";
-import { RECENT_REQUEST_FAILURE_WINDOW_MS } from "@token/application-control-plane/control-plane";
+import {
+  RECENT_REQUEST_FAILURE_WINDOW_MS,
+} from "@token/application-control-plane/control-plane";
 
 export interface OperationalAttentionAuthorityOptions {
   readonly now?: () => number;
@@ -89,25 +91,17 @@ export function createOperationalAttentionAuthority(
       for (const provider of credentialProjection?.providers ?? []) {
         if (!PROVIDER_ID.test(provider.providerId)) continue;
         visibleProviders.add(provider.providerId);
-        // A verified external Codex login is a usable Provider source even
-        // though it owns no managed Profile; a Provider with no managed
-        // Profile and no external source stays out of this episode tracking.
-        const externalConnected =
-          provider.profiles.length === 0 &&
-          provider.ambient?.status === "connected";
         if (provider.profiles.length === 0 && provider.ambient === undefined) {
           providerWasEffective.delete(provider.providerId);
           providerInvalidEpisodes.delete(provider.providerId);
           continue;
         }
-        const active = provider.profiles.find(
-          (profile) => profile.credentialId === provider.activeCredentialId,
-        );
-        const effective = provider.implementationAvailable &&
-          (externalConnected ||
-            (active?.enabled === true &&
-              active.health !== "reconnect_required" &&
-              active.health !== "disabled"));
+        const selected = provider.profiles.find((profile) => profile.credentialId === provider.activeCredentialId);
+        const profileEffective = selected?.enabled === true &&
+          selected.health !== "reconnect_required" && selected.health !== "disabled";
+        const ambientEffective = provider.profiles.length === 0 &&
+          (provider.ambient?.status === "connected" || provider.ambient?.status === "configured");
+        const effective = provider.implementationAvailable && (profileEffective || ambientEffective);
         const previous = providerWasEffective.get(provider.providerId);
         if (effective) {
           providerWasEffective.set(provider.providerId, true);

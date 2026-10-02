@@ -248,7 +248,8 @@ function projectProfile(
     ...(profile.identityHint === undefined ? {} : { identityHint: profile.identityHint }),
     enabled: profile.enabled,
     health: profile.enabled
-      ? (runtimeHealth ?? (usage?.lastSucceededAt === undefined ? "not_yet_verified" : "ready"))
+      ? (profile.kind === "unavailable" ? "reconnect_required" :
+        runtimeHealth ?? (usage?.lastSucceededAt === undefined ? "not_yet_verified" : "ready"))
       : "disabled",
     priority: profile.priority,
     createdAt: profile.createdAt,
@@ -346,39 +347,17 @@ function withoutActiveCredential(
 function withoutIdentityHint(
   profile: PersistedCredentialProfileV2,
 ): PersistedCredentialProfileV2 {
-  return {
-    credentialId: profile.credentialId,
-    credentialGeneration: profile.credentialGeneration,
-    authType: profile.authType,
-    authMethodLabel: profile.authMethodLabel,
-    displayName: profile.displayName,
-    ...(profile.note === undefined ? {} : { note: profile.note }),
-    enabled: profile.enabled,
-    priority: profile.priority,
-    createdAt: profile.createdAt,
-    updatedAt: profile.updatedAt,
-    ...(profile.kind === "inline" ? { kind: "inline", inline: profile.inline } : { kind: "incarnation", incarnation: profile.incarnation }),
-  };
+  const rest = { ...profile };
+  delete rest.identityHint;
+  return rest;
 }
 
 function withoutNote(
   profile: PersistedCredentialProfileV2,
 ): PersistedCredentialProfileV2 {
-  return {
-    credentialId: profile.credentialId,
-    credentialGeneration: profile.credentialGeneration,
-    authType: profile.authType,
-    authMethodLabel: profile.authMethodLabel,
-    displayName: profile.displayName,
-    ...(profile.identityHint === undefined
-      ? {}
-      : { identityHint: profile.identityHint }),
-    enabled: profile.enabled,
-    priority: profile.priority,
-    createdAt: profile.createdAt,
-    updatedAt: profile.updatedAt,
-    ...(profile.kind === "inline" ? { kind: "inline", inline: profile.inline } : { kind: "incarnation", incarnation: profile.incarnation }),
-  };
+  const rest = { ...profile };
+  delete rest.note;
+  return rest;
 }
 
 export function createProviderCredentialProfiles(options: {
@@ -387,8 +366,7 @@ export function createProviderCredentialProfiles(options: {
   readonly createId: () => string;
   readonly now: () => number;
   readonly ambientStatus?: (providerId: string) => "configured" | "unknown";
-  /** Explicit externally owned sources, keyed by Provider id. No source
-   * discovery or persisted selection; managed Profiles remain authoritative. */
+  /** Explicit externally owned sources, available only without Profiles. */
   readonly externalSources?: Readonly<Record<string, ExternalCredentialSource>>;
   readonly credentialUsage?: (
     credentialIds: readonly string[],
@@ -1532,6 +1510,7 @@ export function createProviderCredentialProfiles(options: {
       if (
         active === undefined ||
         !active.enabled ||
+        active.kind === "unavailable" ||
         activeHealth?.terminal === "reconnect_required" ||
         (activeHealth?.cooldownUntil !== undefined && activeHealth.cooldownUntil > options.now())
       ) {
@@ -1587,6 +1566,7 @@ export function createProviderCredentialProfiles(options: {
       if (
         active === undefined ||
         !active.enabled ||
+        active.kind === "unavailable" ||
         record.activeCredentialId !== active.credentialId
       ) {
         throw new ProviderAuthBindingError(
@@ -1701,6 +1681,7 @@ export function createProviderCredentialProfiles(options: {
       return Object.freeze({
         kind: "login",
         mode: "reconnect",
+        ...(profile.acquisition === undefined ? {} : { acquisition: profile.acquisition }),
         providerId: input.providerId,
         authType: profile.authType,
         displayName: profile.displayName,
@@ -1767,6 +1748,7 @@ export function createProviderCredentialProfiles(options: {
                 if (
                   profile.authType !== failed.authType ||
                   !profile.enabled ||
+                  profile.kind === "unavailable" ||
                   attempted.has(profile.credentialId)
                 ) {
                   return false;

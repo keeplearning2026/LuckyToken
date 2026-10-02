@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type {
   ApplicationStatus,
+  CredentialProfileProjectionV1,
   CredentialProfilesProjectionV1,
   ProviderCredentialProfilesProjectionV1,
 } from "@token/application-control-plane/control-plane";
-import { decodeAttentionProjection } from "@token/application-control-plane/control-plane";
+import {
+  decodeAttentionProjection,
+} from "@token/application-control-plane/control-plane";
 import { createOperationalAttentionAuthority } from "../../src/operational-attention/index.js";
 
 const running: ApplicationStatus = Object.freeze({
@@ -21,6 +24,69 @@ function credentials(
   providers: readonly ProviderCredentialProfilesProjectionV1[],
 ): CredentialProfilesProjectionV1 {
   return Object.freeze({ providers: Object.freeze(providers) });
+}
+
+const SELECTION_PROVIDER_ID = "selection-provider";
+
+function selectionProfile(
+  health: CredentialProfileProjectionV1["health"] = "ready",
+): CredentialProfileProjectionV1 {
+  return Object.freeze({
+    credentialId: "managed-profile",
+    authType: "oauth" as const,
+    authMethodLabel: "Fixture account",
+    displayName: "Managed Profile",
+    enabled: true,
+    health,
+    priority: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+}
+
+function selectionProvider(input: {
+  readonly activeCredentialId?: string;
+  readonly declaredExternalSource: boolean;
+  readonly externalStatus: "connected" | "configured" | "unknown";
+  readonly profiles?: readonly CredentialProfileProjectionV1[];
+}): ProviderCredentialProfilesProjectionV1 {
+  return Object.freeze({
+    providerId: SELECTION_PROVIDER_ID,
+    implementationAvailable: true,
+    ...(input.activeCredentialId === undefined
+      ? {}
+      : { activeCredentialId: input.activeCredentialId }),
+    ambient: Object.freeze({
+      kind: "external" as const,
+      status: input.externalStatus,
+      ...(input.declaredExternalSource ? { displayName: "Codex login" } : {}),
+      message: "Fixture external source",
+    }),
+    profiles: Object.freeze(input.profiles ?? []),
+  });
+}
+
+function providerInvalidTransitions(
+  states: readonly ProviderCredentialProfilesProjectionV1[],
+): readonly boolean[] {
+  let projection = credentials([states[0]!]);
+  const authority = createOperationalAttentionAuthority({
+    now: () => 100,
+    credentials: () => projection,
+    requestFailureCount: () => 0,
+  });
+  const hasInvalidEpisode = () =>
+    authority.project(running)?.conditions.some(
+      (condition) =>
+        condition.id ===
+        `provider-login-invalid:${SELECTION_PROVIDER_ID}`,
+    ) ?? false;
+
+  expect(hasInvalidEpisode()).toBe(false);
+  return states.slice(1).map((provider) => {
+    projection = credentials([provider]);
+    return hasInvalidEpisode();
+  });
 }
 
 describe("operational attention authority", () => {
@@ -226,5 +292,54 @@ describe("operational attention authority", () => {
         ],
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("operational attention and credential selection", () => {
+  it("uses the selected Profile rather than a connected external source", () => {
+    expect(providerInvalidTransitions([
+      selectionProvider({
+        activeCredentialId: "managed-profile",
+        declaredExternalSource: true,
+        externalStatus: "connected",
+        profiles: Object.freeze([selectionProfile()]),
+      }),
+      selectionProvider({
+        activeCredentialId: "managed-profile",
+        declaredExternalSource: true,
+        externalStatus: "connected",
+        profiles: Object.freeze([selectionProfile("reconnect_required")]),
+      }),
+    ])).toEqual([true]);
+  });
+
+  it("fails closed when Profiles exist without a selection", () => {
+    const profiles = Object.freeze([selectionProfile()]);
+    expect(providerInvalidTransitions([
+      selectionProvider({
+        activeCredentialId: "managed-profile",
+        declaredExternalSource: true,
+        externalStatus: "connected",
+        profiles,
+      }),
+      selectionProvider({
+        declaredExternalSource: true,
+        externalStatus: "connected",
+        profiles,
+      }),
+    ])).toEqual([true]);
+  });
+
+  it("preserves configured ambient auth without a declared external source", () => {
+    expect(providerInvalidTransitions([
+      selectionProvider({
+        declaredExternalSource: false,
+        externalStatus: "configured",
+      }),
+      selectionProvider({
+        declaredExternalSource: false,
+        externalStatus: "unknown",
+      }),
+    ])).toEqual([true]);
   });
 });
