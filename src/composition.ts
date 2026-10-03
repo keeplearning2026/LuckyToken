@@ -82,6 +82,8 @@ export interface ConfiguredTokenDataPlaneOptions {
   readonly codexSearchModel?: () => string;
   /** Settings-backed switch for Provider Native function-call namespace repair. */
   readonly functionCallNamespaceRepair?: () => boolean;
+  readonly toolCallAdjacency?: () => boolean;
+  readonly sseLifecycleNormalization?: () => boolean;
   readonly providerResponseObservation?: (input: {
     readonly model: Parameters<ExecutionOperation>[1];
     readonly capture: ProviderAuthBindingCapture;
@@ -253,6 +255,12 @@ export async function createConfiguredTokenDataPlane(
         ...(options.functionCallNamespaceRepair === undefined
           ? {}
           : { functionCallNamespaceRepair: options.functionCallNamespaceRepair }),
+        ...(options.toolCallAdjacency === undefined
+          ? {}
+          : { toolCallAdjacency: options.toolCallAdjacency }),
+        ...(options.sseLifecycleNormalization === undefined
+          ? {}
+          : { sseLifecycleNormalization: options.sseLifecycleNormalization }),
         ...(directLane === undefined ? {} : { directLane }),
       }),
       createOpenAIResponsesCompactHandler({

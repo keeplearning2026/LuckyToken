@@ -78,6 +78,8 @@ export interface OpenAIResponsesHandlerOptions {
   readonly providerNativeLane?: ProviderResponsesLane;
   /** Settings-backed switch for Provider Native function-call namespace repair. */
   readonly functionCallNamespaceRepair?: () => boolean;
+  readonly toolCallAdjacency?: () => boolean;
+  readonly sseLifecycleNormalization?: () => boolean;
   readonly createSessionId?: () => string;
   readonly configuration?: OpenAIResponsesConfiguration;
   readonly stateFile: string;
@@ -107,6 +109,8 @@ interface OpenAIResponsesDependencies {
   readonly directLane: DirectResponsesLane | undefined;
   readonly providerNativeLane: ProviderResponsesLane | undefined;
   readonly functionCallNamespaceRepair: (() => boolean) | undefined;
+  readonly toolCallAdjacency: (() => boolean) | undefined;
+  readonly sseLifecycleNormalization: (() => boolean) | undefined;
   readonly createSessionId: () => string;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly sessionState: ResponseSessionState;
@@ -977,6 +981,14 @@ async function providerNativeBranch(
 ): Promise<Response> {
   const lane = dependencies.providerNativeLane;
   if (lane === undefined) throw new Error("Provider Native lane is unavailable");
+  // Capture optional repairs once for this request, including its retries and
+  // delayed response. Settings and their failures never enter the pure rewrites.
+  const enabled = (read: (() => boolean) | undefined): boolean => {
+    try { return read?.() !== false; } catch { return false; }
+  };
+  const toolCallAdjacency = enabled(dependencies.toolCallAdjacency);
+  const sseLifecycleNormalization = enabled(dependencies.sseLifecycleNormalization);
+  const functionCallNamespaceRepair = enabled(dependencies.functionCallNamespaceRepair);
   let finalAttempt = 1;
   let physicalResponseObserved = false;
   const observation: ProviderResponsesObservationContext | undefined =
@@ -1007,6 +1019,7 @@ async function providerNativeBranch(
         signal: request.signal,
         sessionId,
         operation: "responses",
+        toolCallAdjacency,
         ...(dependencies.requestTimeoutMs === undefined
           ? {}
           : { requestTimeoutMs: dependencies.requestTimeoutMs }),
@@ -1140,6 +1153,7 @@ async function providerNativeBranch(
   let body = upstream.body;
   const contentType = upstream.headers["content-type"] ?? "";
   if (
+    sseLifecycleNormalization &&
     upstream.status >= 200 &&
     upstream.status < 300 &&
     nativeResponsesWireShape(body, contentType) === "sse"
@@ -1222,7 +1236,7 @@ async function providerNativeBranch(
     const repairEnabled =
       upstream.status >= 200 &&
       upstream.status < 300 &&
-      dependencies.functionCallNamespaceRepair?.() !== false;
+      functionCallNamespaceRepair;
     if (repairEnabled) {
       // `fatal` keeps the module away from bodies whose bytes are not valid
       // UTF-8: a successful decode proves the decode/encode round trip is
@@ -1376,6 +1390,8 @@ export function createOpenAIResponsesHandler(
     directLane: options.directLane,
     providerNativeLane: options.providerNativeLane,
     functionCallNamespaceRepair: options.functionCallNamespaceRepair,
+    toolCallAdjacency: options.toolCallAdjacency,
+    sseLifecycleNormalization: options.sseLifecycleNormalization,
     createSessionId: options.createSessionId ?? randomUUID,
     configuration,
     sessionState,

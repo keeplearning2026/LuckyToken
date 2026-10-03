@@ -22,6 +22,7 @@
 
 ### 2.1 适用范围
 
+- 2026-10-03 新增独立设置 `protocols.openai-responses.responseRepair.sseLifecycle.providerNative`：boolean、默认 true、hot-apply。在进入 Native 分支时捕获本请求快照；关闭时保留该阶段输入，不调整事件顺序或 sequence_number，后续 namespace 和 alias 步骤按各自契约执行。算法与范围不变，见 [重写清单](TokenProviderNativeRewriteInventory.md)。
 - 仅 `POST /v1/responses` 的 Provider Native Preservation 分支。
 - 上游为成功 HTTP 响应，响应媒体类型为 `text/event-stream`，body 已完整缓冲。
 - 统一适用于该边界，不识别 Codex User-Agent，不按 Provider/model 名称特判。

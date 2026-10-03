@@ -1,4 +1,4 @@
-import { rewriteModelJson } from "./common.js";
+import { parseJsonObject, rewriteModelJson } from "./common.js";
 import type { ProviderResponsesOperation } from "./contract.js";
 
 /**
@@ -385,13 +385,11 @@ function analyze(
 
 function buildProjection(
   text: string,
-  modelValue: ElementSpan | undefined,
   parsed: Record<string, unknown>,
   input: readonly unknown[],
   layout: ArrayLayout,
   order: readonly number[],
   movedCount: number,
-  modelId: string,
 ): ProviderNativeBodyProjection | null {
   let interior = layout.lead;
   for (let index = 0; index < order.length; index += 1) {
@@ -401,27 +399,7 @@ function buildProjection(
   }
   interior += layout.tail;
 
-  const edits: Array<{ start: number; end: number; text: string }> = [
-    { start: layout.open + 1, end: layout.close, text: interior },
-  ];
-  if (parsed.model !== modelId) {
-    if (modelValue === undefined || text[modelValue.start] !== '"') return null;
-    edits.push({
-      start: modelValue.start,
-      end: modelValue.end,
-      text: JSON.stringify(modelId),
-    });
-  }
-  edits.sort((left, right) => left.start - right.start);
-  for (let index = 1; index < edits.length; index += 1) {
-    if (edits[index]!.start < edits[index - 1]!.end) return null;
-  }
-
-  let projected = text;
-  for (let index = edits.length - 1; index >= 0; index -= 1) {
-    const edit = edits[index]!;
-    projected = projected.slice(0, edit.start) + edit.text + projected.slice(edit.end);
-  }
+  const projected = text.slice(0, layout.open + 1) + interior + text.slice(layout.close);
 
   let output: unknown;
   try {
@@ -442,11 +420,9 @@ function buildProjection(
     if (inputKeys[index] !== outputKeys[index]) return null;
   }
   for (const key of inputKeys) {
-    if (key === "input" || key === "model") continue;
+    if (key === "input") continue;
     if (!deepEqual(output[key], parsed[key])) return null;
   }
-  if (output.model !== modelId && parsed.model !== output.model) return null;
-  if (parsed.model !== modelId && output.model !== modelId) return null;
 
   const outputTop = scanObject(projected, 0);
   if (outputTop === null || outputTop.duplicate) return null;
@@ -468,7 +444,7 @@ function buildProjection(
 
   const reordered = order.map((source) => input[source]);
   return {
-    parsed: { ...parsed, model: modelId, input: reordered },
+    parsed: { ...parsed, input: reordered },
     text: projected,
     outcome: "deferred",
     deferredMessages: movedCount,
@@ -479,18 +455,27 @@ export function projectProviderNativeBody(
   rawBody: string,
   modelId: string,
   operation: ProviderResponsesOperation,
+  toolCallAdjacency = true,
+): ProviderNativeBodyProjection {
+  const rewritten = rewriteModelJson(rawBody, modelId);
+  if (operation !== "responses" || !toolCallAdjacency) {
+    return { ...rewritten, outcome: "model-only", deferredMessages: 0 };
+  }
+  return reorderProviderNativeToolCallAdjacency(rewritten.text);
+}
+
+/** Pure, optional request repair; model projection and compaction are separate. */
+export function reorderProviderNativeToolCallAdjacency(
+  rawBody: string,
 ): ProviderNativeBodyProjection {
   const modelOnly = (outcome: ProviderNativeBodyOutcome): ProviderNativeBodyProjection => {
-    const rewritten = rewriteModelJson(rawBody, modelId);
     return {
-      parsed: rewritten.parsed,
-      text: rewritten.text,
+      parsed: parseJsonObject(rawBody),
+      text: rawBody,
       outcome,
       deferredMessages: 0,
     };
   };
-
-  if (operation !== "responses") return modelOnly("model-only");
 
   const top = scanObject(rawBody, 0);
   if (top === null || top.duplicate) return modelOnly("model-only");
@@ -529,19 +514,13 @@ export function projectProviderNativeBody(
   if (analysis.kind === "none") return modelOnly("model-only");
   if (analysis.kind === "abstain") return modelOnly(analysis.outcome);
 
-  const modelValue =
-    parsed.model !== modelId
-      ? { start: modelEntry.valueStart, end: modelEntry.valueEnd }
-      : undefined;
   const projection = buildProjection(
     rawBody,
-    modelValue,
     parsed,
     input,
     layout,
     analysis.order,
     analysis.movedCount,
-    modelId,
   );
   if (projection === null) return modelOnly("abandoned");
   return projection;

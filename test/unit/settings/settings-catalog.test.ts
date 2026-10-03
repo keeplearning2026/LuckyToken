@@ -35,6 +35,8 @@ describe("authoritative registered settings catalog", () => {
       "integrations.claude.sonnetModel",
       "integrations.claude.haikuModel",
       "integrations.claude.subagentModel",
+      "protocols.openai-responses.requestRepair.toolCallAdjacency.providerNative",
+      "protocols.openai-responses.responseRepair.sseLifecycle.providerNative",
       "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
     ]);
 

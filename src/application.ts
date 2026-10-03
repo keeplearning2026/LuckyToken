@@ -1108,6 +1108,16 @@ async function startNormalApplication(options: {
                 "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
               ])["protocols.openai-responses.responseRepair.functionCallNamespace.providerNative"]
                 ?.value !== false,
+            toolCallAdjacency: () =>
+              settingsRegistry.query([
+                "protocols.openai-responses.requestRepair.toolCallAdjacency.providerNative",
+              ])["protocols.openai-responses.requestRepair.toolCallAdjacency.providerNative"]
+                ?.value !== false,
+            sseLifecycleNormalization: () =>
+              settingsRegistry.query([
+                "protocols.openai-responses.responseRepair.sseLifecycle.providerNative",
+              ])["protocols.openai-responses.responseRepair.sseLifecycle.providerNative"]
+                ?.value !== false,
             providerResponseObservation:
               createProviderUsageResponseObserver(providerUsageAuthority),
           });

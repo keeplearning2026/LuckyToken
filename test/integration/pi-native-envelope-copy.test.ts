@@ -11,22 +11,29 @@ function model(api: Api, provider: string): Model<Api> {
 }
 
 describe("copied Pi envelopes with Native body and raw response ownership", () => {
-  it.each([
+  it.each(([
     { api: "openai-responses", provider: "openai", key: "sk-test" },
     { api: "azure-openai-responses", provider: "azure-openai-responses", key: "test" },
     { api: "openai-codex-responses", provider: "openai-codex", key: `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } })).toString("base64url")}.signature` },
-  ] as const)("keeps unknown body fields and an unread non-2xx response for $api", async ({ api, provider, key }) => {
+  ] as const).flatMap((provider) => [true, false].map((toolCallAdjacency) => ({ ...provider, toolCallAdjacency }))))("keeps body fields, the adjacency choice and an unread non-2xx response for $api adjacency=$toolCallAdjacency", async ({ api, provider, key, toolCallAdjacency }) => {
     const upstream = new Response("private provider error", { status: 429, headers: { "x-upstream": "retained" } });
     let request: Request | undefined;
     const auth: AuthResult = { auth: { apiKey: key } };
-    const sender = createProviderResponsesSender({ model: model(api, provider), auth, sessionId: "test-session",
+    const sender = createProviderResponsesSender({ model: model(api, provider), auth, sessionId: "test-session", toolCallAdjacency,
       fetch: async (input, init) => { request = new Request(input, init); return upstream; } });
-    const raw = { model: "alias", input: "hi", stream: true, provider_private_field: { future: [1, "two"] } };
+    const history = [
+      { type: "function_call", call_id: "a", name: "lookup", arguments: "{}" },
+      { type: "function_call", call_id: "b", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "a", output: "A" },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "resize notice" }] },
+      { type: "function_call_output", call_id: "b", output: "B" },
+    ];
+    const raw = { model: "alias", input: history, stream: true, provider_private_field: { future: [1, "two"] } };
     const response = await sender!.send("responses", JSON.stringify(raw), new AbortController().signal);
     const sent = request!.headers.get("content-encoding") === "zstd"
       ? JSON.parse(zstdDecompressSync(new Uint8Array(await request!.arrayBuffer())).toString("utf8"))
       : await request!.json();
-    expect(sent).toEqual({ ...raw, model: "native-model" });
+    expect(sent).toEqual({ ...raw, model: "native-model", input: toolCallAdjacency ? [history[0], history[1], history[2], history[4], history[3]] : history });
     expect(response).toBe(upstream);
     expect(response.bodyUsed).toBe(false);
     expect(await response.text()).toBe("private provider error");

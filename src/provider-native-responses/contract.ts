@@ -42,6 +42,8 @@ export interface ProviderResponsesPhysicalAttemptObservation {
 export type ProviderResponsesLaneInput = {
   readonly model: Model<string>;
   readonly rawBody: string;
+  /** Captured optional request repair; never controls compaction processing. */
+  readonly toolCallAdjacency?: boolean;
   readonly signal: AbortSignal;
   /** Effective Provider request timeout, the same fact the Semantic lane
    *  passes to Pi. Provider Native mirrors it so SDK timeout/identity headers
@@ -79,5 +81,6 @@ export interface CreateProviderResponsesSenderOptions {
   readonly auth: AuthResult;
   readonly fetch: FetchFunction;
   readonly sessionId?: string;
+  readonly toolCallAdjacency?: boolean;
   readonly requestTimeoutMs?: number;
 }

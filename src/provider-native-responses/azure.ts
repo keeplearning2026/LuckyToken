@@ -53,7 +53,7 @@ export function createAzureResponsesSender(
       );
       let rewritten: ProviderNativeBodyProjection;
       try {
-        rewritten = projectProviderNativeBody(rawBody, deploymentName, operation);
+        rewritten = projectProviderNativeBody(rawBody, deploymentName, operation, options.toolCallAdjacency);
         observeProviderResponsesBodyProjection(
           observation?.journey,
           rewritten,

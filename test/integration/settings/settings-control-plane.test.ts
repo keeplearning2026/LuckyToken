@@ -170,6 +170,8 @@ describe("settings through the Control Plane and real HTTP seams", () => {
       "integrations.claude.sonnetModel",
       "integrations.claude.haikuModel",
       "integrations.claude.subagentModel",
+      "protocols.openai-responses.requestRepair.toolCallAdjacency.providerNative",
+      "protocols.openai-responses.responseRepair.sseLifecycle.providerNative",
       "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative",
     ]);
     expect(settings["protocols.anthropic-messages.enabled"]).toMatchObject({

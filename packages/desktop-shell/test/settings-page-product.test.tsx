@@ -339,9 +339,11 @@ describe("Settings product slice", () => {
     expect(container.querySelector('#settings-tab-diagnostics')?.getAttribute("aria-selected")).toBe("true");
   });
 
-  it("toggles the Provider Native namespace repair from Response repair settings", async () => {
-    const settingKey =
-      "protocols.openai-responses.responseRepair.functionCallNamespace.providerNative";
+  it.each([
+    ["protocols.openai-responses.requestRepair.toolCallAdjacency.providerNative", "tool-call adjacency reorder"],
+    ["protocols.openai-responses.responseRepair.sseLifecycle.providerNative", "SSE lifecycle normalization"],
+    ["protocols.openai-responses.responseRepair.functionCallNamespace.providerNative", "function-call namespace repair"],
+  ])("toggles only %s in the Responses Provider Native settings", async (settingKey, action) => {
     const executeSettings = vi.fn(async (command: Parameters<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>[0]) => ({
       outcome: command.command === "set" ? ("applied" as const) : ("ok" as const),
       settings: {
@@ -360,19 +362,21 @@ describe("Settings product slice", () => {
 
     await click("Advanced");
 
-    const toggle = container.querySelector(
-      '.switch-control[aria-label="Disable function-call namespace repair"]',
-    );
+    const toggle = container.querySelector(`.switch-control[aria-label="Disable ${action}"]`);
     expect(toggle).not.toBeNull();
     expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle?.closest(".page-card")?.querySelector("h3")?.textContent).toBe("Provider Native rewrites");
+    expect(toggle?.closest(".page-card")?.querySelectorAll(".switch-control")).toHaveLength(3);
 
-    await clickAria("Disable function-call namespace repair");
+    await clickAria(`Disable ${action}`);
 
     expect(executeSettings).toHaveBeenCalledWith({
       command: "set",
       key: settingKey,
       value: false,
     });
+    expect(container.querySelector(`.switch-control[aria-label="Enable ${action}"]`)?.getAttribute("aria-pressed")).toBe("false");
+    expect(toggle?.closest(".page-card")?.querySelectorAll('.switch-control[aria-pressed="true"]')).toHaveLength(2);
   });
 
   it("keeps both protocol controls in Advanced settings", async () => {

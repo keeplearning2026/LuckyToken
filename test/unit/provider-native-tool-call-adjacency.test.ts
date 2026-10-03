@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { rewriteModelJson } from "../../src/provider-native-responses/common.js";
 import {
   projectProviderNativeBody,
+  reorderProviderNativeToolCallAdjacency,
   TOOL_CALL_ADJACENCY_DEFERRED_NOTICE_CODE,
   TOOL_CALL_GROUP_ABANDONED_NOTICE_CODE,
   TOOL_CALL_GROUP_UNSUPPORTED_ITEM_NOTICE_CODE,
@@ -36,6 +37,24 @@ function project(raw: string, modelId = RESOLVED, operation: "responses" | "comp
 }
 
 describe("provider native tool-call adjacency projection", () => {
+  it("disabling adjacency retains model projection and the original input order", () => {
+    const raw = bodyWith([call("a"), call("b"), result("a"), notice(), result("b")]);
+    const projection = projectProviderNativeBody(raw, RESOLVED, "responses", false);
+    expect(projection.text).toBe(rewriteModelJson(raw, RESOLVED).text);
+    expect(projection.parsed.input).toEqual(JSON.parse(raw).input);
+    expect(projection.outcome).toBe("model-only");
+    expect(projection.deferredMessages).toBe(0);
+  });
+
+  it("the standalone adjacency rewrite preserves the model and unrelated wire", () => {
+    const raw = bodyWith([call("a"), call("b"), result("a"), notice(), result("b")]);
+    const projection = reorderProviderNativeToolCallAdjacency(raw);
+    expect(projection.outcome).toBe("deferred");
+    expect(projection.parsed.model).toBe(ALIAS);
+    expect(projection.text).toBe(projectProviderNativeBody(raw, ALIAS, "responses").text);
+    expect(reorderProviderNativeToolCallAdjacency(raw)).toEqual(projection);
+  });
+
   it("keeps the model-only projection byte-identical when no group is interrupted", () => {
     const raw = bodyWith([call("a"), call("b"), result("a"), result("b")]);
     const baseline = rewriteModelJson(raw, RESOLVED);

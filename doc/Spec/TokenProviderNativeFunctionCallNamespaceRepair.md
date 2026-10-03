@@ -84,8 +84,9 @@ silently redirect it).
   captured, so Direct Mode is unmeasured rather than proven unaffected. That
   failure stays unfixed there, and this module will not be the place that changes
   it. Adding a lane later means a new setting key, a new integration point, and
-  a second control in Settings → Advanced → Protocols → Response repair; today
-  that section carries exactly one switch, and no lane is enabled by implication.
+  a separate control in Settings → Advanced → Protocols. The Responses Provider
+  Native rewrites section has three independent controls for adjacency, lifecycle,
+  and namespace repair; no other lane is enabled by implication.
 
 ## Byte discipline and failure behaviour
 
@@ -141,9 +142,12 @@ rather than merely short of an optional snapshot. Only an object `response` whos
 ## Switch
 
 Setting `protocols.openai-responses.responseRepair.functionCallNamespace.providerNative`
-(boolean, default `true`, `hot-apply`) gates the repair. The handler reads it
-lazily per response through a supplier, so toggling it in Settings → Response
-repair takes effect without a restart. When the setting is absent the repair
+(boolean, default `true`, `hot-apply`) gates the repair. The handler captures it
+once when entering the Native request branch, together with the adjacency and
+lifecycle switches. The current request, including retries and its response,
+keeps this snapshot; subsequent requests use updated values without a restart.
+The control is in Settings → Advanced → Protocols → Provider Native rewrites.
+When the setting is absent the repair
 runs. Because the module does nothing unless the response is already degraded,
 leaving it on is safe; the switch exists so the exception can be withdrawn once
 the upstream stops omitting the field.

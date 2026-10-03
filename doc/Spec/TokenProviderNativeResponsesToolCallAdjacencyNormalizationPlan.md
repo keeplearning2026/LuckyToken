@@ -4,6 +4,8 @@ Status: implemented v5.1（PRD 层授权已给出；离线实现与认证见下�
 Authority: 第 2 节的契约已按第 12 节授权落入仓库文档与实现。
 Scope: Provider Native Preservation，且仅 `operation === "responses"`（不含 compact）请求方向的窄结构归一化。
 
+2026-10-03 实现修订：独立纯函数 `reorderProviderNativeToolCallAdjacency` 只重排 input；`projectProviderNativeBody` 先做必需的 model 投影，再按 `protocols.openai-responses.requestRepair.toolCallAdjacency.providerNative` 决定是否调用它。开关 boolean、默认 true、hot-apply，本请求捕获一次并在重试中保持；compact 恒不重排。此修订取代历史“无配置开关”的决定，不改变重排资格、notice 或 Token1/routed compaction，见 [重写清单](TokenProviderNativeRewriteInventory.md)。
+
 > **B2′ 后的字节契约说明（2026-09-29）：** 本文所有“逐字节保持/逐字节等于”断言只描述
 > `tool-call-adjacency.ts` 投影器自身输出相对于输入文本的局部性质。最终 Provider wire
 > 已由 `TokenProviderNativeEnvelopeParityPlan.md` 的 B2′ 契约取代：投影后的 JSON 值交给
@@ -153,7 +155,7 @@ message 之间、tool 结果之间各自保持原有相对顺序；**其它元�
 ### 2.7 所有者决定
 
 必须留在 native 车道（不引入请求级资格判定、不跨 lane 回退）；允许放宽契约；
-不引入配置开关。PRD 层授权见第 12 节。
+独立开关仅选择是否应用本步骤，不参与 lane 选择。PRD 层授权见第 12 节；2026-10-03 开关修订见文首。
 
 ### 2.8 第二条例外的封闭表述（候选替换文本）
 
@@ -272,7 +274,7 @@ call 段。
 `E_{k+1}` 之间的字节；`tail` = `E_{n-1}` 与 `]` 之间的字节；`modelValue` = 顶层 `model`
 字符串字面量区间。
 
-**输出 = 对原文施加两个互不重叠的替换（与两字段在文中的先后无关）**：
+**输出 = 顺序调用两个独立纯函数（与两字段在文中的先后无关）**：
 
 ```text
 R_model   : modelValue -> JSON.stringify(resolvedModelId)          （仅当不同）
@@ -280,7 +282,7 @@ R_interior: (arrayOpen, arrayClose) -> lead + E_{P[0]} + sep_0 + E_{P[1]} + ... 
 ```
 
 `[`、`]`、`lead`、`tail`、每个 `sep_k` 都是**不变区间**，因此数组框架与首尾空白原样保留；
-两处替换按偏移从右往左应用，并先校验两者不重叠。
+model 投影完成后，adjacency 在其输出上重新定位数组区间并替换内部。adjacency 自身不写 model；关闭该步骤仍保留 model 投影。
 
 **采用条件**（任一失败 → 不采用重建，返回原始 body，按 3.7 记 notice）：
 
@@ -288,7 +290,7 @@ R_interior: (arrayOpen, arrayClose) -> lead + E_{P[0]} + sep_0 + E_{P[1]} + ... 
 2. 元素 span 数 = `parsed.input.length`；每个 span 切片重解析后与 `parsed.input[i]` 深相等。
 3. **按解码后键名**，顶层无重复键；每个元素的 `type`/`call_id`/`role`/`id` 无重复键。
 4. 输出可完整复解析；`input` 长度不变，且**逐位置**等于 `parsed.input[P[k]]`；
-   顶层键集合不变；除 `input` 与 `model` 外所有值深相等。
+   顶层键集合不变；adjacency 步骤除 `input` 外所有值深相等（包括已经投影的 `model`）。
 5. `parsed.input` 的顺序与输出文本顺序一致（供 3.6 使用）。
 6. 字节相等：输出 `input` 第 k 项切片逐字节等于原文 `E_{P[k]}`；`[`、`]`、`lead`、
    每个 `sep_k`、`tail` 在输出中原位且逐字节相同；`modelValue` 与数组内部区间之外的
@@ -297,14 +299,14 @@ R_interior: (arrayOpen, arrayClose) -> lead + E_{P[0]} + sep_0 + E_{P[1]} + ... 
 ### 3.6 与 model 投影、parsed 一致性
 
 ```ts
-projectProviderNativeBody(rawBody, modelId, operation): {
+projectProviderNativeBody(rawBody, modelId, operation, toolCallAdjacency = true): {
   parsed: Record<string, unknown>;   // 命中时 input 顺序与发送文本一致
   text: string;
   outcome: "model-only" | "deferred" | "abandoned" | "unsupported-item";
 }
 ```
 
-未命中走既有 model-only 路径。命中时 `parsed.input` 必须按 P 重排，避免 `openai.ts:163` 的
+关闭或未命中走既有 model-only 路径。独立 `reorderProviderNativeToolCallAdjacency(rawBody)` 不读取设置。命中时 `parsed.input` 必须按 P 重排，避免 `openai.ts:163` 的
 `copilotDynamicHeaders(parsed)` 与实际 wire 描述不同顺序。
 
 ### 3.7 观测规则（统一，每请求至多一条）
@@ -318,7 +320,7 @@ projectProviderNativeBody(rawBody, modelId, operation): {
 优先级（同时命中时只发一条）：`unsupported_item` > `group_abandoned` > `deferred`。
 整份放弃使 `deferred` 与另两条互斥。
 
-**不产生 notice 的正常空操作**：compact；`input` 为字符串/缺失；请求内不存在候选形状或
+**不产生 notice 的正常空操作**：开关关闭；compact；`input` 为字符串/缺失；请求内不存在候选形状或
 非 message 穿插；非法 JSON（走既有失败路径）；结构扫描无法完成（无法断言形状存在，记入第 8 节）。
 notice 只读、有界、不含客户端文本或 body，且**不得声称 reasoning 的失败原因已确定**。
 三个 sender 都发同样的通知并各有测试。
@@ -519,7 +521,7 @@ guarded npm test；文档修订与代码同批提交。
 - 5.7 五态非干扰通过；
 - 3.7 的三条 code、优先级与"每请求至多一条"一致；
 - 4.4 的 28 条修订完成，且两处测试基线**未被削弱**；
-- 未引入配置开关；
+- 默认开启且保留既有行为；关闭只跳过 adjacency，不影响 model 或 compaction；
 - 5.8 已验证合成最小形状的真实上游 400→200；文档/release 不得据此声称真实
   Codex 会话所有变体的连续 502 均已修复。
 

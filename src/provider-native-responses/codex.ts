@@ -67,7 +67,7 @@ export function createCodexResponsesSender(
       );
       let rewritten: ProviderNativeBodyProjection;
       try {
-        rewritten = projectProviderNativeBody(rawBody, model.id, operation);
+        rewritten = projectProviderNativeBody(rawBody, model.id, operation, options.toolCallAdjacency);
         observeProviderResponsesBodyProjection(
           observation?.journey,
           rewritten,

@@ -31,7 +31,7 @@ Parse(U) = SDK JSON 值归一化(R(B))
 R 必须指向已有的独立契约与正反测试，不能用“必要 repair”作为无限授权：
 
 - 顶层 model / Azure deployment 投影；其余模型可见字段继续来自客户端。
-- Responses 已认证的 tool-call adjacency 调整，见 [对应规范](TokenProviderNativeResponsesToolCallAdjacencyNormalizationPlan.md)；不满足条件时保留 model-only 行为。
+- Responses 已认证的 tool-call adjacency 调整，见 [对应规范](TokenProviderNativeResponsesToolCallAdjacencyNormalizationPlan.md)；开关关闭或不满足条件时保留 model-only 行为。
 - Anthropic managed OAuth 的已认证 identity/tool-name 差分，见 [Anthropic Native Contract](TokenProviderNativeAnthropicContract.md)。
 - Anthropic SDK 的 betas → header 资源层转换属于已声明 envelope 事实，不允许据此任意注入 body 字段。
 - Routed compaction 与 Token1 replay 是独立且窄的语义例外，必须遵守 [remote compaction 契约](TokenResponsesRemoteCompactionHandlingSpec.md)，不能以普通 body 等价测试替代认证。
@@ -71,12 +71,14 @@ sender/transport 必须把真实上游 Response 交回 Native 响应 owner，在
 
 Native 响应处理仍遵循既有 buffering、重试分类、安全 header 过滤与 commit 契约；最终客户端响应不承诺是同一个 Response 对象，也不承诺保留被安全过滤的全部 headers。对于已提交的结果，只有以下已有规范允许改变可见内容：
 
-- Responses 成功响应依次执行 SSE lifecycle normalization、[function-call namespace insertion](TokenProviderNativeFunctionCallNamespaceRepair.md)、model alias projection。
+- Responses 成功响应依次执行可选 SSE lifecycle normalization、可选 [function-call namespace insertion](TokenProviderNativeFunctionCallNamespaceRepair.md)、必需的 model alias projection（当请求使用 alias）。可选步骤关闭时该步骤输入必须原样保留；alias、安全处理和 compaction 不能被一起跳过。
 - Anthropic 的已声明 model alias projection；不能据请求侧 OAuth 差分自行推定响应侧也获准重写 tool names。
 - Routed compaction 的单一 Token-owned compaction item。
 - 配置 public alias 时的既有错误安全流程：摘要/脱敏并替换真实 model 身份，构造协议错误；这不是原始错误 body 保真，必须作为明确的有条件差分认证。无 alias 时的原始错误保留路径单独测试。
 
 每项变换都必须证明触发范围、只改变被授权的事实、未知事件/字段保留，以及无匹配条件时不改变内容。错误 body 不进行成功响应修复。可见文本、工具名/参数/ID、usage、finish/error 含义不得被未经批准的改写改变。
+
+三个兼容性修复开关默认 true，在进入 Native 分支时捕获一次；请求发送、重试与响应处理使用同一快照。必须覆盖独立 on/off、全部关键组合、请求期间变更后的快照一致性，以及读取一个开关失败不影响其它步骤和 mandatory 处理。Token1 replay、routed compaction 请求与响应保持既有规则，不新增开关。
 
 ## N5：生命周期、提交与 lane 隔离
 
@@ -121,6 +123,7 @@ npm run test:provider-native
 - 很多 parity fixture 使用空 Pi Context；这些用例不能据此声称图片、工具、thinking、末条角色等动态 facts 已完成最终请求对照。需逐项审查其他测试的真实覆盖，再补缺口，不能以测试数量代替矩阵。
 - compact 的部分用例用 Pi Responses 请求作为共用 headers oracle，再独立检查 compact URL；属于拆分证据，不是同 operation 的 Pi 执行对照。
 - `pi-native-envelope-copy` 证明四条 sender 的未知 body 字段及 unread 原始非 2xx Response 保留；其余 projection/lifecycle/namespace/compaction/retry/profile/diagnostics 测试分别证明对应模块与组合。
+- `provider-native-rewrite-settings` 经 production composition 与 registry 验证三个开关的 8 种组合、下一请求 hot-apply、当前请求快照，以及单个开关读取失败的隔离；`pi-native-envelope-copy` 对 OpenAI/Azure/Codex 分别验证 adjacency 开关；`provider-native-compaction` 验证可选修复全开/全关时既有 SSE/JSON compaction 和 Token1 replay 行为。它们提供局部离线证据，不证明线上 Provider 接受。
 - `pi-upgrade-sync` 证明依赖同步、提取、有限 patch 拒绝/允许及生成一致性，不证明全部 Provider wire 正确。
 - 本次 Pi 1.0 升级未执行在线 Provider gate。当前不能称全链路不可区分或全部发布条件已满足。
 - 2026-10-03 实测统一 `test:provider-native` 入口：26 项同步/范围/隔离认证及 23 个 Native 文件的 314 项 unit/integration 全部通过；新增入口的 CODEX_HOME 守卫认证另行运行，14 项通过。这是该批有限离线检查的记录，不改变上述动态事实矩阵和线上证据缺口。

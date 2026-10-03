@@ -525,6 +525,7 @@ export function createProviderNativeResponses(
               model: input.model,
               auth,
               fetch: options.fetch,
+              toolCallAdjacency: input.toolCallAdjacency !== false,
               ...(input.requestTimeoutMs === undefined
                 ? {}
                 : { requestTimeoutMs: input.requestTimeoutMs }),

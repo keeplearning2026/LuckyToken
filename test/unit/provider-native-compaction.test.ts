@@ -35,6 +35,7 @@ function models(model: Model<string>): Models {
 function dependencies(
   source: Models,
   fetch: FetchFunction,
+  optionalRepairs = true,
 ): HttpBoundaryDependencies {
   const handler = createOpenAIResponsesHandler({
     models: source,
@@ -47,6 +48,9 @@ function dependencies(
     maxRequestBytes: 4_000_000,
     createResponseId: () => "resp_test",
     now: () => 1,
+    toolCallAdjacency: () => optionalRepairs,
+    sseLifecycleNormalization: () => optionalRepairs,
+    functionCallNamespaceRepair: () => optionalRepairs,
   });
   return {
     clientProtocols: [handler],
@@ -146,7 +150,7 @@ function compactionTurn(stream: boolean): string {
 }
 
 describe("Provider Native routed compaction", () => {
-  it("summarizes in-lane when the upstream cannot compact and returns one Token item", async () => {
+  it.each([true, false])("summarizes in-lane and returns one Token item with optional repairs=%s", async (optionalRepairs) => {
     const model = responsesModel("commandcode-goat");
     const upstream: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
@@ -169,7 +173,7 @@ describe("Provider Native routed compaction", () => {
     };
 
     const response = await handleHttpRequest(
-      dependencies(models(model), fetch),
+      dependencies(models(model), fetch, optionalRepairs),
       request(COMPACTION_TURN),
     );
 
@@ -226,7 +230,7 @@ describe("Provider Native routed compaction", () => {
     ).toBe("handoff summary");
   });
 
-  it("parses a non-streaming JSON summarizer response", async () => {
+  it.each([true, false])("parses a non-streaming JSON summarizer response with optional repairs=%s", async (optionalRepairs) => {
     const model = responsesModel("commandcode-goat");
     const upstream: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
@@ -251,7 +255,7 @@ describe("Provider Native routed compaction", () => {
     };
 
     const response = await handleHttpRequest(
-      dependencies(models(model), fetch),
+      dependencies(models(model), fetch, optionalRepairs),
       request(compactionTurn(false)),
     );
 
@@ -717,7 +721,7 @@ describe("Provider Native routed compaction", () => {
     await expect(response.text()).resolves.toContain("native-encrypted");
   });
 
-  it("decodes a replayed Token envelope before forwarding to the upstream", async () => {
+  it.each([true, false])("decodes a replayed Token envelope with optional repairs=%s", async (optionalRepairs) => {
     const model = responsesModel("commandcode-goat");
     const upstream: Request[] = [];
     const fetch: FetchFunction = async (input, init) => {
@@ -741,7 +745,7 @@ describe("Provider Native routed compaction", () => {
       Buffer.from("earlier handoff summary", "utf8").toString("base64");
 
     const response = await handleHttpRequest(
-      dependencies(models(model), fetch),
+      dependencies(models(model), fetch, optionalRepairs),
       request(
         JSON.stringify({
           model: "commandcode-goat/real-model",
