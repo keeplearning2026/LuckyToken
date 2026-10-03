@@ -33,6 +33,7 @@ import {
   type WireContinuityAttachment,
 } from "./semantic/reasoning/continuity.js";
 import { flattenResponsesNamespaceToolName } from "./namespace-tool-name.js";
+import { responsesEnvelopeContext } from "./request-context.js";
 
 export class InvalidRequest extends Error {
   readonly kind = "InvalidRequest";
@@ -92,6 +93,14 @@ export interface ResponsesClientRenderState {
 }
 
 export type ResponsesInvocation = ResponsesConversionResult<ResponsesClientRenderState>;
+
+/** Partial envelope preparation, never an executable Semantic invocation. */
+export interface ResponsesMaxContext {
+  readonly mode: "max";
+  readonly context: Context;
+  readonly options: ModelsSimpleStreamOptions;
+  readonly notices: readonly ConversionNotice[];
+}
 
 interface ValidatedResponsesRequest {
   selector: string;
@@ -2778,17 +2787,206 @@ function buildInvocation(
 }
 
 /**
- * Select and validate the consumed Responses facts, then build a Pi invocation.
- *
- * Without a resolver, Lucky-owned references/envelopes are a conversion
- * error (no fail-open). Use {@link convertResponsesRequestAsync} with a
- * narrow Responses-owned resolver to materialize them.
+ * Build a partial Context query using the existing pure conversion primitives.
+ * Omitted native facts and envelope-only presence markers are explicitly
+ * reported; this result must never be executed as a Semantic invocation.
  */
+function convertResponsesMaxContext(value: unknown, receivedAt: number): ResponsesMaxContext {
+  if (!isRecord(value)) throw new InvalidRequest("Responses request must be an object");
+  const notices: ConversionNotice[] = [];
+  const omit = (path: string) => notices.push(requestNotice("openai-responses_max_partial", "ignore", path));
+  for (const key of Object.keys(value)) {
+    if (!CONSUMED_REQUEST_FIELDS.has(key)) omit(requestFieldJsonPath(key));
+  }
+  const attempt = <T>(path: string, run: () => T): T | undefined => {
+    try { return run(); } catch (error) {
+      if (!(error instanceof InvalidRequest)) throw error;
+      omit(path);
+      return undefined;
+    }
+  };
+  const selector = typeof value.model === "string" ? value.model : "Token-envelope-query";
+  const freeform = new Set<string>();
+  const reverse: Record<string, { namespace: string; child: string }> = Object.create(null);
+  const input = typeof value.input === "string" ? [{ role: "user", content: value.input }]
+    : Array.isArray(value.input) ? value.input : [];
+  if (value.input !== undefined && typeof value.input !== "string" && !Array.isArray(value.input)) omit("$.input");
+  const declarations: Array<{ raw: unknown; path: string }> = [];
+  const addDeclarations = (items: unknown[], path: string) => {
+    for (const [index, raw] of items.entries()) {
+      const itemPath = `${path}[${index}]`;
+      // An unrepresentable namespace child must not discard its siblings.
+      if (isRecord(raw) && raw.type === "namespace" && Array.isArray(raw.tools)) {
+        for (const [childIndex, child] of raw.tools.entries()) {
+          declarations.push({ raw: { ...raw, tools: [child] }, path: `${itemPath}.tools[${childIndex}]` });
+        }
+      } else declarations.push({ raw, path: itemPath });
+    }
+  };
+  if (Array.isArray(value.tools)) addDeclarations(value.tools, "$.tools");
+  for (const [index, item] of input.entries()) {
+    if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools))
+      addDeclarations(item.tools, `$.input[${index}].tools`);
+  }
+  if (value.tools !== undefined && !Array.isArray(value.tools)) omit("$.tools");
+  const relaxedTool = (item: unknown): unknown => {
+    if (!isRecord(item)) return item;
+    if (item.defer_loading === true) omit("$.tools.defer_loading");
+    return { ...item, defer_loading: false,
+      ...(item.type === "namespace" && Array.isArray(item.tools) ? { tools: item.tools.map(relaxedTool) } : {}) };
+  };
+  const tools: Tool[] = [];
+  const seenNames = new Set<string>();
+  const ambiguousNames = new Set<string>();
+  const withoutConstraints = (item: unknown): unknown => {
+    if (!isRecord(item)) return item;
+    return { ...item, strict: false, format: undefined, grammar: undefined,
+      ...(item.type === "namespace" && Array.isArray(item.tools)
+        ? { tools: item.tools.map(withoutConstraints) } : {}) };
+  };
+  for (const { raw, path } of declarations) {
+    const candidate = relaxedTool(raw);
+    let converted = attempt(path, () => convertTools([candidate], freeform, reverse, notices));
+    // Strict validation is an execution guarantee. A query can retain the
+    // schema without claiming it can execute that schema with strict sampling.
+    if (!converted) {
+      converted = attempt(path + ".constraints", () =>
+        convertTools([withoutConstraints(candidate)], freeform, reverse, notices));
+    }
+    if (!converted?.length) { omit(path); continue; }
+    for (const tool of converted) {
+      if (seenNames.has(tool.name)) {
+        ambiguousNames.add(tool.name);
+        omit(path + ".name");
+      }
+      seenNames.add(tool.name);
+      tools.push(tool);
+    }
+  }
+  const catalog = tools.filter((tool) => !ambiguousNames.has(tool.name));
+  for (const name of ambiguousNames) delete reverse[name];
+  const executable = new Set(catalog.map((tool) => tool.name));
+  const policy: ResponseRequestConversionPolicy = {
+    unknownInputItem: "ignore", orphanToolOutput: "ignore",
+    unresolvedToolCall: "xrepair", futureReasoningEffort: "omit",
+  };
+  const messages: Message[] = [];
+  const calls = new Map<string, Record<string, unknown>>();
+  const callTypes = new Set(["function_call", "custom_tool_call", "local_shell_call", "shell_call",
+    "apply_patch_call", "computer_call", "mcp_call"]);
+  const resultTypes = new Set(["function_call_output", "custom_tool_call_output", "local_shell_call_output",
+    "shell_call_output", "apply_patch_call_output", "computer_call_output"]);
+  for (const [index, raw] of input.entries()) {
+    const path = `$.input[${index}]`;
+    if (!isRecord(raw)) { omit(path); continue; }
+    const type = raw.type ?? (typeof raw.role === "string" ? "message" : undefined);
+    if (type === "additional_tools") continue;
+    if (type === "compaction" || type === "compaction_summary" || type === "context_compaction"
+      || type === "item_reference" || type === "tool_search_call" || type === "tool_search_output") {
+      omit(path); continue;
+    }
+    let item = raw;
+    if (type === "message") {
+      if (raw.status !== undefined && raw.status !== "completed") omit(path + ".status");
+      const content = Array.isArray(raw.content) ? raw.content.filter((part) => {
+        if (!isRecord(part) || part.type !== "input_image") return true;
+        if (raw.role === "system" || raw.role === "developer"
+          || typeof part.image_url !== "string" || !part.image_url.startsWith("data:")) {
+          omit(path + ".content.image"); return false;
+        }
+        return attempt(path + ".content.image", () => parseDataUrlImage(part.image_url as string, "input_image")) !== undefined;
+      }) : raw.content;
+      item = { ...raw, status: undefined, content };
+    }
+    if (type === "reasoning" && typeof raw.encrypted_content === "string") omit(path + ".encrypted_content");
+    const callKey = type === "mcp_call" || type === "local_shell_call_output" ? raw.id : raw.call_id;
+    const previous = typeof callKey === "string" ? calls.get(callKey) : undefined;
+    if (resultTypes.has(String(type)) && !previous) { omit(path + ".call_id"); continue; }
+    const localNotices: ConversionNotice[] = [];
+    const converted = attempt(path, () => convertMessages(
+      resultTypes.has(String(type)) && previous ? [previous, item] : [item],
+      selector, receivedAt, [], policy, localNotices, executable, reverse,
+    ));
+    // Share the existing grammar, image, namespace and argument parsers.
+    // Per-item conversion's synthetic missing-result repair is never retained.
+    if (!converted) continue;
+    if (callTypes.has(String(type))) {
+      if (typeof callKey === "string") calls.set(callKey, item);
+      messages.push(...converted.filter((message) => message.role !== "toolResult"
+        || (type === "mcp_call" && typeof item.output === "string")));
+    } else if (resultTypes.has(String(type))) {
+      messages.push(...converted.filter((message) => message.role === "toolResult"));
+    } else {
+      messages.push(...converted);
+    }
+    notices.push(...localNotices.filter((notice) => notice.code !== "openai-responses_unresolved_call_repaired"));
+    if (!converted.length) omit(path);
+  }
+  const context: Context = { messages };
+  if (typeof value.instructions === "string") context.systemPrompt = value.instructions;
+  else if (value.instructions !== undefined) omit("$.instructions");
+  if (catalog.length) context.tools = catalog;
+  const options: ModelsSimpleStreamOptions = {};
+  if (Number.isSafeInteger(value.max_output_tokens) && Number(value.max_output_tokens) > 0)
+    options.maxTokens = Number(value.max_output_tokens);
+  else if (value.max_output_tokens !== undefined) omit("$.max_output_tokens");
+  if (typeof value.temperature === "number" && Number.isFinite(value.temperature) && value.temperature >= 0 && value.temperature <= 2)
+    options.temperature = value.temperature;
+  else if (value.temperature !== undefined) omit("$.temperature");
+  if (value.prompt_cache_retention === "24h") options.cacheRetention = "long";
+  else if (value.prompt_cache_retention === "in_memory") options.cacheRetention = "short";
+  else if (value.prompt_cache_retention !== undefined) omit("$.prompt_cache_retention");
+  if (value.tool_choice === "auto" || value.tool_choice === "none") options.toolChoice = value.tool_choice;
+  else if (value.tool_choice !== undefined) omit("$.tool_choice");
+  const reasoningInput = value.reasoning;
+  let reasoning = attempt("$.reasoning", () => convertReasoning(reasoningInput, "omit", notices));
+  if (!reasoning && isRecord(reasoningInput)) {
+    reasoning = attempt("$.reasoning.effort", () =>
+      convertReasoning({ effort: reasoningInput.effort }, "omit", notices));
+  }
+  if (reasoning?.intent.effort.kind === "enabled") options.reasoning = reasoning.intent.effort.level;
+  if (reasoning?.intent.effort.kind === "disabled") omit("$.reasoning.effort");
+  if (value.parallel_tool_calls !== undefined) omit("$.parallel_tool_calls");
+  if (reasoning?.intent.summary.kind === "requested") omit("$.reasoning.summary");
+
+  // Query markers retain raw envelope facts when partial conversion omitted an
+  // opaque tail/image. They are safe only behind verified body substitution.
+  const query = responsesEnvelopeContext(value, receivedAt).context;
+  const hasImages = messages.some((message) => (message.role === "user" || message.role === "toolResult")
+    && Array.isArray(message.content) && message.content.some((part) => part.type === "image"));
+  const queryImage = query.messages.find((message) => message.role === "user"
+    && Array.isArray(message.content) && message.content.some((part) => part.type === "image"));
+  if (queryImage && !hasImages) { messages.unshift(queryImage); omit("$.input.image_presence_only"); }
+  const tail = query.messages.at(-1)!;
+  const last = messages.at(-1);
+  if (!last || (tail.role === "user" ? last.role !== "user" : last.role === "user" || last.role === "system")) {
+    messages.push(tail);
+    omit("$.input.initiator_only");
+  }
+  const bounded = notices.slice(0, 31);
+  if (notices.length > 31) bounded.push(requestNotice("openai-responses_max_notices_bounded", "ignore", "$"));
+  return { mode: "max", context, options, notices: bounded };
+}
+
+export function convertResponsesRequest(
+  value: unknown,
+  receivedAt: number,
+  policy: ResponseRequestConversionPolicy | undefined,
+  mode: "max",
+): ResponsesMaxContext;
+export function convertResponsesRequest(
+  value: unknown,
+  receivedAt: number,
+  policy?: ResponseRequestConversionPolicy,
+  mode?: "semantic",
+): ResponsesInvocation;
 export function convertResponsesRequest(
   value: unknown,
   receivedAt: number,
   policy: ResponseRequestConversionPolicy = DEFAULT_POLICY,
-): ResponsesInvocation {
+  mode?: "semantic" | "max",
+): ResponsesInvocation | ResponsesMaxContext {
+  if (mode === "max") return convertResponsesMaxContext(value, receivedAt);
   const selected = selectResponsesConsumerViews(value);
   const mainRequest = selected.mainRequest;
   const freeformNames = new Set<string>();

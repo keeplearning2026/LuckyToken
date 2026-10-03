@@ -17,6 +17,7 @@ export {
   type ResponseReferenceResolver,
   type ResponseRequestConversionPolicy,
   type ResponsesInvocation,
+  type ResponsesMaxContext,
 } from "./request.js";
 export {
   convertAssistantMessageToResponses,
