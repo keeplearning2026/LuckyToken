@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
+import { createClient as createPiClient, getClientApiKey } from "./pi-openai.generated.js";
 import OpenAI from "openai";
 
 import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
@@ -23,25 +23,6 @@ import {
   projectProviderNativeBody,
   type ProviderNativeBodyProjection,
 } from "./tool-call-adjacency.js";
-
-function assertTransportAuth(
-  provider: string,
-  apiKey: string | undefined,
-  headers: CreateProviderResponsesSenderOptions["auth"]["auth"]["headers"],
-): void {
-  if (apiKey) return;
-  const has = (name: string): boolean =>
-    headers !== undefined &&
-    Object.entries(headers).some(
-      ([key, value]) =>
-        key.toLowerCase() === name &&
-        value !== null &&
-        value !== undefined &&
-        value.trim().length > 0,
-    );
-  if (has("authorization") || has("cf-aig-authorization")) return;
-  throw new Error(`No API key for provider: ${provider}`);
-}
 
 function hasImageInput(value: unknown, depth = 0): boolean {
   if (depth > 32) return false;
@@ -78,55 +59,11 @@ function copilotDynamicHeaders(body: Record<string, unknown>): Record<string, st
   };
 }
 
-/** Pi's `createClient` session-affinity block, format-for-format. */
-function applySessionAffinityHeaders(
-  headers: Record<string, string | null | undefined>,
-  model: Model<string>,
-  sessionId: string,
-): void {
-  const format =
-    (model as Model<"openai-responses">).compat?.sessionAffinityFormat ??
-    (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")
-      ? "openrouter"
-      : "openai");
-  if (format === "openrouter") {
-    headers["x-session-id"] = sessionId;
-    return;
-  }
-  if (format === "openai") headers.session_id = sessionId;
-  headers["x-client-request-id"] = sessionId;
-}
-
-/**
- * Build the same default headers Pi's `createClient` builds, in the same
- * order: Pi user agent, model headers, Copilot dynamic headers, session
- * affinity, then the composed Provider/auth headers last.
- */
-function buildDefaultHeaders(
-  model: Model<string>,
-  body: Record<string, unknown>,
-  options: CreateProviderResponsesSenderOptions,
-  sessionId: string | undefined,
-): Record<string, string | null | undefined> {
-  const headers: Record<string, string | null | undefined> = {
-    "User-Agent": getPiUserAgent(),
-    ...model.headers,
-  };
-  if (model.provider === "github-copilot") {
-    Object.assign(headers, copilotDynamicHeaders(body));
-  }
-  if (sessionId !== undefined) {
-    applySessionAffinityHeaders(headers, model, sessionId);
-  }
-  Object.assign(headers, options.auth.auth.headers);
-  return headers;
-}
-
 export function createOpenAIResponsesSender(
   options: CreateProviderResponsesSenderOptions,
 ): ProviderResponsesSender {
   const model = resolveRequestModel(options.model, options.auth) as Model<string>;
-  assertTransportAuth(
+  const apiKey: string = getClientApiKey(
     model.provider,
     options.auth.auth.apiKey,
     options.auth.auth.headers,
@@ -190,12 +127,6 @@ export function createOpenAIResponsesSender(
         envelopeLocation,
       );
       const params = rewritten.parsed;
-      const defaultHeaders = buildDefaultHeaders(
-        model,
-        params,
-        options,
-        operation === "responses" ? options.sessionId : undefined,
-      );
       completeProviderResponsesStep(
         observation?.journey,
         envelopeStep,
@@ -256,13 +187,14 @@ export function createOpenAIResponsesSender(
             },
           },
           async (fetchForSdk) => {
-            const client = new OpenAI({
-              apiKey: options.auth.auth.apiKey ?? "unused",
-              baseURL: model.baseUrl,
-              dangerouslyAllowBrowser: true,
-              fetch: fetchForSdk,
-              defaultHeaders,
-            });
+            const client: OpenAI = createPiClient(
+              model,
+              model.provider === "github-copilot" ? copilotDynamicHeaders(params) : undefined,
+              apiKey,
+              options.auth.auth.headers,
+              fetchForSdk,
+              operation === "responses" ? options.sessionId : undefined,
+            );
             const requestOptions = {
               signal,
               maxRetries: 0,

@@ -15,7 +15,7 @@
 - `ModelsStoreEntry.models` 按 `AnyModel` 校验并完整持久化。聊天 serving 使用 Pi 的 `getModels()`；动态归属的 id 集合也只取 `isModelType(model, "chat")`，避免 image 与 chat 同 id 时误标动态模型。
 - 内部有效模型事实类型派生自公开 `Model`，基础模型按完整事实合成，保留 `promptCache` 等新增字段；公开 Control Plane projection 仍只暴露自己的契约字段。
 - 两个 DeepSeek Provider 直接读取公开 `deepseekProvider().getModels()`，不再维护价格、reasoning、limits、input 等数据快照。Token 只选择已支持的两个 id 并设置目标 API compat。
-- Native 的公共 User-Agent 和 Azure provider env lookup 直接调用 Pi；SDK 版本、安装去重、Claude OAuth 固定身份值自动同步。Anthropic SDK 禁用隐式默认 credential chain，匹配已安装 Pi 的行为。
+- Native 使用局部自动 vendoring：OpenAI client/认证头检查、Azure client/config/deployment、Codex URL/headers/zstd、Anthropic client/compat/beta/身份直接从发布包选取有限依赖。Native 只保留 body/header 事实适配及自身 transport/Response ownership。公共 User-Agent/env lookup 仍直接调用 Pi。
 - 认证的运行时身份读取安装包与 lockfile；模型数据测试比较公开 catalog。Desktop 图标认证使用既有首字母 fallback 验证新增 Provider 的渲染，不再强制每次 Pi 新增/删除品牌都修改本地 SVG 表。
 
 ## 每次升级的机械操作
@@ -29,7 +29,7 @@ npm run test:unit
 npm run test:integration
 ```
 
-`scripts/upgrade-pi-runtime.mjs` 统一根和 workspace 的已有 Pi pin，读取发布 manifest 同步 Native SDK，安装并更新 lockfile，从实际 Pi Anthropic adapter 提取固定身份值。提取点失效时明确失败，要求审查；它不生成虚假的通过记录。认证运行时身份读取已安装版本和 lockfile integrity，历史在线记录保留原始版本。Builtin catalog 测试验证当前公开数据的投影，不手抄 Provider 列表或模型价格。
+`scripts/upgrade-pi-runtime.mjs` 统一根和 workspace 的已有 Pi pin，读取发布 manifest 同步 Native SDK，安装并更新 lockfile，再调用 `scripts/sync-pi-native.mjs` 生成四份 Native 信封代码。私有入口、参数名称/顺序、修改点、自由名称/依赖和许可检查失败时拒绝生成；保留源码 hash、Pi 版本和 MIT 许可。认证运行时身份读取安装包和 lockfile，历史在线记录保留原始版本。Builtin catalog 测试验证公开数据投影。
 
 本次实际依赖图：Pi 1.0.0、OpenAI SDK 7.19.0、Anthropic SDK 0.124.0；根与六个 Pi workspace 引用均 `deduped`，无两份 Pi runtime。
 
@@ -41,7 +41,7 @@ npm run test:integration
 | Semantic 两协议 | 架构必须修改。生产协议仍只输出公开 Context/options；真正 Pi Models 完成归一化与 dispatch。reasoning、tools、continuity 的现有认证保持。 |
 | 自定义 Provider | 保持公开 Provider/TranscriptContext 契约。DeepSeek catalog 快照删除。CommandCode 请求 wire 与 Provider 注册规则不扩展。 |
 | Responses 工具正确性 | 直接采用 upstream 实现。实际 Models → OpenAI adapter 测试验证 `fc_*`/`ctc_*` 类型改变时丢弃错误 item id，保持 call/result 配对；未完成工具 stream 通过 Token execution 返回失败。 |
-| Native OpenAI/Azure/Codex/Anthropic | SDK 和固定身份必须同步；其余当前认证分支的信封审查/回归继续。公共工具复用后仍有私有 URL、session、beta、Copilot body-fact 规则。Cloudflare header-only Anthropic 的已认证 SDK 显式省略例外仍保留，Pi 1.0 未修复该 adapter gap。 |
+| Native OpenAI/Azure/Codex/Anthropic | SDK 与局部信封代码自动同步，实际 request parity 继续。私有 URL、session、beta 规则不再手抄；少量 body-fact/credential-kind 适配保留。Cloudflare header-only Anthropic 的已认证 SDK 显式省略例外保留，Pi 1.0 未修复该 adapter gap。 |
 | Direct Mode | 无 wire 改造。继续不进入 Pi Models/IR 或 Native transport；独立 lane certification 验证。 |
 | 产品/观察面 | catalog 姓名/Provider 列表来自新 Pi，测试按实际 authority 判断。`onProviderStreamEvent` 暂不接入，拒绝 Client-owned callback；Meta usage 单独集成及认证。 |
 
@@ -49,9 +49,11 @@ npm run test:integration
 
 Pi 的 OpenAI/Azure/Anthropic API 公开入口只返回归一化 AssistantMessage stream，Codex 额外公开 WebSocket 管理方法。`createClient`、beta、Azure config、Codex URL/compression/header preparation 没有独立 raw-request 公开接口。Copilot 的公开动态 header helper 要求 `Message[]`；Native 不伪造 Pi IR 来调用它。
 
-因此本次没有自动复制整个 Pi Provider 文件。完整文件含 Context/TranscriptContext、归一化、响应解析、session/retry/federation 等私有依赖，复制后还需改写 body/response 路径，会重新制造 Token 的 Provider fork。只对确实需要且独立的身份常量做可验证的自动提取；剩余镜像以实际安装适配器和最终 fetch 请求对照为证据。
+用户进一步明确允许局部复制后，本次已自动提取所需声明及有限依赖，删除对应手写规则及独立 `pi-identity.ts`。OpenAI Copilot 输入改为 Native dynamicHeaders；Anthropic tools 输入改为 hasTools，OAuth 使用 managed credential kind，federation 分支省略。Azure/Codex 所选实现不修改。完整 Provider、Pi IR、响应解析、执行重试和 WebSocket session 不复制，安装包不修改。SDK shield 保留真实 Response，Native 原始 body 不经过 Pi 的语义转换。详见 [Native vendoring 契约](Spec/TokenPiNativeEnvelopeVendoringSpec.md)。
 
-长期要把 Native 也收敛为纯公开接口调用，需要上游提供接受 model/auth、原始 Provider body、session 等基础设施事实的 request-envelope/transport API，并返回原始 HTTP Response。该接口不能要求 Token 先造 Pi Context，也不能先经过 Pi 的工具/语义校验。此条件尚未满足；不能声称此后所有 Pi 升级都只改版本号。
+耦合现在集中在同步 recipe 与少量事实适配：选定函数内部实现改变时直接重新生成；私有输入、依赖或修改点改变时审查这一处。每次升级仍需 wire parity。未来 upstream 的 raw-body/raw-Response 公共接口可替换生成代码，保持 Native sender 的稳定输入/输出；不能声称此后所有升级必定零代码改动。
+
+后续审查保留 OpenAI/Azure/Anthropic 的 `createClient` 同步粒度；它们拥有真实的认证、路由、header 优先级及 SDK 配置，拆成手写小函数会增加同步点。强化的是本地 patch：被替换/删除区域与已接受片段做完整 AST 结构对照，包括 const/let/using 标志、条件、语句及调用参数；新增 Context 消费、输入名冲突、默认/rest/async/generator 签名和非法语法也拒绝同步。未修改区域实现可自动复制。解析与诊断使用现有 TypeScript 6.0.3 compiler API，不是手写解析器；没有为有限 patch 增加通用 codemod 依赖。
 
 ## 新能力与未验证事实
 
@@ -70,4 +72,6 @@ Pi 的 OpenAI/Azure/Anthropic API 公开入口只返回归一化 AssistantMessag
 - 最终根目录回归：守卫下 `vitest run --maxWorkers=2 --exclude test/integration/cli.test.ts --exclude test/integration/cli-ownership.test.ts`，312 文件 / 2799 项通过；两个 CLI 文件以 `--maxWorkers=1` 单独运行，2 文件 / 27 项通过。合计全部 314 文件 / 2826 项通过，包括两协议、Native parity/stub、工具、reasoning、continuity、认证、catalog、Direct lane 等现有离线覆盖。
 - 最终 Desktop：`npm test --workspace @token/desktop-shell`，23 文件 / 152 项通过。首次图标 coverage 失败于新增 `typesafe`；源组件已支持未来内置 Provider 的 fallback，认证改为检查实际渲染而非强制手工 SVG 列表与 Pi Provider 列表相等。
 - 最终门禁：`npm run typecheck`、`npm run lint`、`npm run test:certification`（81 项）、`npm run pi:upgrade -- --check`、依赖图去重检查通过。收尾简化模型事实复制后，`effective-catalog` 与两个 DeepSeek package 文件又单独回归通过。
+- 上述完整回归为依赖升级阶段的记录。后续 Native vendoring 回归：根目录排除两个 CLI 文件后 313 文件 / 2802 项，其中 2801 项通过、`catalog-serve-cli` 1 项启动超时；停止并行负载后，两个 CLI 文件、catalog CLI 和最新 raw-Response/body 保留测试单独运行，4 文件 / 32 项通过，没有放宽测试预算。最新四份 Native parity/Anthropic integration/raw-Response 文件又单独运行，4 文件 / 66 项通过。typecheck/lint 的 Native 收尾日志无错误；Desktop 152 项来自前述升级阶段，本阶段未重跑。
+- patch 强化后的门禁：完整守卫 certification 98 项通过（含 14 类 patch 变化拒绝及格式/未修改区域变化允许用例）；只读 Native 生成一致性检查通过。该检查拒绝生成时不写任何 generated 文件，但升级入口此前的 manifests/安装/lockfile 更新不会自动回滚。
 - 真实 Provider 接受度、限流、在线响应差异：本次未认证。没有运行其他 `test:online*`。

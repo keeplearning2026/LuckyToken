@@ -70,6 +70,7 @@ test("every repository test entrypoint uses the Codex test guard", async () => {
     "test",
     "test:release",
     "test:certification",
+    "test:provider-native",
     "test:unit",
     "test:integration",
     "test:distribution",

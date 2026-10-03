@@ -6,6 +6,10 @@ This document defines only the Token Provider Native preservation lane for
 `api=anthropic-messages`. It does not define Semantic Conversion and does not
 change the source Anthropic Messages wire specification.
 
+The shared acceptance criteria are defined in
+[Provider Native correctness and certification](TokenProviderNativeCorrectnessSpec.md).
+This contract owns the Anthropic-specific allowed transformations and differences.
+
 ## Request authority
 
 The client JSON value is the model-visible semantic authority. Provider Native

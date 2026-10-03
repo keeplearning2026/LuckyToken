@@ -1,16 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import type { FetchFunction, Model, ProviderHeaders } from "@earendil-works/pi-ai";
-import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
-import { CLAUDE_CODE_VERSION } from "./pi-identity.js";
-
-export { CLAUDE_CODE_VERSION } from "./pi-identity.js";
-
-/** Resolved Token auth owns the request; the SDK must not add ambient credentials. */
-class ProviderNativeAnthropic extends Anthropic {
-  protected override _shouldResolveDefaultCredentials(): boolean {
-    return false;
-  }
-}
+import { createClient as createPiClient, getAnthropicCompat, getBetaFeatures } from "./pi-envelope.generated.js";
+export { claudeCodeVersion as CLAUDE_CODE_VERSION } from "./pi-envelope.generated.js";
 
 /** Credential branch the lane reconstructed the upstream envelope for. */
 export type AnthropicNativeAuthMode =
@@ -18,49 +9,6 @@ export type AnthropicNativeAuthMode =
   | "oauth"
   | "github_copilot"
   | "ambient";
-
-const FINE_GRAINED_TOOL_STREAMING_BETA =
-  "fine-grained-tool-streaming-2025-05-14";
-const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
-const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01";
-const MID_CONVERSATION_OUTPUT_CONFIG_BETA =
-  "mid-conversation-output-config-2026-07-01";
-const THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01";
-
-interface AnthropicNativeCompatFacts {
-  readonly supportsEagerToolInputStreaming?: boolean;
-  readonly forceAdaptiveThinking?: boolean;
-  readonly sendSessionAffinityHeaders?: boolean;
-  readonly sessionAffinityFormat?: "openrouter" | string;
-  readonly allowedFallbackModels?: readonly string[];
-  readonly supportsMidConvoEffort?: boolean;
-}
-
-function anthropicCompat(model: Model<string>): AnthropicNativeCompatFacts {
-  return (
-    model as unknown as { readonly compat?: AnthropicNativeCompatFacts }
-  ).compat ?? {};
-}
-
-function isOpenRouterHosted(model: Model<string>): boolean {
-  return model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai");
-}
-
-/** Pinned Pi `getAnthropicCompat().sendSessionAffinityHeaders`. */
-function sendsSessionAffinityHeaders(model: Model<string>): boolean {
-  return (
-    anthropicCompat(model).sendSessionAffinityHeaders ??
-    isOpenRouterHosted(model)
-  );
-}
-
-/** Pinned Pi `getAnthropicCompat().sessionAffinityFormat`. */
-function sessionAffinityHeaderName(model: Model<string>): string {
-  const format =
-    anthropicCompat(model).sessionAffinityFormat ??
-    (isOpenRouterHosted(model) ? "openrouter" : undefined);
-  return format === "openrouter" ? "x-session-id" : "x-session-affinity";
-}
 
 function parsedBody(rawBody: string): Record<string, unknown> {
   const parsed = JSON.parse(rawBody) as unknown;
@@ -106,86 +54,18 @@ function copilotDynamicHeaders(body: Record<string, unknown>): ProviderHeaders {
   };
 }
 
-function headerValue(
-  sources: readonly (ProviderHeaders | undefined)[],
-  name: string,
-): string | null | undefined {
-  let found: string | null | undefined;
-  for (const source of sources) {
-    for (const [key, value] of Object.entries(source ?? {})) {
-      if (key.toLowerCase() === name) found = value;
-    }
-  }
-  return found;
-}
-
-/**
- * Pinned Pi `getBetaFeatures`, with the client-authored body standing in for
- * the facts Pi reads from its `Context`:
- *
- * - configured `anthropic-beta` (model or composed Provider headers) replaces
- *   the computed list entirely, and an explicit `null` means "no betas";
- * - OAuth adds the Claude Code beta pair;
- * - tool streaming and interleaved thinking are computed from the body;
- * - `allowedFallbackModels` and `supportsMidConvoEffort` come from the model's
- *   compatibility facts;
- * - the mid-conversation tool-changes beta needs Pi `Context` (initial tools
- *   and redefinitions), so the preservation lane does not reconstruct it —
- *   recorded as decision D2 in the plan.
- */
 export function anthropicBetaFeatures(
   model: Model<string>,
   body: Record<string, unknown>,
   authMode: AnthropicNativeAuthMode,
   composedHeaders: ProviderHeaders | undefined,
 ): string[] {
-  const configured = headerValue([model.headers, composedHeaders], "anthropic-beta");
-  if (configured === null) return [];
-  if (configured !== undefined) {
-    return [
-      ...new Set(
-        configured
-          .split(",")
-          .map((feature) => feature.trim())
-          .filter((feature) => feature.length > 0),
-      ),
-    ];
-  }
-  const compat = anthropicCompat(model);
-  const features: string[] = [];
-  if (authMode === "oauth") {
-    features.push("claude-code-20250219", "oauth-2025-04-20");
-  }
-  if (
-    Array.isArray(body.tools) &&
-    body.tools.length > 0 &&
-    compat.supportsEagerToolInputStreaming !== true
-  ) {
-    features.push(FINE_GRAINED_TOOL_STREAMING_BETA);
-  }
   const thinking = body.thinking;
-  const thinkingEnabled =
-    typeof thinking === "object" &&
-    thinking !== null &&
-    !Array.isArray(thinking) &&
-    (thinking as Record<string, unknown>).type === "enabled";
-  if (
-    model.reasoning === true &&
-    thinkingEnabled &&
-    compat.forceAdaptiveThinking !== true
-  ) {
-    features.push(INTERLEAVED_THINKING_BETA);
-  }
-  if ((compat.allowedFallbackModels?.length ?? 0) > 0) {
-    features.push(SERVER_SIDE_FALLBACK_BETA);
-  }
-  if (compat.supportsMidConvoEffort === true) {
-    features.push(
-      MID_CONVERSATION_OUTPUT_CONFIG_BETA,
-      THINKING_BINDING_CONTROLS_BETA,
-    );
-  }
-  return [...new Set(features)];
+  const thinkingEnabled = typeof thinking === "object" && thinking !== null && !Array.isArray(thinking) && (thinking as Record<string, unknown>).type === "enabled";
+  return getBetaFeatures(
+    model, Array.isArray(body.tools) && body.tools.length > 0, authMode === "oauth", false,
+    { headers: composedHeaders, thinkingEnabled },
+  ) as string[];
 }
 
 export interface AnthropicSdkRequestFacts {
@@ -232,52 +112,7 @@ export function createAnthropicSdkClient(
   rawBody: string,
   fetch: FetchFunction,
 ): Anthropic {
-  const compat = anthropicCompat(facts.model);
   const body = parsedBody(rawBody);
-  const base: ProviderHeaders = {
-    accept: "application/json",
-    "anthropic-dangerous-direct-browser-access": "true",
-  };
-  const common = {
-    baseURL: facts.model.baseUrl,
-    dangerouslyAllowBrowser: true,
-    fetch,
-  } as const;
-
-  if (facts.model.provider === "github-copilot") {
-    return new ProviderNativeAnthropic({
-      ...common,
-      apiKey: null,
-      authToken: facts.apiKey ?? null,
-      defaultHeaders: {
-        "User-Agent": getPiUserAgent(),
-        ...base,
-        ...facts.model.headers,
-        ...copilotDynamicHeaders(body),
-        ...facts.composedHeaders,
-      },
-    });
-  }
-  if (facts.authMode === "oauth") {
-    return new ProviderNativeAnthropic({
-      ...common,
-      apiKey: null,
-      authToken: facts.apiKey ?? null,
-      defaultHeaders: {
-        "User-Agent": getPiUserAgent(),
-        ...base,
-        "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
-        "x-app": "cli",
-        ...facts.model.headers,
-        ...facts.composedHeaders,
-      },
-    });
-  }
-  const sessionAffinityHeaders: ProviderHeaders =
-    facts.sessionId !== undefined &&
-    (compat.sendSessionAffinityHeaders ?? isOpenRouterHosted(facts.model))
-      ? { [sessionAffinityHeaderName(facts.model)]: facts.sessionId }
-      : {};
   // Header-owned credentials may carry no apiKey. The installed Pi adapter dispatches
   // explicit Authorization/X-Api-Key headers correctly, but its Cloudflare
   // cf-aig-authorization branch has a confirmed adapter gap: assertRequestAuth
@@ -291,19 +126,12 @@ export function createAnthropicSdkClient(
     facts.apiKey === undefined || facts.apiKey.length === 0
       ? { "x-api-key": null, authorization: null }
       : {};
-  return new ProviderNativeAnthropic({
-    ...common,
-    apiKey: facts.apiKey ?? null,
-    authToken: null,
-    defaultHeaders: {
-      "User-Agent": getPiUserAgent(),
-      ...base,
-      ...sessionAffinityHeaders,
-      ...facts.model.headers,
-      ...omittedAuthHeaders,
-      ...facts.composedHeaders,
-    },
-  });
+  const result: { client: Anthropic; isOAuthToken: boolean } = createPiClient(
+    facts.model, facts.apiKey, { ...omittedAuthHeaders, ...facts.composedHeaders }, fetch,
+    facts.model.provider === "github-copilot" ? copilotDynamicHeaders(body) : undefined, facts.sessionId,
+    facts.authMode === "oauth",
+  );
+  return result.client;
 }
 
 /** Whether the lane would send session-affinity headers for this model. */
@@ -312,5 +140,5 @@ export function anthropicSendsSessionAffinity(
   authMode: AnthropicNativeAuthMode,
 ): boolean {
   if (authMode === "oauth" || authMode === "github_copilot") return false;
-  return sendsSessionAffinityHeaders(model);
+  return getAnthropicCompat(model).sendSessionAffinityHeaders;
 }

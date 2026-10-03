@@ -3,6 +3,8 @@
 Status: **离线信封认证通过且完整 integration 串行通过；“上游无法区分 Token 与 Pi”尚未证明**（2026-09-29：D1 通过、D5=B2′、D6 已执行；在线金丝雀按用户要求不运行）
 Owner: Provider Native lanes（`src/provider-native-responses/`、`src/provider-native-anthropic/`）
 
+统一正确性标准见 [TokenProviderNativeCorrectnessSpec.md](TokenProviderNativeCorrectnessSpec.md)：body、envelope、认证差异、Response ownership、生命周期/隔离必须分别认证。本计划只负责信封对照及其组合要求，不能替代完整 Native 正确性结论。
+
 阅读说明：§1 的“当前”差距与 §4.2–§4.5 的手工补头步骤是立项时的基线和路线 A 备选，不描述 D5 采纳 B2′ 后的当前实现；当前契约以 §3.4、§5 的已决定项、§7 和对应 Native Contract 为准。
 
 “上游无法区分”比本计划的信封认证更强：Provider 还能看到客户端 JSON 经 SDK 序列化后的 body、实际 HTTP 栈产生的头与编码、连接读取/取消时序和重试。Native 的 body 以 Client JSON 为权威，而 Pi 适配器从 `Context` 构造 body；两者对任意请求不保证相等。当前离线测试主要在注入的 `fetch` 边界比较请求，响应由 Native lane 自行缓冲而非交给 Pi 消费。因此本计划完成不能被表述为全链路不可区分。
@@ -70,7 +72,7 @@ Provider Native 只允许替换 body 中已认证的最小差异（顶层 `model
 
 - WebSocket transport（Pi Codex 默认 `transport: "auto"`）；协议文档已声明 parity 不含 WebSocket。
 - 复用 Pi 的 Provider 执行、Pi IR 或 Pi 语义构造器（`onPayload` 方案，见 §3.3）。
-- 在本地 patch/fork Pi 加宽公共契约（§3.5 的上游 seam 只能由上游发布）。
+- 修改已安装的 Pi 包或通过本地副本加宽 Semantic 的公开语义契约；Native 信封的局部自动复制另见 `TokenPiNativeEnvelopeVendoringSpec.md`。
 - 改动 Semantic Conversion、Direct Mode 或任何 response 路径。
 - 上游行为/风控影响的产品决策（见 §5 决策点）。
 
@@ -155,7 +157,7 @@ B2′ 之所以"最像 Pi"，是因为请求侧完整走 Pi 的代码路径：�
 - 唯一现成的 payload 替换口 `onPayload` 在 `createClient` 之后执行，改不了上述头；且属于 payload projector，`AGENTS.md` 禁止 protocol 生产模块创建或依赖它，`src/execution.ts` 也会主动拒绝带 `onPayload`/`onResponse` 的语义执行选项。
 - 绕过方式都不是"复用 Pi"：造忠实 `Context` 等于把 Semantic Conversion 再做一遍，且对客户端未知字段不可行。
 
-因此该 seam 必须由上游加宽公共契约，`AGENTS.md` 已规定 Token 不 patch/fork Pi 来加宽边界。若未来上游发布该能力，`transports/<provider-api>.ts` 的内部实现可直接替换为委托调用，lane 核心、契约、观测、重试均不变——这也是 §4.7 模块化的长期收益。
+纯公共调用仍需上游加宽契约。2026-10-03 用户明确允许局部复制后，当前 Native 已采用 [Pi Native 请求信封自动同步契约](TokenPiNativeEnvelopeVendoringSpec.md)：自动从发布包提取 client/config/header/beta/压缩函数，修改少量输入读取，将复制范围限制在信封构造；既有 SDK fetch shield 返回原始 Response。安装的 Pi 包、Semantic 公共接口和三 lane 隔离不改变。未来 upstream 发布该 seam 后，可以替换为直接委托。
 
 代价（即便上游提供）：Token 的发布节奏与 Pi 绑定；PRD §515 的认证负担从"逐字段重建"转为"验证上游 seam 符合契约"。
 
@@ -212,7 +214,7 @@ B2′ 之所以"最像 Pi"，是因为请求侧完整走 Pi 的代码路径：�
 
 - 行为真相：根 `package.json` 精确 pin 的实际安装 `@earendil-works/pi-ai`（`node_modules/@earendil-works/pi-ai/dist/api/*.js`）。
 - 可读镜像：checked-in `pi-agent/packages/ai/src/api/*.ts`（0.86.1 快照，SDK 依赖声明与运行时一致：`openai@6.40.0`、`@anthropic-ai/sdk@0.124.0`）。
-- 参考快照的 SDK 声明属于快照自身，不能用来 pin 当前 Native SDK。当前版本自动从已安装 Pi manifest 对齐；公共 User-Agent 直接调用 Pi，Claude OAuth 身份值由升级命令提取。**运行时为准**，快照仅作审阅参考；剩余私有信封规则须在每次升级时行为对照。详见 `TokenPiAIUpgradeAuditProcedure.md`。
+- 参考快照的 SDK 声明属于快照自身，不能用来 pin 当前 Native SDK。当前版本自动从已安装 Pi manifest 对齐；公共 User-Agent 直接调用 Pi；client/config/header/beta/压缩与 Claude 身份值由升级命令生成四份 `pi-*.generated.ts`。**运行时为准**，快照仅作审阅参考；同步入口及明确修改点仍须升级审查与行为对照。详见 `TokenPiAIUpgradeAuditProcedure.md`、`TokenPiNativeEnvelopeVendoringSpec.md`。
 
 ### 4.7 模块化目标布局（与信封补齐分开做）
 
@@ -306,24 +308,24 @@ PRD §515 要求的矩阵必须逐 tuple 有认证用例；同一信封的 manag
 
 跨模块的统一升级审计流程见 [`TokenPiAIUpgradeAuditProcedure.md`](./TokenPiAIUpgradeAuditProcedure.md)。下表是其中 Provider Native 边界的专项检查；运行时发布包仍是行为真相。
 
-Native lane 对 Pi 的**类型耦合**只有 5 个公开类型（`FetchFunction`、`ProviderHeaders`、`Model`、`Models`、`AuthResult`，全部为 `import type`），因此升级几乎不会触发编译错误；真正的成本在**镜像的 wire 行为**，它漂移时是静默的。下表是升级时必须逐条重验的清单。
+Native 的稳定输入仍是公开 Model/auth/body/session/timeout。当前私有 wire 规则通过四份自动生成模块复用，修改点集中在 `scripts/sync-pi-native.mjs`；生成器拒绝私有入口与依赖变化，parity 检查行为变化。下表是升级时必须逐条重验的清单。
 
-| 镜像点 | Token 位置 | Pi 参考源（0.86.1 快照路径） | 重验时机 |
+| 同步/适配点 | Token 位置 | 实际安装 Pi 来源（`dist/api/`） | 重验时机 |
 |---|---|---|---|
-| OpenAI Responses envelope、URL、session affinity、copilot 动态头 | `src/provider-native-responses/openai.ts` | `pi-agent/packages/ai/src/api/openai-responses.ts`（`createClient` / `buildParams` / session affinity） | 每次 pi-ai 升级 |
-| Codex SSE envelope、account id 提取、zstd | `src/provider-native-responses/codex.ts` | `pi-agent/packages/ai/src/api/openai-codex-responses.ts`（`buildSSEHeaders` / `resolveCodexUrl` / `extractAccountId` / 压缩） | 每次 |
-| Azure endpoint、deployment、api-version | `src/provider-native-responses/azure.ts` | `pi-agent/packages/ai/src/api/azure-openai-responses.ts`（`resolveAzureConfig`） | 每次 |
-| Anthropic envelope、beta 列表、OAuth 身份、session affinity | `src/provider-native-anthropic/envelope.ts` + `transport.ts` | `pi-agent/packages/ai/src/api/anthropic-messages.ts`（`mergeClientHeaders` / `getBetaFeatures` / `getAnthropicCompat`） | 每次 |
-| SDK identity 版本号 | 两个 lane 的常量 | `pi-agent/packages/ai/package.json` 的 `openai` / `@anthropic-ai/sdk` 声明 | 每次（由 T7 门禁自动发现） |
+| OpenAI client、session、认证头检查；Copilot body 事实适配 | `pi-openai.generated.ts` + `openai.ts` | `openai-responses.js`（`createClient` / `getCompat` / `getClientApiKey`） | 每次 pi-ai 升级 |
+| Codex SSE/base headers、URL、zstd；Token account 交集校验 | `pi-codex.generated.ts` + `codex.ts` | `openai-codex-responses.js`（`buildSSEHeaders` / `resolveCodexUrl` / 压缩） | 每次 |
+| Azure client、endpoint、deployment、api-version | `pi-azure.generated.ts` + `azure.ts` | `azure-openai-responses.js`（`createClient` / `resolveAzureConfig` / `resolveDeploymentName`） | 每次 |
+| Anthropic client、beta、身份、session；credential kind/tools/Copilot 事实适配 | `pi-envelope.generated.ts` + `envelope.ts` | `anthropic-messages.js`（`createClient` / `getBetaFeatures` / `getAnthropicCompat`） | 每次 |
+| SDK identity 版本号 | 根 SDK declarations + 去重依赖 | 安装 Pi `package.json` 的 `openai` / `@anthropic-ai/sdk` 声明 | 每次（自动同步与 T7 门禁） |
 | 模型投影与 Responses adjacency | `tool-call-adjacency.ts` / `body-projection.ts` | Token 自有契约（`doc/Spec/TokenProviderNativeResponsesToolCallAdjacencyNormalizationPlan.md`）；仅当 Pi 语义变化影响该契约时重验 | 按需 |
 | 响应侧三处有界重写（SSE 生命周期、function-call namespace、alias 投影） | `src/protocols/openai-responses/*` | Token 自有契约 + Pi Provider 行为参考 | 按需 |
 
 升级 checklist（沿用 `doc/PiAI-0.84.2-Upgrade-Audit.md` 的形态）：
 
-1. 提升运行时 pi-ai 依赖；checked-in 快照仅在另有维护需求时更新，行为以新安装的发布包为准。按 B2′ 同步厂商 SDK 直接依赖。
+1. 执行 `npm run pi:upgrade -- <精确版本>`，统一依赖/SDK 并重新生成信封代码；checked-in 快照仅在另有维护需求时更新，行为以新安装发布包为准。
 2. 跑 certification + parity（T2/T7），记录红点。
 3. 逐条 diff 上表的"Pi 参考源"，对照运行时 `node_modules/@earendil-works/pi-ai/dist/api/*.js`（运行时为准）。
-4. 更新常量/规则、fixture 与本文档。
+4. 审查同步 recipe 的修改点；生成文件不手工改动。更新确实受影响的事实适配、fixture 与本文档。
 5. 在线金丝雀属于另行授权的发布验证；未运行时记录为未验证，不得算入离线认证结果。
 6. 按统一流程新增 upgrade audit，逐项记录各边界及 native lane 的影响（包括"无影响"的结论）。
 

@@ -1,6 +1,4 @@
-import type { AuthResult, Model } from "@earendil-works/pi-ai";
-import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
-import { getProviderEnvValue } from "@earendil-works/pi-ai/utils/provider-env";
+import { createClient as createPiClient, resolveDeploymentName } from "./pi-azure.generated.js";
 import { AzureOpenAI } from "openai";
 
 import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
@@ -21,77 +19,6 @@ import {
   type ProviderNativeBodyProjection,
 } from "./tool-call-adjacency.js";
 
-const DEFAULT_AZURE_API_VERSION = "v1";
-
-function parseDeploymentNameMap(value: string | undefined): Map<string, string> {
-  const map = new Map<string, string>();
-  if (!value) return map;
-  for (const entry of value.split(",")) {
-    const trimmed = entry.trim();
-    if (!trimmed) continue;
-    const [modelId, deploymentName] = trimmed.split("=", 2);
-    if (!modelId || !deploymentName) continue;
-    map.set(modelId.trim(), deploymentName.trim());
-  }
-  return map;
-}
-
-/** Pinned Pi `normalizeAzureBaseUrl`. */
-function normalizeBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/u, "");
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    throw new Error(`Invalid Azure OpenAI base URL: ${baseUrl}`);
-  }
-  const isAzureHost =
-    url.hostname.endsWith(".openai.azure.com") ||
-    url.hostname.endsWith(".cognitiveservices.azure.com") ||
-    url.hostname.endsWith(".ai.azure.com");
-  const normalizedPath = url.pathname.replace(/\/+$/u, "");
-  if (
-    isAzureHost &&
-    (normalizedPath === "" ||
-      normalizedPath === "/" ||
-      normalizedPath === "/openai" ||
-      normalizedPath === "/openai/v1/responses")
-  ) {
-    url.pathname = "/openai/v1";
-    url.search = "";
-  }
-  return url.toString().replace(/\/+$/u, "");
-}
-
-/** Pinned Pi `resolveAzureConfig`. */
-function resolveBaseUrl(model: Model<string>, auth: AuthResult): string {
-  const configured =
-    getProviderEnvValue("AZURE_OPENAI_BASE_URL", auth.env)?.trim() ||
-    auth.auth.baseUrl?.trim() ||
-    undefined;
-  if (configured) return normalizeBaseUrl(configured);
-  const resourceName = getProviderEnvValue("AZURE_OPENAI_RESOURCE_NAME", auth.env);
-  if (resourceName) return `https://${resourceName}.openai.azure.com/openai/v1`;
-  if (model.baseUrl) return normalizeBaseUrl(model.baseUrl);
-  throw new Error(
-    "Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME, or provide model.baseUrl.",
-  );
-}
-
-function resolveApiVersion(auth: AuthResult): string {
-  return (
-    getProviderEnvValue("AZURE_OPENAI_API_VERSION", auth.env) || DEFAULT_AZURE_API_VERSION
-  );
-}
-
-function resolveDeploymentName(model: Model<string>, auth: AuthResult): string {
-  return (
-    parseDeploymentNameMap(
-      getProviderEnvValue("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", auth.env),
-    ).get(model.id) || model.id
-  );
-}
-
 export function createAzureResponsesSender(
   options: CreateProviderResponsesSenderOptions,
 ): ProviderResponsesSender {
@@ -99,14 +26,9 @@ export function createAzureResponsesSender(
   if (apiKey === undefined || apiKey.length === 0) {
     throw new Error("No API key for provider: azure-openai-responses");
   }
-  const baseUrl = resolveBaseUrl(options.model, options.auth);
-  const apiVersion = resolveApiVersion(options.auth);
-  const deploymentName = resolveDeploymentName(options.model, options.auth);
-  const defaultHeaders = {
-    "User-Agent": getPiUserAgent(),
-    ...options.model.headers,
-    ...options.auth.auth.headers,
-  };
+  const model = { ...options.model, baseUrl: options.auth.auth.baseUrl ?? options.model.baseUrl };
+  const piOptions = { env: options.auth.env, headers: options.auth.auth.headers };
+  const deploymentName: string = resolveDeploymentName(model, piOptions);
 
   return Object.freeze({
     supportsNativeCompact: true,
@@ -205,14 +127,7 @@ export function createAzureResponsesSender(
             },
           },
           async (fetchForSdk) => {
-            const client = new AzureOpenAI({
-              apiKey,
-              apiVersion,
-              dangerouslyAllowBrowser: true,
-              fetch: fetchForSdk,
-              defaultHeaders,
-              baseURL: baseUrl,
-            });
+            const client: AzureOpenAI = createPiClient(model, apiKey, { ...piOptions, fetch: fetchForSdk });
             const requestOptions = {
               signal,
               maxRetries: 0,

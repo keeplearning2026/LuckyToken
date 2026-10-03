@@ -1,11 +1,9 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
-import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
+import { buildBaseCodexHeaders, buildSSEHeaders, compressRequestBodyZstd, resolveCodexUrl } from "./pi-codex.generated.js";
 
 import { resolveCodexAccountIdentity } from "../credentials/codex-auth.js";
 import { resolveRequestModel } from "../providers/request-composition.js";
 import {
-  applyHeaders,
   executeProviderFetch,
 } from "./common.js";
 import type {
@@ -25,8 +23,6 @@ import {
 } from "./tool-call-adjacency.js";
 
 
-const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
-
 function extractAccountId(token: string): string {
   // The account-claim intersection contract is shared with external
   // credential parsing: the nested claim is required, and a present top-level
@@ -37,32 +33,6 @@ function extractAccountId(token: string): string {
     throw new Error("Failed to extract accountId from token");
   }
   return identity.accountId;
-}
-
-function resolveCodexUrl(baseUrl?: string): string {
-  const raw =
-    baseUrl && baseUrl.trim().length > 0
-      ? baseUrl
-      : "https://chatgpt.com/backend-api";
-  const normalized = raw.replace(/\/+$/u, "");
-  if (normalized.endsWith("/codex/responses")) return normalized;
-  if (normalized.endsWith("/codex")) return `${normalized}/responses`;
-  return `${normalized}/codex/responses`;
-}
-
-function compressBody(bodyJson: string): ArrayBuffer | undefined {
-  try {
-    const compressed = zstdCompressSync(bodyJson, {
-      params: {
-        [zlibConstants.ZSTD_c_compressionLevel]: REQUEST_COMPRESSION_ZSTD_LEVEL,
-      },
-    });
-    const copy = new Uint8Array(compressed.byteLength);
-    copy.set(compressed);
-    return copy.buffer;
-  } catch {
-    return undefined;
-  }
 }
 
 export function createCodexResponsesSender(
@@ -118,30 +88,21 @@ export function createCodexResponsesSender(
         );
         throw error;
       }
-      const headers = new Headers();
-      applyHeaders(headers, model.headers);
-      applyHeaders(headers, options.auth.auth.headers);
-      headers.set("authorization", `Bearer ${token}`);
-      headers.set("chatgpt-account-id", accountId);
-      headers.set("originator", "pi");
-      headers.set("user-agent", getPiUserAgent());
-      headers.set("content-type", "application/json");
-
       const isCompact = operation === "compact";
-      const compressed = isCompact ? undefined : compressBody(rewritten.text);
+      if (!isCompact && options.sessionId === undefined) {
+        throw new Error("Provider Native Responses requires a session ID");
+      }
+      const headers: Headers = isCompact
+        ? buildBaseCodexHeaders(model.headers, options.auth.auth.headers, accountId, token)
+        : buildSSEHeaders(model.headers, options.auth.auth.headers, accountId, token, options.sessionId);
+      const compressed: Uint8Array | null = isCompact ? null : compressRequestBodyZstd(rewritten.text);
       if (isCompact) {
+        headers.set("content-type", "application/json");
         headers.delete("openai-beta");
         headers.set("accept", "application/json");
         headers.delete("content-encoding");
       } else {
-        if (options.sessionId === undefined) {
-          throw new Error("Provider Native Responses requires a session ID");
-        }
-        headers.set("openai-beta", "responses=experimental");
-        headers.set("accept", "text/event-stream");
-        headers.set("session-id", options.sessionId);
-        headers.set("x-client-request-id", options.sessionId);
-        if (compressed !== undefined) headers.set("content-encoding", "zstd");
+        if (compressed !== null) headers.set("content-encoding", "zstd");
         else headers.delete("content-encoding");
       }
       const url = isCompact
@@ -150,7 +111,7 @@ export function createCodexResponsesSender(
       return executeProviderFetch(options.fetch, url, {
         method: "POST",
         headers,
-        body: compressed ?? rewritten.text,
+        body: compressed === null ? rewritten.text : new Uint8Array(compressed).buffer,
         signal,
       });
     },
