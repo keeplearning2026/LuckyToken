@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { createModels, createProvider, type AnyModel, type Api, type Model } from "@earendil-works/pi-ai";
+import { createCatalogSnapshotModels } from "../../src/providers/catalog-refresh.js";
 
 import {
   createCatalogCacheStore,
@@ -74,6 +75,41 @@ function createMemoryFileSystem(): {
 }
 
 describe("catalog cache store", () => {
+  it("restores Pi's mixed catalog while Token's served snapshot stays chat-only", async () => {
+    const { fileSystem } = createMemoryFileSystem();
+    const path = "C:\\app\\mixed-catalog.json";
+    const chat = modelFact();
+    const base = {
+      id: chat.id, name: chat.name, api: chat.api, provider: chat.provider,
+      baseUrl: chat.baseUrl, input: chat.input, cost: chat.cost,
+    };
+    const mixed: readonly AnyModel[] = [
+      chat,
+      { ...base, id: "image", api: "openai-images", type: "image", output: ["image"] },
+      { ...base, id: "classifier", api: "openai-classifier", type: "classifier", contextWindow: 100 },
+    ];
+    const provider = () => createProvider({
+      id: chat.provider, name: "Mixed", models: [],
+      auth: { apiKey: { name: "Test", resolve: async () => ({ auth: { apiKey: "test" } }) } },
+      fetchModels: async () => mixed,
+      api: { stream: () => { throw new Error("unused"); }, streamSimple: () => { throw new Error("unused"); } },
+    });
+    const store = createCatalogCacheStore({ path, fileSystem });
+    const first = createModels({ modelsStore: store });
+    first.setProvider(provider());
+    expect((await first.refresh({ allowNetwork: true })).errors.size).toBe(0);
+    const secondStore = createCatalogCacheStore({ path, fileSystem });
+    expect((await secondStore.read(chat.provider))?.models).toEqual(mixed);
+    const second = createModels({ modelsStore: secondStore });
+    second.setProvider(provider());
+    expect((await second.refresh({ allowNetwork: false })).errors.size).toBe(0);
+    expect(second.getAllModels(chat.provider)).toEqual(mixed);
+    const served = createCatalogSnapshotModels(second);
+    served.capture();
+    expect(served.getModels()).toEqual([chat]);
+    expect(served.getModel(chat.provider, "image")).toBeUndefined();
+  });
+
   it("persists a validated dynamic catalog entry as transparent JSON", async () => {
     const { fileSystem, files } = createMemoryFileSystem();
     const path = "C:\\app\\models-catalog-cache.json";

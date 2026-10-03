@@ -1,4 +1,7 @@
-import type { FetchFunction, Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "./chat-models.js";
+import type {
+  FetchFunction,
+} from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
@@ -68,7 +71,7 @@ export type DataPlaneConfiguration = Readonly<
  * outside this Interface. */
 export interface ConfiguredTokenDataPlaneOptions {
   readonly configuration: DataPlaneConfiguration;
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly publicModels: PublicModelSource;
   readonly diagnostics?: RequestJourneyObservationAuthority;

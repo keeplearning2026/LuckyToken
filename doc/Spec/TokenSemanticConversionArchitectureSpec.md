@@ -1,6 +1,6 @@
 # Token Semantic Conversion Architecture
 
-Status: **CURRENT — clean upstream Pi AI 0.87.0 boundary**
+Status: **CURRENT — clean upstream Pi AI public contract boundary**
 
 ## 1. Scope
 
@@ -88,9 +88,18 @@ is named for that purpose and is never a Provider-write candidate.
 ## 5. Common option contracts
 
 The production runtime pins the **unmodified upstream**
-`@earendil-works/pi-ai@0.87.0`. Token has no `patch-package` postinstall and carries no
-Pi patch artifact. Semantic Conversion is therefore bounded by the public Pi 0.87
+`@earendil-works/pi-ai` (the exact version in root `package.json`). Token has no `patch-package` postinstall and carries no
+Pi patch artifact. Semantic Conversion is therefore bounded by the installed Pi public
 `Context` and `ModelsSimpleStreamOptions` contracts.
+
+Pi Models owns auth application, public Context normalization and Provider dispatch.
+Token's models.json layer uses public Provider auth and Models.transformHeaders,
+then delegates every execution operation to Pi. The header transform receives only
+headers, so auth-resolved env is transferred through request-local infrastructure
+scope; it never enters Context, model-visible options or protocol state. Token's
+chat capability is a type-only Pick of Models, not an implementation of newly added
+image/classifier operations. Pi's ModelsStore persists all AnyModel variants, while
+Token's served catalog consumes the public chat getModels projection.
 
 ### 5.1 Reasoning
 
@@ -116,7 +125,7 @@ second Provider-output ceiling.
 ### 5.3 Other controls
 
 Only controls representable by the upstream Pi public contract cross the semantic
-boundary. In Pi 0.87 this includes `temperature`, `cacheRetention`, session identity,
+boundary. In the installed Pi public contract this includes `temperature`, `cacheRetention`, session identity,
 and `toolChoice` values `auto` / `none`. Consumed non-structural controls without a Pi
 representation — currently explicit reasoning-off, required/named tool choice, and
 `parallel_tool_calls` intent — are omitted with a bounded Client-owned warning while

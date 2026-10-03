@@ -52,6 +52,15 @@ const context: Context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 };
 
+it("rejects a Client-owned raw Provider event observer before dispatch", async () => {
+  const fixture = modelsFor(streamFrom([]));
+  const observer = vi.fn();
+  await expect(execute(fixture.models, model, context, { onProviderStreamEvent: observer }))
+    .rejects.toThrow("must not supply Provider callbacks");
+  expect(fixture.streamSimple).not.toHaveBeenCalled();
+  expect(observer).not.toHaveBeenCalled();
+});
+
 function message(
   stopReason: AssistantMessage["stopReason"],
   errorMessage?: string,

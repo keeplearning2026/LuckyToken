@@ -4,6 +4,12 @@
 
 ## 结论与判定原则
 
+升级目标是固定消费 Pi 的公开接口，让实现变化由 Pi 自己承担。当前 Semantic 的 `stream` / `complete` / simple / deferred 操作直接委托已安装的 Pi Models；Token 不复制 normalization、认证应用或 Provider dispatch。`src/chat-models.ts` 只是公开 `Models` 的类型级 `Pick`，没有共享语义执行实现；Pi 新增 image/classifier 方法不会扩大 Token 的聊天契约。缓存实现完整的 `ModelsStoreEntry` / `AnyModel` 契约，聊天目录通过 Pi `getModels()` 投影。
+
+Provider Native 的限制不同：Pi 尚未公开接受保留的 Provider body、构造完整请求信封并返回原始 Response 的接口。Native 可复用公共 User-Agent 工具和相同 SDK，但 beta、session、URL 等私有规则仍是行为镜像。直接复制整个 Pi Provider 文件会连带复制 Pi IR、响应归一化和私有依赖，无法成为稳定升级契约；不要通过伪造 Context 或 `onPayload` 替换 body 绕过 lane 边界。只有上游公开合适的 raw-request/transport 接口后，才能移除这部分镜像。
+
+因此“公开接口不变”可减少生产代码改动，不能保证 Provider wire 行为不变，尤其 Native。必须区分一次性架构迁移和每次升级的行为认证。
+
 Provider Native 与 Pi 当前通过 npm 去重共用已安装的 `openai` / `@anthropic-ai/sdk`。Token 直接导入这些 SDK，因此仍需在根 `package.json` 直接声明与新 Pi manifest 相同的版本。`test/unit/provider-native-sdk-identity-gate.test.ts` 检查版本一致性；`npm ls` 再确认本次安装是否实际去重。共用 SDK **不等于**共用 Pi 的请求构造或响应解析；Native 的信封、例外和响应处理仍须做行为审计。
 
 每个结论分为四类，并记录证据：**必须修改**（公共契约、行为或 Token 镜像已变化）、**只改版本/证据**（实现仍正确）、**无需修改**（相关 Pi 行为未变且回归通过）、**无法离线确认**（需要真实上游才能证明的事实）。编译通过只能证明类型仍匹配；测试通过也不能代替对新 Pi 运行时代码的差异审查。
@@ -16,9 +22,9 @@ Provider Native 与 Pi 当前通过 npm 去重共用已安装的 `openai` / `@an
 
 ## 2. 安装与依赖一致性
 
-1. 更新根 `@earendil-works/pi-ai` 精确版本、引用 Pi 的 workspace 依赖或 peer dependency、lockfile。不要自动改动独立的 `pi-coding-agent` 模型配置兼容基线：只有其 schema 或组成契约确实变化时才改。
-2. 读取**新安装**的 `node_modules/@earendil-works/pi-ai/package.json`。若 Pi 的 `openai` / `@anthropic-ai/sdk` 依赖变动，同步根直接依赖到相同精确版本并重装。运行 `npm ls @earendil-works/pi-ai openai @anthropic-ai/sdk --all`，记录是否 `deduped`；嵌套副本或不同版本必须解释和修正。
-3. 搜索硬编码版本和来源证据：`rg -n '0\.87\.0|Pi 0\.87|pi-ai@|@earendil-works/pi-ai' src packages test doc/Spec --glob '!*.map'`。按语义逐条更新，不对历史审计文档做盲目替换。当前 `test/unit/pi-ai-boundary-architecture.test.ts` 有精确版本断言，升级时必须审查。
+1. 运行 `npm run pi:upgrade -- <精确版本>`。命令读取该发布版本 manifest，统一根和所有已有 Pi workspace 依赖/peer pin，同步 Native 直接使用的 SDK，更新 lockfile，并从**实际安装**的 Pi Anthropic adapter 提取 `pi-identity.ts`。无版本参数时同步当前安装；`npm run pi:upgrade -- --check` 只验证，不改文件。它不运行认证，也不把新版本自动宣称为认证通过。源代码中的身份常量位置改变时提取会明确失败，须审查新实现。
+2. 不自动改动独立的 `pi-coding-agent` 模型配置兼容基线：只有其 schema 或组成契约确实变化时才改。运行 `npm ls @earendil-works/pi-ai openai @anthropic-ai/sdk --all`，记录是否 `deduped`；认证检查所有 lockfile 实例和 workspace 声明一致，避免 branded/private 类型跨两份 Pi runtime 混用。
+3. 运行时版本由根 manifest、实际安装包和 lockfile 决定，认证 manifest 从实际安装与 lockfile 读取身份。不要在测试、活动规范或模型数据中重新手抄版本、integrity、内置 Provider 列表或价格。按语义审查来源证据，不对历史审计文档做盲目替换。DeepSeek 两个 API 的模型事实直接取自 Pi 公开 Provider catalog，仅保留 Token 自己的模型选择和 API compat。
 
 ## 3. 按边界审查变更
 
@@ -37,6 +43,8 @@ Provider Native 与 Pi 当前通过 npm 去重共用已安装的 `openai` / `@an
 ## 4. 离线验证顺序
 
 所有可能触及 Codex 状态的测试使用仓库守卫命令，它会创建并清理临时 `CODEX_HOME`。以下命令不调用真实 Provider；**不要运行任何 `test:online*`**。
+
+按下面顺序运行门禁。`typecheck` 会删除并重建 workspace 的 `dist`，不得与需要这些发布入口的 CLI/Backend 测试并行。
 
 1. `npm run typecheck`；定位公开 API 和 workspace 类型破坏。
 2. `npm run test:certification`；验证 lane、依赖、认证边界。

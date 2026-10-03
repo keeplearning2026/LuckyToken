@@ -1,3 +1,4 @@
+import { CLAUDE_CODE_VERSION } from "../../src/provider-native-anthropic/envelope.js";
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
@@ -441,7 +442,7 @@ describe("Anthropic Provider Native lane", () => {
       "Bearer not-an-oauth-shaped-token",
     );
     expect(upstreamRequest!.headers.get("x-api-key")).toBeNull();
-    expect(upstreamRequest!.headers.get("user-agent")).toBe("claude-cli/2.1.251");
+    expect(upstreamRequest!.headers.get("user-agent")).toBe(`claude-cli/${CLAUDE_CODE_VERSION}`);
     expect(upstreamRequest!.headers.get("x-app")).toBe("cli");
     expect(upstreamRequest!.headers.get("anthropic-beta")).toContain(
       "claude-code-20250219",

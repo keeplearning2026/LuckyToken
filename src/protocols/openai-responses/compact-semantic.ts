@@ -1,4 +1,7 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "../../chat-models.js";
+import type {
+  Model,
+} from "@earendil-works/pi-ai";
 
 import type { ExecutionOperation } from "../../execution.js";
 import type {
@@ -28,7 +31,7 @@ export interface SemanticCompactOptions {
   readonly request: Request;
   readonly body: Record<string, unknown>;
   readonly model: Model<string>;
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly sessionState: ResponseSessionState;
   readonly requestIdentity: RequestIdentity;

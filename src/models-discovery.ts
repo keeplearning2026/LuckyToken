@@ -1,4 +1,5 @@
-import type { Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "./chat-models.js";
+
 
 import type { RequestJourneyObservationInput } from "./diagnostics/contract.js";
 import type { PublicModelSource } from "./public-model-seam.js";
@@ -10,7 +11,7 @@ import {
 import { renderResponsesModelsList } from "./protocols/openai-responses/models.js";
 
 export interface ModelsDiscoveryHandlerOptions {
-  readonly models: Models;
+  readonly models: ChatModels;
   /** External Provider Package IDs; Pi builtins and models.json stay hidden. */
   readonly providerIds?: readonly string[];
   /** Runtime publication authority. When wired, this is the only source of

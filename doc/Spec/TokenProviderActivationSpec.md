@@ -486,7 +486,7 @@ export type ProviderSource =
   | "user";
 
 export interface ProviderRuntime {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly credentialAuthority: LiveCredentialAuthority;
   readonly catalog: CatalogRuntimeHandle;
   providerSource(providerId: string): ProviderSource;
@@ -497,7 +497,7 @@ export interface ProviderRuntime {
 
 ```ts
 interface CatalogRuntimeHandle {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly recompose: (modelsJson: ModelsJsonConfig | undefined) => void;
   readonly capture: () => void;
 }
@@ -1161,7 +1161,7 @@ Conceptually:
 ```ts
 interface ConfiguredTokenDataPlaneOptions {
   readonly configuration: DataPlaneConfiguration;
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly publicModels: PublicModelSource;
   readonly requestLedger: RequestLedger;
   readonly deepCapture: DeepCaptureAuthority;
@@ -2278,3 +2278,5 @@ The product invariant is equally simple:
 > **A user can always discover and authenticate Providers while Token Backend is healthy, regardless of whether the model HTTP Gateway is running. Every Catalog model is immediately usable through one generated `${providerId}/${defaultModelName}` alias with a slash-free Model name, and the user may replace that Model name from the model row without understanding internal Provider/model routing.**
 
 That invariant is the release-level definition of Provider activation for Token V1.
+
+The data-plane `ChatModels` capability is `Pick<Models, ...>` from the upstream public interface (`src/chat-models.ts`); Provider Runtime keeps the full mutable Pi collection internally. This capability has no shared semantic state or dispatcher.

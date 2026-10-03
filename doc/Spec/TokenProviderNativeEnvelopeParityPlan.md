@@ -210,9 +210,9 @@ B2′ 之所以"最像 Pi"，是因为请求侧完整走 Pi 的代码路径：�
 
 ### 4.6 事实来源
 
-- 行为真相：pinned 运行时 `@earendil-works/pi-ai@0.87.0`（`node_modules/@earendil-works/pi-ai/dist/api/*.js`）。
+- 行为真相：根 `package.json` 精确 pin 的实际安装 `@earendil-works/pi-ai`（`node_modules/@earendil-works/pi-ai/dist/api/*.js`）。
 - 可读镜像：checked-in `pi-agent/packages/ai/src/api/*.ts`（0.86.1 快照，SDK 依赖声明与运行时一致：`openai@6.40.0`、`@anthropic-ai/sdk@0.124.0`）。
-- 注意两者存在版本差（0.86.1 vs 0.87.0）。**运行时为准**，快照仅作审阅参考；若信封行为在两者间有差异，以运行时为准并在文档中记录。
+- 参考快照的 SDK 声明属于快照自身，不能用来 pin 当前 Native SDK。当前版本自动从已安装 Pi manifest 对齐；公共 User-Agent 直接调用 Pi，Claude OAuth 身份值由升级命令提取。**运行时为准**，快照仅作审阅参考；剩余私有信封规则须在每次升级时行为对照。详见 `TokenPiAIUpgradeAuditProcedure.md`。
 
 ### 4.7 模块化目标布局（与信封补齐分开做）
 

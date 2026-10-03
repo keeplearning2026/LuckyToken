@@ -1,3 +1,4 @@
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -204,7 +205,7 @@ describe("Backend Application public lifecycle seam", () => {
       expect(enabled.outcome).toBe("applied");
       await vi.waitFor(async () => expect((await state()).profiles).toHaveLength(1));
       const first = await state();
-      expect(first.profiles[0]?.displayName).toBe("OpenAI Codex local login");
+      expect(first.profiles[0]?.displayName).toBe(`${builtinProviders().find((provider) => provider.id === "openai-codex")!.name} local login`);
       const removed = await client!.executeCredentialProfilesCommand({
         command: "remove", providerId: "openai-codex", credentialId: first.profiles[0]!.credentialId, expectedRevision: first.revision!,
       });

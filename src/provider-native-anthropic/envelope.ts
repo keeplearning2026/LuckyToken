@@ -1,6 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { FetchFunction, Model, ProviderHeaders } from "@earendil-works/pi-ai";
-import { arch, platform, release } from "node:os";
+import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
+import { CLAUDE_CODE_VERSION } from "./pi-identity.js";
+
+export { CLAUDE_CODE_VERSION } from "./pi-identity.js";
+
+/** Resolved Token auth owns the request; the SDK must not add ambient credentials. */
+class ProviderNativeAnthropic extends Anthropic {
+  protected override _shouldResolveDefaultCredentials(): boolean {
+    return false;
+  }
+}
 
 /** Credential branch the lane reconstructed the upstream envelope for. */
 export type AnthropicNativeAuthMode =
@@ -9,9 +19,6 @@ export type AnthropicNativeAuthMode =
   | "github_copilot"
   | "ambient";
 
-/** Claude Code identity Pi's Anthropic adapter pins for the OAuth branch.
- *  Kept in sync with the pinned runtime by the SDK identity gate test. */
-export const CLAUDE_CODE_VERSION = "2.1.251";
 const FINE_GRAINED_TOOL_STREAMING_BETA =
   "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
@@ -19,11 +26,6 @@ const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 const MID_CONVERSATION_OUTPUT_CONFIG_BETA =
   "mid-conversation-output-config-2026-07-01";
 const THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01";
-
-/** Pi's `getPiUserAgent()`. */
-function piUserAgent(): string {
-  return `pi (${platform()} ${release()}; ${arch()})`;
-}
 
 interface AnthropicNativeCompatFacts {
   readonly supportsEagerToolInputStreaming?: boolean;
@@ -243,12 +245,12 @@ export function createAnthropicSdkClient(
   } as const;
 
   if (facts.model.provider === "github-copilot") {
-    return new Anthropic({
+    return new ProviderNativeAnthropic({
       ...common,
       apiKey: null,
       authToken: facts.apiKey ?? null,
       defaultHeaders: {
-        "User-Agent": piUserAgent(),
+        "User-Agent": getPiUserAgent(),
         ...base,
         ...facts.model.headers,
         ...copilotDynamicHeaders(body),
@@ -257,12 +259,12 @@ export function createAnthropicSdkClient(
     });
   }
   if (facts.authMode === "oauth") {
-    return new Anthropic({
+    return new ProviderNativeAnthropic({
       ...common,
       apiKey: null,
       authToken: facts.apiKey ?? null,
       defaultHeaders: {
-        "User-Agent": piUserAgent(),
+        "User-Agent": getPiUserAgent(),
         ...base,
         "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
         "x-app": "cli",
@@ -276,7 +278,7 @@ export function createAnthropicSdkClient(
     (compat.sendSessionAffinityHeaders ?? isOpenRouterHosted(facts.model))
       ? { [sessionAffinityHeaderName(facts.model)]: facts.sessionId }
       : {};
-  // Header-owned credentials may carry no apiKey. Pinned Pi 0.87 dispatches
+  // Header-owned credentials may carry no apiKey. The installed Pi adapter dispatches
   // explicit Authorization/X-Api-Key headers correctly, but its Cloudflare
   // cf-aig-authorization branch has a confirmed adapter gap: assertRequestAuth
   // accepts the credential, then Anthropic's SDK rejects the client before
@@ -289,12 +291,12 @@ export function createAnthropicSdkClient(
     facts.apiKey === undefined || facts.apiKey.length === 0
       ? { "x-api-key": null, authorization: null }
       : {};
-  return new Anthropic({
+  return new ProviderNativeAnthropic({
     ...common,
     apiKey: facts.apiKey ?? null,
     authToken: null,
     defaultHeaders: {
-      "User-Agent": piUserAgent(),
+      "User-Agent": getPiUserAgent(),
       ...base,
       ...sessionAffinityHeaders,
       ...facts.model.headers,

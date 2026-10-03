@@ -1,7 +1,7 @@
+import type { ChatModels } from "../../chat-models.js";
 import type {
   FetchFunction,
   Model,
-  Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type {
@@ -72,7 +72,7 @@ export interface SemanticResponsesExecutionOptions {
   readonly body: unknown;
   readonly model: Model<string>;
   readonly requestIdentity: RequestIdentity;
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly configuration: OpenAIResponsesConfiguration;
   readonly sessionState: ResponseSessionState;
   readonly routerDefaults: RouterOptionDefaults;

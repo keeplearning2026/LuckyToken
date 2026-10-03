@@ -1,6 +1,6 @@
 # Anthropic Messages Semantic Conversion Implementation Record
 
-Status: **IMPLEMENTED HISTORICAL PLAN — current runtime boundary is clean upstream Pi AI 0.87.0**
+Status: **IMPLEMENTED HISTORICAL PLAN — current runtime boundary is the clean upstream Pi AI public contract (root package.json)**
 
 ## Delivered structure
 

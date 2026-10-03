@@ -1,8 +1,8 @@
+import type { ChatModels } from "../../src/chat-models.js";
 import type {
   AssistantMessage,
   Context,
   Model,
-  Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
@@ -95,14 +95,14 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("answers a compaction_trigger turn with exactly one Token compaction item", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const calls: Array<{
       readonly context: Context;
       readonly options: ModelsSimpleStreamOptions;
     }> = [];
     const executeOperation = vi.fn(
       async (
-        _models: Models,
+        _models: ChatModels,
         _model: Model<string>,
         context: Context,
         options: ModelsSimpleStreamOptions,
@@ -191,7 +191,7 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("renders one JSON compaction item for a non-streaming semantic turn", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const handler = createOpenAIResponsesHandler({
       models,
       executeOperation: vi.fn(
@@ -240,7 +240,7 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
     async ({ stopReason, text }) => {
       const models = {
         getModels: () => [THIRD_PARTY_MODEL],
-      } as unknown as Models;
+      } as unknown as ChatModels;
       const handler = createOpenAIResponsesHandler({
         models,
         executeOperation: vi.fn(
@@ -266,12 +266,12 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("keeps the canonical replay identity of namespaced history calls", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const contexts: Context[] = [];
     const options: ModelsSimpleStreamOptions[] = [];
     const executeOperation = vi.fn(
       async (
-        _models: Models,
+        _models: ChatModels,
         _model: Model<string>,
         context: Context,
         streamOptions: ModelsSimpleStreamOptions,
@@ -460,7 +460,7 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("keeps failing closed when namespaced history has no matching declaration or child", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const executeOperation = vi.fn(
       async (): Promise<AssistantMessage> => assistantMessage("unused"),
     );
@@ -532,11 +532,11 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("preserves history accepted by ordinary conversion when flat and namespaced calls share a name", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const contexts: Context[] = [];
     const executeOperation = vi.fn(
       async (
-        _models: Models,
+        _models: ChatModels,
         _model: Model<string>,
         context: Context,
       ): Promise<AssistantMessage> => {
@@ -630,7 +630,7 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("preserves orphan tool-output rejection with and without the compaction rewrite", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const executeOperation = vi.fn(
       async (): Promise<AssistantMessage> => assistantMessage("unused"),
     );
@@ -672,7 +672,7 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("preserves the ordinary collision rejection when flattened history names collide", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const executeOperation = vi.fn(
       async (): Promise<AssistantMessage> => assistantMessage("unused"),
     );
@@ -752,11 +752,11 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   it("replays a Token compaction item as model-visible summary text", async () => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const contexts: Context[] = [];
     const executeOperation = vi.fn(
       async (
-        _models: Models,
+        _models: ChatModels,
         _model: Model<string>,
         context: Context,
       ): Promise<AssistantMessage> => {
@@ -808,7 +808,7 @@ describe("Codex routed v2 compaction over Semantic Conversion", () => {
   ])("does not decode a malformed Token envelope (%s)", async (_label, envelope) => {
     const models = {
       getModels: () => [THIRD_PARTY_MODEL],
-    } as unknown as Models;
+    } as unknown as ChatModels;
     const executeOperation = vi.fn(
       async (): Promise<AssistantMessage> => assistantMessage("unused"),
     );

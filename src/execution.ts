@@ -1,9 +1,10 @@
+import type { ChatModels } from "./chat-models.js";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageEvent,
   Context,
   Model,
-  Models,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import {
@@ -37,7 +38,7 @@ function deepFreezeInvocationData(
 }
 
 export function freezePiInvocation(
-  model: Model<string>,
+  model: Model<Api>,
   context: Context,
   options: ModelsSimpleStreamOptions,
 ): void {
@@ -48,8 +49,8 @@ export function freezePiInvocation(
 
 /** The neutral Pi execution operation used by Client Protocol handlers. */
 export type ExecutionOperation = (
-  models: Models,
-  model: Model<string>,
+  models: ChatModels,
+  model: Model<Api>,
   context: Context,
   options: ModelsSimpleStreamOptions,
   factsSink?: ExecutionFactsSink,
@@ -61,7 +62,7 @@ export interface ExecutionObservation {
   readonly providerRequest?: (payload: unknown) => void;
   readonly providerResponse?: (
     response: unknown,
-    model: Model<string>,
+    model: Model<Api>,
   ) => void;
 }
 
@@ -71,14 +72,18 @@ export function createExecutionOperation(): ExecutionOperation {
 }
 
 export async function execute(
-  models: Models,
-  model: Model<string>,
+  models: ChatModels,
+  model: Model<Api>,
   context: Context,
   options: ModelsSimpleStreamOptions,
   factsSink?: ExecutionFactsSink,
   observation?: ExecutionObservation,
 ): Promise<AssistantMessage> {
-  if (options.onPayload !== undefined || options.onResponse !== undefined) {
+  if (
+    options.onPayload !== undefined ||
+    options.onResponse !== undefined ||
+    options.onProviderStreamEvent !== undefined
+  ) {
     throw new TypeError(
       "Semantic execution options must not supply Provider callbacks",
     );
@@ -106,7 +111,7 @@ export async function execute(
             try {
               observation.providerResponse?.(
                 response,
-                responseModel as Model<string>,
+                responseModel as Model<Api>,
               );
             } catch {
               // Observation is fail-open and never changes Provider handling.

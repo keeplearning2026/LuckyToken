@@ -1,6 +1,6 @@
 # Token Reasoning Effort Unification Plan
 
-Status: **SUPERSEDED — current runtime boundary is clean upstream Pi AI 0.87.0**
+Status: **SUPERSEDED — current runtime boundary is the clean upstream Pi AI public contract (root package.json)**
 
 This document is retained only as a decision record. Its former Client Protocol target
 projectors, Provider payload repair, and semantic `onPayload` lifecycle are not part of

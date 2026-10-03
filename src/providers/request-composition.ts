@@ -1,72 +1,28 @@
-/**
- * Request-time Provider-facing composition: auth resolution, headers and
- * authHeader, mirroring the vendored `pi-agent/` reference tree, not the
- * runtime `@earendil-works/pi-ai@0.87.0` Provider execution dependency
- * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts` and
- * `model-runtime.ts`, whose reference identity is
- * `@earendil-works/pi-coding-agent` 0.84.2).
- *
- * Ownership: this is the single Provider-facing invocation boundary for
- * models.json auth/header facts. Client Protocol adapters, the Pi semantic
- * IR, and public model-visible projections never receive apiKey, header
- * values, env references or command text from here.
- *
- * Semantics mirrored from the pinned baseline:
- *
- * - `composeConfiguredAuth` mirrors `composeApiKeyAuth`/`composeOAuthAuth`:
- *   a stored credential wins, then the configured models.json `apiKey`
- *   (literal, `$ENV`/`${ENV}` template or `!command`, resolved UNCACHED on
- *   every request), then the inherited built-in auth; provider-level
- *   `headers` resolve per request and merge into the auth result;
- *   `authHeader` adds `Authorization: Bearer <key>` and throws the exact
- *   pinned error when no API key resolved; OAuth-only bases get no
- *   fabricated api-key login and their `toAuth` composes the same
- *   headers/authHeader generically;
- * - `mergeHeaders` mirrors model-runtime `mergeHeaders`: later sources win
- *   case-insensitively (same-name different casing collapses);
- * - `resolveConfiguredModelHeaders` mirrors `rawModelHeaders` +
- *   `resolveHeadersOrThrow`: modelOverrides headers, then model-definition
- *   headers (definition wins on exact key), resolved per request;
- * - `createRequestCompositionModels` mirrors ModelRuntime's
- *   `getAuth`/`prepareRequest`: model-level configured headers merge above
- *   auth headers (which already include the built-in static model headers
- *   via pi-ai `Models.getAuth`), request-option headers win last, and an
- *   auth `baseUrl` override replaces the request model's baseUrl.
- *
- * All env/command sources are injected deterministic adapters in tests;
- * production defaults to `process.env` and a bounded shell.
- */
+import type { ChatModels } from "../chat-models.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+/** Token-owned models.json auth and header composition.
+ * Provider auth and Models.transformHeaders are upstream public extension points.
+ * Pi Models owns authentication application, Context normalization and dispatch.
+ * Credentials and configuration sources never enter semantic state.
+ * Configuration syntax remains based on pi-coding-agent 0.84.2 independently. */
 
 import type {
   Api,
+  AnyModel,
   ApiKeyAuth,
   AuthContext,
   AuthResult,
-  Context,
   Credential,
   Model,
   ModelAuth,
-  Models,
-  ModelsApiStreamOptions,
-  ModelsDeferredCancelOptions,
-  ModelsDeferredFetchOptions,
-  ModelsRefreshOptions,
-  ModelsRefreshResult,
   ModelsRequestTransforms,
-  ModelsSimpleStreamOptions,
   OAuthAuth,
   Provider,
   ProviderAuth,
   ProviderHeaders,
   ProviderRequestOptions,
-  SimpleStreamOptions,
-  StreamOptions,
 } from "@earendil-works/pi-ai";
-import {
-  lazyStream,
-  ModelsError,
-  normalizeContext,
-} from "@earendil-works/pi-ai";
+import { isModelType } from "@earendil-works/pi-ai";
 import type { ConfigValueResolver } from "./config-value.js";
 import type {
   ModelsJsonConfig,
@@ -76,6 +32,10 @@ import type {
 export interface RequestCompositionAdapters {
   readonly configValues: ConfigValueResolver;
 }
+
+// Infrastructure-only request scope: the public Provider auth result supplies
+// env to the public Models header transform, without resolving auth twice.
+const requestAuthEnv = new AsyncLocalStorage<(env: AuthResult["env"]) => void>();
 
 /** Pinned model-runtime `mergeHeaders`: override wins case-insensitively. */
 export function mergeHeaders(
@@ -276,6 +236,7 @@ function composeApiKeyAuth(
         result = await inherited?.resolve(input);
       }
       if (!result) return undefined;
+      requestAuthEnv.getStore()?.(result.env);
       const explicitEnv = {
         ...(input.credential?.env ?? {}),
         ...(result.env ?? {}),
@@ -416,17 +377,15 @@ export function resolveRequestModel(
 }
 
 /**
- * The runtime Models facade (pinned ModelRuntime getAuth/prepareRequest):
- * the same provider collection the data plane serves, with per-request
- * model-level configured headers composed above the auth result. Every
- * other Models operation delegates to the underlying collection.
+ * Chat-only facade. Native getAuth receives configured model headers;
+ * Semantic execution delegates to Pi using its public header transform.
  */
 export function createRequestCompositionModels(
-  models: Models,
+  models: ChatModels,
   config: ModelsJsonConfig | undefined,
   adapters: RequestCompositionAdapters,
   options: { readonly readConfig?: () => ModelsJsonConfig | undefined } = {},
-): Models {
+): ChatModels {
   const providerConfig = (
     providerId: string,
   ): ModelsJsonProviderConfig | undefined =>
@@ -434,10 +393,13 @@ export function createRequestCompositionModels(
       ?.providers[providerId];
 
   const getAuth = (
-    providerOrModel: string | Model<Api>,
-    overrides: Parameters<Models["getAuth"]>[1] = {},
+    providerOrModel: string | AnyModel,
+    overrides: Parameters<ChatModels["getAuth"]>[1] = {},
   ): Promise<AuthResult | undefined> => {
     if (typeof providerOrModel === "string") {
+      return models.getAuth(providerOrModel, overrides);
+    }
+    if (!isModelType(providerOrModel, "chat")) {
       return models.getAuth(providerOrModel, overrides);
     }
     return models.getAuth(providerOrModel, overrides).then((resolution) => {
@@ -466,157 +428,73 @@ export function createRequestCompositionModels(
     });
   };
 
-  const prepareRequest = async <
+  const withConfiguredHeaders = <
     TOptions extends ProviderRequestOptions & ModelsRequestTransforms,
+    TResult,
   >(
     model: Model<Api>,
     options: TOptions | undefined,
-  ): Promise<{
-    provider: Provider;
-    model: Model<Api>;
-    options: Omit<TOptions, "transformHeaders"> & ProviderRequestOptions;
-  }> => {
-    const provider = models.getProvider(model.provider);
-    if (!provider)
-      throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
-    const resolution = await getAuth(model, {
-      ...(options?.apiKey === undefined ? {} : { apiKey: options.apiKey }),
-      ...(options?.env === undefined ? {} : { env: options.env }),
-      ...(options?.signal === undefined ? {} : { signal: options.signal }),
-    });
-    if (!resolution)
-      throw new ModelsError(
-        "auth",
-        `Provider is not configured: ${model.provider}`,
-      );
-
-    const { transformHeaders, ...rawProviderOptions } = options ?? {};
-    const providerOptions = rawProviderOptions as Omit<
-      TOptions,
-      "transformHeaders"
-    > &
-      ProviderRequestOptions;
-    let headers = mergeHeaders(
-      resolution.auth.headers,
-      providerOptions.headers,
+    run: (options: TOptions | undefined) => TResult,
+  ): TResult => {
+    const config = providerConfig(model.provider);
+    const definition = config?.models?.find((entry) => entry.id === model.id);
+    if (
+      definition?.headers === undefined &&
+      config?.modelOverrides?.[model.id]?.headers === undefined
+    ) {
+      return run(options);
+    }
+    let resolvedEnv: AuthResult["env"];
+    return requestAuthEnv.run((env) => { resolvedEnv = env; }, () =>
+      run({
+        ...options,
+        transformHeaders: async (headers: ProviderHeaders) => {
+          const configured = resolveConfiguredModelHeaders(
+            model,
+            providerConfig(model.provider),
+            adapters,
+            { ...resolvedEnv, ...options?.env },
+          );
+          const composed = mergeHeaders(
+            mergeHeaders(headers, configured),
+            options?.headers,
+          ) ?? {};
+          return options?.transformHeaders === undefined
+            ? composed
+            : options.transformHeaders(composed);
+        },
+      } as TOptions),
     );
-    if (transformHeaders) headers = await transformHeaders(headers ?? {});
-    const env =
-      resolution.env || providerOptions.env
-        ? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
-        : undefined;
-    return {
-      provider,
-      model: resolution.auth.baseUrl
-        ? { ...model, baseUrl: resolution.auth.baseUrl }
-        : model,
-      options: {
-        ...providerOptions,
-        apiKey: providerOptions.apiKey ?? resolution.auth.apiKey,
-        headers,
-        env,
-      } as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions,
-    };
   };
 
-  const stream = <TApi extends Api>(
-    model: Model<TApi>,
-    context: Context,
-    options?: ModelsApiStreamOptions<TApi>,
-  ) =>
-    lazyStream(model, async () => {
-      const prepared = await prepareRequest(
-        model,
-        options as (StreamOptions & ModelsRequestTransforms) | undefined,
-      );
-      return prepared.provider.stream(
-        prepared.model as Model<TApi>,
-        normalizeContext(context),
-        prepared.options as never,
-      );
-    });
-
-  const streamSimple = (
-    model: Model<Api>,
-    context: Context,
-    options?: ModelsSimpleStreamOptions,
-  ) =>
-    lazyStream(model, async () => {
-      const prepared = await prepareRequest(model, options);
-      return prepared.provider.streamSimple(
-        prepared.model,
-        normalizeContext(context),
-        prepared.options as SimpleStreamOptions,
-      );
-    });
-
-  return Object.freeze({
+  return Object.freeze<ChatModels>({
     getProviders: () => models.getProviders(),
-    getProvider: (id: string) => models.getProvider(id),
-    getModels: (provider?: string) => models.getModels(provider),
-    getModel: (provider: string, id: string) => models.getModel(provider, id),
-    refresh: (options?: ModelsRefreshOptions): Promise<ModelsRefreshResult> =>
-      models.refresh(options),
-    checkAuth: (providerId: string, options?: { signal?: AbortSignal }) =>
-      models.checkAuth(providerId, options),
-    getAvailable: (providerId?: string, options?: { signal?: AbortSignal }) =>
-      models.getAvailable(providerId, options),
+    getProvider: (id) => models.getProvider(id),
+    getModels: (provider) => models.getModels(provider),
+    getModel: (provider, id) => models.getModel(provider, id),
+    refresh: (options) => models.refresh(options),
+    checkAuth: (providerId, options) => models.checkAuth(providerId, options),
+    getAvailable: (providerId, options) => models.getAvailable(providerId, options),
     getAuth,
-    login: (
-      providerId: string,
-      type: "api_key" | "oauth",
-      interaction: never,
-    ) => models.login(providerId, type, interaction),
-    logout: (providerId: string, options?: { signal?: AbortSignal }) =>
-      models.logout(providerId, options),
-    stream,
-    complete: (
-      model: Model<Api>,
-      context: Context,
-      options?: ModelsApiStreamOptions<Api>,
-    ) => stream(model, context, options).result(),
-    streamSimple,
-    completeSimple: (
-      model: Model<Api>,
-      context: Context,
-      options?: ModelsSimpleStreamOptions,
-    ) => streamSimple(model, context, options).result(),
-    fetchDeferred: (
-      model: Model<Api>,
-      handle: never,
-      options?: ModelsDeferredFetchOptions,
-    ) =>
-      lazyStream(model, async () => {
-        const prepared = await prepareRequest(model, options);
-        if (!prepared.provider.fetchDeferred) {
-          throw new ModelsError(
-            "provider",
-            `Provider ${model.provider} does not support deferred responses`,
-          );
-        }
-        return prepared.provider.fetchDeferred(
-          prepared.model,
-          handle,
-          prepared.options as never,
-        );
-      }).result(),
-    cancelDeferred: async (
-      model: Model<Api>,
-      handle: never,
-      options?: ModelsDeferredCancelOptions,
-    ): Promise<void> => {
-      const prepared = await prepareRequest(model, options);
-      if (!prepared.provider.cancelDeferred) {
-        throw new ModelsError(
-          "provider",
-          `Provider ${model.provider} does not support deferred responses`,
-        );
-      }
-      await prepared.provider.cancelDeferred(
-        prepared.model,
-        handle,
-        prepared.options as never,
-      );
-    },
-  } as Models);
+    login: (...args) => models.login(...args),
+    logout: (providerId, options) => models.logout(providerId, options),
+    stream: (model, context, options) => withConfiguredHeaders(
+      model, options, (prepared) => models.stream(model, context, prepared),
+    ),
+    complete: (model, context, options) => withConfiguredHeaders(
+      model, options, (prepared) => models.complete(model, context, prepared),
+    ),
+    streamSimple: (model, context, options) => withConfiguredHeaders(
+      model, options, (prepared) => models.streamSimple(model, context, prepared),
+    ),
+    completeSimple: (model, context, options) => withConfiguredHeaders(
+      model, options, (prepared) => models.completeSimple(model, context, prepared),
+    ),
+    fetchDeferred: (model, handle, options) => withConfiguredHeaders(
+      model, options, (prepared) => models.fetchDeferred(model, handle, prepared),
+    ),
+    cancelDeferred: (model, handle, options) => withConfiguredHeaders(
+      model, options, (prepared) => models.cancelDeferred(model, handle, prepared),
+    ),
+  });
 }

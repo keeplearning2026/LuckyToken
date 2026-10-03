@@ -1,3 +1,4 @@
+import { PI_RUNTIME_IDENTITY } from "../support/pi-runtime.js";
 import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
@@ -103,12 +104,7 @@ describe("serving composition certification", () => {
             referenceCommit: "914cf1472e715297caa30db4b9535d534a9eb718",
             protocolBlobSha: "ebf2e9ef043d7351a38fd69909bf367f0f103884",
           },
-          runtime: {
-            package: "@earendil-works/pi-ai",
-            version: "0.87.0",
-            integrity:
-              "sha512-lbRm+EMY6Jx3l+HLpbqbm9Yrhkc5u7EffLk2id+zJQEoBuR5I+tijGiZU8zlnuuCclmQOgH0PVjL9PLbeqJ9MQ==",
-          },
+          runtime: PI_RUNTIME_IDENTITY,
         },
         commandCode: {
           protocol: "CommandCode Private Protocol v1.3",

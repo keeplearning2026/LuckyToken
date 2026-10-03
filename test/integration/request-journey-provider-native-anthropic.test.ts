@@ -1,3 +1,4 @@
+import { CLAUDE_CODE_VERSION } from "../../src/provider-native-anthropic/envelope.js";
 import type { FetchFunction, Model, Models } from "@earendil-works/pi-ai";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -511,8 +512,8 @@ describe("Anthropic Provider Native Request Journey", () => {
         null,
       ]);
       expect(outboundAttempts.map((attempt) => attempt.userAgent)).toEqual([
-        "claude-cli/2.1.251",
-        "claude-cli/2.1.251",
+        `claude-cli/${CLAUDE_CODE_VERSION}`,
+        `claude-cli/${CLAUDE_CODE_VERSION}`,
       ]);
       expect(
         outboundAttempts.every((attempt) =>

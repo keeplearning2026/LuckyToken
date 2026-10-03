@@ -1,20 +1,26 @@
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 
 import { PI_COMPATIBILITY_BASELINE } from "../../src/providers/pi-baseline.js";
-import { composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
+import { composeConfiguredProvider, composeEffectiveCatalog } from "../../src/providers/effective-composition.js";
 
-/**
- * Ticket 09 public seam: the effective catalog projection.
- *
- * Expected literals are derived from the repository-pinned Pi baseline
- * (`@earendil-works/pi-coding-agent` 0.84.2 / `@earendil-works/pi-ai`
- * 0.84.2): built-in provider/model facts below are pinned catalog data, and
- * the malformed-case messages are the pinned Pi wording. No Pi internal
- * object is imported anywhere in this file.
- */
+/** models.json behavior follows its independent coding-agent schema baseline;
+ * built-in catalog data comes from the installed public Pi Provider contract. */
 describe("effective catalog composition", () => {
+  it("retains upstream cache metadata through composition without adding it to the public projection", () => {
+    const source = builtinProviders().find((provider) => provider.id === "openai")!;
+    const model = { ...source.getModels()[0]!, promptCache: { short: 600 } };
+    const builtin = { ...source, getModels: () => [model] };
+    const composed = composeConfiguredProvider(builtin.id, builtin, { modelOverrides: { [model.id]: { name: "Configured" } } });
+    expect(composed.models[0]?.promptCache).toEqual(model.promptCache);
+    expect(composed.models[0]?.name).toBe("Configured");
+    const projection = composeEffectiveCatalog({}, [builtin]);
+    expect(projection.providers[0]?.models[0]).not.toHaveProperty("promptCache");
+  });
+
   it("records the pinned Pi baseline and composes the built-in base layer with no user file", () => {
-    const catalog = composeEffectiveCatalog({});
+    const builtins = builtinProviders();
+    const catalog = composeEffectiveCatalog({}, builtins);
 
     expect(catalog.schemaVersion).toBe("token-effective-catalog-v1");
     expect(catalog.baseline).toEqual({
@@ -25,99 +31,20 @@ describe("effective catalog composition", () => {
     expect(catalog.baseline).toEqual(PI_COMPATIBILITY_BASELINE);
     expect(catalog.compositionErrors).toEqual([]);
 
-    const openai = catalog.providers.find((provider) => provider.id === "openai");
-    expect(openai).toBeDefined();
-    expect(openai?.layer).toBe("builtin");
-    expect(openai?.name).toBe("OpenAI");
-    expect(openai?.baseUrl).toBe("https://api.openai.com/v1");
-    expect(openai?.models[0]).toEqual({
-      id: "gpt-4",
-      name: "GPT-4",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 30, output: 60, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 8192,
-      layer: "builtin",
-      compat: { supportsStrictMode: true },
-    });
-    expect(openai?.models.find((model) => model.id === "gpt-5.4")?.compat).toMatchObject({
-      supportsAdditionalTools: true,
-      supportsToolSearch: true,
-    });
-
-    const anthropic = catalog.providers.find(
-      (provider) => provider.id === "anthropic",
-    );
-    expect(anthropic?.name).toBe("Anthropic");
-    expect(anthropic?.baseUrl).toBe("https://api.anthropic.com");
-    const opus = anthropic?.models.find(
-      (model) => model.id === "claude-opus-4-7",
-    );
-    expect(opus).toMatchObject({
-      name: "Claude Opus 4.7",
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      contextWindow: 1000000,
-      maxTokens: 128000,
-      layer: "builtin",
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      compat: {
-        forceAdaptiveThinking: true,
-        supportsTemperature: false,
-        supportsStrictTools: true,
-      },
-    });
-    // Built-ins form the lower layer and appear before custom providers.
-    expect(catalog.providers.map((provider) => provider.id)).toEqual([
-      "amazon-bedrock",
-      "ant-ling",
-      "anthropic",
-      "azure-openai-responses",
-      "baseten",
-      "cerebras",
-      "cloudflare-ai-gateway",
-      "cloudflare-workers-ai",
-      "deepseek",
-      "fireworks",
-      "github-copilot",
-      "google",
-      "google-vertex",
-      "groq",
-      "huggingface",
-      "kimi-coding",
-      "meta",
-      "minimax",
-      "minimax-cn",
-      "mistral",
-      "moonshotai",
-      "moonshotai-cn",
-      "nvidia",
-      "openai",
-      "openai-codex",
-      "opencode",
-      "opencode-go",
-      "openrouter",
-      "qwen-token-plan",
-      "qwen-token-plan-cn",
-      "qwen-token-plan-individual",
-      "radius",
-      "together",
-      "vercel-ai-gateway",
-      "xai",
-      "xiaomi",
-      "xiaomi-token-plan-ams",
-      "xiaomi-token-plan-cn",
-      "xiaomi-token-plan-sgp",
-      "zai",
-      "zai-coding-cn",
-    ]);
+    for (const builtin of builtins) {
+      const projected = catalog.providers.find((provider) => provider.id === builtin.id)!;
+      expect(projected.layer).toBe("builtin");
+      expect(projected.name).toBe(builtin.name);
+      expect(projected.baseUrl).toBe(builtin.baseUrl);
+      expect(projected.models).toHaveLength(builtin.getModels().length);
+      for (const [index, upstream] of builtin.getModels().entries()) {
+        const visible = projected.models[index]!;
+        for (const key of ["id", "name", "api", "provider", "baseUrl", "reasoning", "thinkingLevelMap", "input", "cost", "contextWindow", "maxTokens", "compat"] as const) {
+          expect(visible[key], `${builtin.id}/${upstream.id}: ${key}`).toEqual(upstream[key]);
+        }
+      }
+    }
+    expect(catalog.providers.map((provider) => provider.id)).toEqual(builtins.map((provider) => provider.id));
   });
 
   it("creates a custom Provider with the pinned required/defaulted fields", () => {

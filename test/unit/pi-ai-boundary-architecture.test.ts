@@ -25,13 +25,13 @@ async function expectPathAbsent(path: string): Promise<void> {
 }
 
 describe("Pi AI semantic boundary architecture", () => {
-  it("uses clean upstream Pi 0.87 without patch-package", async () => {
+  it("uses an exact upstream Pi release without patch-package", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
       scripts?: Record<string, string>;
     };
-    expect(packageJson.dependencies?.["@earendil-works/pi-ai"]).toBe("0.87.0");
+    expect(packageJson.dependencies?.["@earendil-works/pi-ai"]).toMatch(/^\d+\.\d+\.\d+$/u);
     expect(packageJson.devDependencies?.["patch-package"]).toBeUndefined();
     expect(packageJson.scripts?.postinstall).toBeUndefined();
 
@@ -143,5 +143,15 @@ describe("Pi AI semantic boundary architecture", () => {
       expect(source, file).not.toMatch(/export\s+\{\s*createCommandCode/u);
       expect(source, file).not.toMatch(/export\s+type\s+\{[^}]*ProviderOptions/su);
     }
+  });
+
+  it("delegates semantic dispatch and normalization to upstream Models", async () => {
+    const source = await readFile("src/providers/request-composition.ts", "utf8");
+    expect(source).not.toMatch(/\bnormalizeContext\(|\blazyStream\(|\bprepareRequest\(/u);
+    expect(source).not.toMatch(/\bprovider\.(?:stream|streamSimple|fetchDeferred|cancelDeferred)\(/u);
+    for (const method of ["stream", "complete", "streamSimple", "completeSimple", "fetchDeferred", "cancelDeferred"]) {
+      expect(source).toContain(`models.${method}(`);
+    }
+    expect(source).toContain("transformHeaders:");
   });
 });

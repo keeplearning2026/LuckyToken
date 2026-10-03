@@ -1,4 +1,7 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "../../../chat-models.js";
+import type {
+  Model,
+} from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
 import {
@@ -45,7 +48,7 @@ function publishReasoningWarnings(
 }
 
 export async function executeAnthropicSemanticInvocation(input: {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly model: Model<string>;
   readonly invocation: AnthropicSemanticInvocation;
   readonly execution: {

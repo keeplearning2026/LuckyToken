@@ -29,6 +29,8 @@ const commandCodeCatalogRoot = path.join(
 );
 
 const CLIENT_SHARED_SEAMS = new Set([
+  // Type-only Pick of upstream Models; no shared semantic state or implementation.
+  "chat-models.ts",
   "request-identity.ts",
   "execution.ts",
   // Protocols may translate only the neutral compatibility failure contract.
@@ -74,6 +76,20 @@ const RESPONSES_SHARED_SEAMS = new Set([
   "responses-compaction.ts",
   "responses-sse.ts",
 ]);
+
+test("the shared chat capability is only a Pick of the public Pi interface", async () => {
+  const source = await readFile(path.join(sourceRoot, "chat-models.ts"), "utf8");
+  const parsed = ts.createSourceFile("chat-models.ts", source, ts.ScriptTarget.Latest, true);
+  assert.equal(parsed.statements.length, 2);
+  const [dependency, contract] = parsed.statements;
+  assert.ok(ts.isImportDeclaration(dependency) && dependency.importClause.isTypeOnly);
+  assert.equal(dependency.moduleSpecifier.text, "@earendil-works/pi-ai");
+  assert.ok(ts.isTypeAliasDeclaration(contract));
+  assert.equal(contract.name.text, "ChatModels");
+  assert.ok(ts.isTypeReferenceNode(contract.type));
+  assert.equal(contract.type.typeName.getText(parsed), "Pick");
+  assert.equal(contract.type.typeArguments[0].getText(parsed), "Models");
+});
 
 function slash(value) {
   return value.split(path.sep).join("/");

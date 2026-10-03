@@ -1,4 +1,7 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "./chat-models.js";
+import type {
+  Model,
+} from "@earendil-works/pi-ai";
 
 import type { PublicModelSnapshot } from "./public-models/authority.js";
 import { resolveModel } from "./model-resolution.js";
@@ -20,7 +23,7 @@ export type PublicModelResolution =
 /** Resolve one selector for one request. Without a Public Model source the
  * direct provider/model selector contract remains available as a test seam. */
 export async function resolveDataPlanePublicModel(
-  models: Models,
+  models: ChatModels,
   publicModels: PublicModelSource | undefined,
   selector: string,
 ): Promise<PublicModelResolution> {
@@ -38,7 +41,7 @@ export async function resolveDataPlanePublicModel(
  * resolution: an OFF alias remains directly callable while its target still
  * exists in the served Pi catalog. */
 export function resolvePublicModel(
-  models: Pick<Models, "getModels">,
+  models: Pick<ChatModels, "getModels">,
   snapshot: PublicModelSnapshot,
   selector: string,
 ): PublicModelResolution {

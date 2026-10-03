@@ -1,10 +1,10 @@
+import type { ChatModels } from "../../src/chat-models.js";
 import type {
   Api,
   ApiKeyAuth,
   AuthContext,
   AuthResult,
   Model,
-  Models,
   OAuthAuth,
   Provider,
   ProviderAuth,
@@ -436,6 +436,39 @@ describe("request-time auth and header composition", () => {
   });
 
   describe("request composition Models facade", () => {
+    it("isolates concurrent auth env, resolves auth once, and applies the caller transform last", async () => {
+      let calls = 0;
+      let releaseFirst!: () => void;
+      const firstMayFinish = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const inherited: ApiKeyAuth = {
+        name: "Test",
+        resolve: async (input) => {
+          const request = ++calls;
+          if (request === 1) await firstMayFinish;
+          else releaseFirst();
+          return { auth: { apiKey: input.credential?.key ?? "key" }, env: { REQUEST: String(request) } };
+        },
+      };
+      const adapt = adapters();
+      const configured = config({ models: [{ id: "m1", headers: { "X-Request": "$REQUEST", "X-Win": "model" } }] });
+      const recordings: Array<{ model: Model<Api>; options?: SimpleStreamOptions }> = [];
+      const base = providerWith("gw", { apiKey: inherited }, [model("m1")], recordings);
+      const underlying = createModels();
+      underlying.setProvider({ ...base, auth: composeConfiguredAuth("gw", base, configured.providers.gw, adapt) });
+      const wrapped = createRequestCompositionModels(underlying, configured, adapt);
+      const invoke = (name: string) => wrapped.completeSimple(model("m1"), { messages: [] }, {
+        headers: { "x-win": name },
+        transformHeaders: async (headers) => ({ ...headers, "X-Final": headers["X-Request"]! }),
+      });
+      const results = await Promise.all([invoke("first"), invoke("second")]);
+      expect(results.map((message) => message.stopReason)).toEqual(["stop", "stop"]);
+      expect(calls).toBe(2);
+      expect(recordings.map(({ options }) => options?.headers)).toEqual(expect.arrayContaining([
+        { "X-Request": "1", "x-win": "first", "X-Final": "1" },
+        { "X-Request": "2", "x-win": "second", "X-Final": "2" },
+      ]));
+    });
+
     function composedModels(
       providerConfig: ModelsJsonProviderConfig | undefined,
       opts: {
@@ -446,7 +479,7 @@ describe("request-time auth and header composition", () => {
         auth?: ProviderAuth;
       } = {},
     ): {
-      models: Models;
+      models: ChatModels;
       recordings: Array<{ model: Model<Api>; options?: SimpleStreamOptions }>;
     } {
       const recordings: Array<{ model: Model<Api>; options?: SimpleStreamOptions }> = [];

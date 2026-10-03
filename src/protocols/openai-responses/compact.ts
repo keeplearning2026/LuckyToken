@@ -1,4 +1,5 @@
-import type { Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "../../chat-models.js";
+
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -48,7 +49,7 @@ import type { ExecutionOperation } from "../../execution.js";
 import type { RouterOptionDefaults } from "../options.js";
 
 export interface OpenAIResponsesCompactHandlerOptions {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly publicModels?: PublicModelSource;
   readonly directLane?: DirectResponsesCompactLane;
   readonly providerNativeLane?: ProviderResponsesLane;

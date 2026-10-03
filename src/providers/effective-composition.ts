@@ -30,7 +30,7 @@ import type {
  * The semantics mirror the vendored `pi-agent/` reference tree
  * (`pi-agent/packages/coding-agent/src/core/provider-composer.ts`, whose
  * reference identity is `@earendil-works/pi-coding-agent` 0.84.2), not the
- * runtime `@earendil-works/pi-ai@0.87.0` Provider execution dependency:
+ * runtime `@earendil-works/pi-ai (root package.json)` Provider execution dependency:
  *
  * - a custom Provider is created with the pinned required fields and
  *   defaults (`modelFromJson`): name falls back to id, reasoning to false,
@@ -67,16 +67,12 @@ import type {
 
 /** Internal full model facts: everything Pi constructs, plus source-layer
  *  attribution for the public projection. */
-export interface EffectiveModelFacts {
-  readonly id: string;
-  readonly name: string;
-  readonly api: string;
-  readonly provider: string;
-  readonly baseUrl: string;
-  readonly reasoning: boolean;
+export interface EffectiveModelFacts extends Omit<
+  Readonly<Model<Api>>,
+  "input" | "cost" | "thinkingLevelMap" | "compat" | "headers"
+> {
   readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   readonly input: readonly ("text" | "image")[];
-  readonly inputLimits?: Model<Api>["inputLimits"];
   readonly cost: {
     readonly input: number;
     readonly output: number;
@@ -84,9 +80,6 @@ export interface EffectiveModelFacts {
     readonly cacheWrite: number;
     readonly tiers?: ReadonlyArray<unknown>;
   };
-  readonly contextWindow: number;
-  readonly maxTokens: number;
-  readonly samplingParams?: Readonly<Record<string, unknown>>;
   readonly compat?: Readonly<Record<string, unknown>>;
   /** Built-in static model headers (e.g. github-copilot/kimi-coding/nvidia).
    *  Internal runtime fact only: pinned applyModelsJson/applyModelOverride
@@ -281,29 +274,14 @@ function modelFromConfig(
 
 /** Base model facts from a built-in Provider (layer `builtin`). */
 function baseModelFacts(model: Model<Api>): EffectiveModelFacts {
+  const { compat, ...facts } = model;
   return Object.freeze({
-    id: model.id,
-    name: model.name,
-    api: model.api,
-    provider: model.provider,
-    baseUrl: model.baseUrl,
-    reasoning: model.reasoning,
-    ...(model.thinkingLevelMap === undefined
-      ? {}
-      : { thinkingLevelMap: model.thinkingLevelMap }),
+    ...facts,
     input: Object.freeze([...model.input]),
-    ...(model.inputLimits === undefined
-      ? {}
-      : { inputLimits: model.inputLimits }),
     cost: Object.freeze({ ...model.cost }),
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    ...(model.samplingParams === undefined
+    ...(compat === undefined
       ? {}
-      : { samplingParams: model.samplingParams }),
-    ...(model.compat === undefined
-      ? {}
-      : { compat: model.compat as Readonly<Record<string, unknown>> }),
+      : { compat: compat as Readonly<Record<string, unknown>> }),
     ...(model.headers === undefined
       ? {}
       : { headers: Object.freeze({ ...model.headers }) }),

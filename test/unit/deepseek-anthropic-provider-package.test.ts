@@ -1,3 +1,4 @@
+import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
 import {
   normalizeContext,
   type FetchFunction,
@@ -110,46 +111,14 @@ describe("DeepSeek Anthropic Provider Package", () => {
       expect(model.api).toBe("anthropic-messages");
       expect(model.provider).toBe("deepseek-anthropic");
       expect(model.baseUrl).toBe("https://api.deepseek.com/anthropic");
-      expect(model.reasoning).toBe(true);
-      expect(model.contextWindow).toBe(1_000_000);
-      expect(model.maxTokens).toBe(384_000);
+      const upstream = deepseekProvider().getModels().find((entry) => entry.id === model.id)!;
+      for (const key of ["name", "reasoning", "input", "inputLimits", "cost", "contextWindow", "maxTokens", "thinkingLevelMap", "promptCache"] as const) {
+        expect(model[key], key).toEqual(upstream[key]);
+      }
       expect(model.compat?.forceAdaptiveThinking).toBe(true);
       expect(model.compat?.supportsLongCacheRetention).toBe(false);
     }
 
-    const flash = models[0] as Model<"anthropic-messages">;
-    expect(flash.name).toBe("DeepSeek V4.1 Flash");
-    expect(flash.input).toEqual(["text", "image"]);
-    expect(flash.cost).toEqual({
-      input: 0.3,
-      output: 1.2,
-      cacheRead: 0.006,
-      cacheWrite: 0,
-    });
-    expect(flash.thinkingLevelMap).toEqual({
-      minimal: null,
-      low: "low",
-      medium: null,
-      high: "high",
-      max: "max",
-    });
-
-    const pro = models[1] as Model<"anthropic-messages">;
-    expect(pro.name).toBe("DeepSeek V4 Pro");
-    expect(pro.input).toEqual(["text"]);
-    expect(pro.cost).toEqual({
-      input: 1.32,
-      output: 3.96,
-      cacheRead: 0.044,
-      cacheWrite: 0,
-    });
-    expect(pro.thinkingLevelMap).toEqual({
-      minimal: null,
-      low: null,
-      medium: null,
-      high: "high",
-      max: "max",
-    });
   });
 
   it("rejects unknown package configuration keys", () => {

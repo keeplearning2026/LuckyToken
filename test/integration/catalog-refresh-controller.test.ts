@@ -1,3 +1,4 @@
+import type { ChatModels } from "../../src/chat-models.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,10 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createModels,
   createProvider,
+  isModelType,
   type Api,
   type AuthCheck,
   type Model,
-  type Models,
   type Provider,
   type ProviderAuth,
   type RefreshModelsContext,
@@ -94,7 +95,8 @@ function createControlledProvider(
   ) => {
     if (context.stored !== undefined) {
       const restored = context.stored.models.filter(
-        (model) => model.provider === providerId,
+        (model): model is ModelApi =>
+          model.provider === providerId && isModelType(model, "chat"),
       );
       await context.publish({
         update: () => {
@@ -300,7 +302,7 @@ function createRuntimeHandle(options: {
   readonly configValues?: ReturnType<typeof createConfigValueResolver>;
   readonly modelsStore?: ReturnType<typeof createCatalogCacheStore>;
   readonly builtins?: readonly Provider[];
-}): CatalogRuntimeHandle & { readonly models: Models } {
+}): CatalogRuntimeHandle & { readonly models: ChatModels } {
   const configValues =
     options.configValues ??
     createConfigValueResolver({ envSource: () => undefined });
@@ -384,6 +386,22 @@ function createController(
 describe("catalog refresh controller", () => {
   afterEach(async () => {
     await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()));
+  });
+
+  it("keeps image ids out of chat dynamic attribution even when the id matches a static chat model", async () => {
+    const fixture = await createFixture();
+    writeModelsJson(fixture, {});
+    const baseline = dynamicModelFact("mixed", "shared", "https://controlled.example.com/v1");
+    const cached = dynamicModelFact("mixed", "cached-chat", baseline.baseUrl);
+    await fixture.store.write("mixed", { models: [cached, { ...baseline, type: "image", api: "openai-images", output: ["image"] }] });
+    const controlled = createControlledProvider("mixed", { baseline: [baseline], fetchError: new Error("offline") });
+    const controller = createController(fixture);
+    await controller.bind(createRuntimeHandle({ modelsStore: fixture.store, providers: [controlled.provider] }));
+    const chatFacts = () => controller.snapshot().providers.find((provider) => provider.providerId === "mixed")!.models.map(({ id, dynamic }) => ({ id, dynamic }));
+    expect(chatFacts()).toEqual([{ id: "shared", dynamic: false }, { id: "cached-chat", dynamic: true }]);
+    await controller.refreshManual();
+    expect(chatFacts()).toEqual([{ id: "shared", dynamic: false }, { id: "cached-chat", dynamic: true }]);
+    expect((await fixture.store.read("mixed"))?.models).toHaveLength(2);
   });
 
   it("keeps catalog failure behavior identical when unified runtime observation is enabled or throws", async () => {
@@ -675,7 +693,7 @@ describe("catalog refresh controller", () => {
         return [dynamicModelFact("dynamic-g", "g", "https://g.example/v1")];
       },
     });
-    let secondHandle: CatalogRuntimeHandle & { readonly models: Models };
+    let secondHandle: CatalogRuntimeHandle & { readonly models: ChatModels };
     await controller.bind(
       (secondHandle = createRuntimeHandle({
         modelsStore: fixture.store,

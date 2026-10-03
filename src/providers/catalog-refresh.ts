@@ -1,12 +1,13 @@
+import type { ChatModels } from "../chat-models.js";
 import type {
   Api,
+  AnyModel,
   AuthCheck,
   Model,
-  Models,
   ModelsRefreshOptions,
   ModelsStoreEntry,
 } from "@earendil-works/pi-ai";
-import { ModelsError } from "@earendil-works/pi-ai";
+import { isModelType, ModelsError } from "@earendil-works/pi-ai";
 import type {
   CatalogModelAvailability,
   CatalogProviderProjection,
@@ -55,7 +56,7 @@ import type {
 export interface CatalogRuntimeHandle {
   /** The served Models facade; `getModels`/`getModel` read the captured
    * active snapshot. Provider composition is fixed for the Backend lifetime. */
-  readonly models: Models;
+  readonly models: ChatModels;
   /** Atomically capture the current runtime catalog as the served snapshot.
    * Dynamic Provider catalog refresh may change model facts; models.json never
    * changes the Provider set after startup. */
@@ -67,12 +68,12 @@ export interface CatalogRuntimeHandle {
   refreshProvider(
     providerId: string,
     options: Omit<ModelsRefreshOptions, "providers">,
-  ): ReturnType<Models["refresh"]>;
+  ): ReturnType<ChatModels["refresh"]>;
   /** Check exactly one Provider under its captured Profile binding. */
   checkAuth(
     providerId: string,
     options?: { readonly signal?: AbortSignal },
-  ): ReturnType<Models["checkAuth"]>;
+  ): ReturnType<ChatModels["checkAuth"]>;
   /** Default lifecycle runs have no pre-captured binding; exact operation
    * views override these guards. */
   isCurrent(providerId: string): Promise<boolean>;
@@ -609,7 +610,7 @@ export function createCatalogRefreshController(
             .read(provider.id)
             .catch(() => undefined);
       const dynamicIds = Object.freeze(
-        new Set((stored?.models ?? []).map((model) => model.id)),
+        new Set((stored?.models ?? []).filter((model) => isModelType(model, "chat")).map((model) => model.id)),
       );
       const published = exactStage?.changed ??
         serializeEntry(stored) !== serializeEntry(preRunEntries.get(provider.id));
@@ -748,7 +749,7 @@ export function createCatalogRefreshController(
               ? {}
               : { availability: previous.availability }),
             dynamicModelIds: Object.freeze(
-              new Set(stored.models.map((model) => model.id)),
+              new Set(stored.models.filter((model) => isModelType(model, "chat")).map((model) => model.id)),
             ),
           });
         }
@@ -1035,8 +1036,8 @@ export function createCatalogRefreshController(
  * objects.
  */
 export function createCatalogSnapshotModels(
-  models: Models,
-): Models & {
+  models: ChatModels,
+): ChatModels & {
   readonly capture: (preserveProviderIds?: ReadonlySet<string>) => void;
 } {
   let captured: readonly Model<Api>[] | undefined;
@@ -1045,7 +1046,9 @@ export function createCatalogSnapshotModels(
     if (providerId === undefined) return all;
     return all.filter((model) => model.provider === providerId);
   };
-  return Object.freeze({
+  return Object.freeze<ChatModels & {
+    readonly capture: (preserveProviderIds?: ReadonlySet<string>) => void;
+  }>({
     getProviders: () => models.getProviders(),
     getProvider: (id: string) => models.getProvider(id),
     getModels: (providerId?: string) => snapshotModels(providerId),
@@ -1058,13 +1061,13 @@ export function createCatalogSnapshotModels(
       models.checkAuth(providerId, options),
     getAvailable: (providerId?: string, options?: { signal?: AbortSignal }) =>
       models.getAvailable(providerId, options),
-    getAuth: (providerOrModel: string | Model<Api>, overrides: unknown) =>
-      models.getAuth(
-        providerOrModel as Parameters<Models["getAuth"]>[0],
-        overrides as Parameters<Models["getAuth"]>[1],
-      ),
-    login: (providerId: string, type: "api_key" | "oauth", interaction: never) =>
-      models.login(providerId, type, interaction),
+    getAuth: (
+      providerOrModel: string | AnyModel,
+      overrides?: Parameters<ChatModels["getAuth"]>[1],
+    ) => typeof providerOrModel === "string"
+      ? models.getAuth(providerOrModel, overrides)
+      : models.getAuth(providerOrModel, overrides),
+    login: (...args) => models.login(...args),
     logout: (providerId: string, options?: { signal?: AbortSignal }) =>
       models.logout(providerId, options),
     stream: (model, context, options) => models.stream(model, context, options),
@@ -1098,7 +1101,5 @@ export function createCatalogSnapshotModels(
       }
       captured = Object.freeze(next);
     },
-  } as Models & {
-    readonly capture: (preserveProviderIds?: ReadonlySet<string>) => void;
   });
 }

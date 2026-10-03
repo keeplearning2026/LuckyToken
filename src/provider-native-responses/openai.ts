@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { arch, platform, release } from "node:os";
+import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
 import OpenAI from "openai";
 
 import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
@@ -23,11 +23,6 @@ import {
   projectProviderNativeBody,
   type ProviderNativeBodyProjection,
 } from "./tool-call-adjacency.js";
-
-/** Pi's `getPiUserAgent()`; Provider Native mirrors Pi's identity exactly. */
-function piUserAgent(): string {
-  return `pi (${platform()} ${release()}; ${arch()})`;
-}
 
 function assertTransportAuth(
   provider: string,
@@ -114,7 +109,7 @@ function buildDefaultHeaders(
   sessionId: string | undefined,
 ): Record<string, string | null | undefined> {
   const headers: Record<string, string | null | undefined> = {
-    "User-Agent": piUserAgent(),
+    "User-Agent": getPiUserAgent(),
     ...model.headers,
   };
   if (model.provider === "github-copilot") {

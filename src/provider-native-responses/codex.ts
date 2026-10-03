@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { arch, platform, release } from "node:os";
+import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
 import { constants as zlibConstants, zstdCompressSync } from "node:zlib";
 
 import { resolveCodexAccountIdentity } from "../credentials/codex-auth.js";
@@ -124,7 +124,7 @@ export function createCodexResponsesSender(
       headers.set("authorization", `Bearer ${token}`);
       headers.set("chatgpt-account-id", accountId);
       headers.set("originator", "pi");
-      headers.set("user-agent", `pi (${platform()} ${release()}; ${arch()})`);
+      headers.set("user-agent", getPiUserAgent());
       headers.set("content-type", "application/json");
 
       const isCompact = operation === "compact";

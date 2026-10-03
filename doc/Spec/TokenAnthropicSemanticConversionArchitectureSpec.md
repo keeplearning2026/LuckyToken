@@ -1,6 +1,6 @@
 # Anthropic Messages Semantic Conversion Architecture
 
-Status: **CURRENT — projector-free clean upstream Pi AI 0.87.0 boundary**
+Status: **CURRENT — projector-free clean upstream Pi AI public contract boundary**
 
 ## 1. Contract
 

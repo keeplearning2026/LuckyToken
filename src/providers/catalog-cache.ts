@@ -4,8 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { dirname } from "node:path";
 
 import type {
-  Api,
-  Model,
+  AnyModel,
   ModelsStore,
   ModelsStoreEntry,
 } from "@earendil-works/pi-ai";
@@ -118,8 +117,8 @@ interface FileState {
   readonly unparseable: boolean;
 }
 
-/** Validate one dynamic model fact (pi-ai `Model` shape). */
-function isModelFact(value: unknown): value is Model<Api> {
+/** Validate Pi's persisted catalog; chat-only projection belongs to serving. */
+function isModelFact(value: unknown): value is AnyModel {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
@@ -133,11 +132,8 @@ function isModelFact(value: unknown): value is Model<Api> {
     typeof model.provider !== "string" ||
     model.provider.length === 0 ||
     typeof model.baseUrl !== "string" ||
-    typeof model.reasoning !== "boolean" ||
     !Array.isArray(model.input) ||
-    model.input.some((entry) => entry !== "text" && entry !== "image") ||
-    typeof model.contextWindow !== "number" ||
-    typeof model.maxTokens !== "number"
+    model.input.some((entry) => entry !== "text" && entry !== "image")
   ) {
     return false;
   }
@@ -152,7 +148,25 @@ function isModelFact(value: unknown): value is Model<Api> {
   ) {
     return false;
   }
-  return true;
+  switch (model.type) {
+    case undefined:
+    case "chat":
+      return (
+        typeof model.reasoning === "boolean" &&
+        typeof model.contextWindow === "number" &&
+        typeof model.maxTokens === "number"
+      );
+    case "image":
+      return (
+        Array.isArray(model.output) &&
+        model.output.includes("image") &&
+        model.output.every((entry) => entry === "text" || entry === "image")
+      );
+    case "classifier":
+      return typeof model.contextWindow === "number";
+    default:
+      return false;
+  }
 }
 
 /** Validate one cached entry: every model must be a validated fact of the
@@ -185,7 +199,7 @@ function validateEntry(
   }
   return Object.freeze({
     entry: Object.freeze({
-      models: Object.freeze([...(entry.models as readonly Model<Api>[])]),
+      models: Object.freeze([...(entry.models as readonly AnyModel[])]),
       ...(checkedAt === undefined ? {} : { checkedAt: checkedAt as number }),
       ...(lastModified === undefined
         ? {}

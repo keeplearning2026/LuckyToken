@@ -1,3 +1,4 @@
+import type { ChatModels } from "../chat-models.js";
 /**
  * Provider Runtime (Provider Activation Specification v1.0 §7) — the one
  * Backend-lifetime Provider execution environment.
@@ -28,7 +29,6 @@ import {
   defaultProviderAuthContext,
   type AuthContext,
   type FetchFunction,
-  type Models,
   type ModelsStore,
   type Provider,
 } from "@earendil-works/pi-ai";
@@ -108,7 +108,7 @@ export interface AutomaticModelOverlayHandle {
 
 /** The narrow Provider Runtime seam (Spec §7.3). */
 export interface ProviderRuntime {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly localAcquisitionMethods: readonly ProviderRuntimeLocalAcquisitionMethod[];
   readonly credentialManagement: CredentialProfileManagement;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
@@ -404,7 +404,7 @@ export async function createProviderRuntime(
   // Ticket 10: the same effective Provider/model/runtime composition serves
   // catalog facts and invocation; the facade adds only the per-request
   // model-level configured header layer above the standard Pi auth path.
-  const facade: Models = createRequestCompositionModels(
+  const facade: ChatModels = createRequestCompositionModels(
     mutableModels,
     servedModelsJson,
     { configValues },

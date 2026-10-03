@@ -182,7 +182,7 @@ The plan is based on the current repository implementation:
 9. The current Control Plane version is `5`.
 10. Pi `Models.getAuth(providerId, { signal })` accepts an abort signal, so one Provider Usage refresh signal can cover OAuth refresh and the subsequent quota acquisition.
 11. `models.json` can overlay a Pi built-in Provider's effective `baseUrl`; therefore `providerId` alone does not prove that a credential is safe to send to that Provider's canonical quota endpoint.
-12. Pi's public `StreamOptions.onResponse` exposes HTTP status/headers, which is sufficient for Anthropic API-key passive rate-limit observation. The current OpenAI Responses stream processor does not expose unknown SSE events such as Meta `response.subscription_usage` to Token.
+12. Pi's public `StreamOptions.onResponse` exposes HTTP status/headers, which is sufficient for Anthropic API-key passive rate-limit observation. Pi 1.0 adds the public `onProviderStreamEvent` callback, including unknown SSE events; Token has not adopted this callback for passive Meta usage.
 13. The research inventory proves reliable acquisition methods for only a subset of Providers; the remaining Providers must stay unsupported.
 
 Provider Usage remains a separate acquisition/cache authority, but its observations attach to Profiles. Provider-card presentation composes the selected Profile's usage:
@@ -757,17 +757,11 @@ Because Provider Usage is intentionally not part of `StatusSnapshot`, a successf
 
 ### Meta `response.subscription_usage` — gated/deferred
 
-The current Meta semantic path uses Pi's OpenAI Responses adapter. The current `processResponsesStream()` consumes recognized Responses events and does not expose arbitrary/unknown SSE events to Token. `onResponse` exposes HTTP metadata only, not stream body events.
+The current Meta semantic path uses Pi's OpenAI Responses adapter. Accepted Pi 1.0 exposes parsed events, including unknown `response.subscription_usage`, through public `onProviderStreamEvent(data, model)` before normalization. The upstream public-observation condition is now satisfied; `onResponse` still exposes HTTP metadata only.
 
-Therefore Meta `response.subscription_usage` is **not an implementable passive source under the current public Pi seam**.
+Token has not wired or certified this observer. Meta passive usage remains deferred as a separate feature, rather than a prerequisite for upgrading Pi. Before enabling it, certify bounded immutable event extraction, correct Profile/destination attribution, and diagnostics non-interference. Pi awaits this callback, so the installed observer must return immediately, contain failures, and enqueue work without awaiting slow acquisition/persistence. Observer failure or saturation must never interrupt the model request.
 
-Do not implement it unless one of these becomes true:
-
-1. an accepted Pi public observation seam exposes the event;
-2. an upgraded pinned Pi version exposes it;
-3. a separately justified Native lane that already owns the raw SSE can observe it without coupling Semantic Conversion to Native implementation.
-
-Until then Meta passive usage remains deferred. This plan does not modify or fork Pi to obtain it.
+Do not put the event into Pi semantic IR, create a Client-owned callback, or fork Pi to obtain it.
 
 ---
 
@@ -1105,7 +1099,7 @@ Implement:
 
 - Anthropic API-key response-header observations through the existing Pi `onResponse`/Token fail-open response observation seam.
 
-Do **not** schedule Meta `response.subscription_usage` as an implementation item under the current Pi contract. It remains gated/deferred until the observability condition in section 10.2 is satisfied.
+Keep Meta `response.subscription_usage` in a separate implementation slice. Pi 1.0 satisfies the upstream observation gate, but Token integration and non-interference certification in section 10.2 remain required.
 
 Optional Meta proactive acquisition is also separate and may proceed only after the Muse identity-token seam is explicitly accepted and destination/auth safety is proven.
 
@@ -1447,7 +1441,7 @@ The feature is complete when:
 18. No raw credential or raw upstream error reaches Control Plane or renderer.
 19. Balance-only Providers are not represented as `0%` usage.
 20. Control Plane version is updated for the new command family and Provider Usage uses split contract/wire modules.
-21. Anthropic passive observation uses an existing public observation seam; Meta passive observation remains deferred until a real public/raw-SSE seam exists.
+21. Anthropic passive observation uses an existing public observation seam; Meta passive observation remains deferred until the public Pi 1.0 observer is integrated and certified.
 22. Existing request-lane tests remain green.
 23. Pi and `pi-agent/` remain unmodified.
 
@@ -1515,7 +1509,7 @@ These are deliberate architectural choices:
 - fixed safe failure categories instead of raw upstream errors;
 - unsupported binding/destination instead of unsafe auth resolution or guessed support;
 - Anthropic passive observation only where the existing public seam actually exposes data;
-- Meta passive observation gated/deferred under the current Pi public contract;
+- Meta passive observation deferred pending Token integration/certification of the Pi 1.0 public callback;
 - no quota influence on routing/request execution.
 
 They are the minimum design needed to satisfy Provider isolation, credential correctness, and acquisition/presentation separation without building a broader quota platform than the current product requires.

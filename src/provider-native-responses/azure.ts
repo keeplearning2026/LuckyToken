@@ -1,5 +1,6 @@
 import type { AuthResult, Model } from "@earendil-works/pi-ai";
-import { arch, platform, release } from "node:os";
+import { getPiUserAgent } from "@earendil-works/pi-ai/utils/pi-user-agent";
+import { getProviderEnvValue } from "@earendil-works/pi-ai/utils/provider-env";
 import { AzureOpenAI } from "openai";
 
 import { publishSafeHttpEnvelopeArtifact } from "../diagnostics/http-envelope.js";
@@ -21,10 +22,6 @@ import {
 } from "./tool-call-adjacency.js";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
-
-function providerEnv(name: string, auth: AuthResult): string | undefined {
-  return auth.env?.[name] || process.env[name] || undefined;
-}
 
 function parseDeploymentNameMap(value: string | undefined): Map<string, string> {
   const map = new Map<string, string>();
@@ -69,11 +66,11 @@ function normalizeBaseUrl(baseUrl: string): string {
 /** Pinned Pi `resolveAzureConfig`. */
 function resolveBaseUrl(model: Model<string>, auth: AuthResult): string {
   const configured =
-    providerEnv("AZURE_OPENAI_BASE_URL", auth)?.trim() ||
+    getProviderEnvValue("AZURE_OPENAI_BASE_URL", auth.env)?.trim() ||
     auth.auth.baseUrl?.trim() ||
     undefined;
   if (configured) return normalizeBaseUrl(configured);
-  const resourceName = providerEnv("AZURE_OPENAI_RESOURCE_NAME", auth);
+  const resourceName = getProviderEnvValue("AZURE_OPENAI_RESOURCE_NAME", auth.env);
   if (resourceName) return `https://${resourceName}.openai.azure.com/openai/v1`;
   if (model.baseUrl) return normalizeBaseUrl(model.baseUrl);
   throw new Error(
@@ -83,14 +80,14 @@ function resolveBaseUrl(model: Model<string>, auth: AuthResult): string {
 
 function resolveApiVersion(auth: AuthResult): string {
   return (
-    providerEnv("AZURE_OPENAI_API_VERSION", auth) || DEFAULT_AZURE_API_VERSION
+    getProviderEnvValue("AZURE_OPENAI_API_VERSION", auth.env) || DEFAULT_AZURE_API_VERSION
   );
 }
 
 function resolveDeploymentName(model: Model<string>, auth: AuthResult): string {
   return (
     parseDeploymentNameMap(
-      providerEnv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", auth),
+      getProviderEnvValue("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", auth.env),
     ).get(model.id) || model.id
   );
 }
@@ -106,7 +103,7 @@ export function createAzureResponsesSender(
   const apiVersion = resolveApiVersion(options.auth);
   const deploymentName = resolveDeploymentName(options.model, options.auth);
   const defaultHeaders = {
-    "User-Agent": `pi (${platform()} ${release()}; ${arch()})`,
+    "User-Agent": getPiUserAgent(),
     ...options.model.headers,
     ...options.auth.auth.headers,
   };

@@ -68,7 +68,7 @@ test("production serving receives narrow Provider capabilities and cannot create
       `Data Plane composition must not reference ${forbiddenFactory}`,
     );
   }
-  assert.match(composition, /readonly models:\s*Models/u);
+  assert.match(composition, /readonly models:\s*ChatModels/u);
   assert.match(
     composition,
     /readonly diagnostics\?:\s*RequestJourneyObservationAuthority/u,

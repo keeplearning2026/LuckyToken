@@ -10,7 +10,7 @@ import type {
 } from "../../src/credentials/profile-contract.js";
 
 export interface OnlineProviderLoginInput {
-  readonly models: Models;
+  readonly models: Pick<Models, "login">;
   readonly providerAuthBindings: ProviderAuthBindingAuthority;
   readonly credentialManagement: CredentialProfileManagement;
   readonly providerId: string;

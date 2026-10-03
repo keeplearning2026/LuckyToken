@@ -1,7 +1,7 @@
+import type { ChatModels } from "../../../chat-models.js";
 import type {
   AssistantMessage,
   Model,
-  Models,
 } from "@earendil-works/pi-ai";
 import type { ExecutionFactsSink } from "@token/provider-contract/diagnostics";
 
@@ -62,7 +62,7 @@ function publishReasoningWarnings(
 }
 
 export async function executeOpenAIResponsesSemanticInvocation(input: {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly model: Model<string>;
   readonly invocation: ResponsesSemanticInvocation;
   readonly infrastructure: ResponsesSemanticExecutionCapabilities;

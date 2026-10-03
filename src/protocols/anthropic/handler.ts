@@ -1,4 +1,5 @@
-import type { Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "../../chat-models.js";
+
 import type { UpstreamFailureFact } from "@token/provider-contract/diagnostics";
 import { randomUUID } from "node:crypto";
 import { bindCredentialActivityToExecutionFacts } from "../../credentials/activity.js";
@@ -336,7 +337,7 @@ function semanticFailureLocation(
 }
 
 export interface AnthropicMessagesHandlerOptions {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly createSessionId?: () => string;
   readonly configuration?: AnthropicConfiguration;
   readonly providerNativeLane?: AnthropicProviderNativeLane;
@@ -357,7 +358,7 @@ export interface AnthropicMessagesHandlerOptions {
 }
 
 interface AnthropicMessagesDependencies {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly createSessionId: () => string;
   readonly configuration: AnthropicConfiguration;
   readonly providerNativeLane: AnthropicProviderNativeLane | undefined;

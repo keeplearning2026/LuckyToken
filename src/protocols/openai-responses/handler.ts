@@ -1,4 +1,7 @@
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { ChatModels } from "../../chat-models.js";
+import type {
+  Model,
+} from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import { resolveRequestIdentity } from "../../request-identity.js";
@@ -70,7 +73,7 @@ import type { DirectResponsesLane } from "./direct-lane-contract.js";
 export const openaiResponsesProtocolId = "openai-responses";
 
 export interface OpenAIResponsesHandlerOptions {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly directLane?: DirectResponsesLane;
   readonly providerNativeLane?: ProviderResponsesLane;
   /** Settings-backed switch for Provider Native function-call namespace repair. */
@@ -100,7 +103,7 @@ export interface OpenAIResponsesHandlerOptions {
 }
 
 interface OpenAIResponsesDependencies {
-  readonly models: Models;
+  readonly models: ChatModels;
   readonly directLane: DirectResponsesLane | undefined;
   readonly providerNativeLane: ProviderResponsesLane | undefined;
   readonly functionCallNamespaceRepair: (() => boolean) | undefined;
