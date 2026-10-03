@@ -209,6 +209,7 @@ async function main(): Promise<void> {
       configurationPath:
         'providerPackages["@token/provider-commandcode-private"]',
       host: {
+        registerLocalOAuth: () => undefined,
         fetch: globalThis.fetch,
         now: Date.now,
         createUuid: randomUUID,

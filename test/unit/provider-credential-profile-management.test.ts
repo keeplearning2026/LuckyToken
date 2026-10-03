@@ -1,14 +1,15 @@
 import { createModels } from "@earendil-works/pi-ai";
 import { tmpdir } from "node:os";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { LocalOAuthAcquisition } from "../../src/credentials/acquisition.js";
+import type { LocalOAuthRegistration } from "@token/provider-contract/local-oauth";
 import { createProviderCredentialProfiles } from "../../src/credentials/profile-authority.js";
 import { createInMemoryProviderCredentialRecordStore } from "../../src/credentials/profile-record-store.js";
 import { createFixtureProvider } from "../support/credential-fixture.js";
 
-function fixture() {
+function fixture(localOAuthRegistrations: readonly LocalOAuthRegistration[] = []) {
   let nextId = 0;
   let nextRevision = 0;
   const provider = createFixtureProvider();
@@ -20,6 +21,7 @@ function fixture() {
     providers: () => [provider],
     createId: () => `id-${++nextId}`,
     now: () => 1_000,
+    localOAuthRegistrations: () => localOAuthRegistrations,
   });
   const models = createModels({ credentials: profiles.credentialStore });
   models.setProvider(provider);
@@ -187,44 +189,49 @@ describe("Credential Profile management target model", () => {
   });
 
   it("activates the first new local_oauth Profile after the last Profile was removed", async () => {
-    const value = fixture();
-    const acquisition: LocalOAuthAcquisition = Object.freeze({
-      providerId: value.provider.id,
-      acquisitionKind: "local_oauth" as const,
-      icon: "terminal" as const,
-      label: () => undefined,
-      acquire: async () =>
-        Object.freeze({
-          owner: "external" as const,
-          path: join(tmpdir(), `token-review-local-${process.pid}.json`),
-        }),
-    });
-    const first = await value.profiles.management.acquireLocal({
-      providerId: value.provider.id,
-      displayName: "Local",
-      acquisition,
-    });
-    expect(first.outcome).toBe("ok");
-    const firstId = first.provider!.profiles[0]!.credentialId;
-    expect(first.provider?.activeCredentialId).toBe(firstId);
+    const root = await mkdtemp(join(tmpdir(), "Token-profile-local-"));
+    try {
+      const path = join(root, "auth.json");
+      await writeFile(path, "fixture credential");
+      const registration: LocalOAuthRegistration = Object.freeze({
+        providerId: "fixture-provider",
+        icon: "terminal" as const,
+        label: () => undefined,
+        acquire: async () =>
+          Object.freeze({
+            owner: "external" as const,
+            path,
+          }),
+        read: () => ({ type: "oauth" as const, access: "access", refresh: "refresh", expires: 1_000 }),
+      });
+      const value = fixture([registration]);
+      const first = await value.profiles.management.acquireLocal({
+        providerId: value.provider.id,
+        displayName: "Local",
+      });
+      expect(first.outcome).toBe("ok");
+      const firstId = first.provider!.profiles[0]!.credentialId;
+      expect(first.provider?.activeCredentialId).toBe(firstId);
 
-    const removed = await value.profiles.management.remove({
-      providerId: value.provider.id,
-      credentialId: firstId,
-      expectedRevision: first.provider!.revision!,
-    });
-    expect(removed.outcome).toBe("ok");
-    expect(removed.provider?.profiles).toEqual([]);
+      const removed = await value.profiles.management.remove({
+        providerId: value.provider.id,
+        credentialId: firstId,
+        expectedRevision: first.provider!.revision!,
+      });
+      expect(removed.outcome).toBe("ok");
+      expect(removed.provider?.profiles).toEqual([]);
 
-    const second = await value.profiles.management.acquireLocal({
-      providerId: value.provider.id,
-      displayName: "Local two",
-      acquisition,
-    });
-    expect(second.outcome).toBe("ok");
-    expect(second.provider?.profiles).toHaveLength(1);
-    expect(second.provider?.activeCredentialId).toBe(
-      second.provider?.profiles[0]?.credentialId,
-    );
+      const second = await value.profiles.management.acquireLocal({
+        providerId: value.provider.id,
+        displayName: "Local two",
+      });
+      expect(second.outcome).toBe("ok");
+      expect(second.provider?.profiles).toHaveLength(1);
+      expect(second.provider?.activeCredentialId).toBe(
+        second.provider?.profiles[0]?.credentialId,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

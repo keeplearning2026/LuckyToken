@@ -14,7 +14,6 @@ import { createPiAuthInteraction } from "./auth-interaction.js";
 import {
   LocalAcquisitionError,
   type AcquisitionIcon,
-  type LocalOAuthAcquisition,
 } from "./acquisition.js";
 import {
   CredentialManagementBusyError,
@@ -40,7 +39,6 @@ export interface LocalAcquisitionMethod {
   readonly providerId: string;
   readonly label: string | undefined;
   readonly icon: AcquisitionIcon;
-  readonly acquisition: LocalOAuthAcquisition;
 }
 
 function projectOptions(
@@ -400,7 +398,6 @@ export function createCredentialProfilesControlPlaneHandlers(options: {
               providerId: command.providerId,
               displayName: command.displayName,
               ...(command.note === undefined ? {} : { note: command.note }),
-              acquisition: method.acquisition,
               signal,
             });
             if (result.outcome !== "ok") {

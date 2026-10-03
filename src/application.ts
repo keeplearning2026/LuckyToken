@@ -850,7 +850,6 @@ async function startNormalApplication(options: {
           providerId: method.providerId,
           label: method.label(),
           icon: method.icon,
-          acquisition: method.acquisition,
         })),
       providerSource: (providerId) => providerRuntime.providerSource(providerId),
       postLoginProvider: (providerId, capture) => {

@@ -2,6 +2,7 @@ import type {
   FetchFunction,
   Provider,
 } from "@earendil-works/pi-ai";
+import type { LocalOAuthRegistration } from "./local-oauth.js";
 
 export const PROVIDER_PACKAGE_CONTRACT_VERSION = 1 as const;
 
@@ -9,6 +10,8 @@ export interface ProviderHostCapabilities {
   readonly fetch: FetchFunction;
   readonly now: () => number;
   readonly createUuid: () => string;
+  /** Only available during this package's createProvider() call. */
+  readonly registerLocalOAuth: (registration: LocalOAuthRegistration) => void;
 }
 
 export interface ProviderPackageCreateInput {

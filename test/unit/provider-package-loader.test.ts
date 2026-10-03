@@ -2,6 +2,8 @@ import { createModels } from "@earendil-works/pi-ai";
 import { providerPackage as commandCodeProviderPackage } from "@token/provider-commandcode-private";
 import { DEFAULT_COMMANDCODE_MODEL_CATALOG } from "@token/commandcode-model-catalog";
 import { describe, expect, it, vi } from "vitest";
+import type { LocalOAuthRegistration } from "@token/provider-contract/local-oauth";
+import type { ProviderHostCapabilities } from "@token/provider-contract/package";
 
 import { loadProviderPackages } from "../../src/providers/package-loader.js";
 
@@ -11,6 +13,72 @@ const commandCodeConfiguration = Object.freeze({
 });
 
 describe("Provider Package loader", () => {
+  const host = {
+    fetch: async () => new Response(),
+    now: () => 1,
+    createUuid: () => "fixture-id",
+  };
+  const registration: LocalOAuthRegistration = {
+    providerId: "commandcode-private",
+    label: () => "Fixture local login",
+    icon: "terminal",
+    acquire: async () => null,
+    read: () => undefined,
+  };
+
+  it("publishes local OAuth only with its owning Provider and closes registration after creation", async () => {
+    const models = createModels();
+    let register: ProviderHostCapabilities["registerLocalOAuth"] | undefined;
+    const acquire = vi.fn(registration.acquire);
+    const read = vi.fn(registration.read);
+    const result = await loadProviderPackages({
+      models, host,
+      providerPackages: { "@fixture/local": commandCodeConfiguration },
+      importModule: async () => ({ providerPackage: {
+        contractVersion: 1,
+        createProvider(input: Parameters<typeof commandCodeProviderPackage.createProvider>[0]) {
+          register = input.host.registerLocalOAuth;
+          register({ ...registration, acquire, read });
+          return commandCodeProviderPackage.createProvider(input);
+        },
+      } }),
+    });
+    expect(result.localOAuthRegistrations).toMatchObject([{ providerId: "commandcode-private" }]);
+    expect(models.getProvider("commandcode-private")).toBeDefined();
+    expect(acquire).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(() => register!(registration)).toThrow("during createProvider()");
+  });
+
+  it.each(["duplicate", "other-provider", "invalid", "factory-failure"])(
+    "rejects %s local OAuth registration without publishing staged Providers", async (scenario) => {
+      const models = createModels();
+      await expect(loadProviderPackages({
+        models, host,
+        providerPackages: {
+          "@fixture/first": commandCodeConfiguration,
+          "@fixture/local": commandCodeConfiguration,
+        },
+        importModule: async (specifier) => ({ providerPackage: {
+          contractVersion: 1,
+          createProvider(input: Parameters<typeof commandCodeProviderPackage.createProvider>[0]) {
+            const provider = commandCodeProviderPackage.createProvider(input);
+            if (specifier === "@fixture/first") return { ...provider, id: "first" };
+            input.host.registerLocalOAuth(scenario === "other-provider"
+              ? { ...registration, providerId: "first" }
+              : scenario === "invalid"
+                ? { ...registration, read: undefined } as unknown as LocalOAuthRegistration
+                : registration);
+            if (scenario === "duplicate") input.host.registerLocalOAuth(registration);
+            if (scenario === "factory-failure") throw new Error("fixture factory failed");
+            return provider;
+          },
+        } }),
+      })).rejects.toThrow();
+      expect(models.getProviders()).toEqual([]);
+    },
+  );
+
   it("loads and registers a configured package through one seam", async () => {
     const models = createModels();
 

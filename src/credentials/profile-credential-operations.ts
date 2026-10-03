@@ -1,6 +1,7 @@
 import type { Credential } from "@earendil-works/pi-ai";
 
-import { parseCodexInternalAuth } from "./codex-internal-auth.js";
+import type { LocalOAuthRegistration } from "@token/provider-contract/local-oauth";
+import { readLocalOAuthCredential } from "./acquisition.js";
 import {
   parseApiKeyCredentialDocument,
   parseOAuthCredentialDocument,
@@ -29,7 +30,7 @@ export interface ProfileCredentialOperations {
 
 export interface ProfileCredentialOperationsOverride {
   readonly providerId: string;
-  readonly acquisitionKind: PersistedCredentialProfile["acquisitionKind"];
+  readonly acquisitionKind: "api_key" | "oauth";
   readonly read?: ProfileCredentialOperations["read"];
   readonly modify?: ProfileCredentialOperations["modify"];
 }
@@ -64,6 +65,7 @@ function serializeDefault(
 export function createProfileCredentialOperations(options: {
   readonly store: ProviderCredentialRecordStore;
   readonly overrides?: readonly ProfileCredentialOperationsOverride[];
+  readonly localOAuthRegistrations?: () => readonly LocalOAuthRegistration[];
 }): {
   resolve(
     providerId: string,
@@ -72,6 +74,9 @@ export function createProfileCredentialOperations(options: {
 } {
   const overrides = new Map<string, ProfileCredentialOperationsOverride>();
   for (const override of options.overrides ?? []) {
+    if (override.acquisitionKind !== "api_key" && override.acquisitionKind !== "oauth") {
+      throw new Error("Local OAuth operations require registerLocalOAuth()");
+    }
     const key = `${override.providerId}\u0000${override.acquisitionKind}`;
     if (overrides.has(key)) {
       throw new Error(
@@ -98,7 +103,17 @@ export function createProfileCredentialOperations(options: {
     ) {
       return undefined;
     }
-    const credential = parseDefault(profile, read.raw);
+    let credential: Credential | undefined;
+    if (profile.acquisitionKind === "local_oauth") {
+      const localOAuth = options.localOAuthRegistrations?.().find(
+        (registration) => registration.providerId === providerId,
+      );
+      credential = localOAuth === undefined
+        ? undefined
+        : readLocalOAuthCredential(localOAuth, read.raw);
+    } else {
+      credential = parseDefault(profile, read.raw);
+    }
     return credential?.type === expectedCredentialType(profile.acquisitionKind)
       ? credential
       : undefined;
@@ -154,31 +169,4 @@ export function createProfileCredentialOperations(options: {
   };
 
   return Object.freeze({ resolve });
-}
-
-export function codexLocalOAuthOperations(
-  store: ProviderCredentialRecordStore,
-): ProfileCredentialOperationsOverride {
-  return Object.freeze({
-    providerId: "openai-codex",
-    acquisitionKind: "local_oauth" as const,
-    async read(
-      providerId: string,
-      profile: PersistedCredentialProfile,
-    ) {
-      const read = await store.readCredentialDocument(
-        providerId,
-        profile.credentialId,
-      );
-      if (
-        read.state !== "ok" ||
-        read.profile.credentialId !== profile.credentialId ||
-        read.profile.reference.owner !== "external" ||
-        read.profile.reference.path !== profile.reference.path
-      ) {
-        return undefined;
-      }
-      return parseCodexInternalAuth(read.raw);
-    },
-  });
 }

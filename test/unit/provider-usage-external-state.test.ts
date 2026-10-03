@@ -7,7 +7,7 @@ import { createModels } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 
-import { createCodexLocalAcquisition } from "../../src/credentials/acquisition.js";
+import { createCodexLocalOAuthRegistration } from "../../src/credentials/codex-local-oauth.js";
 import { createProviderCredentialProfiles } from "../../src/credentials/profile-authority.js";
 import {
   createInMemoryProviderCredentialRecordStore,
@@ -42,6 +42,10 @@ function documentFor(account: string): string {
 }
 
 async function setup(authPath: string, usageProbe: ProviderUsageProbe) {
+  const registration = createCodexLocalOAuthRegistration({
+    authPath,
+    label: () => provider.auth.oauth?.name,
+  });
   const profiles = createProviderCredentialProfiles({
     recordStore: createInMemoryProviderCredentialRecordStore({
       createRevision: randomUUID,
@@ -49,15 +53,11 @@ async function setup(authPath: string, usageProbe: ProviderUsageProbe) {
     providers: () => [provider],
     createId: randomUUID,
     now: Date.now,
-  });
-  const acquisition = createCodexLocalAcquisition({
-    authPath,
-    label: () => provider.auth.oauth?.name,
+    localOAuthRegistrations: () => [registration],
   });
   await profiles.management.acquireLocal({
     providerId,
     displayName: "Codex local",
-    acquisition,
   });
   const models = createModels({ credentials: profiles.credentialStore });
   models.setProvider(provider);

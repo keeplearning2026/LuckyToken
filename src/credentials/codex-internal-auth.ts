@@ -1,4 +1,4 @@
-import type { Credential } from "@earendil-works/pi-ai";
+import type { Credential, OAuthCredential } from "@earendil-works/pi-ai";
 import { parseCodexExternalAuth, resolveCodexAccountIdentity } from "./codex-auth.js";
 
 /** The public Pi credential lacks Codex's refresh timestamp/id_token. Keep
@@ -20,7 +20,7 @@ export function serializeCodexInternalAuth(credential: Credential): string {
   return content;
 }
 
-export function parseCodexInternalAuth(content: string): Credential | undefined {
+export function parseCodexInternalAuth(content: string): OAuthCredential | undefined {
   const parsed = parseCodexExternalAuth(content);
   if (parsed.state !== "ok" || parsed.auth.credential === undefined) return undefined;
   const { accessToken: access, refreshToken: refresh, expiresAt: expires } = parsed.auth.credential;

@@ -1,9 +1,5 @@
-import {
-  canonicalCredentialPath,
-  readCredentialDocumentFile,
-  type CredentialDocumentReference,
-} from "./credential-document.js";
-import { parseCodexInternalAuth } from "./codex-internal-auth.js";
+import type { OAuthCredential } from "@earendil-works/pi-ai";
+import type { LocalOAuthRegistration } from "@token/provider-contract/local-oauth";
 
 export type AcquisitionKind = "api_key" | "oauth" | "local_oauth";
 export type AcquisitionIcon = "key" | "account" | "terminal";
@@ -20,39 +16,22 @@ export class LocalAcquisitionError extends Error {
   }
 }
 
-export interface LocalOAuthAcquisition {
-  readonly providerId: string;
-  readonly acquisitionKind: "local_oauth";
-  readonly icon: AcquisitionIcon;
-  readonly label: () => string | undefined;
-  acquire(
-    signal?: AbortSignal,
-  ): Promise<Extract<CredentialDocumentReference, { readonly owner: "external" }> | null>;
-}
-
-/**
- * The Codex-owned auth.json remains external. Acquisition validates that the
- * current document contains a supported ChatGPT OAuth credential, then stores
- * only its canonical external reference.
- */
-export function createCodexLocalAcquisition(options: {
-  readonly authPath: string;
-  readonly label: () => string | undefined;
-}): LocalOAuthAcquisition {
-  return Object.freeze({
-    providerId: "openai-codex",
-    acquisitionKind: "local_oauth" as const,
-    icon: "terminal" as const,
-    label: options.label,
-    async acquire(signal?: AbortSignal) {
-      signal?.throwIfAborted();
-      const path = await canonicalCredentialPath(options.authPath);
-      const document = await readCredentialDocumentFile(path);
-      signal?.throwIfAborted();
-      if (document.state !== "ok" || parseCodexInternalAuth(document.raw) === undefined) {
-        return null;
-      }
-      return Object.freeze({ owner: "external" as const, path });
-    },
-  });
+/** Provider parser failures must never expose credential-file content. */
+export function readLocalOAuthCredential(
+  registration: LocalOAuthRegistration,
+  raw: string,
+): OAuthCredential | undefined {
+  try {
+    const credential = registration.read(raw);
+    if (
+      credential?.type !== "oauth" ||
+      typeof credential.access !== "string" ||
+      typeof credential.refresh !== "string" ||
+      typeof credential.expires !== "number" ||
+      !Number.isFinite(credential.expires)
+    ) return undefined;
+    return structuredClone(credential);
+  } catch {
+    return undefined;
+  }
 }

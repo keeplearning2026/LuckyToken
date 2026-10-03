@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { LocalOAuthRegistration } from "@token/provider-contract/local-oauth";
 
 import type {
   AuthOperationOptions,
@@ -13,14 +14,17 @@ import {
   LOCAL_LOGIN_DUPLICATE_MESSAGE,
   LOCAL_LOGIN_FAILURE_MESSAGE,
   LocalAcquisitionError,
+  readLocalOAuthCredential,
   type AcquisitionKind,
 } from "./acquisition.js";
 import {
   serializeApiKeyCredentialDocument,
   serializeOAuthCredentialDocument,
+  canonicalCredentialPath,
+  isExternalCredentialPath,
+  readCredentialDocumentFile,
 } from "./credential-document.js";
 import {
-  codexLocalOAuthOperations,
   createProfileCredentialOperations,
   type ProfileCredentialOperationsOverride,
 } from "./profile-credential-operations.js";
@@ -249,6 +253,7 @@ export function createProviderCredentialProfiles(options: {
     readonly lastSucceededAt?: number;
   }[];
   readonly credentialOperationOverrides?: readonly ProfileCredentialOperationsOverride[];
+  readonly localOAuthRegistrations?: () => readonly LocalOAuthRegistration[];
 }): ProviderCredentialProfilesComposition {
   const scope = new AsyncLocalStorage<BoundScope>();
   const cooldownUntil = new Map<string, number>();
@@ -260,12 +265,17 @@ export function createProviderCredentialProfiles(options: {
   const providerFor = (providerId: string): Provider | undefined =>
     options.providers().find((provider) => provider.id === providerId);
 
+  const authLabelFor = (provider: Provider, kind: AcquisitionKind): string =>
+    (kind === "local_oauth"
+      ? options.localOAuthRegistrations?.().find(
+          (registration) => registration.providerId === provider.id,
+        )?.label()
+      : undefined) ?? providerAuthLabel(provider, kind);
+
   const operations = createProfileCredentialOperations({
     store: options.recordStore,
-    overrides: Object.freeze([
-      codexLocalOAuthOperations(options.recordStore),
-      ...(options.credentialOperationOverrides ?? []),
-    ]),
+    overrides: options.credentialOperationOverrides ?? [],
+    localOAuthRegistrations: () => options.localOAuthRegistrations?.() ?? [],
   });
 
   const cooldownKey = (providerId: string, credentialId: string): string =>
@@ -301,7 +311,7 @@ export function createProviderCredentialProfiles(options: {
           ? authTypeFor(profile.acquisitionKind) === "api_key"
             ? "API key"
             : "OAuth"
-          : providerAuthLabel(provider, profile.acquisitionKind),
+          : authLabelFor(provider, profile.acquisitionKind),
       displayName: profile.displayName,
       ...(profile.note === undefined ? {} : { note: profile.note }),
       enabled: profile.enabled,
@@ -466,7 +476,7 @@ export function createProviderCredentialProfiles(options: {
       credentialId: profile.credentialId,
       acquisitionKind: profile.acquisitionKind,
       authType: authTypeFor(profile.acquisitionKind),
-      authMethodLabel: providerAuthLabel(provider, profile.acquisitionKind),
+      authMethodLabel: authLabelFor(provider, profile.acquisitionKind),
       displayName: profile.displayName,
       referenceOwner: profile.reference.owner,
       ...(externalContentRevision === undefined
@@ -980,11 +990,14 @@ export function createProviderCredentialProfiles(options: {
 
     async acquireLocal(input) {
       const provider = providerFor(input.providerId);
-      if (
-        provider === undefined ||
-        input.acquisition.providerId !== input.providerId
-      ) {
+      if (provider === undefined) {
         return mutationFailure("unknown_provider", "Provider is unknown");
+      }
+      const registration = options.localOAuthRegistrations?.().find(
+        (item) => item.providerId === input.providerId,
+      );
+      if (registration === undefined) {
+        return mutationFailure("unavailable", "Local OAuth acquisition is unavailable");
       }
       if (!validDisplayName(input.displayName) || !validNote(input.note)) {
         return mutationFailure("invalid", "Credential Profile metadata is invalid");
@@ -1017,17 +1030,45 @@ export function createProviderCredentialProfiles(options: {
         );
       }
 
-      const reference = await input.acquisition.acquire(input.signal);
-      input.signal?.throwIfAborted();
-      if (reference === null) {
+      let discovered: Awaited<ReturnType<LocalOAuthRegistration["acquire"]>>;
+      try {
+        discovered = await registration.acquire(input.signal);
+      } catch {
+        input.signal?.throwIfAborted();
         throw new LocalAcquisitionError(LOCAL_LOGIN_FAILURE_MESSAGE);
       }
+      input.signal?.throwIfAborted();
+      if (
+        discovered === null || typeof discovered !== "object" ||
+        discovered.owner !== "external" || typeof discovered.path !== "string" ||
+        !isExternalCredentialPath(discovered.path)
+      ) {
+        throw new LocalAcquisitionError(LOCAL_LOGIN_FAILURE_MESSAGE);
+      }
+      const reference = externalCredentialReference(
+        await canonicalCredentialPath(discovered.path),
+      );
+      const document = await readCredentialDocumentFile(reference.path);
+      input.signal?.throwIfAborted();
+      const credential = document.state === "ok"
+        ? readLocalOAuthCredential(registration, document.raw)
+        : undefined;
+      input.signal?.throwIfAborted();
+      if (credential === undefined) {
+        throw new LocalAcquisitionError(LOCAL_LOGIN_FAILURE_MESSAGE);
+      }
+      if (metadataContainsSecrets(
+        input.displayName, input.note, credentialSecrets(credential),
+      )) {
+        return mutationFailure("invalid", "Credential Profile metadata must not contain credential secrets");
+      }
+      for (const secret of credentialSecrets(credential)) knownSecrets.add(secret);
       const credentialId = options.createId();
       const now = options.now();
       const profile: PersistedCredentialProfile = {
         credentialId,
         acquisitionKind: "local_oauth",
-        reference: externalCredentialReference(reference.path),
+        reference,
         displayName: input.displayName,
         ...(input.note === undefined ? {} : { note: input.note }),
         enabled: true,
@@ -1043,6 +1084,7 @@ export function createProviderCredentialProfiles(options: {
             reference: profile.reference,
           },
           (latest) => {
+            input.signal?.throwIfAborted();
             if (
               latest?.profiles.some(
                 (candidate) =>
@@ -1091,6 +1133,7 @@ export function createProviderCredentialProfiles(options: {
         await refreshProjection([input.providerId]);
         return resultWithProvider(result.value, input.providerId);
       } catch {
+        input.signal?.throwIfAborted();
         return mutationFailure(
           "storage_failure",
           "Credential Profile storage is unavailable",

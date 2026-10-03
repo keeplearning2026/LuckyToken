@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it, vi } from "vitest";
 
-import { createCodexLocalAcquisition } from "../../src/credentials/acquisition.js";
+import { createCodexLocalOAuthRegistration } from "../../src/credentials/codex-local-oauth.js";
 import { createProviderCredentialProfiles } from "../../src/credentials/profile-authority.js";
 import {
   createInMemoryProviderCredentialRecordStore,
@@ -59,17 +59,18 @@ function fixture(authPath: string) {
   const store = createInMemoryProviderCredentialRecordStore({
     createRevision: randomUUID,
   });
+  const registration = createCodexLocalOAuthRegistration({
+    authPath,
+    label: () => provider.auth.oauth?.name,
+  });
   const profiles = createProviderCredentialProfiles({
     recordStore: store,
     providers: () => [provider],
     createId: randomUUID,
     now: Date.now,
+    localOAuthRegistrations: () => [registration],
   });
-  const acquisition = createCodexLocalAcquisition({
-    authPath,
-    label: () => provider.auth.oauth?.name,
-  });
-  return { store, profiles, acquisition };
+  return { store, profiles };
 }
 
 describe("Codex local OAuth Profile", () => {
@@ -81,7 +82,6 @@ describe("Codex local OAuth Profile", () => {
       const added = await value.profiles.management.acquireLocal({
         providerId,
         displayName: "Codex local",
-        acquisition: value.acquisition,
       });
       expect(added.outcome).toBe("ok");
 
@@ -127,7 +127,6 @@ describe("Codex local OAuth Profile", () => {
       await value.profiles.management.acquireLocal({
         providerId,
         displayName: "Codex local",
-        acquisition: value.acquisition,
       });
       const capture = await value.profiles.binding.capture(providerId);
       const mutation = vi.fn(async () => ({
@@ -157,7 +156,6 @@ describe("Codex local OAuth Profile", () => {
       const first = await value.profiles.management.acquireLocal({
         providerId,
         displayName: "Codex local",
-        acquisition: value.acquisition,
       });
       expect(first.outcome).toBe("ok");
       const state = (await value.profiles.management.query([providerId]))
@@ -173,7 +171,6 @@ describe("Codex local OAuth Profile", () => {
       const duplicate = await value.profiles.management.acquireLocal({
         providerId,
         displayName: "Another local",
-        acquisition: value.acquisition,
       });
       expect(duplicate.outcome).toBe("duplicate");
     }));

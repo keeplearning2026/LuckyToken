@@ -20,6 +20,7 @@ function createProvider() {
     host: Object.freeze({
       fetch: hostFetch(),
       now: () => 1,
+      registerLocalOAuth: () => undefined,
       createUuid: () => "00000000-0000-4000-8000-000000000001",
     }),
   });
@@ -159,6 +160,7 @@ describe("DeepSeek Anthropic Provider Package", () => {
         host: {
           fetch: hostFetch(),
           now: () => 1,
+          registerLocalOAuth: () => undefined,
           createUuid: () => "00000000-0000-4000-8000-000000000002",
         },
       }),

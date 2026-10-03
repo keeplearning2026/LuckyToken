@@ -93,6 +93,7 @@ async function main(): Promise<void> {
     configuration: Object.freeze({}),
     configurationPath: "online-smoke",
     host: Object.freeze({
+      registerLocalOAuth: () => undefined,
       fetch: globalThis.fetch,
       now: Date.now,
       createUuid: () => crypto.randomUUID(),

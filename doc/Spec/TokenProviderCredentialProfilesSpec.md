@@ -136,15 +136,37 @@ Global Credential Management Guard
 `local_oauth` is Token-owned local reference discovery and does not call Pi login or Pi `CredentialStore.modify`:
 
 ```ts
-interface LocalOAuthAcquisition {
-  readonly kind: "local_oauth";
-  acquire(context: LocalOAuthAcquisitionContext): Promise<{
-    readonly reference: Extract<CredentialReference, { readonly owner: "external" }>;
-  }>;
+interface LocalOAuthRegistration {
+  readonly providerId: string;
+  readonly label: () => string | undefined;
+  readonly icon: "key" | "account" | "terminal";
+  acquire(signal?: AbortSignal): Promise<ExternalCredentialReference | null>;
+  read(raw: string): OAuthCredential | undefined;
 }
 ```
 
-The local acquisition may parse/validate the external document before returning, but the durable result is only the external reference.
+Provider packages register this contract once during `createProvider()` through
+`input.host.registerLocalOAuth(registration)`. The public types are exported by
+`@token/provider-contract/local-oauth`. Built-in local OAuth implementations use
+the same contract. Providers supply reference discovery and a synchronous content
+parser; neither callback receives a Profile, credential store, or Profile management
+authority. `acquire` returns an absolute external file reference, or `null` when no
+usable source is selected. Parser failure returns `undefined`.
+
+Token canonicalizes the external path, performs a bounded read, validates the
+registered parser's OAuth result, and commits one new Profile only on success.
+Discovery/parser exceptions produce fixed secret-safe failures. Token owns all
+credential-file I/O and all Profile identity, metadata, selection and persistence.
+The durable result is only the external reference.
+
+Each Provider may register at most one local OAuth method, and a package may only
+register for the Provider it creates. Registration is staged with package loading:
+invalid registration, duplicate registration, Provider ID mismatch, or package
+creation failure publishes neither the package Providers nor their local OAuth
+capabilities. The registration callback closes when `createProvider()` settles.
+Functions are registered again at startup, never persisted. A Profile whose local
+OAuth registration is missing remains visible, but credential use fails closed;
+Token never guesses another Provider's parser or a generic file format.
 
 Provider composition decides which acquisition methods exist.
 
@@ -153,6 +175,109 @@ If `openai-codex` registers `local_oauth`, that method is a Provider capability 
 There is no `integrations.codex.localLogin` capability switch.
 
 Acquisition failure creates no Profile. Ordinary user acquisition/login always targets a new Profile.
+
+#### 3.1.1 Developer guide: adding `local_oauth` to a Provider package
+
+This extension concerns only `local_oauth`. Managed API-key/OAuth login continues
+through the existing Pi login/publication path above. The persisted Profile shape,
+selection, ordering, enablement and Pi CredentialStore interface are unchanged.
+
+Provider developers implement two callbacks and register them while constructing
+their existing Pi Provider. They do not construct a Profile or receive any Profile
+state. The contract is:
+
+| Field | Developer responsibility | Token responsibility |
+|---|---|---|
+| `providerId` | Use the ID of the Provider returned by this package | Check registration ownership and reject duplicates |
+| `label` / `icon` | Supply a non-secret display label and one supported icon | Project the local-login option and Profile authentication label |
+| `acquire(signal)` | Locate the external document and return `{ owner: "external", path: absolutePath }`; observe cancellation; return `null` if no source is selected | Canonicalize/validate the reference, read bounded current contents and validate the parser result before publishing a Profile |
+| `read(raw)` | Synchronously parse file contents into Pi `OAuthCredential`; return `undefined` for invalid/unsupported content | Own file I/O, contain parser exceptions, validate/clone the returned credential, and use this same parser for later reads |
+
+`read` is the Provider's content parser, not the Pi `CredentialStore.read` method.
+It receives one string containing the current document contents, with no Profile,
+file-write authority, or Token credential store. Its result is the existing Pi
+OAuth credential shape (`type`, `access`, `refresh`, `expires`, plus any supported
+Provider credential fields). `expires` is a finite Unix timestamp in milliseconds.
+It must finish promptly and must not write or refresh the external document.
+
+The reference code below assumes `createExampleProvider` is the package's existing
+Pi Provider factory. Its existing Pi OAuth auth implementation must accept the
+OAuth credentials produced by the parser. That factory and its managed login
+functions do not need to be rewritten to add local login.
+
+```ts
+import type { OAuthCredential } from "@earendil-works/pi-ai";
+import {
+  PROVIDER_PACKAGE_CONTRACT_VERSION,
+  type TokenProviderPackage,
+} from "@token/provider-contract/package";
+import type { LocalOAuthRegistration } from "@token/provider-contract/local-oauth";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createExampleProvider } from "./provider.js";
+
+// This example external app writes access_token, refresh_token, and
+// expires_at (milliseconds). Adapt only this parser to its actual format.
+function parseLocalOAuthCredential(raw: string): OAuthCredential | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (
+    typeof value !== "object" || value === null || Array.isArray(value) ||
+    !("access_token" in value) || typeof value.access_token !== "string" ||
+    !("refresh_token" in value) || typeof value.refresh_token !== "string" ||
+    !("expires_at" in value) || typeof value.expires_at !== "number" ||
+    !Number.isFinite(value.expires_at)
+  ) return undefined;
+  return {
+    type: "oauth",
+    access: value.access_token,
+    refresh: value.refresh_token,
+    expires: value.expires_at,
+  };
+}
+
+export const providerPackage = {
+  contractVersion: PROVIDER_PACKAGE_CONTRACT_VERSION,
+  createProvider(input) {
+    const provider = createExampleProvider(input.configuration);
+    const authPath = join(homedir(), ".example-app", "auth.json");
+    const localOAuth: LocalOAuthRegistration = {
+      providerId: provider.id,
+      label: () => "Example app local account",
+      icon: "terminal",
+      async acquire(signal) {
+        signal?.throwIfAborted();
+        return { owner: "external", path: authPath };
+      },
+      read: parseLocalOAuthCredential,
+    };
+    input.host.registerLocalOAuth(localOAuth);
+    return provider;
+  },
+} satisfies TokenProviderPackage;
+```
+
+The path/discovery logic belongs to the Provider. The example returns its known
+path directly; Token then verifies that the file exists, is bounded/readable,
+and parses successfully. Neither `acquire` nor `read` creates a Profile.
+
+No Provider `modify` callback is registered: Token rereads the external reference
+through the same parser when Pi calls `modify`, and ignores Pi's mutation callback.
+The external application owns refresh. Registering also supplies the generic UI
+capability; adding a Provider does not require a Provider-ID branch in the renderer.
+
+At startup, register the functions again. Token dispatches existing Profiles using
+the containing `providerId` and `acquisitionKind === "local_oauth"`; functions and
+implementation IDs are never persisted. A missing registration or unreadable/invalid
+document fails credential use while leaving the existing Profile intact.
+
+Built-in reference implementation: `src/credentials/codex-local-oauth.ts` implements
+the same discovery/parser contract for `openai-codex`, and Provider Runtime supplies
+it to the same Token local OAuth operations used by package registrations.
 
 ### 3.2 Profile State module
 
@@ -278,7 +403,9 @@ local_oauth
 → default external OAuth read/reread
 ```
 
-A Provider may replace the default `read`, `modify`, or both for one Profile type it supports.
+A Provider may replace the default managed `api_key`/`oauth` `read`, `modify`, or
+both. For `local_oauth`, Provider variation is supplied through the registered
+content parser. Token implements the Profile read and reread operations itself.
 
 Resolution is internal:
 
@@ -373,13 +500,13 @@ The default `local_oauth.modify` is therefore semantically just a fresh `read`.
 
 This is intentional: Pi's `modify` contract returns the post-modification current Credential, and for an externally owned reference Token performs no modification. The external owner controls refresh.
 
-If a Provider supplies a dedicated `local_oauth.read`, the default `local_oauth.modify` must reuse that selected read semantics rather than bypassing it with a generic parser.
+Every `local_oauth` read uses that Provider's registered parser. The common
+`local_oauth.modify` invokes the same read again. Providers do not register a
+local OAuth `modify`; the external owner remains responsible for credential
+refresh. Token never executes the Pi mutation callback or adopts its result.
 
-A Provider may also supply its own `local_oauth.modify` when required. The external ownership rule remains absolute: no default or Provider-specific implementation may write the external reference.
-
-A Provider-specific external `modify` also cannot adopt the Pi mutation callback result as current state unless that exact state is independently observed from the external reference. Its returned Credential must be derived from a fresh read/parse of the current external reference. Provider-specific polymorphism may change parsing or validation, not ownership authority.
-
-For the current `openai-codex + local_oauth` case, Token provides Provider-specific credential operations where Codex's referenced `auth.json` requires Codex-specific document handling.
+For `openai-codex`, the registration locates Codex's `auth.json` and supplies its
+Codex-specific parser. The Profile operations module has no Codex special case.
 
 ### 3.5 Pi CredentialStore Adapter
 
@@ -824,21 +951,25 @@ No separate setting may hide a registered Provider acquisition capability unless
 
 Profile types own default `read` and `modify` semantics.
 
-A Provider may supply dedicated credential operations for one Profile type when the referenced credential document requires different parsing, validation or modification semantics.
+A Provider may supply dedicated managed credential operations when its referenced
+document requires different parsing, validation or modification semantics.
+Local OAuth Providers supply a content parser through `registerLocalOAuth`;
+Token applies the common external read/reread semantics around that parser.
 
 Example:
 
 ```text
-local_oauth defaults
-├─ read
-└─ modify
+local_oauth common Token operations
+├─ read   → bounded file read → registered Provider parser
+└─ modify → perform the same read again
 
 openai-codex + local_oauth
-├─ read   → Codex-specific implementation
-└─ modify → Codex-specific implementation
+├─ parser → Codex auth.json → Pi OAuthCredential
+└─ read/modify → common Token operations
 ```
 
-Only that Provider/Profile combination uses the dedicated implementation. Other Providers using `local_oauth` continue to use the default operations.
+Each Provider's local OAuth registration supplies its own parser. No Provider
+receives Profile state, and no function or parser identity is persisted.
 
 This override mechanism is Token-internal. It does not create a Provider-specific Pi CredentialStore and does not alter Pi's `read(providerId)` / `modify(providerId, callback)` interface.
 
@@ -856,9 +987,9 @@ Provider-specific implementations must not place Provider-private types into Pro
 8. Pi receives only Pi `api_key | oauth` Credentials.
 9. `acquisitionKind` is persisted Profile type authority and determines both the default credential operations and the derived Pi credential type; `authType` is not separately persisted.
 10. `api_key` and `oauth` Profiles own managed references; `local_oauth` Profiles own external references. Other owner/type combinations are invalid.
-11. A Provider may replace the default `read`, `modify`, or both for one Profile type it supports; the selected operations own that Provider/Profile's internal credential handling.
+11. A Provider may replace managed Profile `read`, `modify`, or both; local OAuth variation uses the registered parser with Token-owned external read/reread semantics.
 12. Provider/Profile operation selection is entirely Token-internal and never changes Pi's CredentialStore method/type interface.
-13. Provider-specific external `modify` cannot adopt Pi callback output as authority; any returned current Credential must come from a fresh parse of the external reference.
+13. Token's common external `modify` never adopts Pi callback output as authority; its returned current Credential comes from a fresh external read using the registered Provider parser.
 14. `credentialGeneration` does not exist; `credentialId` identifies the Profile credential/reference lifetime, while Provider record `revision` and `selectionGeneration` protect different Token state transitions.
 15. Persisted Profile state does not duplicate Provider identity, Pi auth type, ordering priority, Provider implementation ids, auth-method labels, identity hints, or credential content revision/hash.
 16. `profiles[]` order is the single Profile ordering authority for UI reorder and 429 fallback.
@@ -891,6 +1022,8 @@ Provider-specific implementations must not place Provider-private types into Pro
 43. Disabling or removing a Profile does not proactively cancel an already-running request; any later credential resolution against that disabled/removed Profile fails closed and can never recreate the Profile.
 44. Pi `list()` exposes at most the active Token credential per Provider and never exposes inactive Profile multiplicity.
 45. Protocol conversion layers never depend on concrete Profile credential-operation implementations.
+46. All local OAuth Providers use one discovery/content-parser registration contract; Provider callbacks receive no Profile or credential-store authority.
+47. Every local OAuth credential read and modify uses that Provider's current registered parser; a missing registration fails closed without deleting Profile state or guessing a parser.
 
 ## 14. Target module map
 
@@ -902,9 +1035,9 @@ Recommended ownership:
 | `credentials/reference` | reference types, bounded read, managed atomic write, ownership enforcement |
 | `credentials/management` | fail-fast global exclusive guard, Credential Management-owned operation IDs, active-operation metadata, explicit cancellation/deadline ownership and guaranteed release for all user Credential/Profile management mutations |
 | `credentials/acquisition` | managed Pi-login publication orchestration plus Provider local-reference acquisition capabilities inside the guarded management workflow |
-| `credentials/profile-credential-operations` | default `read`/`modify` operations per Profile type and Provider/Profile-specific replacements |
+| `credentials/profile-credential-operations` | default `read`/`modify` operations per Profile type, managed Provider/Profile-specific replacements, and common local OAuth operations using the registered parser |
 | `credentials/pi-store-adapter` | adapt Pi `CredentialStore.read/list/modify/delete`; dispatch read/modify internally while preventing Pi from owning Token Profile lifecycle |
-| Provider composition | acquisition capability registration plus any Provider/Profile credential-operation replacements |
+| Provider composition | local OAuth discovery/parser registration plus any managed Provider/Profile credential-operation replacements |
 
 Exact filenames may differ. The ownership boundaries are normative; filenames are not.
 

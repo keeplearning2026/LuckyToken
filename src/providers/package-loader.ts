@@ -7,6 +7,10 @@ import {
   type ProviderHostCapabilities,
 } from "@token/provider-contract/package";
 import { isBuiltin } from "node:module";
+import {
+  assertLocalOAuthRegistration,
+  type LocalOAuthRegistration,
+} from "@token/provider-contract/local-oauth";
 
 import { isSafeProviderId } from "./provider-id.js";
 
@@ -15,12 +19,13 @@ export type ImportProviderModule = (specifier: string) => Promise<unknown>;
 export interface LoadProviderPackagesOptions {
   readonly models: MutableModels;
   readonly providerPackages: Readonly<Record<string, unknown>>;
-  readonly host: ProviderHostCapabilities;
+  readonly host: Omit<ProviderHostCapabilities, "registerLocalOAuth">;
   readonly importModule?: ImportProviderModule;
 }
 
 export interface LoadedProviderPackages {
   readonly providerIds: readonly string[];
+  readonly localOAuthRegistrations: readonly LocalOAuthRegistration[];
 }
 
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9._-]*$/u;
@@ -89,6 +94,7 @@ export async function loadProviderPackages(
   );
   const staged: Provider[] = [];
   const stagedIds = new Set<string>();
+  const stagedLocalOAuth: LocalOAuthRegistration[] = [];
 
   for (const [specifier, configuration] of Object.entries(
     options.providerPackages,
@@ -103,13 +109,32 @@ export async function loadProviderPackages(
       const providerPackage = assertTokenProviderPackage(
         namespace.providerPackage,
       );
-      const provider = await Promise.resolve(
-        providerPackage.createProvider({
-          configuration,
-          configurationPath: path,
-          host: options.host,
-        }),
-      );
+      let localOAuth: LocalOAuthRegistration | undefined;
+      let acceptingRegistration = true;
+      let provider: Provider;
+      try {
+        provider = await Promise.resolve(
+          providerPackage.createProvider({
+            configuration,
+            configurationPath: path,
+            host: Object.freeze({
+              ...options.host,
+              registerLocalOAuth(registration: LocalOAuthRegistration) {
+                if (!acceptingRegistration) {
+                  throw new Error("Local OAuth must be registered during createProvider()");
+                }
+                assertLocalOAuthRegistration(registration);
+                if (localOAuth !== undefined) {
+                  throw new Error("Only one local OAuth registration is allowed per Provider");
+                }
+                localOAuth = Object.freeze({ ...registration });
+              },
+            }),
+          }),
+        );
+      } finally {
+        acceptingRegistration = false;
+      }
       assertProvider(provider, path);
       if (existingIds.has(provider.id) || stagedIds.has(provider.id)) {
         throw new Error(
@@ -118,6 +143,12 @@ export async function loadProviderPackages(
       }
       staged.push(provider);
       stagedIds.add(provider.id);
+      if (localOAuth !== undefined) {
+        if (localOAuth.providerId !== provider.id) {
+          throw new Error("Local OAuth registration must belong to the package's Provider");
+        }
+        stagedLocalOAuth.push(localOAuth);
+      }
     } catch (error) {
       throw new Error(
         `Failed to load Provider Package ${specifier}: ${errorMessage(error)}`,
@@ -127,5 +158,8 @@ export async function loadProviderPackages(
   }
 
   for (const provider of staged) options.models.setProvider(provider);
-  return Object.freeze({ providerIds: Object.freeze([...stagedIds]) });
+  return Object.freeze({
+    providerIds: Object.freeze([...stagedIds]),
+    localOAuthRegistrations: Object.freeze(stagedLocalOAuth),
+  });
 }

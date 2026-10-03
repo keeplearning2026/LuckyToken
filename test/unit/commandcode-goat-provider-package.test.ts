@@ -79,6 +79,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000101",
       },
     });
@@ -123,6 +124,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000108",
       },
     });
@@ -155,6 +157,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch,
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000106",
       },
     });
@@ -203,6 +206,7 @@ describe("CommandCode Goat Provider Package", () => {
           });
         },
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000109",
       },
     });
@@ -259,6 +263,7 @@ describe("CommandCode Goat Provider Package", () => {
           return openAICompletion("image accepted");
         },
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000110",
       },
     });
@@ -332,6 +337,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch,
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000107",
       },
     });
@@ -376,6 +382,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch,
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000102",
       },
     });
@@ -451,6 +458,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch,
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000104",
       },
     });
@@ -493,6 +501,7 @@ describe("CommandCode Goat Provider Package", () => {
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000103",
       },
     });
@@ -522,6 +531,7 @@ describe("CommandCode Goat Provider Package", () => {
             { status: 200, headers: { "content-type": "text/event-stream" } },
           ),
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000105",
       },
     });

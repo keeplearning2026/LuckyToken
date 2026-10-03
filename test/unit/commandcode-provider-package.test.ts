@@ -22,6 +22,7 @@ describe("CommandCode Provider Package", () => {
       host: {
         fetch: async () => new Response(null, { status: 500 }),
         now: () => 1,
+        registerLocalOAuth: () => undefined,
         createUuid: () => "00000000-0000-4000-8000-000000000001",
       },
     });
@@ -46,6 +47,7 @@ describe("CommandCode Provider Package", () => {
         host: {
           fetch: async () => new Response(null, { status: 500 }),
           now: () => 1,
+          registerLocalOAuth: () => undefined,
           createUuid: () => "00000000-0000-4000-8000-000000000002",
         },
       }),

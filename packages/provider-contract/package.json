@@ -7,6 +7,10 @@
     "dist"
   ],
   "exports": {
+    "./local-oauth": {
+      "types": "./dist/local-oauth.d.ts",
+      "import": "./dist/local-oauth.js"
+    },
     "./package": {
       "types": "./dist/package.d.ts",
       "import": "./dist/package.js"

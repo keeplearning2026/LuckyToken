@@ -1,9 +1,6 @@
 import type { AuthType } from "@earendil-works/pi-ai";
 
-import type {
-  AcquisitionKind,
-  LocalOAuthAcquisition,
-} from "./acquisition.js";
+import type { AcquisitionKind } from "./acquisition.js";
 
 export interface CredentialProfileProjection {
   readonly credentialId: string;
@@ -110,7 +107,6 @@ export interface AcquireLocalProfileInput {
   readonly providerId: string;
   readonly displayName: string;
   readonly note?: string;
-  readonly acquisition: LocalOAuthAcquisition;
   readonly signal?: AbortSignal;
 }
 

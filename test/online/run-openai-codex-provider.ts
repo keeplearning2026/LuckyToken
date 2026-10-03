@@ -142,7 +142,6 @@ async function run(): Promise<void> {
     const localLogin = await composition.credentialManagement.acquireLocal({
       providerId: PROVIDER_ID,
       displayName: "Local Codex",
-      acquisition: localMethod.acquisition,
     });
     assert.equal(localLogin.outcome, "ok");
 

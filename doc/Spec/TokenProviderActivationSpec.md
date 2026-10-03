@@ -649,6 +649,12 @@ The composition order is:
 The existing Pi/models.json composition code remains the authority for steps 1 and 2.
 
 The existing Provider Package loader remains the authority for package validation and package Provider creation.
+During `createProvider()`, a package may call `input.host.registerLocalOAuth()`
+once for its own Provider. Discovery and content parsing use the contract in
+`@token/provider-contract/local-oauth`; Token owns Profile lifecycle and external
+file reads. Provider creation and local OAuth registration are staged together,
+and any package failure publishes neither. See
+`TokenProviderCredentialProfilesSpec.md` §3.1.
 
 Bundled and external packages must be loaded through the same `@token/provider-contract` package contract.
 
@@ -2203,6 +2209,10 @@ Pi Provider metadata and typed Auth interactions already define the generic beha
 Rejected.
 
 The existing Pi `Models.login()` and Token Provider Package contract already provide the required semantics.
+
+The Token Provider Package host additionally exposes the narrow
+`registerLocalOAuth()` capability for reference discovery and content parsing;
+it carries no Profile concepts and does not replace the Pi login contract.
 
 ## 26.8 Keep the static curated alias default table
 

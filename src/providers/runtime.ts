@@ -34,16 +34,17 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { randomUUID } from "node:crypto";
+import {
+  assertLocalOAuthRegistration,
+  type LocalOAuthRegistration,
+} from "@token/provider-contract/local-oauth";
 import type {
   CredentialProfileManagement,
   ProviderAuthBindingAuthority,
   ProviderAuthBindingCapture,
 } from "../credentials/profile-contract.js";
 import { createProviderCredentialProfiles } from "../credentials/profile-authority.js";
-import {
-  createCodexLocalAcquisition,
-  type LocalOAuthAcquisition,
-} from "../credentials/acquisition.js";
+import { createCodexLocalOAuthRegistration } from "../credentials/codex-local-oauth.js";
 import { codexExternalAuthPath } from "../credentials/codex-auth.js";
 import {
   createFileProviderCredentialRecordStore,
@@ -90,8 +91,7 @@ export type ProviderSource =
 export interface ProviderRuntimeLocalAcquisitionMethod {
   readonly providerId: string;
   readonly label: () => string | undefined;
-  readonly icon: LocalOAuthAcquisition["icon"];
-  readonly acquisition: LocalOAuthAcquisition;
+  readonly icon: LocalOAuthRegistration["icon"];
 }
 
 /** One Codex native-model overlay generation (plan sections 4.6–4.8). */
@@ -144,9 +144,9 @@ export interface CreateProviderRuntimeOptions {
   /** Shared Codex native acquisition. When present, one snapshot generation
    * feeds the automatic `openai-codex` model overlay. */
   readonly nativeCatalogSource?: CodexNativeCatalogSource;
-  /** Explicit closed set of local OAuth acquisition capabilities. Defaults
-   * to the one Codex local acquisition bound to `codexHome`. */
-  readonly localAcquisitions?: readonly LocalOAuthAcquisition[];
+  /** Built-in local OAuth registrations. Provider packages register through
+   * host.registerLocalOAuth(). Defaults to Codex bound to codexHome. */
+  readonly localOAuthRegistrations?: readonly LocalOAuthRegistration[];
   readonly credentialUsage?: (
     credentialIds: readonly string[],
   ) => readonly {
@@ -226,9 +226,9 @@ export async function createProviderRuntime(
   const createUuid = options.createUuid ?? randomUUID;
   const codexHome = options.codexHome ?? resolveCodexHome();
   let currentProviders: () => readonly Provider[] = () => Object.freeze([]);
-  const localAcquisitions: readonly LocalOAuthAcquisition[] = Object.freeze([
-    ...(options.localAcquisitions ?? [
-      createCodexLocalAcquisition({
+  let localOAuthRegistrations: readonly LocalOAuthRegistration[] = Object.freeze([
+    ...(options.localOAuthRegistrations ?? [
+      createCodexLocalOAuthRegistration({
         authPath: codexExternalAuthPath(codexHome),
         label: () =>
           currentProviders().find(
@@ -251,6 +251,7 @@ export async function createProviderRuntime(
     providers: () => currentProviders(),
     createId: createUuid,
     now,
+    localOAuthRegistrations: () => localOAuthRegistrations,
     ambientStatus: (providerId) =>
       modelsJson?.providers[providerId]?.apiKey === undefined
         ? "unknown"
@@ -350,7 +351,7 @@ export async function createProviderRuntime(
       );
     }
   }
-  await loadProviderPackages({
+  const bundledLoaded = await loadProviderPackages({
     models: mutableModels,
     providerPackages: bundled,
     host: Object.freeze({
@@ -376,6 +377,23 @@ export async function createProviderRuntime(
       ? {}
       : { importModule: options.importModule }),
   });
+
+  const localOAuthProviderIds = new Set<string>();
+  localOAuthRegistrations = Object.freeze([
+    ...localOAuthRegistrations,
+    ...bundledLoaded.localOAuthRegistrations,
+    ...userLoaded.localOAuthRegistrations,
+  ].map((registration) => {
+    assertLocalOAuthRegistration(registration);
+    if (mutableModels.getProvider(registration.providerId) === undefined) {
+      throw new Error("Local OAuth registration requires an available Provider");
+    }
+    if (localOAuthProviderIds.has(registration.providerId)) {
+      throw new Error("Only one local OAuth registration is allowed per Provider");
+    }
+    localOAuthProviderIds.add(registration.providerId);
+    return Object.freeze({ ...registration });
+  }));
 
   const modelsJsonProviderIdSet: ReadonlySet<string> = Object.freeze(
     new Set(modelsJsonProviderIds),
@@ -526,12 +544,11 @@ export async function createProviderRuntime(
   return Object.freeze({
     models: served,
     localAcquisitionMethods: Object.freeze(
-      localAcquisitions.map((acquisition) =>
+      localOAuthRegistrations.map((registration) =>
         Object.freeze({
-          providerId: acquisition.providerId,
-          label: acquisition.label,
-          icon: acquisition.icon,
-          acquisition,
+          providerId: registration.providerId,
+          label: registration.label,
+          icon: registration.icon,
         }),
       ),
     ),
