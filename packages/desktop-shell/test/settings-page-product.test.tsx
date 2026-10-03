@@ -30,6 +30,33 @@ const settingsResult = () => ({
 });
 
 describe("Settings product slice", () => {
+  it("persists the automatic local login switch and preserves its value on save failure", async () => {
+    const key = "credentials.autoLocalOAuth.enabled";
+    let enabled = false;
+    let fail = false;
+    const executeSettings = vi.fn<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>(async (command) => {
+      if (command.command === "set" && command.key === key && !fail) enabled = command.value === true;
+      return {
+        outcome: command.command === "set" ? (fail ? "storage_failure" : "applied") : "ok",
+        settings: { [key]: {
+          key, type: "boolean", default: false, value: enabled,
+          validation: { type: "boolean" }, sensitivity: "public", applyMode: "hot-apply",
+        } },
+      };
+    });
+    await render(createFakeDesktopApi({ control: { executeSettings } }));
+    expect(container.textContent).toContain("Automatic local OAuth login");
+    await clickAria("Enable automatic local OAuth login");
+    expect(executeSettings).toHaveBeenCalledWith({ command: "set", key, value: true });
+    expect(container.querySelector('button[aria-label="Disable automatic local OAuth login"]')?.getAttribute("aria-pressed")).toBe("true");
+    fail = true;
+    await clickAria("Disable automatic local OAuth login");
+    expect(container.textContent).toContain("could not be saved");
+    expect(container.querySelector('button[aria-label="Disable automatic local OAuth login"]')?.getAttribute("aria-pressed")).toBe("true");
+    fail = false;
+    await clickAria("Disable automatic local OAuth login");
+    expect(container.textContent).toContain("Existing Profiles are kept");
+  });
   it("shows one unified history total", async () => {
     await render(createFakeDesktopApi({ control: { queryHistory: async () => ({ range: "all", counts: { requestJourneys: 2, runtimeEvents: 1 } }) } }));
     await click("Diagnostics");
@@ -450,7 +477,7 @@ describe("Settings product slice", () => {
   it("rejects a usage timeout that is not shorter than the refresh interval", async () => {
     const intervalKey = "providerUsage.refreshIntervalMinutes";
     const timeoutKey = "providerUsage.refreshTimeoutSeconds";
-    const executeSettings = vi.fn(async () => ({
+    const executeSettings = vi.fn<ReturnType<typeof createFakeDesktopApi>["control"]["executeSettings"]>(async () => ({
       outcome: "ok" as const,
       settings: {
         [intervalKey]: {
@@ -482,7 +509,7 @@ describe("Settings product slice", () => {
     });
     await clickAria("Save usage timeout");
 
-    expect(executeSettings).toHaveBeenCalledTimes(1);
+    expect(executeSettings.mock.calls.filter(([command]) => command.command === "set")).toHaveLength(0);
     expect(container.textContent).toContain("Timeout must be less than 60 seconds.");
   });
 });

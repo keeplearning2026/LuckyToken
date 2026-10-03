@@ -59,7 +59,10 @@ no source is selected. `read` synchronously parses file contents into a Pi
 `OAuthCredential`, or returns `undefined` for unsupported/invalid content. These
 functions receive no Profile. Token canonicalizes the path, performs bounded
 reads, validates the result, and creates/persists the Profile only after success.
-Keep labels non-secret. Discovery must observe cancellation and complete promptly.
+Keep labels non-secret. Discovery must run without user interaction, observe
+cancellation, complete promptly, and return `null` when no source is available.
+Token may invoke the same login operation automatically when the user enables
+automatic local OAuth connection; registration alone never creates a Profile.
 
 Token implements local OAuth `modify` as a fresh read with the same parser. It
 never executes Pi's mutation callback, writes/copies/deletes the external file,

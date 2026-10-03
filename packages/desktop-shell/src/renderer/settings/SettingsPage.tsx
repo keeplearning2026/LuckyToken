@@ -4,6 +4,7 @@ import type { TokenDesktopApi } from "../../shared/desktop-api.js";
 import { AdvancedSettings } from "./AdvancedSettings.js";
 import { DataSettings } from "./DataSettings.js";
 import { GeneralSettings } from "./GeneralSettings.js";
+import { LocalLoginSettings } from "./LocalLoginSettings.js";
 import { ProviderUsageSettings } from "./ProviderUsageSettings.js";
 import type { AgentIntegrationControls } from "./useAgentIntegrations.js";
 
@@ -63,6 +64,7 @@ export function SettingsPage({ api, agentIntegrations }: { readonly api: TokenDe
         {section === "general" ? (
           <>
             <GeneralSettings api={api} />
+            <LocalLoginSettings api={api} />
             <ProviderUsageSettings api={api} />
           </>
         ) : section === "diagnostics" ? (

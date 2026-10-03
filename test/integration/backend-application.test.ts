@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   connectControlPlane,
   controlPlaneVersion,
@@ -157,6 +157,85 @@ async function writeInjectableModel(
 }
 
 describe("Backend Application public lifecycle seam", () => {
+  it("automatically connects local OAuth on enable and restart, and respects disable", async () => {
+    const { configPath, descriptorPath } = await fixture();
+    const codexHome = join(dirname(configPath), "automatic-local-codex-home");
+    await mkdir(codexHome);
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const authDocument = JSON.stringify({ auth_mode: "chatgpt", tokens: {
+      access_token: [encode({ alg: "none" }), encode({
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        "https://api.openai.com/auth": { chatgpt_account_id: "automatic-fixture-account" },
+      }), "signature"].join("."),
+      refresh_token: "automatic-fixture-refresh", account_id: "automatic-fixture-account",
+    } });
+    const authPath = join(codexHome, "auth.json");
+    await writeFile(authPath, authDocument);
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No external network in local login test"));
+    let client: Awaited<ReturnType<typeof connectControlPlane>> | undefined;
+    let application: RunningTokenApplication | undefined;
+    const start = async () => {
+      const started = await startTokenApplication({ configPath, descriptorOverride: descriptorPath, ownerKind: "cli" });
+      if (started.kind !== "running") throw new Error("Expected running Backend");
+      application = started.application;
+      applications.push(application);
+      client = await connectControlPlane(await readControlPlaneDescriptor(descriptorPath), {
+        createRequestId: randomUUID, pipeConnector: createNodePipeTransport(),
+      });
+      await client.hello(controlPlaneVersion);
+    };
+    const state = async () => {
+      const query = await client!.executeCredentialProfilesCommand({ command: "query" });
+      return query.state.providers.find((provider) => provider.providerId === "openai-codex")!;
+    };
+    const stop = async () => {
+      await client?.close();
+      client = undefined;
+      await application?.close();
+      application = undefined;
+    };
+    try {
+      await start();
+      expect((await state()).profiles).toEqual([]);
+      expect((await client!.getStatus()).settings?.["credentials.autoLocalOAuth.enabled"]?.value).toBe(false);
+      const enabled = await client!.executeSettingsCommand({ command: "set", key: "credentials.autoLocalOAuth.enabled", value: true });
+      expect(enabled.outcome).toBe("applied");
+      await vi.waitFor(async () => expect((await state()).profiles).toHaveLength(1));
+      const first = await state();
+      expect(first.profiles[0]?.displayName).toBe("OpenAI Codex local login");
+      const removed = await client!.executeCredentialProfilesCommand({
+        command: "remove", providerId: "openai-codex", credentialId: first.profiles[0]!.credentialId, expectedRevision: first.revision!,
+      });
+      expect(removed.outcome).toBe("ok");
+      expect((await state()).profiles).toEqual([]);
+      await client!.executeRuntimeCommand("restart");
+      expect((await state()).profiles).toEqual([]);
+      await stop();
+      await start();
+      await vi.waitFor(async () => expect((await state()).profiles).toHaveLength(1));
+      const second = await state();
+      expect(second.profiles[0]?.credentialId).not.toBe(first.profiles[0]?.credentialId);
+      const disabled = await client!.executeSettingsCommand({ command: "set", key: "credentials.autoLocalOAuth.enabled", value: false });
+      expect(disabled.outcome).toBe("applied");
+      expect((await state()).profiles).toHaveLength(1);
+      await client!.executeCredentialProfilesCommand({
+        command: "remove", providerId: "openai-codex", credentialId: second.profiles[0]!.credentialId, expectedRevision: second.revision!,
+      });
+      await stop();
+      await start();
+      expect((await state()).profiles).toEqual([]);
+      expect((await client!.getStatus()).settings?.["credentials.autoLocalOAuth.enabled"]?.value).toBe(false);
+      expect(await readFile(authPath, "utf8")).toBe(authDocument);
+    } finally {
+      await stop();
+      fetch.mockRestore();
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  }, 30_000);
+
   it("ignores obsolete client-auth files and exposes no token-management surface", async () => {
     const { configPath, descriptorPath } = await fixture();
     const authPath = join(dirname(configPath), "client-auth", "anthropic-messages.json");

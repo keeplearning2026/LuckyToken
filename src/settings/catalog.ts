@@ -206,6 +206,14 @@ const definitions: readonly SettingDefinition[] = Object.freeze([
     applyMode: "hot-apply",
   }),
   Object.freeze({
+    key: "credentials.autoLocalOAuth.enabled",
+    type: "boolean",
+    default: false,
+    validation: Object.freeze({ type: "boolean" }),
+    sensitivity: "public",
+    applyMode: "hot-apply",
+  }),
+  Object.freeze({
     key: "providerUsage.refreshIntervalMinutes",
     type: "number",
     default: 15,

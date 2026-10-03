@@ -107,7 +107,9 @@ Pi CredentialStore Adapter
 Pi AI
 ```
 
-Credential Management controls only user-initiated management work. Runtime credential reads/refresh and 429 switching do not pass through it.
+Credential Management controls explicit management work, including local OAuth
+additions initiated by the enabled automatic setting. Runtime credential
+reads/refresh and 429 switching do not pass through it.
 
 ### 3.1 Acquisition module
 
@@ -132,7 +134,7 @@ cases, Token alone creates and persists the Profile; neither Pi nor the Provider
 login/registration callbacks need a Profile concept.
 
 Registering a local OAuth capability does not create a Profile. Only a successful
-user-initiated addition publishes one. Registration functions are runtime code;
+manual or enabled automatic addition publishes one. Registration functions are runtime code;
 the persisted local Profile contains the external reference, not those functions
 or a copied credential snapshot.
 
@@ -192,6 +194,51 @@ If `openai-codex` registers `local_oauth`, that method is a Provider capability 
 There is no `integrations.codex.localLogin` capability switch.
 
 Acquisition failure creates no Profile. Ordinary user acquisition/login always targets a new Profile.
+
+#### Automatic local OAuth connection
+
+`credentials.autoLocalOAuth.enabled` is a public boolean setting, defaults to
+`false`, and applies immediately. It controls automatic invocation only; manual
+local OAuth remains available regardless of this setting.
+
+One Backend-owned automatic module uses the existing Profile auth `query` and
+`login` command handler, which is also called by the UI. Its only credential
+dependency is that public handler. It reads the projected login options, selects
+`local_oauth` options with `state === "available"`, and submits an ordinary login
+command using `providerId`, `acquisitionKind: "local_oauth"`, and the display name
+`<Provider name> local login`. It does not import Provider implementations, call
+registrations directly, inspect credential files, or own Profile persistence.
+
+Enabling the setting on an initialized Backend runs one background batch immediately.
+Every Backend startup with the setting enabled runs one batch after the existing
+Agent startup apply, application lifecycle and owner monitoring are initialized.
+Setting commands during bootstrap record policy only; the batch starts with the
+latest setting once initialization is complete. It never runs concurrently with
+initial Agent snapshot acquisition. Like a manual UI login after startup, it
+does not reapply Agent integrations or modify their startup policy. Data Plane
+restarts and opening a UI page do not trigger it. There is no polling. Existing local Profiles, including disabled
+Profiles, project `already_connected` and are skipped. Removing one does not cause
+immediate recreation; it is added again on the next enabled Backend startup, or
+after switching the setting off and back on. No deletion opt-out is persisted.
+
+The existing login entry point owns the management guard, cancellation, duplicate
+and name validation, registered acquisition/parser dispatch, Profile publication
+and post-login catalog work. A name conflict fails that addition without renaming
+or overwriting an existing Profile. The first Profile follows the existing initial
+selection rule; adding to a nonempty Provider preserves the current selection.
+Each Provider is attempted sequentially and one failure does not stop other
+Providers or Backend startup. Outcomes are reported through existing Runtime
+Events, without credential contents, paths or exception text. Result notification
+is no-throw and nonblocking; a slow or unavailable status subscriber/reporter cannot
+hold the next login or automatic-module cleanup. Application owns model
+reconciliation and status publication outside the login batch lifetime.
+
+Turning the setting off cancels the automatic batch and retains existing Profiles.
+Backend cleanup also cancels and joins the batch before closing its dependencies.
+Rapid off/on changes serialize batches and wait for cancelled work to settle.
+Provider `acquire` callbacks must discover existing local references without user
+interaction, honor cancellation, and return `null` when no source is available.
+Neither Pi nor Provider callbacks receive automatic policy or Profile state.
 
 #### 3.1.1 Developer guide: adding `local_oauth` to a Provider package
 
@@ -753,7 +800,8 @@ A user acquisition/login always creates a new Profile.
 
 ### 7.1 Global Credential Management Guard
 
-All user-initiated Credential/Profile management operations share one global exclusive guard.
+All user-initiated Credential/Profile management operations and automatic local
+OAuth additions share one global exclusive guard.
 
 The guard is fail-fast, not a queue:
 
@@ -796,7 +844,8 @@ cancelManagementOperation(operationId)
 
 Cancellation never force-unlocks the guard independently of the operation. The operation must observe the abort, terminate, and release its own lease from `finally`.
 
-The guard covers all user-initiated Credential/Profile mutations, including:
+The guard covers all user-initiated Credential/Profile mutations and automatic
+local OAuth acquisition, including:
 
 - `api_key`, `oauth` and `local_oauth` acquisition;
 - activate;
@@ -805,7 +854,9 @@ The guard covers all user-initiated Credential/Profile mutations, including:
 - reorder;
 - remove.
 
-While one guarded operation is active, no other user Credential/Profile management operation may start.
+While one guarded operation is active, no other manual or automatic
+Credential/Profile management operation may start. Automatic attempts receive
+the same busy outcome and skip that Provider for the current batch.
 
 The guard is an in-process Credential Management lease owned by the Backend credential-management authority, not by the Control Plane transport and not by persisted credential state. It must never survive process restart as a stored lock.
 
@@ -1023,7 +1074,7 @@ Provider-specific implementations must not place Provider-private types into Pro
 27. Disabling or removing the active Profile clears active selection and never automatically activates another Profile.
 28. `local_oauth` is singleton per Provider, regardless of implementation or external path.
 29. Within one Provider, `displayName` is case-insensitively unique; `credentialId` remains the actual Profile identity.
-30. Every user-initiated Credential/Profile management mutation executes under one global exclusive Credential Management Guard; two such operations never overlap.
+30. Every user-initiated Credential/Profile management mutation and automatic local OAuth addition executes under one global exclusive Credential Management Guard; two such operations never overlap.
 31. Every guarded operation has a unique opaque Credential Management `operationId`; it is independent of protocol/HTTP/Pi/Control Plane request identifiers.
 32. Guard acquisition is fail-fast and never queued; a second operation returns `management_operation_in_progress` with bounded current non-secret operation metadata.
 33. The current guarded operation can be explicitly cancelled by `operationId`; cancellation aborts the operation and the operation itself releases the guard from `finally`. Cancellation must never directly force-unlock a live operation.

@@ -12,6 +12,7 @@ import { createProviderRuntime } from "../../src/providers/runtime.js";
 import { createBundledProviderConfigurations } from "../../src/providers/bundled-configuration.js";
 import { createCredentialProfilesControlPlaneHandlers } from "../../src/credentials/profile-control-plane.js";
 import { createCredentialManagementGuard } from "../../src/credentials/management.js";
+import { createAutomaticLocalLogin } from "../../src/credentials/automatic-local-login.js";
 import { bundledProviderImportModule } from "../support/bundled-provider-packages.js";
 import { createSelectOAuthProvider } from "../support/auth-login-fixture.js";
 
@@ -87,6 +88,82 @@ async function authFor(runtime: Awaited<ReturnType<typeof runtimeFor>>) {
 }
 
 describe("Provider local OAuth registration", () => {
+  it("does not publish after automatic login is disabled while reference discovery is pending", async () => isolated(async (root) => {
+    const path = join(root, "cancelled-automatic-owner.json");
+    await writeFile(path, "owner:cancelled-access");
+    let finish: (() => void) | undefined;
+    const acquire = vi.fn(async () => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return { owner: "external" as const, path };
+    });
+    const read = vi.fn(localCredential);
+    const runtime = await runtimeFor(root, {
+      providerId, label: () => "Local", icon: "terminal", acquire, read,
+    });
+    const automatic = createAutomaticLocalLogin({ auth: handlersFor(runtime).auth });
+    automatic.start();
+    try {
+      automatic.setEnabled(true);
+      await vi.waitFor(() => expect(finish).toBeDefined());
+      automatic.setEnabled(false);
+      finish!();
+      await automatic.close();
+      expect((await runtime.credentialManagement.query([providerId])).providers[0]?.profiles ?? []).toEqual([]);
+      expect(read).not.toHaveBeenCalled();
+      expect(await readFile(path, "utf8")).toBe("owner:cancelled-access");
+    } finally { finish?.(); await automatic.close(); }
+  }));
+
+  it("automatically adds a registered Provider through the same login entry and preserves existing selection", async () => isolated(async (root) => {
+    const path = join(root, "automatic-owner.json");
+    const raw = "owner:automatic-access";
+    await writeFile(path, raw);
+    const acquire = vi.fn(async () => ({ owner: "external" as const, path }));
+    const registration: LocalOAuthRegistration = {
+      providerId, label: () => "Local", icon: "terminal", acquire, read: localCredential,
+    };
+    const runtime = await runtimeFor(root, registration);
+    const handlers = handlersFor(runtime);
+    const outcomes: string[] = [];
+    const automatic = createAutomaticLocalLogin({
+      auth: handlers.auth, onResult: ({ outcome }) => { outcomes.push(outcome); },
+    });
+    automatic.start();
+    try {
+      // An existing managed login stays selected after automatic local addition.
+      const managed = await handlers.auth({ command: "login", providerId, acquisitionKind: "oauth", displayName: "Managed" }, {
+        signal: new AbortController().signal, notify: async () => undefined, prompt: async () => "browser",
+      });
+      expect(managed.outcome).toBe("ok");
+      const active = managed.state.providers.find((provider) => provider.providerId === providerId)!.activeCredentialId;
+      automatic.setEnabled(true);
+      await vi.waitFor(() => expect(outcomes).toContain("ok"));
+      const state = (await runtime.credentialManagement.query([providerId])).providers[0]!;
+      expect(state.profiles).toHaveLength(2);
+      expect(state.activeCredentialId).toBe(active);
+      const local = state.profiles.find((profile) => profile.acquisitionKind === "local_oauth")!;
+      expect(local.displayName).toBe(`${runtime.models.getProvider(providerId)!.name} local login`);
+      expect(acquire).toHaveBeenCalledTimes(1);
+      const disabled = await handlers.credentials({ command: "set_enabled", providerId, credentialId: local.credentialId, expectedRevision: state.revision!, enabled: false });
+      expect(disabled.outcome).toBe("ok");
+      automatic.setEnabled(false);
+      automatic.setEnabled(true);
+    } finally { await automatic.close(); }
+    // Restart with a disabled local Profile: the public option marks it connected.
+    const restarted = await runtimeFor(root, registration);
+    const query = vi.fn(handlersFor(restarted).auth);
+    const next = createAutomaticLocalLogin({ auth: query });
+    next.start();
+    next.setEnabled(true);
+    await vi.waitFor(() => expect(query).toHaveBeenCalled());
+    await next.close();
+    expect(query.mock.calls.some(([command]) => command.command === "login" && command.providerId === providerId)).toBe(false);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(await readFile(path, "utf8")).toBe(raw);
+    const saved = await readFile(join(root, "pi", "credential-profiles", `${providerId}.json`), "utf8");
+    expect(saved).not.toContain("automatic-access");
+  }));
+
   it("provides a UI capability, persists one reference and restores dispatch after restart", async () => isolated(async (root) => {
     const path = join(root, "owner-auth.json");
     await writeFile(path, "owner:access-a");

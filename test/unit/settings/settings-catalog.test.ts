@@ -24,6 +24,7 @@ describe("authoritative registered settings catalog", () => {
       "protocols.anthropic-messages.enabled",
       "protocols.openai-responses.enabled",
       "application.quitDrainTimeoutMs",
+      "credentials.autoLocalOAuth.enabled",
       "providerUsage.refreshIntervalMinutes",
       "providerUsage.refreshTimeoutSeconds",
       "diagnostics.fullJourneyCapture.enabled",
@@ -38,6 +39,11 @@ describe("authoritative registered settings catalog", () => {
     ]);
 
     const anthropic = byKey.get("protocols.anthropic-messages.enabled");
+    expect(byKey.get("credentials.autoLocalOAuth.enabled")).toMatchObject({
+      type: "boolean", default: false, value: false, applyMode: "hot-apply",
+    });
+    expect(registry.validate("credentials.autoLocalOAuth.enabled", true)).toEqual({ valid: true });
+    expect(registry.validate("credentials.autoLocalOAuth.enabled", "true")).toMatchObject({ valid: false });
     expect(anthropic).toMatchObject({
       key: "protocols.anthropic-messages.enabled",
       type: "boolean",

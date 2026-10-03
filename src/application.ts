@@ -41,6 +41,7 @@ import {
 import { createProductionControlPipe } from "./control-pipe-composition.js";
 import { createCredentialProfilesControlPlaneHandlers } from "./credentials/profile-control-plane.js";
 import { createCredentialManagementGuard } from "./credentials/management.js";
+import { createAutomaticLocalLogin } from "./credentials/automatic-local-login.js";
 import {
   createDiagnosticsAuthority,
   createUnavailableDiagnosticsAuthority,
@@ -468,6 +469,7 @@ async function startNormalApplication(options: {
     | ReturnType<typeof createProviderUsageAuthority>
     | undefined;
   let providerUsageAutoRefresh: ReturnType<typeof createProviderUsageAutoRefresh> | undefined;
+  let automaticLocalLogin: ReturnType<typeof createAutomaticLocalLogin> | undefined;
   let cleanupPromise: Promise<void> | undefined;
   let lifecycle: ControlledTokenApplication | undefined;
   let desktopOwnerLease: DesktopOwnerLeaseAuthority | undefined;
@@ -489,6 +491,8 @@ async function startNormalApplication(options: {
 
   const closeOwnedResources = async (): Promise<readonly unknown[]> => {
     const failures: unknown[] = [];
+    await automaticLocalLogin?.close().catch((error: unknown) => failures.push(error));
+    automaticLocalLogin = undefined;
     await providerUsageAuthorityForCleanup
       ?.close()
       .catch((error: unknown) => failures.push(error));
@@ -870,6 +874,18 @@ async function startNormalApplication(options: {
       return result;
     };
     const providerProfileAuthCommandHandler = profileControlPlane.auth;
+    automaticLocalLogin = createAutomaticLocalLogin({
+      auth: providerProfileAuthCommandHandler,
+      onResult: async ({ outcome }) => {
+        ownedDiagnosticsAuthority.observeRuntime({
+          level: outcome === "ok" || outcome === "cancelled" ? "info" : "warning",
+          classification: "automatic_local_oauth",
+          safeMessage: `Automatic local OAuth login outcome: ${outcome}.`,
+        });
+        await reconcilePublicModels(catalogController.snapshot());
+        await controlPlane?.publishStatus(lastPublishedStatus);
+      },
+    });
     // The Catalog refresh controller binds to the Provider Runtime BEFORE
     // Data Plane startup and stays bound for the Backend lifetime (Spec
     // §11.2): stopping the Data Plane never aborts the Catalog. Profile state
@@ -1253,6 +1269,15 @@ async function startNormalApplication(options: {
         ) {
           providerUsageAutoRefresh?.reschedule();
         }
+        if (
+          command.command === "set" &&
+          command.key === "credentials.autoLocalOAuth.enabled" &&
+          result.outcome === "applied"
+        ) {
+          automaticLocalLogin?.setEnabled(
+            result.settings["credentials.autoLocalOAuth.enabled"]?.value === true,
+          );
+        }
         return result;
       },
       settingsProjection: () => settingsRegistry.snapshot(),
@@ -1498,6 +1523,15 @@ async function startNormalApplication(options: {
       }, DESKTOP_OWNER_LEASE_CHECK_INTERVAL_MS);
       desktopOwnerLeaseTimer.unref();
     }
+    // Automatic login is the same operation as a UI login after initialization.
+    // Keep the initial Agent snapshot and other startup work deterministic;
+    // setting commands arriving during bootstrap only record the desired policy.
+    automaticLocalLogin.setEnabled(
+      settingsRegistry.query(["credentials.autoLocalOAuth.enabled"])[
+        "credentials.autoLocalOAuth.enabled"
+      ]?.value === true,
+    );
+    automaticLocalLogin.start();
     return { kind: "running", application: lifecycle };
   } catch (error) {
     await closeOwnedResources();
