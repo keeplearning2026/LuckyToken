@@ -35,6 +35,7 @@ import type {
   AnthropicToolChoice,
 } from "./semantic/source-semantics.js";
 import { immutableJsonObject } from "./semantic/immutable-json.js";
+import { anthropicEnvelopeContext } from "./request-context.js";
 import {
   validateAnthropicSourceContentBlock,
   validateAnthropicSystemSourceBlock,
@@ -1561,10 +1562,174 @@ function budgetLevel(budget: number): "minimal" | "low" | "medium" | "high" {
   return "high";
 }
 
+export interface AnthropicMaxContext {
+  readonly mode: "max";
+  readonly context: Context;
+  readonly options: Partial<ModelsSimpleStreamOptions>;
+  readonly notices: readonly ConversionNotice[];
+}
+
+/** Pure partial conversion, never a Semantic invocation or Native body owner. */
+function convertAnthropicMaxContext(value: unknown, receivedAt: number): AnthropicMaxContext {
+  if (!isRecord(value)) throw new InvalidRequest("Request body must be a JSON object");
+  const notices: ConversionNotice[] = [];
+  let omitted = false;
+  const omit = (path: string) => {
+    if (notices.length < 31) notices.push(requestNotice("anthropic_max_partial", "ignore", path));
+    else omitted = true;
+  };
+  const attempt = <T>(path: string, run: () => T): T | undefined => {
+    try { return run(); } catch (error) {
+      if (!(error instanceof InvalidRequest || error instanceof UnsupportedFeature || error instanceof RangeError)) throw error;
+      omit(path); return undefined;
+    }
+  };
+  for (const key of Object.keys(value)) if (!ANTHROPIC_CONSUMED_TOP_LEVEL_KEYS.has(key)) omit(`$.${key}`);
+  const context: Context = { messages: [] };
+  const system = attempt("$.system", () => validateSystem(cloneDemandDrivenValue(value.system)));
+  if (system !== undefined) context.systemPrompt = system;
+  const tools = [] as NonNullable<Context["tools"]>;
+  if (Array.isArray(value.tools)) for (const [index, raw] of value.tools.entries()) {
+    const path = `$.tools[${index}]`;
+    const validated = attempt(path, () => validateAnthropicTools([cloneDemandDrivenValue(raw)]));
+    for (const tool of validated ?? []) for (const omittedPath of tool.omittedJsonPaths)
+      omit(omittedPath.replace("$.tools[0]", path));
+    const converted = validated ? convertAnthropicTools(validated) : undefined;
+    if (!converted?.length) { omit(path); continue; }
+    for (const tool of converted) {
+      if (tool.constrainedSampling && tool.constrainedSampling.type === "json_schema" && tool.constrainedSampling.strict === "require") {
+        tool.constrainedSampling = { ...tool.constrainedSampling, strict: "prefer" };
+        omit(path + ".strict_execution");
+      }
+      tools.push(tool);
+    }
+  } else if (value.tools !== undefined) omit("$.tools");
+  if (tools.length) context.tools = tools;
+  const known = new Set(tools.map((tool) => tool.name));
+  const calls = new Map<string, PendingToolCall>();
+  const parts = (source: unknown, path: string): Array<{ readonly value: unknown; readonly path: string }> => {
+    if (isRecord(source) && source.type === "document" && isRecord(source.source)
+      && source.source.type === "content" && typeof source.source.content === "string") {
+      omit(path);
+      return [{ value: { type: "text", text: source.source.content }, path: path + ".source.content" }];
+    }
+    if (isRecord(source) && source.type === "document" && isRecord(source.source)
+      && source.source.type === "content" && Array.isArray(source.source.content)
+      && source.source.content.some((part) => !isRecord(part) || part.type !== "text")) {
+      omit(path);
+      return source.source.content.map((value, index) => ({ value, path: `${path}.source.content[${index}]` }));
+    }
+    return [{ value: source, path }];
+  };
+  const input = Array.isArray(value.messages) ? value.messages : [];
+  if (!Array.isArray(value.messages)) omit("$.messages");
+  for (const [index, raw] of input.entries()) {
+    const path = `$.messages[${index}]`;
+    if (!isRecord(raw) || !["user", "assistant", "system"].includes(String(raw.role))) { omit(path); continue; }
+    const blocks: ConvertedBlock[] = [];
+    const content = typeof raw.content === "string" ? [{ type: "text", text: raw.content }]
+      : Array.isArray(raw.content) ? raw.content : [];
+    if (typeof raw.content !== "string" && !Array.isArray(raw.content)) omit(path + ".content");
+    for (const [blockIndex, rawBlock] of content.entries()) for (const { value: source, path: blockPath } of parts(rawBlock, `${path}.content[${blockIndex}]`)) {
+      const localNotices: ConversionNotice[] = [];
+      const converted = attempt(blockPath, () => {
+        const block = cloneDemandDrivenValue(source);
+        if (isRecord(block) && block.type === "tool_result" && Array.isArray(block.content)) {
+          const retained: unknown[] = [];
+          for (const [nestedIndex, nested] of block.content.entries()) for (const candidate of parts(nested, `${blockPath}.content[${nestedIndex}]`)) {
+            if (attempt(candidate.path, () => {
+              validateContentBlock(candidate.value, { hasImages: false, hasThinking: false }, "user");
+              const part = convertBlock(candidate.value as Record<string, unknown>, [], known, localNotices, { unknownContent: "ignore" }, candidate.path);
+              if (part?.type !== "text" && part?.type !== "image" && part?.type !== "transcript") {
+                omit(candidate.path); return false;
+              }
+              return true;
+            }) === true) retained.push(candidate.value);
+          }
+          block.content = retained;
+        }
+        validateContentBlock(block, { hasImages: false, hasThinking: false }, raw.role === "assistant" ? "assistant" : "user");
+        const matched = isRecord(block) && typeof block.tool_use_id === "string" ? calls.get(block.tool_use_id) : undefined;
+        return convertBlock(block as Record<string, unknown>, matched ? [matched] : [], known, localNotices, { unknownContent: "ignore" }, blockPath);
+      });
+      for (const notice of localNotices) {
+        if (notices.length < 31) notices.push(notice); else omitted = true;
+      }
+      if (converted) blocks.push(converted);
+    }
+    if (raw.role === "assistant") {
+      const visible = blocks.filter((block) => block.type !== "image" && block.type !== "toolResult");
+      if (visible.length !== blocks.length) omit(path + ".content");
+      context.messages.push(convertHistoricalAssistant(visible, typeof value.model === "string" ? value.model : "Token-envelope-query", receivedAt));
+      for (const block of visible) if (block.type === "toolUse") {
+        if (calls.has(block.id)) omit(path + ".content.duplicate_tool_id");
+        else calls.set(block.id, { id: block.id, name: block.name });
+      }
+    } else if (raw.role === "system") {
+      context.messages.push({ role: "system", content: blocks.flatMap((block) => block.type === "text" ? [block] : []), timestamp: receivedAt });
+    } else {
+      let ordinary: Array<TextContent | ImageContent> = [];
+      const flush = () => {
+        if (ordinary.length) context.messages.push({ role: "user", content: ordinary, timestamp: receivedAt });
+        ordinary = [];
+      };
+      for (const block of blocks) {
+        if (block.type === "toolResult") {
+          flush();
+          context.messages.push({ role: "toolResult", toolCallId: block.toolUseId, toolName: block.toolName,
+            content: block.content, isError: block.isError, timestamp: receivedAt });
+          calls.delete(block.toolUseId);
+        } else if (block.type === "text" || block.type === "image") ordinary.push(block);
+        else if (block.type === "transcript") ordinary.push({ type: "text", text: block.text });
+        else omit(path + ".content");
+      }
+      flush();
+      if (!blocks.length) context.messages.push({ role: "user", content: [], timestamp: receivedAt });
+    }
+  }
+  const options: Partial<ModelsSimpleStreamOptions> = {};
+  if (Number.isSafeInteger(value.max_tokens) && Number(value.max_tokens) > 0) options.maxTokens = Number(value.max_tokens);
+  else if (value.max_tokens !== undefined) omit("$.max_tokens");
+  if (typeof value.temperature === "number" && Number.isFinite(value.temperature) && value.temperature >= 0 && value.temperature <= 1)
+    options.temperature = value.temperature;
+  else if (value.temperature !== undefined) omit("$.temperature");
+  const choice = attempt("$.tool_choice", () => validateToolChoice(cloneDemandDrivenValue(value.tool_choice)));
+  if (choice?.kind === "auto" || choice?.kind === "none") options.toolChoice = choice.kind;
+  else if (choice) omit("$.tool_choice");
+  if (choice?.kind === "auto" && choice.disableParallelToolUse) omit("$.tool_choice.disable_parallel_tool_use");
+  const thinking = attempt("$.thinking", () => validateThinking(cloneDemandDrivenValue(value.thinking)));
+  const effort = attempt("$.output_config.effort", () => validateOutputConfig(cloneDemandDrivenValue(value.output_config)));
+  if (thinking?.kind === "enabled" || thinking?.kind === "adaptive")
+    options.reasoning = effort?.kind === "specified" ? effort.level : thinking.kind === "enabled" ? budgetLevel(thinking.budgetTokens) : "high";
+  if (thinking?.kind === "disabled") omit("$.thinking.disabled");
+  if (isRecord(value.output_config) && Object.hasOwn(value.output_config, "format")) omit("$.output_config.format");
+  const envelope = anthropicEnvelopeContext(value, receivedAt);
+  if (envelope.tools?.length && !context.tools?.length) {
+    context.tools = envelope.tools;
+    omit("$.tools.presence_only");
+  }
+  const image = envelope.messages.find((message) => message.role === "user" && Array.isArray(message.content)
+    && message.content.some((part) => part.type === "image"));
+  const hasImages = context.messages.some((message) => (message.role === "user" || message.role === "toolResult")
+    && Array.isArray(message.content) && message.content.some((part) => part.type === "image"));
+  if (image && !hasImages) { context.messages.unshift(image); omit("$.messages.image_presence_only"); }
+  const tail = envelope.messages.at(-1)!;
+  const last = context.messages.at(-1);
+  if (!last || (tail.role === "user" ? last.role !== "user" : last.role === "user" || last.role === "system")) {
+    context.messages.push(tail); omit("$.messages.initiator_only");
+  }
+  if (omitted) notices.push(requestNotice("anthropic_max_notices_bounded", "ignore", "$"));
+  return { mode: "max", context, options, notices };
+}
+
+export function parseAnthropicTextInvocation(value: unknown, receivedAt: number, mode: "max"): AnthropicMaxContext;
+export function parseAnthropicTextInvocation(value: unknown, receivedAt: number, mode?: "semantic"): AnthropicRequestConversion;
 export function parseAnthropicTextInvocation(
   value: unknown,
   receivedAt: number,
-): AnthropicRequestConversion {
+  mode?: "semantic" | "max",
+): AnthropicRequestConversion | AnthropicMaxContext {
+  if (mode === "max") return convertAnthropicMaxContext(value, receivedAt);
   return convertValidatedAnthropicRequestWithPolicy(
     validateAnthropicSourceRequest(value),
     receivedAt,

@@ -30,6 +30,9 @@ import {
 import { extractAnthropicNativeTerminalUsage } from "./usage.js";
 
 export interface AnthropicProviderNativeLaneOptions {
+  /** Infrastructure injection seam; default is the certified Native sender.
+   * The Pi query prototype is composed here only by experiment tests. */
+  readonly requestSender?: typeof passthroughAnthropicRequest;
   readonly models: Pick<Models, "getAuth">;
   readonly bindings: Pick<
     ProviderAuthBindingAuthority,
@@ -313,7 +316,7 @@ export function createAnthropicProviderNativeLane(
                   input.onExecutionStart();
                 }
                 upstreamResponse = await raceWithSignal(
-                  passthroughAnthropicRequest({
+                  (options.requestSender ?? passthroughAnthropicRequest)({
                     model: requestModel,
                     rawBody: input.rawBody,
                     apiKey,
