@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { createModels, type CredentialStore, type Model } from "@earendil-works/pi-ai";
+import { createModels, type Api, type CredentialStore, type Model } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { createCodexLocalOAuthRegistration } from "../../src/credentials/codex-local-oauth.js";
 import { readCredentialDocumentFile } from "../../src/credentials/credential-document.js";
@@ -69,17 +69,21 @@ async function main() {
         required: ["a", "b"], additionalProperties: false }, strict: true }];
     const request = { model: model.id, instructions: "Follow the user's request.", store: false, stream: true,
       input, tools, reasoning: { effort: "medium" }, include: ["reasoning.encrypted_content"] };
+    // Reproduce the reviewed failure against the real upstream: the temporary
+    // Pi body has no strict capability, while the actual Native tool is strict.
+    const strictQueryModel = { ...model, compat: { ...model.compat, supportsStrictMode: false } };
     stage = "native-medium-tool-call";
-    const toolTurn = await native(model, request, signal);
+    const toolTurn = await native(strictQueryModel, request, signal);
     const call = toolTurn.output.find((item) => item.type === "function_call");
     assert(call && call.name === "audit_sum" && typeof call.call_id === "string");
     assert.deepEqual(JSON.parse(String(call.arguments)), { a: 2, b: 3 });
     stage = "native-medium-tool-replay";
-    const followup = await native(model, { ...request,
+    const followup = await native(strictQueryModel, { ...request,
       input: [...input, ...toolTurn.output, { type: "function_call_output", call_id: call.call_id, output: "5" }],
     }, signal);
     assert(text(followup).includes("TOKEN_NATIVE_PI_TOOL_OK 5"), "Native tool replay marker missing");
     evidence.push({ probe: "native-tool-complete-history", reasoning: "medium", outcome: "passed",
+      nativeStrict: true, piQuerySupportsStrictMode: false,
       opaqueReasoningReplayed: toolTurn.output.some((item) => item.type === "reasoning" && typeof item.encrypted_content === "string") });
     stage = "native-supported-v2-compaction";
     const compacted = await native(model, { ...request, reasoning: { effort: "low" },
@@ -105,9 +109,9 @@ async function main() {
       "External local_oauth document changed during the experiment");
   }
 
-  async function native(target: Model<string>, body: Readonly<Record<string, unknown>>, callerSignal: AbortSignal): Promise<WireResponse> {
+  async function native(target: Model<Api>, body: Readonly<Record<string, unknown>>, callerSignal: AbortSignal): Promise<WireResponse> {
     const response = await sendWithPiEnvelope(models, target, body, 1, {
-      fetch: globalThis.fetch, signal: callerSignal, pi: { sessionId: "token-pi-native-context-experiment" },
+      fetch: globalThis.fetch, signal: callerSignal, pi: { sessionId: "token-pi-native-context-experiment", timeoutMs: 30_000 },
     });
     assert.equal(response.bodyUsed, false, "Pi consumed the real response");
     assert.equal(response.status, 200, `Native upstream status ${response.status}`);

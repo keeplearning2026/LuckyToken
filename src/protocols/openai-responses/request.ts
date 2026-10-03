@@ -2855,6 +2855,12 @@ function convertResponsesMaxContext(value: unknown, receivedAt: number): Respons
     }
     if (!converted?.length) { omit(path); continue; }
     for (const tool of converted) {
+      // Max is an envelope query, not a strict-execution promise. Even a
+      // Client-valid strict schema must not stop Pi before body substitution.
+      if (tool.constrainedSampling && tool.constrainedSampling.type === "json_schema" && tool.constrainedSampling.strict === "require") {
+        tool.constrainedSampling = { ...tool.constrainedSampling, strict: "prefer" };
+        omit(path + ".strict_execution");
+      }
       if (seenNames.has(tool.name)) {
         ambiguousNames.add(tool.name);
         omit(path + ".name");
@@ -2901,7 +2907,6 @@ function convertResponsesMaxContext(value: unknown, receivedAt: number): Respons
     if (type === "reasoning" && typeof raw.encrypted_content === "string") omit(path + ".encrypted_content");
     const callKey = type === "mcp_call" || type === "local_shell_call_output" ? raw.id : raw.call_id;
     const previous = typeof callKey === "string" ? calls.get(callKey) : undefined;
-    if (resultTypes.has(String(type)) && !previous) { omit(path + ".call_id"); continue; }
     const localNotices: ConversionNotice[] = [];
     const converted = attempt(path, () => convertMessages(
       resultTypes.has(String(type)) && previous ? [previous, item] : [item],
@@ -2915,7 +2920,9 @@ function convertResponsesMaxContext(value: unknown, receivedAt: number): Respons
       messages.push(...converted.filter((message) => message.role !== "toolResult"
         || (type === "mcp_call" && typeof item.output === "string")));
     } else if (resultTypes.has(String(type))) {
-      messages.push(...converted.filter((message) => message.role === "toolResult"));
+      // The shared parser also owns named, unpaired function outputs used as
+      // user notifications. Keep them; drop only the prepended paired call.
+      messages.push(...converted.filter((message) => message.role === "toolResult" || message.role === "user"));
     } else {
       messages.push(...converted);
     }

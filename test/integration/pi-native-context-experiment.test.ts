@@ -1,8 +1,9 @@
-import { createModels, type Context, type FetchFunction, type Model, type Provider } from "@earendil-works/pi-ai";
+import { createModels, type Api, type Context, type FetchFunction, type Model, type Provider } from "@earendil-works/pi-ai";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { azureOpenAIResponsesProvider } from "@earendil-works/pi-ai/providers/azure-openai-responses";
 import { zstdDecompressSync } from "node:zlib";
+import { createServer, type RequestListener } from "node:http";
 import { describe, expect, it } from "vitest";
 import { convertResponsesRequest } from "../../src/protocols/openai-responses/request.js";
 import { sendWithPiEnvelope } from "../support/pi-native-context-transport.js";
@@ -22,7 +23,7 @@ const TOKEN = `header.${Buffer.from(JSON.stringify({
 function fixture(provider: string, api = "openai-responses", baseUrl = "https://gateway.example/v1") {
   const upstream: Provider = api === "openai-codex-responses" ? openaiCodexProvider()
     : api === "azure-openai-responses" ? azureOpenAIResponsesProvider() : openaiProvider();
-  const model: Model<string> = {
+  const model: Model<Api> = {
     id: "real-model", name: "real-model", provider, api, baseUrl, reasoning: false,
     contextWindow: 100_000, maxTokens: 10_000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -38,6 +39,22 @@ async function requestBody(request: Request) {
   const bytes = new Uint8Array(await request.clone().arrayBuffer());
   return JSON.parse(request.headers.get("content-encoding") === "zstd"
     ? zstdDecompressSync(bytes).toString("utf8") : new TextDecoder().decode(bytes));
+}
+
+async function withHttpServer(handler: RequestListener, run: (baseUrl: string) => Promise<void>) {
+  const server = createServer(handler);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing test HTTP address");
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 }
 
 describe("pure Responses envelope context mode", () => {
@@ -56,10 +73,40 @@ describe("pure Responses envelope context mode", () => {
     expect(convertResponsesRequest(body, 10, undefined, "max")).toEqual(query);
   });
 
+  it.each([undefined, null, ""])("retains supported named notification text with unpaired call_id=%s", (callId) => {
+    const body = { model: "alias", input: [
+      { type: "function_call_output", name: "thread_notification", call_id: callId, output: "representable notification" },
+      { role: "user", content: "next turn" },
+    ] };
+    const expected = [
+      { role: "user", content: [{ type: "text", text: "representable notification" }], timestamp: 10 },
+      { role: "user", content: [{ type: "text", text: "next turn" }], timestamp: 10 },
+    ];
+    expect(convertResponsesRequest(body, 10).invocation.pi.context.messages).toEqual(expected);
+    const query = convertResponsesRequest(body, 10, undefined, "max");
+    expect(query.context.messages).toEqual(expected);
+    expect(query.notices).toEqual([]);
+  });
+
   it("does not read non-consumed top-level controls", () => {
     const body = { input: "hello",
       get metadata() { throw new Error("metadata read"); } };
     expect(() => convertResponsesRequest(body, 10, undefined, "max")).not.toThrow();
+  });
+
+  it("does not turn unnamed or genuinely orphaned outputs into notification content", () => {
+    for (const item of [
+      { type: "function_call_output", output: "must not fabricate" },
+      { type: "function_call_output", name: "", call_id: "", output: "must not fabricate" },
+      { type: "function_call_output", name: "thread_notification", call_id: "unknown", output: "must not fabricate" },
+      { type: "custom_tool_call_output", name: "thread_notification", output: "must not fabricate" },
+    ]) {
+      const query = convertResponsesRequest({ model: "alias", input: [item, { role: "user", content: "next turn" }] }, 10, undefined, "max");
+      expect(query.context.messages).toEqual([
+        { role: "user", content: [{ type: "text", text: "next turn" }], timestamp: 10 },
+      ]);
+      expect(query.notices.length).toBeGreaterThan(0);
+    }
   });
 
   it("preserves the ordinary default semantic conversion", () => {
@@ -370,6 +417,499 @@ describe("Pi-owned envelope with Native body and Response", () => {
     expect(response.bodyUsed).toBe(false);
     expect(captured!.headers.get("authorization")).toBe("Bearer header-owned");
     expect(captured!.headers.get("x-auth")).toBe("resolved");
+  });
+});
+
+describe("Pi Native experiment review regressions", () => {
+  it.each(["model", "options", "both"] as const)("does not let %s samplingParams override Azure deployment", async (source) => {
+    const { models, model } = fixture("azure-openai-responses", "azure-openai-responses", "https://unit.openai.azure.com");
+    if (source !== "options") model.samplingParams = { model: "wrong-model", future_overlay: "model" };
+    const samplingParams = source === "model" ? undefined : { model: "wrong-request-model", future_overlay: "request" };
+    const body = { model: model.id, input: "hello", stream: true, future_overlay: "native" };
+    const originalModel = structuredClone(model);
+    const env = { AZURE_OPENAI_DEPLOYMENT_NAME_MAP: "real-model=intended-deployment" };
+    let sent: Request | undefined;
+    await sendWithPiEnvelope(models, model, body, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock", env, ...(samplingParams ? { samplingParams } : {}) },
+      fetch: async (input, init) => { sent = new Request(input, init); return new Response("raw"); },
+    });
+    await expect(requestBody(sent!)).resolves.toEqual({ ...body, model: "intended-deployment" });
+    // Independently use a real Pi request with no semantic overlays as oracle.
+    const oracleModel = { ...model };
+    delete oracleModel.samplingParams;
+    let oracle: Request | undefined;
+    for await (const event of models.streamSimple(oracleModel, { messages: [{ role: "user", content: "hello", timestamp: 10 }] }, {
+      apiKey: "mock", env, maxRetries: 0,
+      fetch: async (input, init) => { oracle = new Request(input, init); return new Response("stop", { status: 400 }); },
+    })) void event;
+    expect((await requestBody(oracle!)).model).toBe("intended-deployment");
+    expect(sent!.url).toBe(oracle!.url);
+    expect(Object.fromEntries(sent!.headers)).toEqual(Object.fromEntries(oracle!.headers));
+    expect(model).toEqual(originalModel);
+    expect(body.model).toBe("real-model");
+    if (samplingParams) expect(samplingParams.model).toBe("wrong-request-model");
+  });
+
+  it.each([
+    { provider: "openai", api: "openai-responses" },
+    { provider: "azure-openai-responses", api: "azure-openai-responses" },
+    { provider: "openai-codex", api: "openai-codex-responses" },
+  ])("sends Client-valid required strict tools unchanged despite Pi compat=false for $provider", async ({ provider, api }) => {
+    const { models, model } = fixture(provider, api);
+    model.compat = { supportsStrictMode: false };
+    const body = { model: model.id, input: "hello", stream: true,
+      tools: [{ type: "function", name: "strict_tool", strict: true,
+        parameters: { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false } }] };
+    const normal = convertResponsesRequest(body, 10);
+    expect(normal.invocation.pi.context.tools?.[0]?.constrainedSampling).toEqual({ type: "json_schema", strict: "require" });
+    const query = convertResponsesRequest(body, 10, undefined, "max");
+    expect(query.context.tools?.[0]?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+    expect(query.notices.some((notice) => notice.jsonPath?.endsWith(".strict_execution"))).toBe(true);
+    let calls = 0;
+    let sent: Request | undefined;
+    const upstream = new Response("raw", { status: 422 });
+    const result = await sendWithPiEnvelope(models, model, body, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: api === "openai-codex-responses" ? TOKEN : "mock" },
+      fetch: async (input, init) => { calls++; sent = new Request(input, init); return upstream; },
+    });
+    expect(calls).toBe(1);
+    expect(result).toBe(upstream);
+    expect(result.bodyUsed).toBe(false);
+    await expect(requestBody(sent!)).resolves.toEqual(body);
+    expect(body.tools[0]!.strict).toBe(true);
+  });
+
+  it.each([
+    [{ role: "user", content: "hello", metadata: { type: "image" } }],
+    [{ role: "user", content: [{ type: "input_text", text: "hello", extra: { type: "input_image" } }] }],
+    [{ role: "user", content: "hello", extra: [{ type: "image_url" }] }],
+    [{ role: "developer", content: [{ type: "input_image", image_url: "https://image.invalid" }] }],
+    [{ type: "function_call_output", call_id: "c", output: [{ type: "input_text", text: "hello", metadata: { type: "image" } }] }],
+  ])("does not derive vision from non-image content/metadata: %j", async (item) => {
+    const input = [item];
+    const { models, model } = fixture("github-copilot");
+    let sent: Request | undefined;
+    await sendWithPiEnvelope(models, model, { model: model.id, input, stream: true }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (value, init) => { sent = new Request(value, init); return new Response("raw"); },
+    });
+    const isUser = "role" in item && item.role === "user";
+    const oracleContext: Context = { messages: isUser
+      ? [{ role: "user", content: "hello", timestamp: 10 }]
+      : [{ role: "user", content: "hello", timestamp: 10 }, { role: "assistant", content: [{ type: "text", text: "hello" }],
+        api: model.api, provider: model.provider, model: model.id, timestamp: 10, stopReason: "stop",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }] };
+    let oracle: Request | undefined;
+    for await (const event of models.streamSimple(model, oracleContext, { apiKey: "mock", maxRetries: 0,
+      fetch: async (value, init) => { oracle = new Request(value, init); return new Response("stop", { status: 400 }); },
+    })) void event;
+    expect(sent!.headers.get("copilot-vision-request")).toBeNull();
+    expect(Object.fromEntries(sent!.headers)).toEqual(Object.fromEntries(oracle!.headers));
+  });
+
+  it.each(["input_image", "output_image", "computer_screenshot"])("keeps tool output image presence for %s", async (type) => {
+    const { models, model } = fixture("github-copilot");
+    let sent: Request | undefined;
+    await sendWithPiEnvelope(models, model, { model: model.id,
+      input: [{ type: "function_call_output", call_id: "opaque", output: [{ type, image_url: "https://image.invalid" }] }] }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (value, init) => { sent = new Request(value, init); return new Response("raw"); },
+    });
+    expect(sent!.headers.get("copilot-vision-request")).toBe("true");
+    expect(sent!.headers.get("x-initiator")).toBe("agent");
+  });
+
+  it.each([
+    { provider: "openai", api: "openai-responses" },
+    { provider: "azure", api: "azure-openai-responses" },
+    { provider: "openai-codex", api: "openai-codex-responses" },
+  ])("preserves deeply nested unknown JSON without an extra depth limit for $provider", async ({ provider, api }) => {
+    const { models, model } = fixture(provider, api);
+    const deepJson = '{"nested":'.repeat(2_000) + '"leaf"' + '}'.repeat(2_000);
+    const body = { model: model.id, input: "hello", future_provider_field: JSON.parse(deepJson) };
+    const before = JSON.stringify(body);
+    let sent: Request | undefined;
+    const response = new Response("raw");
+    const result = await sendWithPiEnvelope(models, model, body, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: api === "openai-codex-responses" ? TOKEN : "mock" },
+      fetch: async (value, init) => { sent = new Request(value, init); return response; },
+    });
+    expect(result).toBe(response);
+    expect(JSON.stringify((await requestBody(sent!)).future_provider_field)).toBe(deepJson);
+    expect(JSON.stringify(body)).toBe(before);
+  });
+
+  it("rejects a changed deeply nested unknown value before physical fetch", async () => {
+    const { models, model } = fixture("openai");
+    const deepJson = '{"nested":'.repeat(2_000) + '"leaf"' + '}'.repeat(2_000);
+    const body = { model: model.id, input: "hello", future: JSON.parse(deepJson) };
+    const altered: Pick<typeof models, "streamSimple"> = {
+      streamSimple: (target, context, options) => models.streamSimple(target, context, {
+        ...options, onPayload: async (payload, currentModel) => {
+          const replaced = await options!.onPayload!(payload, currentModel) as Record<string, unknown>;
+          let node = replaced.future as Record<string, unknown>;
+          for (let depth = 1; depth < 2_000; depth++) node = node.nested as Record<string, unknown>;
+          node.nested = "changed";
+          return replaced;
+        },
+      }),
+    };
+    let calls = 0;
+    await expect(sendWithPiEnvelope(altered, model, body, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async () => { calls++; return new Response("must not dispatch"); },
+    })).rejects.toThrow("changed the native body");
+    expect(calls).toBe(0);
+    expect(JSON.stringify(body.future)).toBe(deepJson);
+  });
+
+  it("allows JSON object key reordering while preserving values and array order", async () => {
+    const { models, model } = fixture("openai");
+    const reordered: Pick<typeof models, "streamSimple"> = {
+      streamSimple: (target, context, options) => models.streamSimple(target, context, {
+        ...options, onPayload: async (payload, currentModel) => {
+          const replaced = await options!.onPayload!(payload, currentModel) as Record<string, unknown>;
+          replaced.future = { second: [null, {}, [], false, "value"], first: 42 };
+          return replaced;
+        },
+      }),
+    };
+    const body = { model: model.id, input: "hello", future: { first: 42, second: [null, {}, [], false, "value"] } };
+    let sent: Request | undefined;
+    await sendWithPiEnvelope(reordered, model, body, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (value, init) => { sent = new Request(value, init); return new Response("raw"); },
+    });
+    await expect(requestBody(sent!)).resolves.toEqual(body);
+  });
+
+  it.each([
+    { provider: "github-copilot", api: "openai-responses" },
+    { provider: "azure", api: "azure-openai-responses" },
+    { provider: "openai-codex", api: "openai-codex-responses" },
+  ])("sends a large representable assistant history without Pi temporary-body overflow for $provider", async ({ provider, api }) => {
+    const { models, model } = fixture(provider, api);
+    const body = { model: model.id, stream: true, input: [
+      { id: "msg_large", type: "message", status: "completed", role: "assistant",
+        content: Array.from({ length: 140_000 }, () => ({ type: "output_text", text: "x", annotations: [] })) },
+      { role: "user", content: "next turn" },
+    ] };
+    const before = JSON.stringify(body);
+    const query = convertResponsesRequest(body, 10, undefined, "max");
+    expect(query.context.messages[0]?.content).toHaveLength(140_000);
+    let sent: Request | undefined;
+    const response = new Response("raw");
+    const result = await sendWithPiEnvelope(models, model, body, 10, {
+      signal: AbortSignal.timeout(10_000), pi: { apiKey: api === "openai-codex-responses" ? TOKEN : "mock" },
+      fetch: async (value, init) => { sent = new Request(value, init); return response; },
+    });
+    expect(result).toBe(response);
+    expect(JSON.stringify(await requestBody(sent!))).toBe(before);
+    expect(JSON.stringify(body)).toBe(before);
+    if (provider === "github-copilot") expect(sent!.headers.get("x-initiator")).toBe("user");
+  });
+
+  it("accepts N1 negative-zero normalization without weakening unknown-field or array fidelity", async () => {
+    const { models, model } = fixture("openai");
+    const body = { model: model.id, input: "hello", future: { number: -0, array: [-0, null, 1, "-0"] } };
+    let calls = 0;
+    let sent: Request | undefined;
+    await sendWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (value, init) => { calls++; sent = new Request(value, init); return new Response("raw"); },
+    });
+    expect(calls).toBe(1);
+    await expect(requestBody(sent!)).resolves.toEqual({ ...body, future: { number: 0, array: [0, null, 1, "-0"] } });
+    expect(Object.is(body.future.number, -0)).toBe(true);
+  });
+
+  it("ignores only private parsing after capture; pre-dispatch and extra-dispatch errors still fail", async () => {
+    const { models, model } = fixture("openai");
+    const failures: string[] = [];
+    const observed: Pick<typeof models, "streamSimple"> = {
+      streamSimple: (target, context, options) => {
+        const stream = models.streamSimple(target, context, options);
+        const iterate = stream[Symbol.asyncIterator].bind(stream);
+        stream[Symbol.asyncIterator] = () => {
+          const iterator = iterate();
+          const next = iterator.next.bind(iterator);
+          iterator.next = async () => {
+            const event = await next();
+            if (!event.done && event.value.type === "error") failures.push(event.value.error.errorMessage ?? "");
+            return event;
+          };
+          return iterator;
+        };
+        return stream;
+      },
+    };
+    const upstream = new Response("raw", { status: 503 });
+    const result = await sendWithPiEnvelope(observed, model, { model: model.id, input: "hello", stream: false }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" }, fetch: async () => upstream,
+    });
+    expect(result).toBe(upstream);
+    expect(failures.join(" ")).toMatch(/not async iterable/);
+    let calls = 0;
+    let cancellations = 0;
+    const abandoned = new Response(new ReadableStream<Uint8Array>({ cancel() { cancellations++; } }));
+    const repeated: Pick<typeof models, "streamSimple"> = {
+      streamSimple: (target, context, options) => models.streamSimple(target, context, {
+        ...options, fetch: async (input, init) => {
+          const first = await options!.fetch!(input, init);
+          await options!.fetch!(input, init);
+          return first;
+        },
+      }),
+    };
+    await expect(sendWithPiEnvelope(repeated, model, { model: model.id, input: "hello" }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" }, fetch: async () => { calls++; return abandoned; },
+    })).rejects.toThrow("unexpected dispatch");
+    expect(calls).toBe(1);
+    expect(cancellations).toBe(1);
+  });
+
+  it.each([false, true])("rejects repeated payload preparation after capture even when Pi swallows the guard=%s", async (swallow) => {
+    const { models, model } = fixture("openai");
+    let calls = 0;
+    const cancellations: unknown[] = [];
+    const response = new Response(new ReadableStream<Uint8Array>({
+      cancel(reason) { cancellations.push(reason); },
+    }));
+    // Drive the real installed Pi, but simulate a future adapter invoking the
+    // public payload hook a second time after the validated fetch has returned.
+    const repeated: Pick<typeof models, "streamSimple"> = {
+      streamSimple: (target, context, options) => models.streamSimple(target, context, {
+        ...options, fetch: async (input, init) => {
+          const synthetic = await options!.fetch!(input, init);
+          try { await options!.onPayload!({ model: target.id }, target); } catch (error) {
+            if (!swallow) throw error;
+          }
+          return synthetic;
+        },
+      }),
+    };
+    await expect(sendWithPiEnvelope(repeated, model, { model: model.id, input: "hello" }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async () => { calls++; return response; },
+    })).rejects.toThrow("prepare the payload more than once");
+    expect(calls).toBe(1);
+    expect(cancellations).toHaveLength(1);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  it.each(["throw", "reject"] as const)("preserves the original rejection when abandoned-body cancellation fails by %s", async (mode) => {
+    const { models, model } = fixture("openai");
+    const caller = new AbortController();
+    const original = new Error("Caller abandoned the attempt");
+    const cleanupFailure = new Error("Body cleanup failed");
+    const reasons: unknown[] = [];
+    const response = new Response(new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        reasons.push(reason);
+        if (mode === "throw") throw cleanupFailure;
+        return Promise.reject(cleanupFailure);
+      },
+    }));
+    await expect(sendWithPiEnvelope(models, model, { model: model.id, input: "hello" }, 10, {
+      signal: caller.signal, pi: { apiKey: "mock" },
+      fetch: async () => { caller.abort(original); return response; },
+    })).rejects.toBe(original);
+    expect(reasons).toEqual([original]);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  it.each(["resolve", "reject"] as const)("returns the original failure without waiting for pending body cancellation (%s later)", async (settlement) => {
+    const { models, model } = fixture("openai");
+    const caller = new AbortController();
+    const original = new Error("Caller abandoned the attempt");
+    const reasons: unknown[] = [];
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve, reject) => {
+      finishCleanup = () => settlement === "resolve" ? resolve() : reject(new Error("Late cleanup failure"));
+    });
+    const response = new Response(new ReadableStream<Uint8Array>({
+      cancel(reason) { reasons.push(reason); return cleanup; },
+    }));
+    const attempted = sendWithPiEnvelope(models, model, { model: model.id, input: "hello" }, 10, {
+      signal: caller.signal, pi: { apiKey: "mock" },
+      fetch: async () => { caller.abort(original); return response; },
+    }).then(() => "unexpected success", (error: unknown) => error);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([attempted,
+        new Promise<string>((resolve) => { timer = setTimeout(() => resolve("blocked by cleanup"), 200); })]);
+      expect(outcome).toBe(original);
+      expect(reasons).toEqual([original]);
+    } finally {
+      clearTimeout(timer);
+      finishCleanup();
+      await attempted;
+    }
+  });
+
+  it.each([true, false])("hands off an open body untouched on success, stream=%s", async (stream) => {
+    const { models, model } = fixture("openai");
+    let cancellations = 0;
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel() { cancellations++; } }), { status: 429 });
+    const result = await sendWithPiEnvelope(models, model, { model: model.id, input: "hello", stream }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" }, fetch: async () => response,
+    });
+    expect(result).toBe(response);
+    expect(result.status).toBe(429);
+    expect(result.bodyUsed).toBe(false);
+    expect(result.body!.locked).toBe(false);
+    expect(cancellations).toBe(0);
+    // Only the new owner cancels it, after the successful handoff.
+    await result.body!.cancel();
+    expect(cancellations).toBe(1);
+  });
+
+  it("cancels the captured body if Pi iteration throws before response handoff", async () => {
+    const { models, model } = fixture("openai");
+    const original = new Error("Pi event iteration failed");
+    let cancellations = 0;
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel() { cancellations++; } }));
+    const broken: Pick<typeof models, "streamSimple"> = {
+      streamSimple: (target, context, options) => {
+        const stream = models.streamSimple(target, context, options);
+        const iterator = stream[Symbol.asyncIterator]();
+        stream[Symbol.asyncIterator] = () => ({ next: async () => {
+          await iterator.next(); // The installed adapter emits start after capture.
+          await iterator.return?.();
+          throw original;
+        } });
+        return stream;
+      },
+    };
+    await expect(sendWithPiEnvelope(broken, model, { model: model.id, input: "hello" }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" }, fetch: async () => response,
+    })).rejects.toBe(original);
+    expect(cancellations).toBe(1);
+    expect(response.body!.locked).toBe(false);
+  });
+});
+
+describe("Pi Native real HTTP deadline and compression", () => {
+  const apis = [
+    { provider: "openai", api: "openai-responses" },
+    { provider: "azure-openai-responses", api: "azure-openai-responses" },
+    { provider: "openai-codex", api: "openai-codex-responses" },
+  ];
+  it("does not accept a late Response from a custom fetch that ignores the deadline", async () => {
+    const { models, model } = fixture("openai");
+    let sent: Request | undefined;
+    await expect(sendWithPiEnvelope(models, model, { model: model.id, input: "hello" }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock", timeoutMs: 5 },
+      fetch: async (value, init) => {
+        sent = new Request(value, init);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return new Response("late");
+      },
+    })).rejects.toThrow("Native response headers timed out");
+    expect(sent!.signal.aborted).toBe(true);
+  });
+
+  it("cancels an abandoned late response body before rejecting the attempt", async () => {
+    const { models, model } = fixture("openai");
+    const cancellations: unknown[] = [];
+    const response = new Response(new ReadableStream<Uint8Array>({
+      cancel(reason) { cancellations.push(reason); },
+    }));
+    await expect(sendWithPiEnvelope(models, model, { model: model.id, input: "hello" }, 10, {
+      signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock", timeoutMs: 5 },
+      fetch: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return response;
+      },
+    })).rejects.toThrow("Native response headers timed out");
+    expect(cancellations).toHaveLength(1);
+    expect(cancellations[0]).toBeInstanceOf(Error);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  it("keeps caller cancellation while waiting for real response headers", async () => {
+    const caller = new AbortController();
+    await withHttpServer(() => caller.abort(new Error("Caller cancelled header wait")), async (baseUrl) => {
+      const { models, model } = fixture("openai", "openai-responses", baseUrl + "/v1");
+      await expect(sendWithPiEnvelope(models, model, { model: model.id, input: "hello" }, 10, {
+        signal: caller.signal, pi: { apiKey: "mock", timeoutMs: 500 }, fetch: globalThis.fetch,
+      })).rejects.toThrow("Caller cancelled header wait");
+    });
+  });
+  it.each(apis)("cancels the real header wait for $provider", async ({ provider, api }) => {
+    let received = 0;
+    await withHttpServer(() => { received++; }, async (baseUrl) => {
+      const { models, model } = fixture(provider, api, baseUrl + "/v1");
+      let sent: Request | undefined;
+      let calls = 0;
+      await expect(sendWithPiEnvelope(models, model, { model: model.id, input: "hello", stream: true }, 10, {
+        signal: AbortSignal.timeout(2_000), pi: { apiKey: api === "openai-codex-responses" ? TOKEN : "mock", timeoutMs: 100 },
+        fetch: async (value, init) => { calls++; sent = new Request(value, init); return globalThis.fetch(sent); },
+      })).rejects.toThrow("Native response headers timed out");
+      expect(sent!.signal.aborted).toBe(true);
+      expect(calls).toBe(1);
+      expect(received).toBe(1);
+    });
+  });
+
+  it.each(apis)("stops the header timer without cancelling later body reads for $provider", async ({ provider, api }) => {
+    await withHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.write("first");
+      const timer = setTimeout(() => response.end("second"), 250);
+      response.once("close", () => clearTimeout(timer));
+    }, async (baseUrl) => {
+      const { models, model } = fixture(provider, api, baseUrl + "/v1");
+      const result = await sendWithPiEnvelope(models, model, { model: model.id, input: "hello", stream: false }, 10, {
+        signal: AbortSignal.timeout(2_000), pi: { apiKey: api === "openai-codex-responses" ? TOKEN : "mock", timeoutMs: 100 },
+        fetch: globalThis.fetch,
+      });
+      expect(result.bodyUsed).toBe(false);
+      await expect(result.text()).resolves.toBe("firstsecond");
+    });
+  });
+
+  it("retains caller cancellation of the real response body after capture", async () => {
+    await withHttpServer((_request, response) => { response.writeHead(200); response.write("first"); }, async (baseUrl) => {
+      const { models, model } = fixture("openai", "openai-responses", baseUrl + "/v1");
+      const caller = new AbortController();
+      const result = await sendWithPiEnvelope(models, model, { model: model.id, input: "hello" }, 10, {
+        signal: caller.signal, pi: { apiKey: "mock", timeoutMs: 100 }, fetch: globalThis.fetch,
+      });
+      caller.abort();
+      await expect(result.text()).rejects.toThrow(/abort/i);
+    });
+  });
+
+  it("sends actual Codex zstd bytes with strict tools and keeps the real non-2xx response unread", async () => {
+    let received: unknown;
+    let encoding: string | undefined;
+    await withHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        encoding = request.headers["content-encoding"] as string | undefined;
+        const bytes = Buffer.concat(chunks);
+        received = JSON.parse(zstdDecompressSync(bytes).toString("utf8"));
+        response.writeHead(429, { "content-type": "text/event-stream", "x-private": "keep" });
+        response.end("event: unknown\r\ndata: private\r\n\r\n");
+      });
+    }, async (baseUrl) => {
+      const { models, model } = fixture("openai-codex", "openai-codex-responses", baseUrl + "/v1");
+      model.compat = { supportsStrictMode: false };
+      const body = { model: model.id, input: "hello", stream: true, future_number: -0,
+        tools: [{ type: "function", name: "f", strict: true,
+          parameters: { type: "object", properties: {}, required: [], additionalProperties: false } }] };
+      const result = await sendWithPiEnvelope(models, model, body, 10, {
+        signal: AbortSignal.timeout(2_000), pi: { apiKey: TOKEN, timeoutMs: 500 }, fetch: globalThis.fetch,
+      });
+      expect(encoding).toBe("zstd");
+      expect(received).toEqual(JSON.parse(JSON.stringify(body)));
+      expect(result.status).toBe(429);
+      expect(result.headers.get("x-private")).toBe("keep");
+      expect(result.bodyUsed).toBe(false);
+      await expect(result.text()).resolves.toBe("event: unknown\r\ndata: private\r\n\r\n");
+    });
   });
 });
 

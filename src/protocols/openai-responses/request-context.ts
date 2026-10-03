@@ -20,13 +20,30 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function hasImage(value: unknown, depth = 0): boolean {
-  if (depth > 32) return false;
-  if (Array.isArray(value)) return value.some((item) => hasImage(item, depth + 1));
-  const item = record(value);
-  if (!item) return false;
-  if (item.type === "input_image" || item.type === "image" || item.type === "image_url") return true;
-  return Object.values(item).some((child) => hasImage(child, depth + 1));
+function hasImageParts(value: unknown, output: boolean): boolean {
+  const parts = Array.isArray(value) ? value : output ? [value] : [];
+  return parts.some((part) => {
+    const type = record(part)?.type;
+    return type === "input_image" || (output && (type === "output_image" || type === "computer_screenshot"));
+  });
+}
+
+function hasImage(input: unknown): boolean {
+  if (!Array.isArray(input)) return false;
+  return input.some((raw) => {
+    const item = record(raw);
+    if (!item) return false;
+    if ((item.type === undefined || item.type === "message") && item.role === "user")
+      return hasImageParts(item.content, false);
+    switch (item.type) {
+      case "function_call_output": case "custom_tool_call_output":
+      case "local_shell_call_output": case "shell_call_output":
+      case "apply_patch_call_output": case "computer_call_output":
+        return hasImageParts(item.output, true);
+      default:
+        return false;
+    }
+  });
 }
 
 /** Pure, bounded extraction; no schema validation, reference resolution or IO. */
