@@ -81,6 +81,18 @@ function usageProfileKey(providerId: string, credentialId: string): string {
   return `${providerId}\u0000${credentialId}`;
 }
 
+function profileAuthDisplay(profile: CredentialProfile, provider: ProviderOption) {
+  const Icon = profile.acquisitionKind === "api_key"
+    ? KeyRound
+    : profile.acquisitionKind === "local_oauth"
+      ? Terminal
+      : UserRoundCheck;
+  const label = provider.acquisitionOptions.find(
+    (option) => option.kind === profile.acquisitionKind,
+  )?.label ?? (profile.authType === "api_key" ? "API key" : "OAuth account");
+  return { Icon, label };
+}
+
 /** Whether this Provider has a credential source: any managed Profile, or a
  * Backend-verified external login. Drives the Connected group and whether the
  * usage card has a source it can speak for. */
@@ -1150,6 +1162,9 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
     const active = managed?.profiles.find(
       (profile) => profile.credentialId === managed.activeCredentialId,
     );
+    const activeAuthDisplay = active === undefined
+      ? undefined
+      : profileAuthDisplay(active, provider);
     const profileCount = managed?.profiles.length ?? 0;
     const activeProfileIndex =
       managed === undefined || managed.activeCredentialId === undefined
@@ -1188,7 +1203,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
           : "Not connected";
     const credentialSummary = active !== undefined
       ? { label: active.displayName, actionLabel: `Manage ${provider.name} profiles`,
-          description: `Active Profile: ${active.displayName}. ${statusLabel}`, title: `Active Profile: ${active.displayName}` }
+          description: `Active Profile: ${active.displayName}. Authentication: ${activeAuthDisplay?.label ?? active.authMethodLabel}. ${statusLabel}`,
+          title: `Active Profile: ${active.displayName} · ${activeAuthDisplay?.label ?? active.authMethodLabel}` }
       : hasManagedProfiles ? { label: "Select a Profile", actionLabel: `Manage ${provider.name} profiles`,
           description: `Select an active Profile. ${statusLabel}`, title: "Select an active Profile" } : undefined;
     const usageRow =
@@ -1278,7 +1294,15 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               aria-label={statusLabel}
               title={statusLabel}
             />
-            <span className="provider-profile-name">{credentialSummary.label}</span>
+            <span className="provider-profile-identity">
+              <span className="provider-profile-name">{credentialSummary.label}</span>
+              {activeAuthDisplay === undefined ? null : (
+                <span className="provider-profile-auth">
+                  <activeAuthDisplay.Icon size={14} aria-hidden="true" />
+                  <span>{activeAuthDisplay.label}</span>
+                </span>
+              )}
+            </span>
             <span
               className="provider-profile-count"
               aria-label={
@@ -1589,18 +1613,18 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
               {selectedProfileAuthTypes.length === 0 ? null : (
                 <div className="profile-switch-policy">
                   {selectedProfileAuthTypes.map((authType) => {
-                    const method = selectedProfilesProvider.acquisitionOptions.find(
-                      (candidate) => candidate.kind === authType,
-                    );
-                    const label = method?.label ?? authType;
+                    const label = authType === "api_key" ? "API key" : "OAuth";
                     const enabled = authType === "api_key"
                       ? selectedProfilesState.switchPolicy?.apiKeyOn429
                       : selectedProfilesState.switchPolicy?.oauthOn429;
                     return (
                       <div className="settings-action-row" key={authType}>
                         <div className="settings-action-copy">
-                          <strong>Switch Profiles after HTTP 429</strong>
-                          <p>{label} · Only within this Provider and sign-in method.</p>
+                          <strong>
+                            {selectedProfileAuthTypes.length === 1
+                              ? "Switch Profiles after HTTP 429"
+                              : `${label}: Switch Profiles after HTTP 429`}
+                          </strong>
                         </div>
                         <button
                           type="button"
@@ -1626,19 +1650,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       const editing = editingProfileId === profile.credentialId;
                       const active =
                         selectedProfilesState.activeCredentialId === profile.credentialId;
-                      const AuthIcon =
-                        profile.acquisitionKind === "api_key"
-                          ? KeyRound
-                          : profile.acquisitionKind === "local_oauth"
-                            ? Terminal
-                            : UserRoundCheck;
-                      const authLabel =
-                        selectedProfilesProvider.acquisitionOptions.find(
-                          (option) => option.kind === profile.acquisitionKind,
-                        )?.label ??
-                        (profile.authType === "api_key"
-                          ? "API key"
-                          : "OAuth account");
+                       const { Icon: AuthIcon, label: authLabel } =
+                         profileAuthDisplay(profile, selectedProfilesProvider);
                       const profileStateLabel = !profile.enabled
                         ? "disabled"
                         : active
@@ -1661,6 +1674,8 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                       const usageCanRefresh =
                         profile.enabled &&
                         usagePresentation.refreshable;
+                      const showUsageRefreshAction =
+                        usageRow !== undefined && usageCanRefresh;
                       const usageText = [
                         ...usagePresentation.primary,
                         usagePresentation.status,
@@ -1760,33 +1775,6 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                             <>
                               <div className="profile-card-body">
                               <div className="profile-card-top">
-                                <label className="profile-active-choice">
-                                  <span className="sr-only">
-                                    Use {profile.displayName} for new requests
-                                  </span>
-                                  <input
-                                    type="radio"
-                                    name={`active-profile-${selectedProfilesProvider.providerId}`}
-                                    checked={active}
-                                    disabled={!profile.enabled}
-                                    onChange={() => {
-                                      if (
-                                        active ||
-                                        selectedProfilesState.revision === undefined
-                                      ) {
-                                        return;
-                                      }
-                                      void executeProfileCommand({
-                                        command: "activate",
-                                        providerId:
-                                          selectedProfilesProvider.providerId,
-                                        credentialId: profile.credentialId,
-                                        expectedRevision:
-                                          selectedProfilesState.revision,
-                                      });
-                                    }}
-                                  />
-                                </label>
                                 <button
                                   type="button"
                                   className="profile-name-button"
@@ -1797,6 +1785,22 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                                   {profile.displayName}
                                 </button>
                                 <div className="profile-row-actions">
+                                  {showUsageRefreshAction ? (
+                                    <button
+                                      type="button"
+                                      className="card-icon-button"
+                                      aria-label={`Refresh usage for ${profile.displayName}`}
+                                      title="Refresh usage"
+                                      disabled={usageRefreshing}
+                                      onClick={() =>
+                                        void refreshProfileUsage(
+                                          selectedProfilesProvider.providerId,
+                                          profile.credentialId,
+                                        )}
+                                    >
+                                      <RefreshCw size={18} aria-hidden="true" />
+                                    </button>
+                                  ) : null}
                                   <button
                                     type="button"
                                     className="card-icon-button"
@@ -1823,6 +1827,24 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                                       )}
                                   >
                                     <Trash2 size={18} aria-hidden="true" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="card-icon-button"
+                                    aria-label={`${profile.enabled ? "Disable" : "Enable"} ${profile.displayName}`}
+                                    title={profile.enabled ? "Disable Profile" : "Enable Profile"}
+                                    onClick={() => {
+                                      if (selectedProfilesState.revision === undefined) return;
+                                      void executeProfileCommand({
+                                        command: "set_enabled",
+                                        providerId: selectedProfilesProvider.providerId,
+                                        credentialId: profile.credentialId,
+                                        expectedRevision: selectedProfilesState.revision,
+                                        enabled: !profile.enabled,
+                                      });
+                                    }}
+                                  >
+                                    <Power size={18} aria-hidden="true" />
                                   </button>
                                 </div>
                               </div>
@@ -1928,35 +1950,27 @@ export function ProvidersPage({ api, view = "providers", showFavoriteModels = fa
                                 </span>
                               </div>
                               </div>
-                              <div className="profile-card-power">
-                                <button
-                                  type="button"
-                                  className="card-icon-button"
-                                  aria-label={`${profile.enabled ? "Disable" : "Enable"} ${profile.displayName}`}
-                                  title={
-                                    profile.enabled
-                                      ? "Disable Profile"
-                                      : "Enable Profile"
-                                  }
-                                  onClick={() => {
-                                    if (
-                                      selectedProfilesState.revision === undefined
-                                    ) {
-                                      return;
-                                    }
-                                    void executeProfileCommand({
-                                      command: "set_enabled",
-                                      providerId:
-                                        selectedProfilesProvider.providerId,
-                                      credentialId: profile.credentialId,
-                                      expectedRevision:
-                                        selectedProfilesState.revision,
-                                      enabled: !profile.enabled,
-                                    });
-                                  }}
-                                >
-                                  <Power size={18} aria-hidden="true" />
-                                </button>
+                              <div className="profile-card-selection">
+                                <label className="profile-active-choice" title="Use this Profile for new requests">
+                                  <span className="sr-only">
+                                    Use {profile.displayName} for new requests
+                                  </span>
+                                  <input
+                                    type="radio"
+                                    name={`active-profile-${selectedProfilesProvider.providerId}`}
+                                    checked={active}
+                                    disabled={!profile.enabled}
+                                    onChange={() => {
+                                      if (active || selectedProfilesState.revision === undefined) return;
+                                      void executeProfileCommand({
+                                        command: "activate",
+                                        providerId: selectedProfilesProvider.providerId,
+                                        credentialId: profile.credentialId,
+                                        expectedRevision: selectedProfilesState.revision,
+                                      });
+                                    }}
+                                  />
+                                </label>
                               </div>
                             </>
                           )}

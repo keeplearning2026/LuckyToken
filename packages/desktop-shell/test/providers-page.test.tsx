@@ -14,6 +14,9 @@ let root: Root;
 type ProfilesResult = Awaited<
   ReturnType<DesktopControlPlaneApi["executeCredentialProfiles"]>
 >;
+type ProviderUsageResult = Awaited<
+  ReturnType<DesktopControlPlaneApi["executeProviderUsage"]>
+>;
 type RequestJourneyListener = Parameters<
   DesktopControlPlaneApi["onRequestJourneys"]
 >[0];
@@ -350,6 +353,10 @@ describe("Providers Profile product slice", () => {
     expect(providerCard?.textContent).not.toContain("Built in");
     expect(providerCard?.textContent).not.toContain("Release traffic");
     expect(providerCard?.textContent).not.toContain("AWS organization sign-in");
+    expect(providerCard?.querySelector(".provider-profile-auth")?.textContent).toBe(
+      "AWS credentials or bearer token",
+    );
+    expect(providerCard?.querySelector(".provider-profile-auth svg")).not.toBeNull();
     expect(
       providerCard?.querySelector('[data-provider-icon="fallback"]')?.textContent,
     ).toBe("A");
@@ -764,8 +771,11 @@ describe("Providers Profile product slice", () => {
     ).not.toBeNull();
     expect(
       productionCard?.querySelector(
-        '.profile-card-power [aria-label="Disable Production role"]',
+        '.profile-row-actions [aria-label="Disable Production role"]',
       ),
+    ).not.toBeNull();
+    expect(
+      productionCard?.querySelector('.profile-card-selection input[type="radio"]'),
     ).not.toBeNull();
     expect(
       productionCard?.querySelector('[aria-label="Edit note for Production role"]'),
@@ -963,9 +973,12 @@ describe("Providers Profile product slice", () => {
     expect(container.querySelector('[aria-label*="HTTP 429"]')).toBeNull();
     await clickAria("Close sign in");
     await clickAria("Manage AWS Provider profiles");
-    const fallback = ariaButton("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
+    expect(container.textContent).not.toContain("Only within this Provider and sign-in method");
+    expect(container.textContent).toContain("API key: Switch Profiles after HTTP 429");
+    expect(container.textContent).toContain("OAuth: Switch Profiles after HTTP 429");
+    const fallback = ariaButton("Enable HTTP 429 Profile switching for AWS Provider API key");
     expect(fallback.getAttribute("aria-pressed")).toBe("false");
-    await clickAria("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
+    await clickAria("Enable HTTP 429 Profile switching for AWS Provider API key");
 
     expect(executeCredentialProfiles).toHaveBeenCalledWith({
       command: "set_switch_policy",
@@ -974,12 +987,12 @@ describe("Providers Profile product slice", () => {
       apiKeyOn429: true,
       oauthOn429: false,
     });
-    const enabledFallback = ariaButton("Disable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token");
+    const enabledFallback = ariaButton("Disable HTTP 429 Profile switching for AWS Provider API key");
     expect(enabledFallback.getAttribute("aria-pressed")).toBe("true");
     expect(enabledFallback.classList.contains("on")).toBe(true);
     expect(enabledFallback.getAttribute("title")).toBe("Disable HTTP 429 Profile switching");
 
-    await clickAria("Enable HTTP 429 Profile switching for AWS Provider AWS organization sign-in");
+    await clickAria("Enable HTTP 429 Profile switching for AWS Provider OAuth");
     expect(executeCredentialProfiles).toHaveBeenLastCalledWith({
       command: "set_switch_policy",
       providerId: "aws-provider",
@@ -1005,8 +1018,8 @@ describe("Providers Profile product slice", () => {
     );
     await render({ profiles: singleBranch });
     await clickAria("Manage AWS Provider profiles");
-    expect(ariaButton("Enable HTTP 429 Profile switching for AWS Provider AWS credentials or bearer token")).toBeTruthy();
-    expect(container.querySelector('[aria-label*="HTTP 429 Profile switching for AWS Provider AWS organization sign-in"]')).toBeNull();
+    expect(ariaButton("Enable HTTP 429 Profile switching for AWS Provider API key")).toBeTruthy();
+    expect(container.querySelector('[aria-label*="HTTP 429 Profile switching for AWS Provider OAuth"]')).toBeNull();
   });
 
   it("attributes cached usage to the exact active Profile and refreshes it explicitly", async () => {
@@ -1093,7 +1106,51 @@ describe("Providers Profile product slice", () => {
     expect(incidentCard?.textContent).toContain("Week 91%");
   });
 
-  it("shows each Profile's own usage and refreshes it by double click", async () => {
+  it("omits the Profile refresh action when usage is unsupported", async () => {
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage: async () => ({
+        outcome: "ok",
+        snapshot: {
+          profiles: [
+            { providerId: "aws-provider", credentialId: "credential-a", state: "unsupported", reason: "provider" },
+            { providerId: "aws-provider", credentialId: "credential-b", state: "unsupported", reason: "provider" },
+          ],
+        },
+      }),
+    });
+    await clickAria("Manage AWS Provider profiles");
+    expect(container.querySelector('.profile-row-actions [aria-label^="Refresh usage"]')).toBeNull();
+  });
+
+  it("waits for a known usage state before showing the Profile refresh action", async () => {
+    let resolveUsage: ((result: ProviderUsageResult) => void) | undefined;
+    const usageResult = new Promise<ProviderUsageResult>((resolve) => {
+      resolveUsage = resolve;
+    });
+    await render({
+      profiles: managedProfiles(),
+      executeProviderUsage: async () => usageResult,
+    });
+    await clickAria("Manage AWS Provider profiles");
+    expect(container.querySelector('.profile-row-actions [aria-label^="Refresh usage"]')).toBeNull();
+
+    await act(async () => {
+      resolveUsage?.({
+        outcome: "ok",
+        snapshot: {
+          profiles: [
+            { providerId: "aws-provider", credentialId: "credential-a", state: "unobserved" },
+            { providerId: "aws-provider", credentialId: "credential-b", state: "unobserved" },
+          ],
+        },
+      });
+      await usageResult;
+    });
+    expect(ariaButton("Refresh usage for Production role")).toBeTruthy();
+  });
+
+  it("shows each Profile's own usage and refreshes it from its toolbar", async () => {
     const executeProviderUsage = vi.fn<
       DesktopControlPlaneApi["executeProviderUsage"]
     >(async (command) => {
@@ -1148,14 +1205,12 @@ describe("Providers Profile product slice", () => {
     expect(incidentCard?.textContent).toContain("Week 91%");
     expect(incidentCard?.textContent).toContain("Week resets in 1h");
 
-    const usage = incidentCard?.querySelector(
-      '.profile-card-usage[role="button"]',
+    const refresh = incidentCard?.querySelector(
+      '.profile-row-actions [aria-label="Refresh usage for Incident account"]',
     );
-    expect(usage).toBeInstanceOf(HTMLElement);
-    await act(async () => {
-      usage?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-      await Promise.resolve();
-    });
+    expect(refresh).toBeInstanceOf(HTMLButtonElement);
+    expect(refresh?.getAttribute("title")).toBe("Refresh usage");
+    await clickAria("Refresh usage for Incident account");
     expect(executeProviderUsage).toHaveBeenCalledWith({
       command: "refresh",
       providerId: "aws-provider",
