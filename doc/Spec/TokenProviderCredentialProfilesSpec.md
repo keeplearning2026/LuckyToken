@@ -1,7 +1,7 @@
 # Token Provider Credential Profiles Specification
 
 **Status:** AUTHORITATIVE TARGET SPEC — NOT YET IMPLEMENTED  
-**Date:** 2026-10-02  
+**Date:** 2026-10-03\
 **Scope:** Provider Profiles, credential references, acquisition, Profile credential read/modify operations, Pi CredentialStore adaptation, selection and lifecycle boundaries.
 
 **Supersedes:** `TokenProviderCredentialCoreModelPlan.md`, `TokenExternalProviderCredentialSourcesSpec.md`, `TokenProviderCredentialProfilesPRD.md`, and `TokenProviderCredentialProfilesImplementationPlan.md`.
@@ -118,6 +118,23 @@ Responsibility:
 - never own runtime credential use.
 
 There are two acquisition paths; Token does not force them behind one artificial strategy contract.
+
+| Acquisition kind | How the Provider supplies the capability | What acquisition supplies to Token | What Token persists on successful addition |
+|---|---|---|---|
+| `api_key` | Existing Pi `provider.auth.apiKey.login` contract | Pi passes the Provider's `ApiKeyCredential` through Token's `CredentialStore.modify` adapter | A Token-managed credential document and a Profile referencing that document |
+| `oauth` | Existing Pi `provider.auth.oauth.login` contract | Pi passes the Provider's `OAuthCredential` through Token's `CredentialStore.modify` adapter | A Token-managed credential document and a Profile referencing that document |
+| `local_oauth` | Token `registerLocalOAuth` contract, providing `acquire` and `read` | `acquire` returns an externally owned file reference; Token reads the file and validates the registered parser's OAuth result | A Profile referencing the external document; credential bytes remain in that externally owned document |
+
+The managed API-key/OAuth publication path is built into Token; the actual login
+implementation belongs to the Provider and is invoked by Pi. Local OAuth uses
+Token's registration contract for reference discovery and parsing. In all three
+cases, Token alone creates and persists the Profile; neither Pi nor the Provider
+login/registration callbacks need a Profile concept.
+
+Registering a local OAuth capability does not create a Profile. Only a successful
+user-initiated addition publishes one. Registration functions are runtime code;
+the persisted local Profile contains the external reference, not those functions
+or a copied credential snapshot.
 
 Managed `api_key` / `oauth` acquisition follows Pi's existing login path:
 
