@@ -1,11 +1,11 @@
 import type { FetchFunction, Model, Models, ModelsApiStreamOptions } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
 import { boundAnthropicEnvelopeContext } from "../../src/protocols/anthropic/request-context.js";
 import { projectAnthropicNativeBody } from "../../src/provider-native-anthropic/body-projection.js";
 import { AnthropicPassthroughTransportError, type passthroughAnthropicRequest } from "../../src/provider-native-anthropic/transport.js";
 
 const TERMINAL = 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_query","type":"message","role":"assistant","model":"query","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":0}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
-const QUERY_CREDENTIAL = "Token-envelope-query-credential";
 
 /** Isolated composition with the existing Native auth/retry/response coordinator. */
 export function createAnthropicPiNativeRequestSender(models: Pick<Models, "stream">): typeof passthroughAnthropicRequest {
@@ -71,6 +71,7 @@ export async function sendAnthropicWithPiEnvelope(
   const query = parseAnthropicTextInvocation(nativeBody, receivedAt, "max");
   const context = boundAnthropicEnvelopeContext(query.context, receivedAt);
   const piOptions = { ...options.pi };
+  let queryCredential: string | undefined;
   if (piOptions.apiKey === "") {
     // Explicit empty key means the caller has already resolved header-owned
     // auth. Do not consult ambient credentials or send the query branch key.
@@ -78,7 +79,8 @@ export async function sendAnthropicWithPiEnvelope(
       ["authorization", "x-api-key", "cf-aig-authorization"].includes(name.toLowerCase())
       && typeof value === "string" && value.trim().length > 0);
     if (!hasAuth) throw new Error("Resolved header-owned auth is missing");
-    piOptions.apiKey = options.credentialKind === "oauth" ? `sk-ant-oat-${QUERY_CREDENTIAL}` : QUERY_CREDENTIAL;
+    queryCredential = `Token-envelope-query-${randomUUID()}`;
+    piOptions.apiKey = options.credentialKind === "oauth" ? `sk-ant-oat-${queryCredential}` : queryCredential;
     piOptions.headers = { "x-api-key": null, authorization: null, ...piOptions.headers };
   } else if (options.credentialKind !== undefined) {
     const actualKey = piOptions.apiKey;
@@ -88,8 +90,14 @@ export async function sendAnthropicWithPiEnvelope(
       // Public options select Pi's client/identity/beta branch. A query-only
       // branch marker is overridden by the real Provider-owned auth header;
       // it is never a wire credential. No Pi client/header code is copied.
-      piOptions.apiKey = oauth ? `sk-ant-oat-${QUERY_CREDENTIAL}` : QUERY_CREDENTIAL;
-      piOptions.headers = { ...(oauth ? { authorization: `Bearer ${actualKey}` } : { "x-api-key": actualKey }), ...piOptions.headers };
+      queryCredential = `Token-envelope-query-${randomUUID()}`;
+      piOptions.apiKey = oauth ? `sk-ant-oat-${queryCredential}` : queryCredential;
+      const headers: Record<string, string | null> = {};
+      // Real credentials occupy the SDK-default position, below Model and
+      // options headers. Fold case before merging, retaining null omissions.
+      for (const source of [oauth ? { authorization: `Bearer ${actualKey}` } : { "x-api-key": actualKey }, model.headers, piOptions.headers])
+        for (const [name, value] of Object.entries(source ?? {})) headers[name.toLowerCase()] = value;
+      piOptions.headers = headers;
     }
   }
   const thinkingEnabled = query.options.reasoning !== undefined;
@@ -107,7 +115,7 @@ export async function sendAnthropicWithPiEnvelope(
       const signal = AbortSignal.any([options.signal, deadline.signal]);
       const template = new Request(input, init);
       const headers = new Headers(template.headers);
-      if ([...headers.values()].some((value) => value.includes(QUERY_CREDENTIAL)))
+      if (queryCredential && [...headers.values()].some((value) => value.includes(queryCredential)))
         throw new Error("Pi query credential escaped into the native envelope");
       if (headers.has("content-encoding")) throw new Error("Uncertified Anthropic body encoding");
       // Length must describe the substituted body, never Pi's discarded JSON.

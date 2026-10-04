@@ -421,6 +421,126 @@ describe("Pi-owned envelope with Native body and Response", () => {
 });
 
 describe("Pi Native experiment review regressions", () => {
+  it.each(["message", "reasoning", "function_call"] as const)("keeps optional continuity failures fail-open at large scale: %s", async (type) => {
+    const { models, model } = fixture("openai");
+    const entry = type === "message" ? { type, role: "assistant", content: "retained text" }
+      : type === "reasoning" ? { type, summary: [{ type: "summary_text", text: "retained thinking" }] }
+      : { type, call_id: "call", name: "lookup", arguments: "{}" };
+    const body = { model: model.id, tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+      input: [{ ...entry, token_continuity: { version: 1,
+        source: { provider: "openai", api: "openai-responses", model: model.id },
+        attachments: Array.from({ length: 140_000 }, () => false) } },
+        ...(type === "function_call" ? [{ type: "function_call_output", call_id: "call", output: "result" }] : []),
+        { role: "user", content: "continue" }], stream: true };
+    const before = JSON.stringify(body);
+    const query = convertResponsesRequest(body, 10, undefined, "max");
+    expect(query.notices).toHaveLength(32);
+    expect(query.notices.at(-1)?.code).toBe("openai-responses_max_notices_bounded");
+    const assistant = query.context.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toContainEqual(type === "message" ? { type: "text", text: "retained text" }
+      : type === "reasoning" ? { type: "thinking", thinking: "retained thinking" }
+      : { type: "toolCall", id: "call", name: "lookup", arguments: {} });
+    let sent: Request | undefined;
+    let calls = 0;
+    await sendWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(10_000), pi: { apiKey: "mock" },
+      fetch: async (input, init) => { calls++; sent = new Request(input, init); return new Response("raw"); },
+    });
+    expect(calls).toBe(1);
+    expect(JSON.stringify(await requestBody(sent!))).toBe(before);
+    expect(JSON.stringify(body)).toBe(before);
+  });
+
+  it.each(["file_search_call", "code_interpreter_call"] as const)("sends large hosted history without max append overflow: %s", async (type) => {
+    const { models, model } = fixture("openai");
+    const count = 140_000;
+    const entry = type === "file_search_call"
+      ? { type, id: "hosted", status: "completed", results: Array.from({ length: count }, (_, index) => ({ text: `result-${index}` })) }
+      : { type, id: "hosted", status: "completed", container_id: "container", code: "pass", outputs: Array.from({ length: count }, (_, index) => ({ type: "logs", logs: `result-${index}` })) };
+    const body = { model: model.id, input: [entry, { role: "user", content: "continue" }], stream: true };
+    const before = JSON.stringify(body);
+    const query = convertResponsesRequest(body, 10, undefined, "max");
+    expect(query.context.messages).toHaveLength(count + 1);
+    expect(query.context.messages[0]?.content).toEqual([{ type: "text", text: "result-0" }]);
+    expect(query.context.messages[count - 1]?.content).toEqual([{ type: "text", text: `result-${count - 1}` }]);
+    let sent: Request | undefined;
+    let calls = 0;
+    await sendWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(10_000), pi: { apiKey: "mock" },
+      fetch: async (input, init) => { calls++; sent = new Request(input, init); return new Response("raw"); },
+    });
+    expect(calls).toBe(1);
+    expect(JSON.stringify(await requestBody(sent!))).toBe(before);
+    expect(JSON.stringify(body)).toBe(before);
+  });
+
+  it.each(["data:image/png;base64,YQ==", "data:IMAGE/JPEG;base64,YQ=="])("derives vision from declared image input_file data: %s", async (fileData) => {
+    const { models, model } = fixture("github-copilot");
+    const body = { model: model.id, input: [{ role: "user", content: [{ type: "input_file", file_data: fileData }] }] };
+    const query = convertResponsesRequest(body, 10, undefined, "max");
+    expect(query.context.messages[0]?.content).toContainEqual({ type: "image", data: "YQ==", mimeType: fileData.includes("JPEG") ? "image/jpeg" : "image/png" });
+    let oracle: Request | undefined;
+    for await (const event of models.streamSimple(model, { messages: [{ role: "user", content: [{ type: "image", data: "YQ==", mimeType: "image/png" }], timestamp: 10 }] }, {
+      apiKey: "mock", maxRetries: 0, fetch: async (input, init) => { oracle = new Request(input, init); return new Response("stop", { status: 400 }); },
+    })) void event;
+    let sent: Request | undefined;
+    await sendWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (input, init) => { sent = new Request(input, init); return new Response("raw"); },
+    });
+    expect(sent!.headers.get("copilot-vision-request")).toBe("true");
+    expect(Object.fromEntries(sent!.headers)).toEqual(Object.fromEntries(oracle!.headers));
+    await expect(requestBody(sent!)).resolves.toEqual(body);
+  });
+
+  it.each(["data:application/pdf;base64,YQ==", "data:image/png;base64,invalid", "file-id-only"])("does not invent input_file image facts: %s", async (fileData) => {
+    const { models, model } = fixture("github-copilot");
+    let sent: Request | undefined;
+    const body = { model: model.id, input: [{ role: "user", content: [{ type: "input_file", file_data: fileData,
+      metadata: { type: "input_image", image_url: "data:image/png;base64,YQ==" } }] }] };
+    await sendWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (input, init) => { sent = new Request(input, init); return new Response("raw"); },
+    });
+    expect(sent!.headers.has("copilot-vision-request")).toBe(false);
+    await expect(requestBody(sent!)).resolves.toEqual(body);
+  });
+
+  it.each([
+    { status: "completed", result: "data:image/png;base64,YQ==", image: true },
+    { status: "completed", result: "YQ==", image: false },
+    { status: "failed", result: "data:image/png;base64,YQ==", image: false },
+    { status: "generating", result: "data:image/png;base64,YQ==", image: false },
+  ])("keeps only materialized hosted image-generation vision facts: $status / $image", async ({ status, result, image }) => {
+    const { models, model } = fixture("github-copilot");
+    const body = { model: model.id, input: [{ type: "image_generation_call", id: "image", status, result }, { role: "user", content: "continue" }] };
+    let oracle: Request | undefined;
+    for await (const event of models.streamSimple(model, { messages: [{ role: "user", content: image
+      ? [{ type: "image", data: "YQ==", mimeType: "image/png" }] : "continue", timestamp: 10 }] }, {
+      apiKey: "mock", maxRetries: 0, fetch: async (input, init) => { oracle = new Request(input, init); return new Response("stop", { status: 400 }); },
+    })) void event;
+    let sent: Request | undefined;
+    await sendWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (input, init) => { sent = new Request(input, init); return new Response("raw"); },
+    });
+    expect(sent!.headers.has("copilot-vision-request")).toBe(image);
+    expect(Object.fromEntries(sent!.headers)).toEqual(Object.fromEntries(oracle!.headers));
+    await expect(requestBody(sent!)).resolves.toEqual(body);
+  });
+
+  it.each(["openai-responses", "azure-openai-responses", "openai-codex-responses"])("retains caller cancellation during private Pi parsing: %s", async (api) => {
+    const { models, model } = fixture(api, api);
+    const caller = new AbortController();
+    const original = new Error("Caller canceled during private parsing");
+    const reasons: unknown[] = [];
+    const upstream = new Response(new ReadableStream({ cancel(reason) { reasons.push(reason); } }));
+    const canceled: Pick<typeof models, "streamSimple"> = {
+      streamSimple: (target, context, options) => models.streamSimple(target, context, {
+        ...options, onProviderStreamEvent: () => caller.abort(original),
+      }),
+    };
+    await expect(sendWithPiEnvelope(canceled, model, { model: model.id, input: "hello", stream: true }, 10, {
+      signal: caller.signal, pi: { apiKey: api === "openai-codex-responses" ? TOKEN : "mock" }, fetch: async () => upstream,
+    })).rejects.toBe(original);
+    expect(reasons).toEqual([original]);
+  });
+
   it.each(["model", "options", "both"] as const)("does not let %s samplingParams override Azure deployment", async (source) => {
     const { models, model } = fixture("azure-openai-responses", "azure-openai-responses", "https://unit.openai.azure.com");
     if (source !== "options") model.samplingParams = { model: "wrong-model", future_overlay: "model" };
@@ -790,6 +910,30 @@ describe("Pi Native experiment review regressions", () => {
 });
 
 describe("Pi Native real HTTP deadline and compression", () => {
+  it.each(["unavailable", "throws"] as const)("preserves Native JSON when Codex zstd %s", async (mode) => {
+    const zlib = process.getBuiltinModule("node:zlib");
+    const original = Object.getOwnPropertyDescriptor(zlib, "zstdCompressSync");
+    if (!original) throw new Error("Missing runtime compression property");
+    try {
+      Object.defineProperty(zlib, "zstdCompressSync", { ...original, value: mode === "unavailable" ? undefined : () => { throw new Error("Compression failed"); } });
+      const { models, model } = fixture("openai-codex", "openai-codex-responses");
+      const body = { model: model.id, input: "hello", stream: true, future: { ordered: [false, null, "unchanged"] } };
+      const upstream = new Response("raw-error", { status: 503, headers: { "x-real": "retained" } });
+      let sent: Request | undefined;
+      let calls = 0;
+      const result = await sendWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(2_000), pi: { apiKey: TOKEN },
+        fetch: async (input, init) => { calls++; sent = new Request(input, init); return upstream; },
+      });
+      expect(calls).toBe(1);
+      expect(sent!.headers.has("content-encoding")).toBe(false);
+      await expect(requestBody(sent!)).resolves.toEqual(body);
+      expect(result).toBe(upstream);
+      expect(result.bodyUsed).toBe(false);
+      expect(result.status).toBe(503);
+      await expect(result.text()).resolves.toBe("raw-error");
+    } finally { Object.defineProperty(zlib, "zstdCompressSync", original); }
+  });
+
   const apis = [
     { provider: "openai", api: "openai-responses" },
     { provider: "azure-openai-responses", api: "azure-openai-responses" },

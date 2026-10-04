@@ -20,10 +20,21 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** Match the existing Client converter's provable image-file materialization. */
+function isImageDataUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const match = /^data:([^;]+);base64,(.*)$/su.exec(value);
+  if (!match || !/^image\//iu.test(match[1] ?? "")) return false;
+  const data = match[2] ?? "";
+  return data.length > 0 && data.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/u.test(data);
+}
+
 function hasImageParts(value: unknown, output: boolean): boolean {
   const parts = Array.isArray(value) ? value : output ? [value] : [];
   return parts.some((part) => {
-    const type = record(part)?.type;
+    const block = record(part);
+    const type = block?.type;
+    if (!output && type === "input_file") return isImageDataUrl(block?.file_data);
     return type === "input_image" || (output && (type === "output_image" || type === "computer_screenshot"));
   });
 }
@@ -36,6 +47,9 @@ function hasImage(input: unknown): boolean {
     if ((item.type === undefined || item.type === "message") && item.role === "user")
       return hasImageParts(item.content, false);
     switch (item.type) {
+      case "image_generation_call":
+        return !["in_progress", "generating", "searching", "failed"].includes(String(item.status))
+          && isImageDataUrl(item.result);
       case "function_call_output": case "custom_tool_call_output":
       case "local_shell_call_output": case "shell_call_output":
       case "apply_patch_call_output": case "computer_call_output":

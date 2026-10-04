@@ -116,7 +116,8 @@ exceptions cannot replace the original failure. Successful responses remain
 unread and uncanceled at the sender boundary.
 
 Existing Native composition owns safe response headers, atomic body-read
-failure, OAuth response name repair and model alias projection. Pi never
+failure and model alias projection. OAuth tool-name projection is request-only;
+it does not authorize changing response tool names. Pi never
 parses the actual upstream response. Default Semantic execution has no Native
 payload substitution callback.
 
@@ -137,7 +138,7 @@ failures. Regressions cover 10000 historical tool pairs, declared document
 images/text and string content in user/tool-result documents, omitted-control
 notice paths and cancellation during private Pi parsing.
 
-The final targeted suite passes 37 tests; the broader guarded Anthropic,
+The initial targeted suite passed 37 tests; the broader guarded Anthropic,
 Responses and Native regression run passes 76 files / 1298 tests. Root
 TypeScript checking, changed-file ESLint, `git diff --check` and all 5 lane
 isolation checks pass. Two inherited-model/effort review agents independently
@@ -148,3 +149,43 @@ These are offline and local HTTP results. No Anthropic live credentials or real 
 request were used. Production replacement and online certification remain
 separate work. Passing these tests does not guarantee arbitrary Pi upgrades;
 upgrades must rerun the consumer and wire certification.
+
+## Comprehensive audit follow-up (2026-10-03)
+
+Managed credential-kind disagreement now preserves the existing Native auth
+precedence: credential default, Model headers, then request headers. Header
+names are folded before merging so casing cannot reverse an explicit override
+or null omission. Tests use public Model header types and compare against a
+separately executed Native sender for API-key and OAuth disagreements.
+Query credentials use a per-request marker only when a workaround is needed;
+ordinary header text cannot be mistaken for a leaked fixed marker. An actual
+marker leak still refuses dispatch.
+
+Max preserves enabled/adaptive thinking when only the secondary display
+preference is unsupported, including SDK `display: "updates"`. It omits that
+preference before validating activation; invalid activation does not invent
+thinking. Default Semantic continues rejecting unsupported display values.
+Independent Pi Context tests compare the resulting complete envelope.
+
+Streaming composition tests preserve OAuth tool names and unknown event
+payloads, fields and order. Without an alias rewrite, upstream SSE bytes are
+retained. With the existing model alias rewrite, SSE framing is canonicalized;
+this is not a byte-identity promise for rewritten SSE.
+
+The final Anthropic experiment file passes 50 tests, and the Responses file
+passes 110. The independent final review ran these plus the reasoning boundary
+guard: 3 files / 164 tests passed. Full guarded root Vitest passed 318 files /
+3,011 tests; guarded certification passed 98 tests after assembling its required
+local release backend artifact. Root TypeScript, changed-file ESLint and diff
+whitespace checks passed. The static reasoning guard uses the TypeScript AST
+to allow direct options assignments only inside the two named max converters,
+with negative ordinary-function, top-level and bracket-property fixtures. It
+is an architectural check for these assignment forms, not a general semantic
+proof.
+
+Confirmed audit findings were reproduced before fixes. Both final Standards
+and Spec reviews found no remaining confirmed issues. This follow-up used fresh
+temporary CODEX_HOME guards, offline fixtures and local HTTP servers. It did
+not read user credentials or perform real upstream requests. Production
+replacement, Anthropic online certification and future Pi consumer validation
+remain separate work.

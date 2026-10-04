@@ -146,6 +146,7 @@ export async function sendWithPiEnvelope(
       if (event.type === "error") piFailure = event.error.errorMessage;
     }
     if (tokenFailure) throw tokenFailure.cause;
+    options.signal.throwIfAborted();
     // stream=false gives Pi private JSON, not an iterator. Its parser error
     // is irrelevant to the real Response, once the transport checks passed.
     if (captured) return captured;

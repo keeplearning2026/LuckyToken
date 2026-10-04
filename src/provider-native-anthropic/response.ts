@@ -95,14 +95,14 @@ export async function bufferAnthropicNativeResponse(
  *
  * - non-streaming (`application/json`): the top-level `model` field;
  * - streaming (`text/event-stream`): the nested `message.model` of the
- *   `message_start` event, plus any event that carries a top-level `model`.
+ *   `message_start` event; other model positions fail closed.
  *
  * The response is buffered before projection, so a shape that cannot be
  * guaranteed symmetric fails with `{ error }` and the caller returns a
  * legal target-protocol error instead of leaking upstream bytes or the
  * canonical model id. Non-model-bearing SSE events pass through
- * byte-identical; rewritten events are re-serialized with only the model
- * field changed.
+ * with their payload text unchanged through canonical SSE framing; rewritten
+ * events are re-serialized with only the model field changed.
  */
 export function projectAnthropicPassthroughBody(
   body: Uint8Array,

@@ -262,3 +262,54 @@ remains uncertified.
 This establishes feasibility for the tested Responses cases. It does not yet
 authorize deleting production envelopes or declare all Native APIs/operations
 certified.
+
+## Comprehensive audit follow-up (2026-10-03)
+
+The sender rechecks caller cancellation after private Pi parsing, before
+handing off a captured Response. Cancellation during the private observation
+callback now retains the original abort reason and releases the unhanded body
+for OpenAI, Azure and Codex. A captured Response cannot conceal that failure.
+
+Max appends converted messages and notices by iteration instead of argument
+spread. Completed file-search and code-interpreter histories with 140,000
+outputs retain ordering and reach physical fetch unchanged, without the
+JavaScript argument-count limit introducing a new rejection.
+
+Image presence now includes the converter's declared image-valued
+`input_file.file_data` and materialized completed `image_generation_call.result`
+paths. The checks require supported image data URLs rather than recursively
+reading metadata. Independent Pi Context oracles cover valid image MIME/base64,
+PDF and malformed values, incomplete/failed hosted image calls and unrelated
+fields. The real Native body remains unchanged.
+
+Codex compression tests exercise the installed Pi runtime when zstd is
+unavailable or throws. Pi falls back to unchanged JSON with no encoding header,
+one physical fetch and the original unread non-2xx Response. Runtime fixtures
+are restored in finally; no installed Pi file is patched.
+
+The final Responses experiment file passes 110 tests. Together with the
+Anthropic experiment and reasoning boundary guard, independent review passed
+3 files / 164 tests. Full guarded root Vitest passed 318 files / 3,011 tests;
+guarded certification passed 98 tests after assembling its required local
+release backend artifact. Root TypeScript, changed-file ESLint and diff checks
+passed. Both final review axes found no remaining confirmed issues.
+
+This follow-up used fresh temporary CODEX_HOME guards, offline fixtures and
+local HTTP servers. It did not read user credentials or rerun the online suite.
+Earlier online results retain their stated scope; arbitrary Pi upgrades and
+production replacement still require their own certification.
+
+The next audit found a separate scale failure inside the shared continuity
+parser's notice append, before max's final notice bound. An otherwise retained
+assistant message, reasoning item or function call with 140,000 invalid optional
+continuity attachments exceeded JavaScript's function-argument limit. All three
+regressions failed before the fix. Notice append now iterates in source order;
+continuity validation, ordinary Semantic outputs and omission rules are
+unchanged. The three tests retain text/thinking/tool-call content, cap max
+notices at 32, and dispatch the entire unchanged Native body exactly once.
+The two experiment files, reasoning boundary, content and continuity suites
+passed 5 files / 236 tests. An independent guarded review passed 3 files / 167
+tests. Root TypeScript and changed-file ESLint passed. This audit also remains
+offline; it adds no new upstream or authentication certification.
+The final full guarded root rerun passed 318 files / 3,014 tests; diff
+whitespace checks passed. Both review axes report no remaining confirmed issue.

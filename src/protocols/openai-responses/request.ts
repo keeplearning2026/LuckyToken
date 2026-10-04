@@ -1668,7 +1668,7 @@ function convertMessages(
               ? rawItem.content.length
               : content.length,
           });
-          notices.push(...decodedContinuity.notices);
+          for (const notice of decodedContinuity.notices) notices.push(notice);
           for (const wire of decodedContinuity.attachments) {
             if (wire.target !== "text") continue;
             const block = wireTextParts.get(wire.partIndex);
@@ -1753,7 +1753,7 @@ function convertMessages(
           const decodedContinuity = decodeResponsesContinuity(rawItem, {
             type: "reasoning",
           });
-          notices.push(...decodedContinuity.notices);
+          for (const notice of decodedContinuity.notices) notices.push(notice);
           historicalReasoningCandidates.push({
             block,
             summaryText: thinking,
@@ -1951,7 +1951,7 @@ function convertMessages(
           type: "toolCall",
           callId,
         });
-        notices.push(...decodedContinuity.notices);
+        for (const notice of decodedContinuity.notices) notices.push(notice);
         for (const wire of decodedContinuity.attachments) {
           reasoningContinuityCandidates.push({ block: toolCall, wire });
         }
@@ -2917,16 +2917,16 @@ function convertResponsesMaxContext(value: unknown, receivedAt: number): Respons
     if (!converted) continue;
     if (callTypes.has(String(type))) {
       if (typeof callKey === "string") calls.set(callKey, item);
-      messages.push(...converted.filter((message) => message.role !== "toolResult"
-        || (type === "mcp_call" && typeof item.output === "string")));
+      for (const message of converted) if (message.role !== "toolResult"
+        || (type === "mcp_call" && typeof item.output === "string")) messages.push(message);
     } else if (resultTypes.has(String(type))) {
       // The shared parser also owns named, unpaired function outputs used as
       // user notifications. Keep them; drop only the prepended paired call.
-      messages.push(...converted.filter((message) => message.role === "toolResult" || message.role === "user"));
+      for (const message of converted) if (message.role === "toolResult" || message.role === "user") messages.push(message);
     } else {
-      messages.push(...converted);
+      for (const message of converted) messages.push(message);
     }
-    notices.push(...localNotices.filter((notice) => notice.code !== "openai-responses_unresolved_call_repaired"));
+    for (const notice of localNotices) if (notice.code !== "openai-responses_unresolved_call_repaired") notices.push(notice);
     if (!converted.length) omit(path);
   }
   const context: Context = { messages };

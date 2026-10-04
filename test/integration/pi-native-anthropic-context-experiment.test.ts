@@ -4,6 +4,7 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { parseAnthropicTextInvocation } from "../../src/protocols/anthropic/request.js";
 import { sendAnthropicWithPiEnvelope, createAnthropicPiNativeRequestSender } from "../support/pi-native-anthropic-context-transport.js";
 import { createAnthropicProviderNativeLane } from "../../src/provider-native-anthropic/index.js";
+import { passthroughAnthropicRequest } from "../../src/provider-native-anthropic/transport.js";
 import { fixedManagedProfileBindings } from "../support/profile-binding-fixture.js";
 import { createServer } from "node:http";
 import type { ProviderAuthBindingCapture } from "../../src/credentials/profile-contract.js";
@@ -125,6 +126,88 @@ describe("pure Anthropic max Context experiment", () => {
 });
 
 describe("installed Pi Anthropic Native transport experiment", () => {
+  it.each(["enabled", "adaptive"] as const)("retains %s thinking envelope facts when display is Native-only", async (type) => {
+    const { models, model } = fixture();
+    const body = { model: model.id, max_tokens: 2048, messages: [{ role: "user", content: "hello" }],
+      thinking: { type, ...(type === "enabled" ? { budget_tokens: 1024 } : {}), display: "updates" } };
+    const before = JSON.stringify(body);
+    expect(() => parseAnthropicTextInvocation(body, 10)).toThrow();
+    const query = parseAnthropicTextInvocation(body, 10, "max");
+    expect(query.options.reasoning).toBe(type === "enabled" ? "minimal" : "high");
+    expect(query.notices.some((notice) => notice.jsonPath === "$.thinking.display")).toBe(true);
+    let oracle: Request | undefined;
+    for await (const event of models.stream(model, { messages: [{ role: "user", content: "hello", timestamp: 10 }] }, {
+      apiKey: "mock", thinkingEnabled: true, maxRetries: 0,
+      fetch: async (input, init) => { oracle = new Request(input, init); return new Response("stop", { status: 400 }); },
+    })) void event;
+    let sent: Request | undefined;
+    await sendAnthropicWithPiEnvelope(models, model, body, 10, { signal: AbortSignal.timeout(2_000), pi: { apiKey: "mock" },
+      fetch: async (input, init) => { sent = new Request(input, init); return new Response("raw"); },
+    });
+    expect(Object.fromEntries(sent!.headers)).toEqual(Object.fromEntries(oracle!.headers));
+    expect(sent!.headers.get("anthropic-beta")).toContain("interleaved-thinking");
+    expect(await sent!.text()).toBe(before);
+    expect(JSON.stringify(body)).toBe(before);
+  });
+
+  it.each([{ type: "enabled", budget_tokens: 16, display: "updates" }, { type: "enabled", display: "updates" },
+    { type: "future-activation", display: "updates" }])("does not invent thinking from invalid primary facts: %j", (thinking) => {
+    const query = parseAnthropicTextInvocation({ model: "alias", messages: [{ role: "user", content: "hello" }], thinking }, 10, "max");
+    expect(query.options.reasoning).toBeUndefined();
+    expect(query.notices.length).toBeGreaterThan(0);
+  });
+
+  it.each(["api_key", "oauth"] as const)("keeps Model-owned auth and options null/override precedence for managed %s", async (kind) => {
+    const { models, model } = fixture();
+    const key = kind === "oauth" ? "opaque-oauth" : "sk-ant-oat-atypical-api-key";
+    for (const override of ["model-owned", null, "options-owned"] as const) {
+      const header = kind === "oauth" ? "Authorization" : "X-Api-Key";
+      const requestModel = { ...model, headers: { [header]: "model-owned",
+        [kind === "oauth" ? "x-api-key" : "authorization"]: "other-model-owned" } };
+      const optionsHeaders = override === "model-owned" ? undefined : { [header.toLowerCase()]: override };
+      const { compat, ...nativeModel } = requestModel;
+      expect(compat).toBeUndefined();
+      const body = { model: model.id, messages: [{ role: "user", content: "hello" }], max_tokens: 128 };
+      let native: Request | undefined;
+      await passthroughAnthropicRequest({ model: nativeModel, apiKey: key, rawBody: JSON.stringify(body), authMode: kind,
+        signal: AbortSignal.timeout(2_000), bodyProjectionMode: "model_only", attempt: 1,
+        ...(optionsHeaders ? { composedHeaders: optionsHeaders } : {}),
+        fetch: async (input, init) => { native = new Request(input, init); return new Response("raw"); },
+      });
+      let sent: Request | undefined;
+      await sendAnthropicWithPiEnvelope(models, requestModel, body, 10, { credentialKind: kind,
+        signal: AbortSignal.timeout(2_000), pi: { apiKey: key, ...(optionsHeaders ? { headers: optionsHeaders } : {}) },
+        fetch: async (input, init) => { sent = new Request(input, init); return new Response("raw"); },
+      });
+      expect(sent!.headers.get(header)).toBe(native!.headers.get(header));
+      expect(Object.fromEntries(sent!.headers)).toEqual(Object.fromEntries(native!.headers));
+    }
+  });
+
+  it.each([undefined, "oauth"] as const)("does not mistake a configured header value for a query credential, kind=%s", async (credentialKind) => {
+    const { models, model } = fixture();
+    const configuredValue = "Provider-owned Token-envelope-query-credential annotation";
+    let sent: Request | undefined;
+    await sendAnthropicWithPiEnvelope(models, model, { model: model.id, messages: [] }, 10, {
+      signal: AbortSignal.timeout(2_000), ...(credentialKind ? { credentialKind } : {}),
+      pi: { apiKey: credentialKind ? "opaque-managed-oauth" : "mock", headers: { "x-provider-note": configuredValue } },
+      fetch: async (input, init) => { sent = new Request(input, init); return new Response("raw"); },
+    });
+    expect(sent!.headers.get("x-provider-note")).toBe(configuredValue);
+    expect(sent!.headers.get(credentialKind ? "authorization" : "x-api-key")).toBe(credentialKind ? "Bearer opaque-managed-oauth" : "mock");
+  });
+
+  it.each(["api_key", "oauth"] as const)("refuses actual query-key leakage if Provider header transformation drops managed %s auth", async (credentialKind) => {
+    const { models, model } = fixture();
+    let calls = 0;
+    await expect(sendAnthropicWithPiEnvelope(models, model, { model: model.id, messages: [] }, 10, {
+      signal: AbortSignal.timeout(2_000), credentialKind,
+      pi: { apiKey: credentialKind === "oauth" ? "opaque-oauth" : "sk-ant-oat-is-api-key", transformHeaders: async () => ({}) },
+      fetch: async () => { calls++; return new Response("raw"); },
+    })).rejects.toThrow("Pi query credential escaped");
+    expect(calls).toBe(0);
+  });
+
   it.each(["user", "tool-result"] as const)("retains document content and matches independent Pi vision facts: %s", async (location) => {
     const { models, model } = fixture("github-copilot");
     const document = { type: "document", source: { type: "content", content: [
@@ -410,6 +493,38 @@ describe("installed Pi Anthropic Native transport experiment", () => {
 });
 
 describe("Pi sender composed with the existing Anthropic Native lane", () => {
+  it.each([undefined, "alias"])("preserves OAuth response tool names and unknown SSE, alias=%s", async (alias) => {
+    const { models, model } = fixture();
+    const privateFrame = 'event: provider.private\r\ndata: {"type":"provider.private","opaque":[false,null,"原样"]}\r\n\r\n';
+    const stream = 'event: message_start\ndata: ' + JSON.stringify({ type: "message_start", message: {
+      id: "msg", type: "message", role: "assistant", model: model.id, content: [], usage: { input_tokens: 1, output_tokens: 0 },
+    } }) + '\n\nevent: content_block_start\ndata: ' + JSON.stringify({ type: "content_block_start", index: 0,
+      content_block: { type: "tool_use", id: "call", name: "Read", input: {}, future: 42 } })
+      + '\n\n' + privateFrame + 'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}\n\n'
+      + 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+    const lane = createAnthropicProviderNativeLane({
+      models: { getAuth: async () => ({ auth: { apiKey: "opaque-oauth" } }) }, bindings: fixedManagedProfileBindings("oauth"),
+      resolveRequestModel: (value) => value, requestSender: createAnthropicPiNativeRequestSender(models),
+      fetch: async () => new Response(stream, { headers: { "content-type": "text/event-stream", "set-cookie": "private", "request-id": "real" } }),
+    });
+    const result = await lane.execute({ model, rawBody: JSON.stringify({ model: alias ?? model.id, max_tokens: 128, stream: true,
+      messages: [{ role: "user", content: "hello" }], tools: [{ name: "read", input_schema: { type: "object" } }] }),
+      request: new Request("https://token.invalid/v1/messages"), requestId: "request", ...(alias ? { alias } : {}), onExecutionStart: () => {},
+    });
+    expect(result.outcome).toBe("success");
+    expect(result.response.headers.has("set-cookie")).toBe(false);
+    expect(result.response.headers.get("request-id")).toBe("real");
+    const text = await result.response.text();
+    expect(text).toContain(`"model":"${alias ?? model.id}"`);
+    expect(text).toContain('"name":"Read"');
+    expect(text).toContain('"future":42');
+    // Existing alias projection uses the shared canonical SSE framing.
+    // Without that approved projection, the entire upstream body is exact.
+    expect(text).toContain(alias ? privateFrame.replaceAll("\r\n", "\n") : privateFrame);
+    if (!alias) expect(text).toBe(stream);
+    expect(text).not.toContain('"name":"read"');
+  });
+
   it("rebuilds auth, OAuth identity and body projection after a final-429 Profile switch", async () => {
     const { models, model } = fixture();
     const first = await fixedManagedProfileBindings("api_key", "key-profile").capture(model.provider);

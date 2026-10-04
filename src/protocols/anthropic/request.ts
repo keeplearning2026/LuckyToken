@@ -1697,7 +1697,15 @@ function convertAnthropicMaxContext(value: unknown, receivedAt: number): Anthrop
   if (choice?.kind === "auto" || choice?.kind === "none") options.toolChoice = choice.kind;
   else if (choice) omit("$.tool_choice");
   if (choice?.kind === "auto" && choice.disableParallelToolUse) omit("$.tool_choice.disable_parallel_tool_use");
-  const thinking = attempt("$.thinking", () => validateThinking(cloneDemandDrivenValue(value.thinking)));
+  let thinking = attempt("$.thinking", () => validateThinking(cloneDemandDrivenValue(value.thinking)));
+  if (!thinking && isRecord(value.thinking) && value.thinking.display !== undefined) {
+    omit("$.thinking.display");
+    // A Native-only display preference must not erase a valid activation or
+    // budget fact used by Pi's envelope. The original body stays authoritative.
+    const activation = cloneDemandDrivenValue(value.thinking);
+    activation.display = undefined;
+    thinking = attempt("$.thinking.activation", () => validateThinking(activation));
+  }
   const effort = attempt("$.output_config.effort", () => validateOutputConfig(cloneDemandDrivenValue(value.output_config)));
   if (thinking?.kind === "enabled" || thinking?.kind === "adaptive")
     options.reasoning = effort?.kind === "specified" ? effort.level : thinking.kind === "enabled" ? budgetLevel(thinking.budgetTokens) : "high";
